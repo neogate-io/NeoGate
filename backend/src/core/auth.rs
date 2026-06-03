@@ -51,7 +51,7 @@ pub fn issue_admin_token(ttl: Duration, secret: &str) -> String {
     let nonce = generate_admin_nonce();
     let payload = admin_token_payload(expires_at, &nonce);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    format!("moli_admin_v1_{expires_at}_{nonce}_{signature}")
+    format!("neo_admin_v1_{expires_at}_{nonce}_{signature}")
 }
 
 pub fn issue_user_session_token(ttl: Duration, secret: &str, user_id: DbId) -> String {
@@ -60,7 +60,7 @@ pub fn issue_user_session_token(ttl: Duration, secret: &str, user_id: DbId) -> S
     let nonce = generate_admin_nonce();
     let payload = user_session_token_payload(expires_at, user_id, &nonce);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    format!("moli_user_v1_{expires_at}_{user_id}_{nonce}_{signature}")
+    format!("neo_user_v1_{expires_at}_{user_id}_{nonce}_{signature}")
 }
 
 pub fn issue_password_reset_token(ttl: Duration, secret: &str, email: &str) -> String {
@@ -69,11 +69,11 @@ pub fn issue_password_reset_token(ttl: Duration, secret: &str, email: &str) -> S
     let email_hex = hex::encode(email.as_bytes());
     let payload = password_reset_token_payload(expires_at, &email_hex);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    format!("moli_reset_v1_{expires_at}_{email_hex}_{signature}")
+    format!("neo_reset_v1_{expires_at}_{email_hex}_{signature}")
 }
 
 pub fn password_reset_email_from_token(token: &str, secret: &str) -> Option<String> {
-    let rest = token.strip_prefix("moli_reset_v1_")?;
+    let rest = token.strip_prefix("neo_reset_v1_")?;
     let mut parts = rest.splitn(3, '_');
     let expires_at = parts.next().and_then(|value| value.parse::<i64>().ok())?;
     let email_hex = parts.next().filter(|value| !value.is_empty())?;
@@ -94,7 +94,7 @@ pub fn password_reset_email_from_token(token: &str, secret: &str) -> Option<Stri
 }
 
 pub fn validate_admin_token(token: &str, secret: &str) -> bool {
-    let Some(rest) = token.strip_prefix("moli_admin_v1_") else {
+    let Some(rest) = token.strip_prefix("neo_admin_v1_") else {
         return false;
     };
     let mut parts = rest.splitn(3, '_');
@@ -118,7 +118,7 @@ pub fn validate_admin_token(token: &str, secret: &str) -> bool {
 }
 
 pub fn validate_user_session_token(token: &str, secret: &str) -> Option<DbId> {
-    let rest = token.strip_prefix("moli_user_v1_")?;
+    let rest = token.strip_prefix("neo_user_v1_")?;
     let mut parts = rest.splitn(4, '_');
     let expires_at = parts.next().and_then(|value| value.parse::<i64>().ok())?;
     let user_id = parts.next().and_then(|value| value.parse::<DbId>().ok())?;
@@ -137,12 +137,12 @@ pub fn validate_user_session_token(token: &str, secret: &str) -> Option<DbId> {
 pub fn hash_user_password(password: &str, secret: &str) -> String {
     let salt = Alphanumeric.sample_string(&mut rand::rng(), 32);
     let digest = user_password_digest(password, secret, &salt);
-    format!("moli_pwd_v1${salt}${digest}")
+    format!("neo_pwd_v1${salt}${digest}")
 }
 
 pub fn verify_user_password(password: &str, secret: &str, password_hash: &str) -> bool {
     let mut parts = password_hash.split('$');
-    let Some("moli_pwd_v1") = parts.next() else {
+    let Some("neo_pwd_v1") = parts.next() else {
         return false;
     };
     let Some(salt) = parts.next().filter(|value| !value.is_empty()) else {
@@ -171,14 +171,14 @@ pub fn issue_user_key_draft_token(ttl: Duration, secret: &str, head: &str, tail:
     let expires_at = expires_at.timestamp();
     let payload = user_key_draft_token_payload(expires_at, head, tail);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    format!("moli_draft_v1_{expires_at}_{head}_{tail}_{signature}")
+    format!("neo_draft_v1_{expires_at}_{head}_{tail}_{signature}")
 }
 
 pub fn user_key_draft_parts_from_token(
     token: &str,
     secret: &str,
 ) -> Option<(String, String, String)> {
-    let rest = token.strip_prefix("moli_draft_v1_")?;
+    let rest = token.strip_prefix("neo_draft_v1_")?;
     let mut parts = rest.splitn(4, '_');
     let expires_at = parts.next()?.parse::<i64>().ok()?;
     let head = parts.next()?;
@@ -588,10 +588,7 @@ mod tests {
 
     #[test]
     fn key_prefix_is_short_and_stable() {
-        assert_eq!(
-            key_prefix("moli_abcdefghijklmnopqrstuvwxyz"),
-            "moli_abcdefg"
-        );
+        assert_eq!(key_prefix("neo_abcdefghijklmnopqrstuvwxyz"), "neo_abcdefgh");
     }
 
     #[test]
@@ -610,7 +607,7 @@ mod tests {
         assert!(key.starts_with("sk-"));
         assert!(is_generated_user_key(&key));
         assert!(!is_generated_user_key(&key[3..]));
-        assert!(!is_generated_user_key("moli_abcdefghijklmnopqrstuvwxyz"));
+        assert!(!is_generated_user_key("neo_abcdefghijklmnopqrstuvwxyz"));
     }
 
     #[test]
@@ -718,7 +715,7 @@ mod tests {
         let secret = "test-admin-token-secret";
         let token = issue_admin_token(Duration::from_secs(60), secret);
 
-        assert!(token.starts_with("moli_admin_"));
+        assert!(token.starts_with("neo_admin_"));
         assert!(validate_admin_token(&token, secret));
         assert!(!validate_admin_token(&token, "different-secret"));
         assert!(!validate_admin_token("change-me-in-production", secret));
@@ -732,7 +729,7 @@ mod tests {
         let secret = "test-user-token-secret";
         let token = issue_user_session_token(Duration::from_secs(60), secret, 42);
 
-        assert!(token.starts_with("moli_user_"));
+        assert!(token.starts_with("neo_user_"));
         assert_eq!(validate_user_session_token(&token, secret), Some(42));
         assert_eq!(
             validate_user_session_token(&token, "different-secret"),
@@ -749,7 +746,7 @@ mod tests {
         let token =
             issue_password_reset_token(Duration::from_secs(60), secret, "user_name@example.com");
 
-        assert!(token.starts_with("moli_reset_"));
+        assert!(token.starts_with("neo_reset_"));
         assert_eq!(
             password_reset_email_from_token(&token, secret).as_deref(),
             Some("user_name@example.com")

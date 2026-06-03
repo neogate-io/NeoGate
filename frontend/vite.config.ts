@@ -46,8 +46,8 @@ function normalizeBackendOrigin(value: string | undefined) {
 
 function renderInstallScript(installOrigin: string, backendOrigin: string) {
   return readFileSync(installTemplatePath, 'utf8')
-    .replaceAll('__MOLIGATE_DEFAULT_BASE_URL__', `${backendOrigin}/v1`)
-    .replaceAll('__MOLIGATE_INSTALL_ORIGIN__', installOrigin)
+    .replaceAll('__NEOGATE_DEFAULT_BASE_URL__', `${backendOrigin}/v1`)
+    .replaceAll('__NEOGATE_INSTALL_ORIGIN__', installOrigin)
 }
 
 function isIgnorablePureAnnotationWarning(log: { code?: string; id?: string; message: string }) {
@@ -78,12 +78,12 @@ function installMiddleware(backendOrigin: string, req: { url?: string; headers: 
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, frontendRoot)
-  const backendOrigin = normalizeBackendOrigin(env.VITE_MOLIGATE_BACKEND_ORIGIN)
+  const backendOrigin = normalizeBackendOrigin(env.VITE_NEOGATE_BACKEND_ORIGIN)
 
   return {
     plugins: [
       {
-        name: 'moligate-install-script',
+        name: 'neogate-install-script',
         enforce: 'pre',
         configureServer(server) {
           server.middlewares.use((req, res, next) => installMiddleware(backendOrigin, req, res, next))

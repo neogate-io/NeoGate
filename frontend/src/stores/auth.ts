@@ -2,8 +2,8 @@ import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { LoginRole } from '../api/auth'
 
-const tokenStorageKey = 'moligate_token'
-const roleStorageKey = 'moligate_role'
+const tokenStorageKey = 'neogate_token'
+const roleStorageKey = 'neogate_role'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem(tokenStorageKey) || '')
@@ -60,7 +60,7 @@ export const useAuthStore = defineStore('auth', () => {
 })
 
 function roleFromToken(token: string): LoginRole | '' {
-  if (token.startsWith('moli_admin_v1_')) return 'admin'
-  if (token.startsWith('moli_user_v1_')) return 'user'
+  if (token.startsWith('neo_admin_v1_')) return 'admin'
+  if (token.startsWith('neo_user_v1_')) return 'user'
   return ''
 }

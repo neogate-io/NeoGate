@@ -134,17 +134,17 @@ impl IntoResponse for AppError {
             )
                 .into_response();
             response.headers_mut().insert(
-                "x-moligate-error-type",
+                "x-neogate-error-type",
                 HeaderValue::from_static(err.kind.type_code()),
             );
             response.headers_mut().insert(
-                "x-moligate-retryable",
+                "x-neogate-retryable",
                 HeaderValue::from_static(if err.retryable { "true" } else { "false" }),
             );
             if let Ok(provider) = HeaderValue::from_str(&err.provider) {
                 response
                     .headers_mut()
-                    .insert("x-moligate-upstream-provider", provider);
+                    .insert("x-neogate-upstream-provider", provider);
             }
             return response;
         }
@@ -232,12 +232,12 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(
-            response.headers()["x-moligate-error-type"],
+            response.headers()["x-neogate-error-type"],
             "upstream_tls_error"
         );
-        assert_eq!(response.headers()["x-moligate-retryable"], "true");
+        assert_eq!(response.headers()["x-neogate-retryable"], "true");
         assert_eq!(
-            response.headers()["x-moligate-upstream-provider"],
+            response.headers()["x-neogate-upstream-provider"],
             "gavinhub"
         );
 

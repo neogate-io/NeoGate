@@ -1,6 +1,6 @@
-# 魔力门（Moligate）
+# NeoGate
 
-魔力门是一个基于 Rust/Axum 的轻量级大模型 API 网关，用于统一管理下游用户密钥、上游模型渠道、请求转发和基础用量记录。
+NeoGate 是一个基于 Rust/Axum 的轻量级大模型 API 网关，用于统一管理下游用户密钥、上游模型渠道、请求转发和基础用量记录。
 
 ## 功能概览
 
@@ -10,7 +10,7 @@
 - OpenAI 兼容接口和 Anthropic 兼容接口转发
 - 按渠道优先级、权重、模型白名单和 key 选择策略调度
 - 用量记录、上游 key 失败冷却和健康检查
-- 公开邮箱领取 API key，支持中英文邮件品牌名
+- 公开邮箱领取 API key，邮件品牌名统一为 NeoGate
 - Vue 管理前端，支持中文和英文界面
 
 ## 项目结构
@@ -30,7 +30,7 @@
 先创建本地 PostgreSQL 数据库：
 
 ```bash
-createdb moligate
+createdb neogate
 ```
 
 复制并编辑配置：
@@ -42,7 +42,7 @@ cp .env.example .env
 至少需要确认这些配置：
 
 ```dotenv
-DATABASE_URL=postgres://localhost/moligate
+DATABASE_URL=postgres://localhost/neogate
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=password
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
@@ -82,10 +82,10 @@ cp .env.example .env.production.local
 ```
 
 ```dotenv
-VITE_MOLIGATE_BACKEND_ORIGIN=https://api.example.com
+VITE_NEOGATE_BACKEND_ORIGIN=https://api.example.com
 ```
 
-生成的安装脚本会把 Codex/OpenAI base URL 配置为 `https://api.example.com/v1`，把 Claude/Anthropic base URL 配置为 `https://api.example.com/anthropic`。也可以在构建或启动 Vite 时直接传入 `VITE_MOLIGATE_BACKEND_ORIGIN=https://api.example.com`。
+生成的安装脚本会把 Codex/OpenAI base URL 配置为 `https://api.example.com/v1`，把 Claude/Anthropic base URL 配置为 `https://api.example.com/anthropic`。也可以在构建或启动 Vite 时直接传入 `VITE_NEOGATE_BACKEND_ORIGIN=https://api.example.com`。
 
 构建前端：
 
@@ -106,13 +106,13 @@ docker compose up --build
 `docker-compose.yml` 会启动：
 
 - `postgres`: PostgreSQL 16
-- `backend`: 魔力门后端服务
+- `backend`: NeoGate 后端服务
 
 后端容器内监听 `0.0.0.0:8080`，宿主机端口由 `BACKEND_PORT` 控制，默认是 `8080`。
 
 ## 运行模式
 
-魔力门只有两个运行模式：
+NeoGate 只有两个运行模式：
 
 - `RUNTIME_MODE=standalone`：不依赖 Redis，热余额、缓存失效和转发缓存都在单个进程内维护，适合单后端实例运行。
 - `RUNTIME_MODE=distributed`：多个无状态后端实例共享 Redis，Redis 用于热余额和跨实例缓存失效。`REDIS_URL` 需要指向一个可写 Redis 入口，可以是单 Redis 主节点，也可以是由 Sentinel 维护并通过基础设施暴露出来的主节点入口；当前不支持 Redis Cluster 分片。
@@ -128,7 +128,7 @@ docker compose up --build
 ```dotenv
 RUNTIME_MODE=distributed
 REDIS_URL=redis://redis.example.com:6379/
-REDIS_KEY_PREFIX=moligate
+REDIS_KEY_PREFIX=neogate
 ```
 
 简单集群部署建议：负载均衡后面运行多个 `PROCESS_ROLE=api` 副本，并至少运行一个 `PROCESS_ROLE=worker` 副本处理 billing backlog 和 allocation recovery。
@@ -169,19 +169,16 @@ DEFAULT_OUTPUT_TOKENS=2048
 
 生产模式会拒绝默认的管理员密码、默认签名密钥和默认上游 key 加密密钥，并要求 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY` 至少 32 个字符。
 
-## 邮件和多语言品牌名
+## 邮件品牌名
 
-公开领取 API key 时，后端会根据请求中的 `locale` 选择邮件品牌名：
-
-- 中文环境：`魔力门`
-- 英文环境：`Moligate`
+公开领取 API key 时，后端邮件品牌名统一使用 `NeoGate`，不再按语言区分中文名和英文名。
 
 邮件主题示例：
 
-- 中文：`魔力门 API 密钥`
-- 英文：`Moligate API Key`
+- 中文：`NeoGate API 密钥`
+- 英文：`NeoGate API Key`
 
-`MAIL_FROM_NAME` 和 `MAIL_SUBJECT_PREFIX` 可以留空。留空时后端会按语言自动选择品牌名；如果配置了它们，则使用配置值覆盖自动品牌名。
+`MAIL_FROM_NAME` 和 `MAIL_SUBJECT_PREFIX` 可以留空。留空时后端默认使用 `NeoGate`；如果配置了它们，则使用配置值覆盖默认品牌名。
 
 SMTP 配置示例：
 
@@ -325,7 +322,7 @@ anthropic-version: <incoming value or ANTHROPIC_VERSION>
 
 ## 调度规则
 
-每次转发请求时，魔力门会：
+每次转发请求时，NeoGate 会：
 
 1. 校验下游 `user_key`
 2. 按 provider、协议格式、模型白名单、启用状态、健康状态、冷却时间和父级服务组的可用 key 过滤协议入口

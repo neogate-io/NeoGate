@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::id::DbId;
 
-const SECRET_PREFIX: &str = "moli_secret_v1";
+const SECRET_PREFIX: &str = "neo_secret_v1";
 const NONCE_LEN: usize = 12;
 
 #[derive(Clone)]

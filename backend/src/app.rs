@@ -58,7 +58,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     if !config.process_role.runs_api() {
         tracing::info!(
-            "moligate running in {} role without HTTP listener",
+            "neogate running in {} role without HTTP listener",
             config.process_role.as_str()
         );
         shutdown_signal().await;
@@ -71,7 +71,7 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
-    tracing::info!("moligate listening on {}", config.bind_addr);
+    tracing::info!("neogate listening on {}", config.bind_addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -302,11 +302,11 @@ mod tests {
 
     fn test_state() -> Arc<AppState> {
         let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/moligate")
+            .connect_lazy("postgres://localhost/neogate")
             .unwrap();
         Arc::new(AppState {
             config: Config {
-                database_url: "postgres://localhost/moligate".to_string(),
+                database_url: "postgres://localhost/neogate".to_string(),
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 production: false,
                 runtime_mode: config::RuntimeMode::Standalone,
@@ -332,7 +332,7 @@ mod tests {
                 price_cache_max_entries: 1024,
                 secret_cache_max_entries: 1024,
                 redis_url: None,
-                redis_key_prefix: "moligate-test".to_string(),
+                redis_key_prefix: "neogate-test".to_string(),
                 credit_prefetch_micro_usd: 100_000,
                 credit_allocation_recovery_after: Duration::from_secs(3600),
                 credit_allocation_recovery_interval: Duration::from_secs(60),
@@ -349,7 +349,7 @@ mod tests {
                         merchant_id: None,
                         secret_key: None,
                         default_pay_type: "wxpay".to_string(),
-                        site_name: "Moligate".to_string(),
+                        site_name: "NeoGate".to_string(),
                     },
                 },
                 db_pool: config::DbPoolConfig {
@@ -458,7 +458,7 @@ mod tests {
         let token = value["token"].as_str().unwrap();
 
         assert_ne!(token, "admin");
-        assert!(token.starts_with("moli_admin_"));
+        assert!(token.starts_with("neo_admin_"));
 
         let response = app
             .clone()

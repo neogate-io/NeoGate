@@ -9,10 +9,10 @@ export type Locale = (typeof locales)[number]['code']
 
 const messages = {
   'zh-CN': {
-    appTitle: '魔力门管理后台',
-    appName: '魔力门',
+    appTitle: 'NeoGate 管理后台',
+    appName: 'NeoGate',
     home: '首页',
-    tagline: '魔力门 - 简单好用的大模型API网关',
+    tagline: 'NeoGate - 简单好用的大模型 API 网关',
     docs: '文档',
     services: '服务',
     admin: '后台',
@@ -21,7 +21,7 @@ const messages = {
     username: '用户名',
     password: '密码',
     signIn: '登录',
-    loginTitle: '登录魔力门',
+    loginTitle: '登录 NeoGate',
     loginEmailHint: '输入邮箱和密码即可登录，首次使用需邮箱验证码。',
     loginAccountPlaceholder: '请输入邮箱',
     loginFailed: '邮箱或密码不正确，请重新输入。',
@@ -396,10 +396,10 @@ const messages = {
     providerOpenAI: 'OpenAI'
   },
   'en-US': {
-    appTitle: 'Moligate Admin',
-    appName: 'Moligate',
+    appTitle: 'NeoGate Admin',
+    appName: 'NeoGate',
     home: 'Home',
-    tagline: 'Moligate - A simple LLM API gateway',
+    tagline: 'NeoGate - A simple LLM API gateway',
     docs: 'Docs',
     services: 'Services',
     admin: 'Admin',
@@ -408,7 +408,7 @@ const messages = {
     username: 'Username',
     password: 'Password',
     signIn: 'Sign in',
-    loginTitle: 'Sign in to Moligate',
+    loginTitle: 'Sign in to NeoGate',
     loginEmailHint: 'Enter your email and password to sign in. First-time sign-in requires an email code.',
     loginAccountPlaceholder: 'Enter your email',
     loginFailed: 'Email or password is incorrect. Please try again.',

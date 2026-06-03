@@ -20,7 +20,7 @@ claude`
 
 const claudeCodeConfig = computed(() => `{
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "YOUR_MOLIGATE_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_NEOGATE_API_KEY",
     "ANTHROPIC_BASE_URL": "${anthropicBaseUrl.value}",
     "ANTHROPIC_MODEL": "gpt-5.5"
   }
@@ -30,10 +30,10 @@ const codexInstall = `npm i -g @openai/codex@latest
 codex`
 
 const codexConfig = computed(() => `model = "gpt-5.5"
-model_provider = "moligate"
+model_provider = "neogate"
 
-[model_providers.moligate]
-name = "Moligate"
+[model_providers.neogate]
+name = "NeoGate"
 base_url = "${apiBaseUrl.value}"
 wire_api = "responses"
 requires_openai_auth = false
@@ -41,7 +41,7 @@ requires_openai_auth = false
 `)
 
 const codexAuth = `{
-  "OPENAI_API_KEY": "YOUR_MOLIGATE_API_KEY",
+  "OPENAI_API_KEY": "YOUR_NEOGATE_API_KEY",
   "auth_mode": "apikey"
 }`
 
@@ -61,7 +61,7 @@ const content = computed(() => {
   if (locale.value === 'zh-CN') {
     return {
       title: '帮助文档',
-      subtitle: '用魔力门统一管理 API 密钥、余额、用量和上游模型，并通过 OpenAI / Anthropic 兼容接口接入。',
+      subtitle: '用 NeoGate 统一管理 API 密钥、余额、用量和上游模型，并通过 OpenAI / Anthropic 兼容接口接入。',
       menuTitle: '目录',
       menu: [
         ['start', '开始使用', '1. 开始使用'],
@@ -75,11 +75,11 @@ const content = computed(() => {
       startIntro: '第一次使用只需要完成两步：创建 API 密钥，然后执行安装脚本。',
       startCards: [
         ['创建 API 密钥', '在首页填写邮箱创建密钥，完整密钥只会通过邮件发送。'],
-        ['执行安装脚本', '复制并运行安装脚本，把魔力门写入本机常用 AI 工具配置。']
+        ['执行安装脚本', '复制并运行安装脚本，把 NeoGate 写入本机常用 AI 工具配置。']
       ],
       installTitle: '一键配置本机工具',
       installText: '安装脚本会把当前服务写入常用本地 AI 工具配置。',
-      endpointIntro: '下游应用只需要使用魔力门地址和自己的魔力门 API Key；上游密钥由后台统一管理。',
+      endpointIntro: '下游应用只需要使用 NeoGate 地址和自己的 NeoGate API Key；上游密钥由后台统一管理。',
       routes: [
         ['OpenAI 模型列表', 'GET', '/v1/models'],
         ['OpenAI Chat Completions', 'POST', '/v1/chat/completions'],
@@ -91,7 +91,7 @@ const content = computed(() => {
       requestTitle: '发送一次对话请求',
       pythonTitle: 'Python SDK',
       claudeCodeTitle: 'Claude Code',
-      claudeCodeIntro: '如果你准备使用 Claude Code，先安装 Claude Code，再修改用户级 settings.json。这里使用魔力门的 Anthropic 兼容网关和模型名。',
+      claudeCodeIntro: '如果你准备使用 Claude Code，先安装 Claude Code，再修改用户级 settings.json。这里使用 NeoGate 的 Anthropic 兼容网关和模型名。',
       installClaudeTitle: '安装 Claude Code',
       openClaudeConfigTitle: '打开或创建配置文件',
       claudeConfigPathText: 'Claude Code 官方使用 settings.json 管理配置。首次运行 claude 成功后，本地配置目录才会生成；没有 settings.json 时，可以手动创建。',
@@ -100,7 +100,7 @@ const content = computed(() => {
       verifyTitle: '验证配置',
       claudeVerifyText: '重新运行 claude，进入 Claude Code 后发送一条测试消息；如果能正常回复，说明配置完成。',
       codexTitle: 'Codex',
-      codexIntro: '如果你准备使用 Codex，推荐通过 OpenAI 兼容方式接入魔力门。',
+      codexIntro: '如果你准备使用 Codex，推荐通过 OpenAI 兼容方式接入 NeoGate。',
       installCodexTitle: '安装 Codex',
       codexConfigFileTitle: '打开配置文件',
       codexConfigFileText: '在用户目录下打开 ~/.codex/config.toml；如果文件不存在，请手动创建。模型、提供商和 Base URL 写入 config.toml。',
@@ -125,7 +125,7 @@ const content = computed(() => {
 
   return {
     title: 'Help Docs',
-    subtitle: 'Use Moligate to manage API keys, balance, usage, and upstream models behind OpenAI / Anthropic-compatible APIs.',
+    subtitle: 'Use NeoGate to manage API keys, balance, usage, and upstream models behind OpenAI / Anthropic-compatible APIs.',
     menuTitle: 'Contents',
     menu: [
       ['start', 'Start', '1. Start'],
@@ -139,11 +139,11 @@ const content = computed(() => {
     startIntro: 'First-time setup has two steps: create an API key, then run the install script.',
     startCards: [
       ['Create an API key', 'Create a key from the home page. The full key is only sent by email.'],
-      ['Run the install script', 'Copy and run the script to write Moligate into common local AI tool configuration.']
+      ['Run the install script', 'Copy and run the script to write NeoGate into common local AI tool configuration.']
     ],
     installTitle: 'Configure local tools',
     installText: 'The install script writes this service into common local AI tool configuration.',
-    endpointIntro: 'Apps use Moligate URLs and a Moligate API key. Upstream credentials are managed in the admin console.',
+    endpointIntro: 'Apps use NeoGate URLs and a NeoGate API key. Upstream credentials are managed in the admin console.',
     routes: [
       ['OpenAI models', 'GET', '/v1/models'],
       ['OpenAI Chat Completions', 'POST', '/v1/chat/completions'],
@@ -155,7 +155,7 @@ const content = computed(() => {
     requestTitle: 'Send one chat request',
     pythonTitle: 'Python SDK',
     claudeCodeTitle: 'Claude Code',
-      claudeCodeIntro: 'To use Claude Code, install it first, then edit the user-level settings.json file. This uses the Moligate Anthropic-compatible gateway and model name.',
+      claudeCodeIntro: 'To use Claude Code, install it first, then edit the user-level settings.json file. This uses the NeoGate Anthropic-compatible gateway and model name.',
       installClaudeTitle: 'Install Claude Code',
       openClaudeConfigTitle: 'Open or create the config file',
       claudeConfigPathText: 'Claude Code officially uses settings.json for configuration. The local config directory is created after the first successful claude launch. Create settings.json manually if it does not exist.',

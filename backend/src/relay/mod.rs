@@ -392,16 +392,16 @@ async fn respond_upstream_http_failure(
     let mut builder = Response::builder()
         .status(failure.relay_status)
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-moligate-error-type", failure.error_type)
+        .header("x-neogate-error-type", failure.error_type)
         .header(
-            "x-moligate-retryable",
+            "x-neogate-retryable",
             if failure.retryable { "true" } else { "false" },
         );
     if let Ok(value) = HeaderValue::from_str(&ctx.upstream.provider) {
-        builder = builder.header("x-moligate-upstream-provider", value);
+        builder = builder.header("x-neogate-upstream-provider", value);
     }
     if let Ok(value) = HeaderValue::from_str(&status.as_u16().to_string()) {
-        builder = builder.header("x-moligate-upstream-status", value);
+        builder = builder.header("x-neogate-upstream-status", value);
     }
     builder
         .body(Body::from(payload.to_string()))

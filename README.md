@@ -1,8 +1,8 @@
-# Moligate
+# NeoGate
 
 [中文文档](README.zh-CN.md)
 
-Moligate is a minimal Rust/Axum LLM API gateway.
+NeoGate is a minimal Rust/Axum LLM API gateway.
 
 It provides the backend foundation for:
 
@@ -19,7 +19,7 @@ This repository intentionally starts with backend-only infrastructure. There is 
 The PostgreSQL schema is intentionally small:
 
 - `"user"`: gateway users
-- `user_key`: downstream API keys used by clients calling Moligate
+- `user_key`: downstream API keys used by clients calling NeoGate
 - `wallet`: credit balances for users and user keys
 - `channel`: upstream provider service groups, with priority, weight, and key selection mode
 - `channel_endpoint`: protocol-specific upstream endpoints inside a channel, with protocol, Base URL, model allowlist, and health state
@@ -36,7 +36,7 @@ The PostgreSQL schema is intentionally small:
 Create a database:
 
 ```bash
-createdb moligate
+createdb neogate
 ```
 
 Run the backend:
@@ -60,7 +60,7 @@ MAIL_FROM_NAME=
 MAIL_SUBJECT_PREFIX=
 ```
 
-`MAIL_SMTP_TLS` defaults to `true`. `MAIL_FROM_NAME` and `MAIL_SUBJECT_PREFIX` are optional; when left empty, the backend uses `魔力门` for Chinese public API key emails and `Moligate` for English emails. `.env` is gitignored and should hold the real SMTP password.
+`MAIL_SMTP_TLS` defaults to `true`. `MAIL_FROM_NAME` and `MAIL_SUBJECT_PREFIX` are optional; when left empty, the backend uses `NeoGate` for all public API key emails. `.env` is gitignored and should hold the real SMTP password.
 
 ## Frontend Install Script
 
@@ -74,14 +74,14 @@ cp .env.example .env.production.local
 ```
 
 ```dotenv
-VITE_MOLIGATE_BACKEND_ORIGIN=https://api.example.com
+VITE_NEOGATE_BACKEND_ORIGIN=https://api.example.com
 ```
 
-The generated install script uses `https://api.example.com/v1` for Codex/OpenAI and `https://api.example.com/anthropic` for Claude/Anthropic. You can also pass `VITE_MOLIGATE_BACKEND_ORIGIN=https://api.example.com` when building or running Vite.
+The generated install script uses `https://api.example.com/v1` for Codex/OpenAI and `https://api.example.com/anthropic` for Claude/Anthropic. You can also pass `VITE_NEOGATE_BACKEND_ORIGIN=https://api.example.com` when building or running Vite.
 
 ## Deployment Notes
 
-Moligate has two runtime modes:
+NeoGate has two runtime modes:
 
 - `RUNTIME_MODE=standalone`: no Redis dependency. Hot credit, cache invalidation, and relay caches are process-local, so run a single backend instance.
 - `RUNTIME_MODE=distributed`: multiple stateless backend replicas share Redis for hot credit and cache invalidation. Set `REDIS_URL` to a writable Redis endpoint. This supports a single Redis primary or a Sentinel-managed primary exposed through your infrastructure; Redis Cluster hash-slot sharding is intentionally not supported.
@@ -133,7 +133,7 @@ For multi-replica deployments:
 ```dotenv
 RUNTIME_MODE=distributed
 REDIS_URL=redis://redis.example.com:6379/
-REDIS_KEY_PREFIX=moligate
+REDIS_KEY_PREFIX=neogate
 ```
 
 For simple multi-replica deployments, run multiple `PROCESS_ROLE=api` replicas behind the load balancer and at least one `PROCESS_ROLE=worker` replica for billing backlog processing and allocation recovery.
@@ -143,7 +143,7 @@ Health probes:
 - `GET /healthz`: process liveness
 - `GET /readyz`: readiness, including PostgreSQL connectivity, Redis connectivity when `RUNTIME_MODE=distributed`, billing outbox write health, and billing backlog thresholds
 
-Billing settlements are inserted into the durable `billing` outbox with short retry, then finalized by a background worker in batches. Non-billing relay usage is still queued in memory and flushed to PostgreSQL asynchronously. If a non-billing usage flush fails, the in-process batch is kept for retry; a process crash can lose unflushed non-billing usage records. Stale active credit allocations are periodically recovered after `CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS`; before recovery, Moligate removes matching hot-credit entries from the configured runtime store.
+Billing settlements are inserted into the durable `billing` outbox with short retry, then finalized by a background worker in batches. Non-billing relay usage is still queued in memory and flushed to PostgreSQL asynchronously. If a non-billing usage flush fails, the in-process batch is kept for retry; a process crash can lose unflushed non-billing usage records. Stale active credit allocations are periodically recovered after `CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS`; before recovery, NeoGate removes matching hot-credit entries from the configured runtime store.
 
 Container startup:
 
@@ -192,7 +192,7 @@ anthropic-version: <incoming value or ANTHROPIC_VERSION>
 
 ## Selection Rules
 
-For each relay request, Moligate:
+For each relay request, NeoGate:
 
 1. validates the downstream `user_key`
 2. filters channel endpoints by provider, protocol, requested model, enabled state, health, cooldown, and available keys on the parent channel

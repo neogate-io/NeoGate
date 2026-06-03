@@ -1,7 +1,7 @@
 import { ref, watchEffect } from 'vue'
 import { defaultLocale, isLocale, translate, type Locale, type MessageKey } from '../i18n'
 
-const localeStorageKey = 'moligate_locale'
+const localeStorageKey = 'neogate_locale'
 const storedLocale = typeof localStorage === 'undefined' ? null : localStorage.getItem(localeStorageKey)
 const locale = ref<Locale>(isLocale(storedLocale) ? storedLocale : defaultLocale)
 

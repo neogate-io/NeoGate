@@ -138,7 +138,7 @@ pub async fn create_user_payment_order(
         order_id,
         payable_amount_minor,
         pay_type: req.pay_type.clone(),
-        subject: "Moligate credit recharge".to_string(),
+        subject: "NeoGate credit recharge".to_string(),
         notify_url,
         return_url: req.return_url.clone(),
     };

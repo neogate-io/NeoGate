@@ -14,12 +14,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --system --create-home --home-dir /app moligate
+RUN useradd --system --create-home --home-dir /app neogate
 
 WORKDIR /app
-COPY --from=builder /app/backend/target/release/moligate /usr/local/bin/moligate
+COPY --from=builder /app/backend/target/release/neogate /usr/local/bin/neogate
 
-USER moligate
+USER neogate
 EXPOSE 8080
 
-CMD ["moligate"]
+CMD ["neogate"]

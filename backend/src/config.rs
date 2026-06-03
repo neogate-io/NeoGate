@@ -189,7 +189,7 @@ impl Config {
             secret_cache_max_entries: parse_usize("SECRET_CACHE_MAX_ENTRIES", 4096),
             redis_url: optional("REDIS_URL"),
             redis_key_prefix: env::var("REDIS_KEY_PREFIX")
-                .unwrap_or_else(|_| "moligate".to_string()),
+                .unwrap_or_else(|_| "neogate".to_string()),
             credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000),
             credit_allocation_recovery_after: Duration::from_secs(parse_u64(
                 "CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS",
@@ -319,7 +319,7 @@ impl PaymentConfig {
                 secret_key: optional("ZPAY_SECRET_KEY"),
                 default_pay_type: env::var("ZPAY_DEFAULT_PAY_TYPE")
                     .unwrap_or_else(|_| "wxpay".to_string()),
-                site_name: env::var("ZPAY_SITE_NAME").unwrap_or_else(|_| "Moligate".to_string()),
+                site_name: env::var("ZPAY_SITE_NAME").unwrap_or_else(|_| "NeoGate".to_string()),
             },
         })
     }

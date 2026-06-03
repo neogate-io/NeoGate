@@ -97,10 +97,7 @@ async fn send_openai_oauth_request(
                 .header("connection", "Keep-Alive")
                 .header("originator", "codex_cli_rs")
                 .header("chatgpt-account-id", account_id)
-                .header(
-                    "user-agent",
-                    "codex_cli_rs/0.118.0 (Moligate; openai_oauth)",
-                )
+                .header("user-agent", "codex_cli_rs/0.118.0 (NeoGate; openai_oauth)")
                 .body(body.clone())
         },
     )

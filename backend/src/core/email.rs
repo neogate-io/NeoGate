@@ -27,10 +27,7 @@ impl EmailLocale {
     }
 
     fn product_name(self) -> &'static str {
-        match self {
-            Self::ZhCn => "魔力门",
-            Self::EnUs => "Moligate",
-        }
+        "NeoGate"
     }
 }
 
@@ -237,17 +234,17 @@ fn api_key_email_content(locale: EmailLocale) -> ApiKeyEmailContent {
     match locale {
         EmailLocale::ZhCn => ApiKeyEmailContent {
             subject: "API 密钥",
-            title: "你的魔力门 API 密钥已生成",
-            intro: "调用魔力门时请使用下面的密钥。请妥善保管，完整密钥只会通过这封邮件发送。",
+            title: "你的 NeoGate API 密钥已生成",
+            intro: "调用 NeoGate 时请使用下面的密钥。请妥善保管，完整密钥只会通过这封邮件发送。",
             api_key_label: "API 密钥",
-            footer: "如果这不是你本人操作，请在魔力门管理后台轮换该密钥。",
+            footer: "如果这不是你本人操作，请在 NeoGate 管理后台轮换该密钥。",
         },
         EmailLocale::EnUs => ApiKeyEmailContent {
             subject: "API Key",
-            title: "Your Moligate API key is ready",
-            intro: "Use this key when calling Moligate. Keep it private because the full key is only sent in this email.",
+            title: "Your NeoGate API key is ready",
+            intro: "Use this key when calling NeoGate. Keep it private because the full key is only sent in this email.",
             api_key_label: "API key",
-            footer: "If you did not request this key, rotate it from the Moligate admin console.",
+            footer: "If you did not request this key, rotate it from the NeoGate admin console.",
         },
     }
 }
@@ -278,14 +275,14 @@ fn password_reset_email_content(locale: EmailLocale) -> PasswordResetEmailConten
     match locale {
         EmailLocale::ZhCn => PasswordResetEmailContent {
             subject: "重置密码",
-            title: "重置你的魔力门密码",
+            title: "重置你的 NeoGate 密码",
             intro: "点击下面的按钮设置新的登录密码。链接会在 30 分钟后失效。",
             action: "重置密码",
             footer: "如果这不是你本人操作，可以忽略这封邮件。",
         },
         EmailLocale::EnUs => PasswordResetEmailContent {
             subject: "Reset password",
-            title: "Reset your Moligate password",
+            title: "Reset your NeoGate password",
             intro: "Click the button below to set a new sign-in password. This link expires in 30 minutes.",
             action: "Reset password",
             footer: "If you did not request this, you can ignore this email.",
@@ -297,14 +294,14 @@ fn login_verification_code_email_content(locale: EmailLocale) -> LoginVerificati
     match locale {
         EmailLocale::ZhCn => LoginVerificationCodeEmailContent {
             subject: "登录验证码",
-            title: "验证你的魔力门邮箱",
+            title: "验证你的 NeoGate 邮箱",
             intro: "请输入下面的验证码完成首次登录。验证码会在 10 分钟后失效。",
             code_label: "验证码",
             footer: "如果这不是你本人操作，可以忽略这封邮件。",
         },
         EmailLocale::EnUs => LoginVerificationCodeEmailContent {
             subject: "Sign-in verification code",
-            title: "Verify your Moligate email",
+            title: "Verify your NeoGate email",
             intro: "Enter this code to finish your first sign-in. It expires in 10 minutes.",
             code_label: "Verification code",
             footer: "If you did not request this, you can ignore this email.",
@@ -496,7 +493,7 @@ mod tests {
         let body = api_key_email_text_body("sk-test123", api_key_email_content(EmailLocale::EnUs));
 
         assert!(body.contains("sk-test123"));
-        assert!(body.contains("Your Moligate API key is ready"));
+        assert!(body.contains("Your NeoGate API key is ready"));
     }
 
     #[test]
@@ -505,7 +502,7 @@ mod tests {
             api_key_email_html_body("sk-test<&123", api_key_email_content(EmailLocale::EnUs));
 
         assert!(body.contains("sk-test&lt;&amp;123"));
-        assert!(body.contains("Your Moligate API key is ready"));
+        assert!(body.contains("Your NeoGate API key is ready"));
     }
 
     #[test]
@@ -513,9 +510,9 @@ mod tests {
         let text = api_key_email_text_body("sk-test123", api_key_email_content(EmailLocale::ZhCn));
         let html = api_key_email_html_body("sk-test123", api_key_email_content(EmailLocale::ZhCn));
 
-        assert!(text.contains("你的魔力门 API 密钥已生成"));
+        assert!(text.contains("你的 NeoGate API 密钥已生成"));
         assert!(text.contains("sk-test123"));
-        assert!(html.contains("你的魔力门 API 密钥已生成"));
+        assert!(html.contains("你的 NeoGate API 密钥已生成"));
         assert!(html.contains("sk-test123"));
     }
 
@@ -555,16 +552,16 @@ mod tests {
     #[test]
     fn api_key_email_subject_uses_chinese_product_name() {
         assert_eq!(
-            api_key_email_subject("魔力门", api_key_email_content(EmailLocale::ZhCn)),
-            "魔力门 API 密钥"
+            api_key_email_subject("NeoGate", api_key_email_content(EmailLocale::ZhCn)),
+            "NeoGate API 密钥"
         );
     }
 
     #[test]
     fn api_key_email_subject_uses_english_product_name() {
         assert_eq!(
-            api_key_email_subject("Moligate", api_key_email_content(EmailLocale::EnUs)),
-            "Moligate API Key"
+            api_key_email_subject("NeoGate", api_key_email_content(EmailLocale::EnUs)),
+            "NeoGate API Key"
         );
     }
 
@@ -577,9 +574,9 @@ mod tests {
             password_reset_email_html_body(url, password_reset_email_content(EmailLocale::EnUs));
 
         assert!(text.contains(url));
-        assert!(text.contains("Reset your Moligate password"));
+        assert!(text.contains("Reset your NeoGate password"));
         assert!(html.contains(url));
-        assert!(html.contains("Reset your Moligate password"));
+        assert!(html.contains("Reset your NeoGate password"));
     }
 
     #[test]
@@ -594,14 +591,14 @@ mod tests {
         );
 
         assert!(text.contains("123456"));
-        assert!(text.contains("验证你的魔力门邮箱"));
+        assert!(text.contains("验证你的 NeoGate 邮箱"));
         assert!(html.contains("123456"));
-        assert!(html.contains("验证你的魔力门邮箱"));
+        assert!(html.contains("验证你的 NeoGate 邮箱"));
     }
 
     #[test]
     fn product_name_follows_email_locale() {
-        assert_eq!(EmailLocale::ZhCn.product_name(), "魔力门");
-        assert_eq!(EmailLocale::EnUs.product_name(), "Moligate");
+        assert_eq!(EmailLocale::ZhCn.product_name(), "NeoGate");
+        assert_eq!(EmailLocale::EnUs.product_name(), "NeoGate");
     }
 }

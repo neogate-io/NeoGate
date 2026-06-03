@@ -1,0 +1,632 @@
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
+import {
+  createChannel,
+  createChannelKey,
+  deleteChannel,
+  fetchUpstreamModels,
+  getAllChannelKeys,
+  getChannels,
+  updateChannel
+} from '../api/channels'
+import { getProviders } from '../api/providers'
+import type { MessageKey } from '../i18n'
+import type { Channel, ChannelEndpoint, ChannelKey, ChannelProvider, EndpointProtocol } from '../types/admin'
+import {
+  customProviderOption,
+  findProviderOption,
+  isCustomProvider,
+  providerToOption,
+  splitCommaList,
+  withCustomProviderFirst,
+  type ChannelProviderOption
+} from '../utils/channel'
+import { readError } from '../utils/errors'
+
+type Translate = (key: MessageKey) => string
+type ModelPickerTarget = {
+  form: 'create' | 'edit'
+}
+
+const protocols: EndpointProtocol[] = ['openai', 'openai_oauth', 'anthropic']
+const wordJoiner = '\u2060'
+
+export type ChannelEndpointForm = {
+  protocol: EndpointProtocol
+  base_url: string
+  enabled: boolean
+}
+
+export type ChannelForm = {
+  provider: Channel['provider']
+  name: string
+  models: string
+  endpoints: Record<EndpointProtocol, ChannelEndpointForm>
+  enabled: boolean
+  use_credentials: boolean
+  secret: string
+}
+
+function defaultEndpointForms(provider: ChannelProviderOption) {
+  return {
+    openai: {
+      protocol: 'openai' as const,
+      base_url: provider.defaultEndpoints.openai.baseUrl,
+      enabled: true
+    },
+    openai_oauth: {
+      protocol: 'openai_oauth' as const,
+      base_url: provider.defaultEndpoints.openai_oauth.baseUrl,
+      enabled: true
+    },
+    anthropic: {
+      protocol: 'anthropic' as const,
+      base_url: provider.defaultEndpoints.anthropic.baseUrl,
+      enabled: true
+    }
+  }
+}
+
+function defaultCreateForm(provider: ChannelProviderOption = customProviderOption): ChannelForm {
+  return {
+    provider: provider.value,
+    name: provider.defaultName,
+    models: '',
+    endpoints: defaultEndpointForms(provider),
+    enabled: true,
+    use_credentials: false,
+    secret: ''
+  }
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function endpointModels(endpoints: ChannelEndpoint[]) {
+  const models = endpoints.flatMap((endpoint) => endpoint.models)
+  return Array.from(new Set(models)).join(', ')
+}
+
+export function useChannels(t: Translate) {
+  const channels = ref<Channel[]>([])
+  const channelKeys = ref<ChannelKey[]>([])
+  const providers = ref<ChannelProviderOption[]>([])
+  const loading = ref(false)
+  const createDialogOpen = ref(false)
+  const editDialogOpen = ref(false)
+  const modelPickerDialogOpen = ref(false)
+  const creating = ref(false)
+  const fetchingModels = ref(false)
+  const updating = ref(false)
+  const deletingId = ref<number | null>(null)
+  const editingChannel = ref<Channel | null>(null)
+  const fetchedModels = ref<string[]>([])
+  const selectedFetchedModels = ref<string[]>([])
+  const modelPickerTarget = ref<ModelPickerTarget>({ form: 'create' })
+
+  const createForm = reactive(defaultCreateForm())
+  const editForm = reactive<ChannelForm>(defaultCreateForm())
+
+  const createBaseUrl = computed({
+    get: () => visibleBaseUrl(createForm),
+    set: (value: string) => {
+      if (isCustomProvider(createForm.provider)) {
+        setVisibleBaseUrl(createForm, value)
+      }
+    }
+  })
+
+  const editBaseUrl = computed({
+    get: () => visibleBaseUrl(editForm),
+    set: (value: string) => {
+      if (isCustomProvider(editForm.provider)) {
+        setVisibleBaseUrl(editForm, value)
+      }
+    }
+  })
+
+  const secretInput = computed({
+    get: () => keepHyphenWithNextChar(createForm.secret),
+    set: (value: string) => {
+      createForm.secret = stripWordJoiners(value)
+    }
+  })
+
+  const editSecretInput = computed({
+    get: () => keepHyphenWithNextChar(editForm.secret),
+    set: (value: string) => {
+      editForm.secret = stripWordJoiners(value)
+    }
+  })
+
+  const providerOptions = computed(() => {
+    return withCustomProviderFirst(providers.value)
+  })
+
+  const isCreateCustomProvider = computed(() => isCustomProvider(createForm.provider))
+  const isCreateBaseUrlReadonly = computed(() => !isCustomProvider(createForm.provider))
+  const isEditBaseUrlReadonly = computed(() => !isCustomProvider(editForm.provider))
+
+  const keyCounts = computed(() => {
+    const counts = new Map<number, number>()
+    for (const key of channelKeys.value) {
+      counts.set(key.channel_id, (counts.get(key.channel_id) ?? 0) + 1)
+    }
+    return counts
+  })
+
+  const hasFetchedModels = computed(() => fetchedModels.value.length > 0)
+
+  const allFetchedModelsSelected = computed(() => {
+    return hasFetchedModels.value && selectedFetchedModels.value.length === fetchedModels.value.length
+  })
+
+  watch(selectedFetchedModels, syncSelectedModelsToInput, { deep: true })
+
+  function openCreateDialog() {
+    const provider = findProviderOption(customProviderOption.value, providerOptions.value) ?? providerOptions.value[0]
+    Object.assign(createForm, defaultCreateForm(provider))
+    resetFetchedModels()
+    createDialogOpen.value = true
+  }
+
+  function openEditDialog(row: Channel) {
+    editingChannel.value = row
+    const endpointByProtocol = new Map(row.endpoints.map((endpoint) => [endpoint.protocol, endpoint]))
+    Object.assign(editForm, {
+      provider: row.provider,
+      name: row.name,
+      models: endpointModels(row.endpoints),
+      endpoints: {
+        openai: endpointFormFromRecord('openai', endpointByProtocol.get('openai')),
+        openai_oauth: endpointFormFromRecord('openai_oauth', endpointByProtocol.get('openai_oauth')),
+        anthropic: endpointFormFromRecord('anthropic', endpointByProtocol.get('anthropic'))
+      },
+      enabled: row.enabled,
+      use_credentials: row.use_credentials,
+      secret: ''
+    })
+    resetFetchedModels()
+    editDialogOpen.value = true
+  }
+
+  function endpointFormFromRecord(protocol: EndpointProtocol, endpoint?: ChannelEndpoint): ChannelEndpointForm {
+    return {
+      protocol,
+      base_url: endpoint?.base_url ?? '',
+      enabled: endpoint?.enabled ?? true
+    }
+  }
+
+  function selectCreateProvider(provider: ChannelProvider) {
+    const option = findProviderOption(provider, providerOptions.value)
+    if (!option) return
+
+    Object.assign(createForm, defaultCreateForm(option))
+    resetFetchedModels()
+  }
+
+  async function loadChannels() {
+    loading.value = true
+
+    try {
+      const [fetchedChannels, fetchedChannelKeys, fetchedProviders] = await Promise.all([
+        getChannels(),
+        getAllChannelKeys(),
+        getProviders()
+      ])
+      channels.value = fetchedChannels
+      channelKeys.value = fetchedChannelKeys
+      providers.value = fetchedProviders.map(providerToOption)
+    } catch (err) {
+      channels.value = []
+      channelKeys.value = []
+      ElMessage.error(readError(err))
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function submitChannel() {
+    const parsed = validateChannelForm(createForm)
+    if (!parsed) return null
+
+    creating.value = true
+    try {
+      const channel = await createChannel({
+        provider: createForm.provider,
+        name: parsed.name,
+        endpoints: parsed.endpoints,
+        enabled: createForm.enabled,
+        priority: 0,
+        weight: 1,
+        key_selection_mode: 'polling',
+        use_credentials: createForm.use_credentials,
+        key_name: parsed.name,
+        secret: createForm.use_credentials ? '' : stripWordJoiners(createForm.secret)
+      })
+      ElMessage.success(t('channelCreated'))
+      await loadChannels()
+      createDialogOpen.value = false
+      return channel
+    } catch (err) {
+      ElMessage.error(readError(err))
+      return null
+    } finally {
+      creating.value = false
+    }
+  }
+
+  async function fetchCreateModels() {
+    await fetchModels('create')
+  }
+
+  async function fetchEditModels() {
+    await fetchModels('edit')
+  }
+
+  async function fetchModels(formTarget: ModelPickerTarget['form']) {
+    const form = formTarget === 'edit' ? editForm : createForm
+    const channelId = formTarget === 'edit' ? editingChannel.value?.id : undefined
+    if (formTarget === 'edit' && !channelId) return
+
+    const endpoint = modelFetchEndpoint(form)
+    const baseUrl = visibleBaseUrl(form).trim()
+    const secret = formTarget === 'create' ? stripWordJoiners(createForm.secret).trim() : undefined
+    if (!validateModelFetchInput(form, baseUrl, secret)) return
+
+    modelPickerTarget.value = { form: formTarget }
+    const shouldKeepAllSelected = allFetchedModelsSelected.value
+    const existingModels = splitCommaList(form.models)
+
+    fetchingModels.value = true
+    try {
+      const { models } = await fetchUpstreamModels({
+        channel_id: channelId,
+        provider: form.provider,
+        protocol: endpoint.protocol,
+        base_url: baseUrl,
+        secret: formTarget === 'create' ? secret : undefined,
+        use_credentials: form.use_credentials
+      })
+      if (models.length === 0) {
+        ElMessage.warning(t('modelsFetchEmpty'))
+        return
+      }
+
+      fetchedModels.value = models
+      selectedFetchedModels.value = shouldKeepAllSelected || (formTarget === 'create' && existingModels.length === 0)
+        ? models
+        : models.filter((model) => existingModels.includes(model))
+      syncSelectedModelsToInput()
+      modelPickerDialogOpen.value = true
+      ElMessage.success(t('modelsFetched'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    } finally {
+      fetchingModels.value = false
+    }
+  }
+
+  function validateModelFetchInput(form: ChannelForm, baseUrl: string, secret?: string) {
+    if (!form.use_credentials && secret === '') {
+      ElMessage.warning(t('upstreamKeyRequired'))
+      return false
+    }
+
+    if (!baseUrl) {
+      ElMessage.warning(t('baseUrlRequired'))
+      return false
+    }
+
+    if (!isValidHttpUrl(baseUrl)) {
+      ElMessage.warning(t('baseUrlInvalid'))
+      return false
+    }
+
+    return true
+  }
+
+  async function submitEditChannel() {
+    if (!editingChannel.value) return null
+
+    const parsed = validateChannelForm(editForm)
+    if (!parsed) return null
+
+    updating.value = true
+    try {
+      const channel = await updateChannel(editingChannel.value.id, {
+        name: parsed.name,
+        endpoints: parsed.endpoints,
+        enabled: editForm.enabled,
+        priority: editingChannel.value.priority,
+        weight: editingChannel.value.weight,
+        key_selection_mode: editingChannel.value.key_selection_mode,
+        use_credentials: editForm.use_credentials
+      })
+      const secret = stripWordJoiners(editForm.secret).trim()
+      if (!editForm.use_credentials && secret) {
+        await createChannelKey(editingChannel.value.id, {
+          name: parsed.name,
+          secret,
+          enabled: true
+        })
+      }
+      ElMessage.success(t('channelUpdated'))
+      await loadChannels()
+      editDialogOpen.value = false
+      return channel
+    } catch (err) {
+      ElMessage.error(readError(err))
+      return null
+    } finally {
+      updating.value = false
+    }
+  }
+
+  function toggleAllFetchedModels(checked: boolean) {
+    selectedFetchedModels.value = checked ? [...fetchedModels.value] : []
+    syncSelectedModelsToInput()
+  }
+
+  function resetFetchedModels() {
+    modelPickerTarget.value = { form: 'create' }
+    fetchedModels.value = []
+    selectedFetchedModels.value = []
+    modelPickerDialogOpen.value = false
+  }
+
+  function syncSelectedModelsToInput() {
+    if (!hasFetchedModels.value) return
+    const models = selectedFetchedModels.value.join(', ')
+    const form = modelPickerTarget.value.form === 'edit' ? editForm : createForm
+    form.models = models
+  }
+
+  function modelsInputPlaceholder() {
+    if (allFetchedModelsSelected.value) return t('allModels')
+    return hasFetchedModels.value ? t('modelsCommaSeparated') : t('modelsFetchRequired')
+  }
+
+  function modelsInputReadonly() {
+    return true
+  }
+
+  function validateChannelForm(form: ChannelForm) {
+    const name = form.name.trim()
+    if (!name) {
+      ElMessage.warning(t('channelNameRequired'))
+      return null
+    }
+
+    const models = splitCommaList(form.models)
+    if (models.length === 0) {
+      ElMessage.warning(t('channelModelsRequired'))
+      return null
+    }
+
+    const endpoints = channelEndpointsForSubmit(form, models)
+    if (!endpoints) return null
+
+    return { name, endpoints }
+  }
+
+  function channelEndpointsForSubmit(form: ChannelForm, models: string[]) {
+    if (form.provider === 'openai' && form.use_credentials) {
+      const baseUrl = form.endpoints.openai_oauth.base_url.trim()
+      if (!baseUrl) {
+        ElMessage.warning(t('baseUrlRequired'))
+        return null
+      }
+
+      if (!isValidHttpUrl(baseUrl)) {
+        ElMessage.warning(t('baseUrlInvalid'))
+        return null
+      }
+
+      return [{
+        protocol: 'openai_oauth' as const,
+        base_url: baseUrl,
+        models,
+        enabled: true
+      }]
+    }
+
+    if (isCustomProvider(form.provider)) {
+      const baseUrl = visibleBaseUrl(form).trim()
+      if (!baseUrl) {
+        ElMessage.warning(t('baseUrlRequired'))
+        return null
+      }
+
+      if (!isValidHttpUrl(baseUrl)) {
+        ElMessage.warning(t('baseUrlInvalid'))
+        return null
+      }
+
+      return [{
+        protocol: 'openai' as const,
+        base_url: baseUrl,
+        models,
+        enabled: true
+      }]
+    }
+
+    const endpoints: Array<{
+      protocol: EndpointProtocol
+      base_url: string
+      models: string[]
+      enabled: boolean
+    }> = []
+    for (const protocol of protocols) {
+      if (protocol === 'openai_oauth') continue
+      const endpoint = form.endpoints[protocol]
+      const baseUrl = endpoint.base_url.trim()
+      if (!baseUrl) continue
+
+      if (!isValidHttpUrl(baseUrl)) {
+        ElMessage.warning(t('baseUrlInvalid'))
+        return null
+      }
+
+      endpoints.push({
+        protocol,
+        base_url: baseUrl,
+        models,
+        enabled: endpoint.enabled
+      })
+    }
+
+    if (endpoints.length === 0) {
+      ElMessage.warning(t('channelModelsRequired'))
+      return null
+    }
+
+    return endpoints
+  }
+
+  function stripWordJoiners(value: string) {
+    return value.replace(/\u2060/g, '')
+  }
+
+  function keepHyphenWithNextChar(value: string) {
+    return stripWordJoiners(value).replace(/-/g, `-${wordJoiner}`)
+  }
+
+  function modelFetchEndpoint(form: ChannelForm) {
+    if (form.provider === 'openai' && form.use_credentials) {
+      return form.endpoints.openai_oauth
+    }
+
+    if (isCustomProvider(form.provider)) {
+      return form.endpoints.openai
+    }
+
+    if (form.endpoints.openai.base_url.trim()) {
+      return form.endpoints.openai
+    }
+
+    return protocols
+      .map((protocol) => form.endpoints[protocol])
+      .find((endpoint) => endpoint.base_url.trim()) ?? form.endpoints.openai
+  }
+
+  function visibleBaseUrl(form: ChannelForm) {
+    if (form.provider === 'openai' && form.use_credentials) {
+      return form.endpoints.openai_oauth.base_url
+    }
+
+    return form.endpoints.openai.base_url || form.endpoints.anthropic.base_url
+  }
+
+  function setVisibleBaseUrl(form: ChannelForm, value: string) {
+    form.endpoints.openai.base_url = value
+    form.endpoints.openai_oauth.base_url = ''
+    form.endpoints.anthropic.base_url = ''
+  }
+
+  watch(
+    () => createForm.use_credentials,
+    (useCredentials) => {
+      syncOpenAiCredentialEndpoint(createForm, useCredentials)
+      resetFetchedModels()
+    }
+  )
+
+  watch(
+    () => editForm.use_credentials,
+    (useCredentials) => {
+      syncOpenAiCredentialEndpoint(editForm, useCredentials)
+      resetFetchedModels()
+    }
+  )
+
+  function syncOpenAiCredentialEndpoint(form: ChannelForm, useCredentials: boolean) {
+    if (form.provider !== 'openai') return
+    if (useCredentials) {
+      if (!form.endpoints.openai_oauth.base_url) {
+        const provider = findProviderOption(form.provider, providerOptions.value)
+        form.endpoints.openai_oauth.base_url = provider?.defaultEndpoints.openai_oauth.baseUrl ?? ''
+      }
+      return
+    }
+    if (!form.endpoints.openai.base_url) {
+      const provider = findProviderOption(form.provider, providerOptions.value)
+      form.endpoints.openai.base_url = provider?.defaultEndpoints.openai.baseUrl ?? ''
+    }
+  }
+
+  async function confirmDeleteChannel(row: Channel) {
+    try {
+      await ElMessageBox.confirm(t('deleteChannelConfirm'), t('delete'), {
+        confirmButtonText: t('delete'),
+        cancelButtonText: t('cancel'),
+        confirmButtonClass: 'el-button--danger',
+        type: 'warning'
+      })
+    } catch {
+      return
+    }
+
+    deletingId.value = row.id
+    try {
+      await deleteChannel(row.id)
+      ElMessage.success(t('channelDeleted'))
+      await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    } finally {
+      deletingId.value = null
+    }
+  }
+
+  onMounted(loadChannels)
+
+  return {
+    channels,
+    providerOptions,
+    protocols,
+    keyCounts,
+    loading,
+    createDialogOpen,
+    editDialogOpen,
+    modelPickerDialogOpen,
+    creating,
+    fetchingModels,
+    updating,
+    deletingId,
+    editingChannel,
+    createForm,
+    editForm,
+    createBaseUrl,
+    editBaseUrl,
+    secretInput,
+    editSecretInput,
+    isCreateCustomProvider,
+    isCreateBaseUrlReadonly,
+    isEditBaseUrlReadonly,
+    fetchedModels,
+    selectedFetchedModels,
+    allFetchedModelsSelected,
+    hasFetchedModels,
+    modelsInputPlaceholder,
+    modelsInputReadonly,
+    selectCreateProvider,
+    openCreateDialog,
+    openEditDialog,
+    fetchCreateModels,
+    fetchEditModels,
+    toggleAllFetchedModels,
+    loadChannels,
+    submitChannel,
+    submitEditChannel,
+    confirmDeleteChannel
+  }
+}

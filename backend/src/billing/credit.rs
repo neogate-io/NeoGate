@@ -1,0 +1,660 @@
+use std::{
+    collections::{hash_map::DefaultHasher, HashMap, HashSet, VecDeque},
+    hash::{Hash, Hasher},
+    sync::{LazyLock, Mutex},
+};
+
+use async_trait::async_trait;
+
+use crate::{error::AppResult, id::DbId};
+
+use super::{DebitPart, WalletId};
+
+#[async_trait]
+pub(super) trait HotCreditStore: Send + Sync {
+    async fn credit_allocation(
+        &self,
+        wallet: WalletId,
+        allocation_id: DbId,
+        amount_micro_usd: i64,
+    ) -> AppResult<()>;
+    async fn drain_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>>;
+    async fn try_debit_ordered(
+        &self,
+        wallets: &[WalletId],
+        amount_micro_usd: i64,
+    ) -> AppResult<Option<Vec<DebitPart>>>;
+    async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>>;
+    async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()>;
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HotAllocation {
+    pub wallet: WalletId,
+    pub allocation_id: DbId,
+}
+
+pub(super) struct MemoryHotCreditStore {
+    shards: Vec<Mutex<HashMap<WalletId, WalletHotCredit>>>,
+}
+
+pub(super) struct RedisHotCreditStore {
+    manager: redis::aio::ConnectionManager,
+    key_prefix: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WalletHotCredit {
+    generation: u64,
+    total_available_micro_usd: i64,
+    segments: VecDeque<HotSegment>,
+}
+
+#[derive(Debug, Clone)]
+struct HotSegment {
+    allocation_id: DbId,
+    available_micro_usd: i64,
+}
+
+const HOT_CREDIT_SHARDS: usize = 64;
+
+static REDIS_CREDIT_ALLOCATION_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        if not redis.call('GET', KEYS[3]) then
+          local total = 0
+          local items = redis.call('LRANGE', KEYS[1], 0, -1)
+          for _, item in ipairs(items) do
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+            total = total + tonumber(segment_amount)
+          end
+          redis.call('SET', KEYS[3], total)
+        end
+        local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
+        redis.call('RPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. tostring(gen))
+        redis.call('INCRBY', KEYS[3], ARGV[2])
+        return gen
+        "#,
+    )
+});
+
+static REDIS_DRAIN_WALLET_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
+        local items = redis.call('LRANGE', KEYS[1], 0, -1)
+        redis.call('DEL', KEYS[1])
+        redis.call('DEL', KEYS[3])
+        redis.call('SET', KEYS[2], gen + 1)
+        return items
+        "#,
+    )
+});
+
+static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        local wallet_count = tonumber(ARGV[1])
+        local amount = tonumber(ARGV[2])
+        local available = 0
+        for i = 1, wallet_count do
+          local list_key = KEYS[i]
+          local total_key = KEYS[wallet_count * 2 + i]
+          local total = redis.call('GET', total_key)
+          if not total then
+            local rebuilt = 0
+            local items = redis.call('LRANGE', list_key, 0, -1)
+            for _, item in ipairs(items) do
+              local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+              rebuilt = rebuilt + tonumber(segment_amount)
+            end
+            redis.call('SET', total_key, rebuilt)
+            total = tostring(rebuilt)
+          end
+          available = available + tonumber(total)
+        end
+        if available < amount then
+          return {}
+        end
+
+        local remaining = amount
+        local output = {}
+        for i = 1, wallet_count do
+          if remaining <= 0 then break end
+          local list_key = KEYS[i]
+          local gen_key = KEYS[wallet_count + i]
+          local total_key = KEYS[wallet_count * 2 + i]
+          local gen = tonumber(redis.call('GET', gen_key) or '0')
+          while remaining > 0 do
+            local item = redis.call('LPOP', list_key)
+            if not item then break end
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):([^:]+)')
+            local segment_amount_num = tonumber(segment_amount)
+            local debit = segment_amount_num
+            if debit > remaining then
+              debit = remaining
+            end
+            remaining = remaining - debit
+            redis.call('DECRBY', total_key, debit)
+            table.insert(output, tostring(i))
+            table.insert(output, allocation_id)
+            table.insert(output, tostring(debit))
+            table.insert(output, tostring(gen))
+            local leftover = segment_amount_num - debit
+            if leftover > 0 then
+              redis.call('LPUSH', list_key, allocation_id .. ':' .. tostring(leftover) .. ':' .. tostring(gen))
+            end
+          end
+        end
+        return output
+        "#,
+    )
+});
+
+static REDIS_REFUND_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
+        local expected = tonumber(ARGV[3])
+        if gen ~= expected then
+          return 0
+        end
+        if not redis.call('GET', KEYS[3]) then
+          local total = 0
+          local items = redis.call('LRANGE', KEYS[1], 0, -1)
+          for _, item in ipairs(items) do
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+            total = total + tonumber(segment_amount)
+          end
+          redis.call('SET', KEYS[3], total)
+        end
+        redis.call('LPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. ARGV[3])
+        redis.call('INCRBY', KEYS[3], ARGV[2])
+        return 1
+        "#,
+    )
+});
+
+static REDIS_REMOVE_ALLOCATIONS_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        local remove = {}
+        for i = 1, #ARGV do
+          remove[ARGV[i]] = true
+        end
+
+        local items = redis.call('LRANGE', KEYS[1], 0, -1)
+        redis.call('DEL', KEYS[1])
+        local kept = 0
+        for _, item in ipairs(items) do
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+            if not remove[allocation_id] then
+                redis.call('RPUSH', KEYS[1], item)
+                kept = kept + tonumber(segment_amount)
+            end
+        end
+        if kept > 0 then
+            redis.call('SET', KEYS[2], kept)
+        else
+            redis.call('DEL', KEYS[2])
+        end
+        return 1
+        "#,
+    )
+});
+
+#[async_trait]
+impl HotCreditStore for MemoryHotCreditStore {
+    async fn credit_allocation(
+        &self,
+        wallet: WalletId,
+        allocation_id: DbId,
+        amount_micro_usd: i64,
+    ) -> AppResult<()> {
+        if amount_micro_usd <= 0 {
+            return Ok(());
+        }
+        let mut balances = self.lock_shard_for_wallet(&wallet);
+        let wallet_hot = balances.entry(wallet).or_default();
+        wallet_hot.total_available_micro_usd += amount_micro_usd;
+        wallet_hot.segments.push_back(HotSegment {
+            allocation_id,
+            available_micro_usd: amount_micro_usd,
+        });
+        Ok(())
+    }
+
+    async fn drain_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>> {
+        let mut balances = self.lock_shard_for_wallet(wallet);
+        let wallet_hot = balances.entry(wallet.clone()).or_default();
+        let generation = wallet_hot.generation;
+        wallet_hot.generation = wallet_hot.generation.wrapping_add(1);
+        wallet_hot.total_available_micro_usd = 0;
+        Ok(std::mem::take(&mut wallet_hot.segments)
+            .into_iter()
+            .filter(|segment| segment.available_micro_usd > 0)
+            .map(|segment| DebitPart {
+                wallet: wallet.clone(),
+                allocation_id: segment.allocation_id,
+                amount_micro_usd: segment.available_micro_usd,
+                generation,
+            })
+            .collect())
+    }
+
+    async fn try_debit_ordered(
+        &self,
+        wallets: &[WalletId],
+        amount_micro_usd: i64,
+    ) -> AppResult<Option<Vec<DebitPart>>> {
+        if amount_micro_usd <= 0 {
+            return Ok(Some(Vec::new()));
+        }
+
+        let mut shard_ids = wallets.iter().map(Self::shard_index).collect::<Vec<_>>();
+        shard_ids.sort_unstable();
+        shard_ids.dedup();
+        let mut shards = shard_ids
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    self.shards[id]
+                        .lock()
+                        .expect("hot credit store shard poisoned"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let available = wallets
+            .iter()
+            .filter_map(|wallet| {
+                let shard_id = Self::shard_index(wallet);
+                shards
+                    .iter()
+                    .find(|(id, _)| *id == shard_id)
+                    .and_then(|(_, balances)| balances.get(wallet))
+            })
+            .map(|wallet_hot| wallet_hot.total_available_micro_usd)
+            .sum::<i64>();
+        if available < amount_micro_usd {
+            return Ok(None);
+        }
+
+        let mut remaining = amount_micro_usd;
+        let mut parts = Vec::new();
+        for wallet in wallets {
+            if remaining <= 0 {
+                break;
+            }
+            let shard_id = Self::shard_index(wallet);
+            let Some((_, balances)) = shards.iter_mut().find(|(id, _)| *id == shard_id) else {
+                continue;
+            };
+            let Some(wallet_hot) = balances.get_mut(wallet) else {
+                continue;
+            };
+            let generation = wallet_hot.generation;
+            let segments = &mut wallet_hot.segments;
+            while remaining > 0 {
+                let Some(front) = segments.front_mut() else {
+                    break;
+                };
+                let debit = front.available_micro_usd.min(remaining);
+                front.available_micro_usd -= debit;
+                wallet_hot.total_available_micro_usd -= debit;
+                remaining -= debit;
+                parts.push(DebitPart {
+                    wallet: wallet.clone(),
+                    allocation_id: front.allocation_id,
+                    amount_micro_usd: debit,
+                    generation,
+                });
+                if front.available_micro_usd == 0 {
+                    segments.pop_front();
+                }
+            }
+        }
+        Ok(Some(parts))
+    }
+
+    async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>> {
+        let mut returned = Vec::new();
+        for part in parts {
+            if part.amount_micro_usd <= 0 {
+                continue;
+            }
+            let mut balances = self.lock_shard_for_wallet(&part.wallet);
+            let wallet_hot = balances.entry(part.wallet.clone()).or_default();
+            if wallet_hot.generation != part.generation {
+                returned.push(part.clone());
+                continue;
+            }
+            wallet_hot.total_available_micro_usd += part.amount_micro_usd;
+            wallet_hot.segments.push_front(HotSegment {
+                allocation_id: part.allocation_id,
+                available_micro_usd: part.amount_micro_usd,
+            });
+        }
+        Ok(returned)
+    }
+
+    async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()> {
+        if allocations.is_empty() {
+            return Ok(());
+        }
+        let mut by_wallet: HashMap<WalletId, HashSet<DbId>> = HashMap::new();
+        for allocation in allocations {
+            by_wallet
+                .entry(allocation.wallet.clone())
+                .or_default()
+                .insert(allocation.allocation_id);
+        }
+
+        for (wallet, allocation_ids) in by_wallet {
+            let mut balances = self.lock_shard_for_wallet(&wallet);
+            let Some(wallet_hot) = balances.get_mut(&wallet) else {
+                continue;
+            };
+            let mut kept_total = 0;
+            wallet_hot.segments.retain(|segment| {
+                if allocation_ids.contains(&segment.allocation_id) {
+                    false
+                } else {
+                    kept_total += segment.available_micro_usd;
+                    true
+                }
+            });
+            wallet_hot.total_available_micro_usd = kept_total;
+        }
+        Ok(())
+    }
+}
+
+impl Default for MemoryHotCreditStore {
+    fn default() -> Self {
+        Self {
+            shards: (0..HOT_CREDIT_SHARDS)
+                .map(|_| Mutex::new(HashMap::new()))
+                .collect(),
+        }
+    }
+}
+
+impl MemoryHotCreditStore {
+    fn shard_index(wallet: &WalletId) -> usize {
+        let mut hasher = DefaultHasher::new();
+        wallet.hash(&mut hasher);
+        hasher.finish() as usize % HOT_CREDIT_SHARDS
+    }
+
+    fn lock_shard_for_wallet(
+        &self,
+        wallet: &WalletId,
+    ) -> std::sync::MutexGuard<'_, HashMap<WalletId, WalletHotCredit>> {
+        self.shards[Self::shard_index(wallet)]
+            .lock()
+            .expect("hot credit store shard poisoned")
+    }
+}
+
+impl RedisHotCreditStore {
+    pub async fn connect(redis_url: &str, key_prefix: String) -> AppResult<Self> {
+        let client = redis::Client::open(redis_url)?;
+        let manager = client.get_connection_manager().await?;
+        Ok(Self {
+            manager,
+            key_prefix,
+        })
+    }
+
+    fn wallet_key(&self, wallet: &WalletId) -> String {
+        format!("{}:hot_credit:{}", self.key_prefix, wallet.id)
+    }
+
+    fn generation_key(&self, wallet: &WalletId) -> String {
+        format!("{}:hot_credit_gen:{}", self.key_prefix, wallet.id)
+    }
+
+    fn total_key(&self, wallet: &WalletId) -> String {
+        format!("{}:hot_credit_total:{}", self.key_prefix, wallet.id)
+    }
+}
+
+#[async_trait]
+impl HotCreditStore for RedisHotCreditStore {
+    async fn credit_allocation(
+        &self,
+        wallet: WalletId,
+        allocation_id: DbId,
+        amount_micro_usd: i64,
+    ) -> AppResult<()> {
+        if amount_micro_usd <= 0 {
+            return Ok(());
+        }
+        let wallet_key = self.wallet_key(&wallet);
+        let generation_key = self.generation_key(&wallet);
+        let total_key = self.total_key(&wallet);
+        let mut conn = self.manager.clone();
+        let _: u64 = REDIS_CREDIT_ALLOCATION_SCRIPT
+            .key(wallet_key)
+            .key(generation_key)
+            .key(total_key)
+            .arg(allocation_id)
+            .arg(amount_micro_usd)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn drain_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>> {
+        let wallet_key = self.wallet_key(wallet);
+        let generation_key = self.generation_key(wallet);
+        let total_key = self.total_key(wallet);
+        let mut conn = self.manager.clone();
+        let items: Vec<String> = REDIS_DRAIN_WALLET_SCRIPT
+            .key(wallet_key)
+            .key(generation_key)
+            .key(total_key)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(items
+            .into_iter()
+            .filter_map(|item| decode_hot_segment(wallet, &item))
+            .collect())
+    }
+
+    async fn try_debit_ordered(
+        &self,
+        wallets: &[WalletId],
+        amount_micro_usd: i64,
+    ) -> AppResult<Option<Vec<DebitPart>>> {
+        if amount_micro_usd <= 0 {
+            return Ok(Some(Vec::new()));
+        }
+        if wallets.is_empty() {
+            return Ok(None);
+        }
+        let wallet_keys = wallets
+            .iter()
+            .map(|wallet| self.wallet_key(wallet))
+            .collect::<Vec<_>>();
+        let generation_keys = wallets
+            .iter()
+            .map(|wallet| self.generation_key(wallet))
+            .collect::<Vec<_>>();
+        let total_keys = wallets
+            .iter()
+            .map(|wallet| self.total_key(wallet))
+            .collect::<Vec<_>>();
+        let mut conn = self.manager.clone();
+        let mut invocation = REDIS_DEBIT_ORDERED_SCRIPT.prepare_invoke();
+        for key in &wallet_keys {
+            invocation.key(key);
+        }
+        for key in &generation_keys {
+            invocation.key(key);
+        }
+        for key in &total_keys {
+            invocation.key(key);
+        }
+        invocation.arg(wallets.len()).arg(amount_micro_usd);
+        let values: Vec<String> = invocation.invoke_async(&mut conn).await?;
+        if values.is_empty() {
+            return Ok(None);
+        }
+        let mut parts = Vec::new();
+        for chunk in values.chunks_exact(4) {
+            let wallet_index = chunk[0]
+                .parse::<usize>()
+                .ok()
+                .and_then(|value| value.checked_sub(1));
+            let Some(wallet) = wallet_index.and_then(|index| wallets.get(index)).cloned() else {
+                continue;
+            };
+            let allocation_id = chunk[1].parse::<DbId>().unwrap_or_default();
+            let amount = chunk[2].parse::<i64>().unwrap_or_default();
+            let generation = chunk[3].parse::<u64>().unwrap_or_default();
+            if allocation_id > 0 && amount > 0 {
+                parts.push(DebitPart {
+                    wallet,
+                    allocation_id,
+                    amount_micro_usd: amount,
+                    generation,
+                });
+            }
+        }
+        Ok(Some(parts))
+    }
+
+    async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>> {
+        let mut returned = Vec::new();
+        let mut conn = self.manager.clone();
+        for part in parts {
+            if part.amount_micro_usd <= 0 {
+                continue;
+            }
+            let generation_key = self.generation_key(&part.wallet);
+            let wallet_key = self.wallet_key(&part.wallet);
+            let total_key = self.total_key(&part.wallet);
+            let stored: i64 = REDIS_REFUND_SCRIPT
+                .key(wallet_key)
+                .key(generation_key)
+                .key(total_key)
+                .arg(part.allocation_id)
+                .arg(part.amount_micro_usd)
+                .arg(part.generation)
+                .invoke_async(&mut conn)
+                .await?;
+            if stored == 0 {
+                returned.push(part.clone());
+            }
+        }
+        Ok(returned)
+    }
+
+    async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()> {
+        if allocations.is_empty() {
+            return Ok(());
+        }
+        let mut by_wallet: HashMap<WalletId, Vec<DbId>> = HashMap::new();
+        for allocation in allocations {
+            by_wallet
+                .entry(allocation.wallet.clone())
+                .or_default()
+                .push(allocation.allocation_id);
+        }
+
+        let mut conn = self.manager.clone();
+        for (wallet, allocation_ids) in by_wallet {
+            let wallet_key = self.wallet_key(&wallet);
+            let total_key = self.total_key(&wallet);
+            let mut invocation = REDIS_REMOVE_ALLOCATIONS_SCRIPT.prepare_invoke();
+            invocation.key(wallet_key);
+            invocation.key(total_key);
+            for allocation_id in allocation_ids {
+                invocation.arg(allocation_id);
+            }
+            let _: i64 = invocation.invoke_async(&mut conn).await?;
+        }
+        Ok(())
+    }
+}
+
+fn decode_hot_segment(wallet: &WalletId, item: &str) -> Option<DebitPart> {
+    let mut parts = item.splitn(3, ':');
+    let allocation_id = parts.next()?.parse::<DbId>().ok()?;
+    let amount_micro_usd = parts.next()?.parse::<i64>().ok()?;
+    let generation = parts.next()?.parse::<u64>().ok()?;
+    (amount_micro_usd > 0).then(|| DebitPart {
+        wallet: wallet.clone(),
+        allocation_id,
+        amount_micro_usd,
+        generation,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hot_credit_store_drains_wallet() {
+        let store = MemoryHotCreditStore::default();
+        let wallet = WalletId::new(7);
+
+        store
+            .credit_allocation(wallet.clone(), 101, 30)
+            .await
+            .unwrap();
+        store
+            .credit_allocation(wallet.clone(), 102, 20)
+            .await
+            .unwrap();
+
+        let drained = store.drain_wallet(&wallet).await.unwrap();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(
+            drained
+                .iter()
+                .map(|part| part.amount_micro_usd)
+                .sum::<i64>(),
+            50
+        );
+        assert!(store
+            .try_debit_ordered(&[wallet], 1)
+            .await
+            .unwrap()
+            .is_none());
+
+        let returned = store.refund(&drained).await.unwrap();
+        assert_eq!(returned.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn hot_credit_store_removes_allocations() {
+        let store = MemoryHotCreditStore::default();
+        let wallet = WalletId::new(7);
+
+        store
+            .credit_allocation(wallet.clone(), 101, 30)
+            .await
+            .unwrap();
+        store
+            .credit_allocation(wallet.clone(), 102, 20)
+            .await
+            .unwrap();
+        store
+            .remove_allocations(&[HotAllocation {
+                wallet: wallet.clone(),
+                allocation_id: 101,
+            }])
+            .await
+            .unwrap();
+
+        let drained = store.drain_wallet(&wallet).await.unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].allocation_id, 102);
+        assert_eq!(drained[0].amount_micro_usd, 20);
+    }
+}

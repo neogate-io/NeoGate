@@ -1,0 +1,757 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { Calendar, Clock, Delete, Refresh, SwitchButton, Upload, Warning } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  deleteCredential,
+  disableCredential,
+  enableCredential,
+  getCredentials,
+  refreshCredential as refreshCredentialApi,
+  uploadCredentialFile
+} from '../../api/credentials'
+import ProviderIcon from '../../components/ProviderIcon.vue'
+import { useLocale } from '../../composables/useLocale'
+import type { Credential, CredentialQuotaWindow } from '../../types/admin'
+import { readError } from '../../utils/errors'
+
+const { t } = useLocale()
+const credentials = ref<Credential[]>([])
+const loading = ref(false)
+const uploading = ref(false)
+const refreshingAll = ref(false)
+const refreshingIds = ref(new Set<number>())
+const togglingIds = ref(new Set<number>())
+const deletingIds = ref(new Set<number>())
+const selectedIds = ref(new Set<number>())
+const uploadInput = ref<HTMLInputElement | null>(null)
+
+const sortedCredentials = computed(() =>
+  [...credentials.value].sort((left, right) => {
+    if (left.enabled !== right.enabled) return left.enabled ? -1 : 1
+    const leftTime = left.updated_at ? new Date(left.updated_at).getTime() : 0
+    const rightTime = right.updated_at ? new Date(right.updated_at).getTime() : 0
+    return rightTime - leftTime
+  })
+)
+const selectedCount = computed(() => selectedIds.value.size)
+
+async function loadCredentials() {
+  loading.value = true
+  try {
+    credentials.value = await getCredentials()
+    pruneSelectedCredentials()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function refreshEnabledCredentials() {
+  const ids = credentials.value
+    .filter((credential) => credential.enabled && isOpenAICredential(credential))
+    .map((credential) => credential.id)
+  if (ids.length === 0) return
+  refreshingAll.value = true
+  try {
+    await Promise.all(ids.map((id) => refreshCredential(id, false)))
+  } finally {
+    refreshingAll.value = false
+  }
+}
+
+async function refreshCredential(id: number, notify = true) {
+  refreshingIds.value = new Set(refreshingIds.value).add(id)
+  try {
+    const updated = await refreshCredentialApi(id)
+    mergeCredential(updated)
+  } catch (err) {
+    if (notify) ElMessage.error(readError(err))
+  } finally {
+    const next = new Set(refreshingIds.value)
+    next.delete(id)
+    refreshingIds.value = next
+  }
+}
+
+async function toggleCredential(credential: Credential) {
+  togglingIds.value = new Set(togglingIds.value).add(credential.id)
+  try {
+    const updated = credential.enabled
+      ? await disableCredential(credential.id)
+      : await enableCredential(credential.id)
+    mergeCredential(updated)
+    ElMessage.success(credential.enabled ? t('credentialDisabled') : t('credentialEnabled'))
+    if (updated.enabled) {
+      await refreshCredential(updated.id, false)
+    }
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    const next = new Set(togglingIds.value)
+    next.delete(credential.id)
+    togglingIds.value = next
+  }
+}
+
+async function removeCredential(credential: Credential) {
+  try {
+    await ElMessageBox.confirm(t('credentialDeleteConfirm'), t('delete'), {
+      confirmButtonText: t('delete'),
+      cancelButtonText: t('cancel'),
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+
+  deletingIds.value = new Set(deletingIds.value).add(credential.id)
+  try {
+    await deleteCredential(credential.id)
+    credentials.value = credentials.value.filter((item) => item.id !== credential.id)
+    const nextSelected = new Set(selectedIds.value)
+    nextSelected.delete(credential.id)
+    selectedIds.value = nextSelected
+    ElMessage.success(t('credentialDeleted'))
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    const next = new Set(deletingIds.value)
+    next.delete(credential.id)
+    deletingIds.value = next
+  }
+}
+
+async function uploadCredential(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  uploading.value = true
+  try {
+    const result = await uploadCredentialFile(file)
+    const imported = result.imported.length
+    const failed = result.failed.length
+    for (const credential of result.imported) {
+      mergeCredential(credential)
+    }
+    const message = failed > 0
+      ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
+      : `${t('credentialUploadDone')} ${imported}`
+    ElMessage.success(message)
+    if (failed > 0) {
+      ElMessage.warning(result.failed.map((item) => `${item.filename}: ${item.error}`).join('\n'))
+    }
+    await loadCredentials()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    uploading.value = false
+  }
+}
+
+function openCredentialUpload() {
+  if (uploading.value) return
+  uploadInput.value?.click()
+}
+
+function mergeCredential(updated: Credential) {
+  const index = credentials.value.findIndex((credential) => credential.id === updated.id)
+  if (index === -1) {
+    credentials.value = [...credentials.value, updated]
+    return
+  }
+  const next = [...credentials.value]
+  next[index] = updated
+  credentials.value = next
+}
+
+function pruneSelectedCredentials() {
+  const availableIds = new Set(credentials.value.map((credential) => credential.id))
+  selectedIds.value = new Set([...selectedIds.value].filter((id) => availableIds.has(id)))
+}
+
+function isCredentialSelected(id: number) {
+  return selectedIds.value.has(id)
+}
+
+function toggleCredentialSelection(id: number, checked: string | number | boolean) {
+  const next = new Set(selectedIds.value)
+  if (Boolean(checked)) {
+    next.add(id)
+  } else {
+    next.delete(id)
+  }
+  selectedIds.value = next
+}
+
+function toggleCredentialSelected(id: number) {
+  toggleCredentialSelection(id, !isCredentialSelected(id))
+}
+
+function formatPercent(window?: CredentialQuotaWindow | null) {
+  if (!window?.percent && window?.percent !== 0) return '--'
+  return `${Math.round(window.percent)}%`
+}
+
+function quotaTrackWidth(window?: CredentialQuotaWindow | null) {
+  if (!window?.percent && window?.percent !== 0) return '0%'
+  return `${Math.max(0, Math.min(100, window.percent))}%`
+}
+
+function credentialTitle(credential: Credential) {
+  return credential.identity_label || credential.email || credential.account_id || credential.filename || t('credentialUnknownIdentity')
+}
+
+function isOpenAICredential(credential: Credential) {
+  return credential.provider.trim().toLowerCase() === 'openai'
+}
+
+function credentialPlanLabel(credential: Credential) {
+  const plan = credential.quota?.plan?.trim()
+  if (!plan || plan.toLowerCase() === 'openai') return 'FREE'
+  return plan.toUpperCase()
+}
+
+function formatCompactDateTime(value?: string | null) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hour}:${minute}`
+}
+
+function formatResetLabel(value?: string | null) {
+  if (!value) return `${t('credentialResetAt')}: -`
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return `${t('credentialResetAt')}: -`
+
+  const diffMinutes = Math.max(0, Math.round((date.getTime() - Date.now()) / 60000))
+  const relative = diffMinutes < 60
+    ? `${diffMinutes}${t('minuteShort')}`
+    : diffMinutes < 1440
+      ? `${Math.round(diffMinutes / 60)}${t('hourShort')}`
+      : `${Math.round(diffMinutes / 1440)}${t('dayShort')}`
+  const dayLabel = isTomorrow(date) ? t('tomorrow') : formatShortDate(date)
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  return `${t('credentialResetAt')}: ${relative} (${dayLabel} ${time})`
+}
+
+function isTomorrow(date: Date) {
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  return date.getFullYear() === tomorrow.getFullYear() &&
+    date.getMonth() === tomorrow.getMonth() &&
+    date.getDate() === tomorrow.getDate()
+}
+
+function formatShortDate(date: Date) {
+  return `${date.getMonth() + 1}/${date.getDate()}`
+}
+
+async function bootstrap() {
+  await loadCredentials()
+  await refreshEnabledCredentials()
+}
+
+void bootstrap()
+</script>
+
+<template>
+  <section class="grid credential-page">
+    <div class="table-toolbar">
+      <span v-if="selectedCount > 0" class="credential-selection-count">
+        {{ t('credentialSelectedCount') }} {{ selectedCount }}
+      </span>
+      <input
+        ref="uploadInput"
+        class="credential-upload-input"
+        accept=".json,.zip,application/json,application/zip"
+        type="file"
+        @change="uploadCredential"
+      />
+      <el-button class="admin-action-button" :icon="Upload" :loading="uploading" @click="openCredentialUpload">
+        {{ t('upload') }}
+      </el-button>
+      <el-button class="admin-action-button" :icon="Refresh" :loading="refreshingAll || loading" @click="refreshEnabledCredentials">
+        {{ t('refreshAll') }}
+      </el-button>
+    </div>
+
+    <div v-loading="loading" class="credential-grid">
+      <div v-if="!loading && sortedCredentials.length === 0" class="credential-empty">
+        <el-icon><Warning /></el-icon>
+        <p>{{ t('credentialNoFiles') }}</p>
+      </div>
+
+      <article
+        v-for="credential in sortedCredentials"
+        :key="credential.id"
+        class="credential-card"
+        :class="{ 'is-disabled': !credential.enabled, 'is-selected': isCredentialSelected(credential.id) }"
+      >
+        <button
+          class="credential-select"
+          type="button"
+          :aria-label="credentialTitle(credential)"
+          :aria-pressed="isCredentialSelected(credential.id)"
+          :class="{ 'is-checked': isCredentialSelected(credential.id) }"
+          @click="toggleCredentialSelected(credential.id)"
+        >
+          <span />
+        </button>
+        <div class="credential-card-header">
+          <span class="credential-provider-slot">
+            <ProviderIcon class="credential-provider-icon" :provider="credential.provider" />
+          </span>
+          <div class="credential-identity">
+            <div class="credential-title-block">
+              <strong>{{ credentialTitle(credential) }}</strong>
+              <el-tag v-if="isOpenAICredential(credential)" class="credential-plan-tag" :class="{ 'is-disabled': !credential.enabled }" effect="plain" round>
+                {{ credentialPlanLabel(credential) }}
+              </el-tag>
+              <el-tag v-else class="credential-plan-tag" effect="plain" round>
+                {{ credential.provider }}
+              </el-tag>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="isOpenAICredential(credential)" class="quota-grid">
+          <div class="quota-section primary">
+            <div class="quota-row">
+              <span class="quota-label-main">
+                <el-icon><Clock /></el-icon>
+                {{ t('credentialFiveHourQuota') }}
+              </span>
+              <strong class="quota-value is-primary">{{ formatPercent(credential.quota?.five_hour) }}</strong>
+            </div>
+            <div class="quota-track">
+              <span class="quota-track-fill" :style="{ width: quotaTrackWidth(credential.quota?.five_hour) }" />
+            </div>
+            <p class="quota-reset">{{ formatResetLabel(credential.quota?.five_hour?.reset_at) }}</p>
+          </div>
+
+          <div class="quota-section secondary">
+            <div class="quota-row">
+              <span class="quota-label-main">
+                <el-icon><Calendar /></el-icon>
+                {{ t('credentialWeeklyQuota') }}
+              </span>
+              <strong class="quota-value is-secondary">{{ formatPercent(credential.quota?.weekly) }}</strong>
+            </div>
+            <div class="quota-track quota-track-secondary">
+              <span class="quota-track-fill" :style="{ width: quotaTrackWidth(credential.quota?.weekly) }" />
+            </div>
+            <p class="quota-reset">{{ formatResetLabel(credential.quota?.weekly?.reset_at) }}</p>
+          </div>
+        </div>
+
+        <div class="credential-footer">
+          <span class="credential-updated-at">{{ formatCompactDateTime(credential.updated_at || credential.last_refresh) }}</span>
+          <div class="credential-actions">
+            <el-tooltip :content="credential.enabled ? t('disable') : t('enable')" placement="top">
+              <el-button
+                circle
+                class="credential-icon-button"
+                :icon="SwitchButton"
+                :loading="togglingIds.has(credential.id)"
+                @click="toggleCredential(credential)"
+              />
+            </el-tooltip>
+            <el-tooltip :content="t('refreshQuota')" placement="top">
+              <el-button
+                v-if="isOpenAICredential(credential)"
+                circle
+                class="credential-icon-button"
+                :icon="Refresh"
+                :loading="refreshingIds.has(credential.id)"
+                @click="refreshCredential(credential.id)"
+              />
+            </el-tooltip>
+            <el-tooltip :content="t('delete')" placement="top">
+              <el-button
+                circle
+                class="credential-icon-button is-danger"
+                :icon="Delete"
+                :loading="deletingIds.has(credential.id)"
+                @click="removeCredential(credential)"
+              />
+            </el-tooltip>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.credential-page {
+  gap: 14px;
+}
+
+.table-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.table-toolbar :deep(.el-button) {
+  border-radius: 6px;
+}
+
+.credential-upload-input {
+  display: none;
+}
+
+.credential-selection-count {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+  margin-right: auto;
+}
+
+.credential-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 306px));
+  justify-content: start;
+}
+
+.credential-empty {
+  align-items: center;
+  background: #fff;
+  border: 1px dashed #d7e0ea;
+  border-radius: 8px;
+  color: #718198;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  min-height: 220px;
+  padding: 28px;
+}
+
+.credential-empty .el-icon {
+  font-size: 28px;
+}
+
+.credential-card {
+  background: #ffffff;
+  border: 1px solid #d7e0ea;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.045);
+  display: grid;
+  gap: 11px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+  position: relative;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+  width: 100%;
+}
+
+.credential-card::before {
+  background: linear-gradient(180deg, #22c55e, var(--brand-blue));
+  content: "";
+  inset: 0 auto 0 0;
+  opacity: 0;
+  position: absolute;
+  transition: opacity 160ms ease;
+  width: 3px;
+}
+
+.credential-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
+}
+
+.credential-card.is-selected {
+  border-color: var(--brand-blue);
+  box-shadow: 0 12px 28px rgba(22, 139, 211, 0.14);
+}
+
+.credential-card.is-selected::before {
+  opacity: 1;
+}
+
+.credential-card.is-disabled {
+  background: #fbfcfe;
+  opacity: 0.78;
+}
+
+.credential-card-header {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.credential-select {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  height: 20px;
+  opacity: 0;
+  padding: 0;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  transition: none;
+  width: 20px;
+  z-index: 2;
+}
+
+.credential-card:hover .credential-select,
+.credential-card.is-selected .credential-select,
+.credential-select:focus-visible {
+  opacity: 1;
+}
+
+.credential-select span {
+  background: #ffffff;
+  border: 2px solid #94a3b8;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 2px #ffffff;
+  display: block;
+  height: 19px;
+  position: relative;
+  transition: none;
+  width: 19px;
+}
+
+.credential-select:hover span {
+  border-color: #64748b;
+}
+
+.credential-select.is-checked span {
+  background: #ffffff;
+  border-color: var(--brand-blue);
+}
+
+.credential-select.is-checked span::after {
+  border: solid var(--brand-blue);
+  border-width: 0 2px 2px 0;
+  content: "";
+  height: 8px;
+  left: 5px;
+  position: absolute;
+  top: 2px;
+  transform: rotate(45deg);
+  width: 4px;
+}
+
+.credential-select:focus-visible span {
+  box-shadow: 0 0 0 3px rgba(22, 139, 211, 0.18);
+}
+
+.credential-identity {
+  min-width: 0;
+}
+
+.credential-provider-slot {
+  align-items: center;
+  display: inline-flex;
+  height: 22px;
+  justify-self: center;
+  width: 22px;
+}
+
+.credential-provider-icon {
+  height: 22px;
+  width: 22px;
+}
+
+.credential-title-block {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.credential-title-block strong {
+  color: #0f172a;
+  flex: 0 1 auto;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-reset,
+.credential-updated-at {
+  color: #6b7a90;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credential-plan-tag.el-tag {
+  --el-tag-bg-color: #10b981;
+  --el-tag-border-color: rgba(5, 150, 105, 0.28);
+  --el-tag-text-color: #ffffff;
+  animation: none;
+  font-size: 12px;
+  font-weight: 500;
+  flex: 0 0 auto;
+  height: 26px;
+  min-width: 54px;
+  padding: 0 11px;
+  transition: none;
+}
+
+.credential-plan-tag.el-tag :deep(.el-tag__content) {
+  font-weight: 500;
+}
+
+.credential-plan-tag.is-disabled.el-tag {
+  --el-tag-bg-color: #94a3b8;
+  --el-tag-border-color: #94a3b8;
+}
+
+.credential-actions {
+  display: flex;
+  gap: 7px;
+  justify-content: flex-end;
+  min-width: max-content;
+}
+
+.credential-icon-button.el-button {
+  --el-button-bg-color: #f8fafc;
+  --el-button-border-color: #e2e8f0;
+  --el-button-hover-bg-color: var(--brand-blue-soft);
+  --el-button-hover-border-color: #cbd5e1;
+  --el-button-hover-text-color: var(--brand-blue-hover);
+  height: 28px;
+  width: 28px;
+}
+
+.credential-icon-button.is-danger.el-button {
+  --el-button-hover-bg-color: #fff1f2;
+  --el-button-hover-border-color: #fecdd3;
+  --el-button-hover-text-color: #e11d48;
+}
+
+.quota-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.quota-section {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.quota-row {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.quota-label-main {
+  align-items: center;
+  color: #122033;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 6px;
+  min-width: 0;
+}
+
+.quota-label-main .el-icon {
+  color: #90a0b7;
+  font-size: 15px;
+}
+
+.quota-value {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.quota-value.is-primary {
+  color: #22c55e;
+}
+
+.quota-value.is-secondary {
+  color: #ef4444;
+}
+
+.quota-track {
+  background: #eef3f9;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.quota-track-secondary .quota-track-fill {
+  background: #ef4444;
+}
+
+.quota-track-fill {
+  background: #22c55e;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width 180ms ease;
+}
+
+.quota-reset {
+  color: #b8c2d1;
+  font-weight: 400;
+  justify-self: end;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.credential-footer {
+  align-items: center;
+  border-top: 1px solid #eef2f7;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-top: 9px;
+}
+
+.credential-updated-at {
+  color: #b0bac9;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+@media (max-width: 720px) {
+  .credential-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-actions {
+    grid-column: auto;
+    justify-content: flex-start;
+  }
+
+  .credential-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .quota-reset {
+    justify-items: start;
+    justify-self: start;
+    text-align: left;
+  }
+}
+</style>

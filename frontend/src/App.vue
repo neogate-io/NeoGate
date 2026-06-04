@@ -24,6 +24,13 @@ watchEffect(() => {
 
 <template>
   <el-config-provider :locale="elementLocale">
-    <RouterView />
+    <div class="root-shell">
+      <RouterView />
+      <footer class="powered-footer">
+        <a href="https://github.com/neogate-io/NeoGate" target="_blank" rel="noopener noreferrer">
+          Powered by NeoGate
+        </a>
+      </footer>
+    </div>
   </el-config-provider>
 </template>

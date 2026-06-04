@@ -9,12 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::{
-    auth::UserSessionAuth,
-    error::AppResult,
-    id::DbId,
-    AppState,
-};
+use crate::{auth::UserSessionAuth, error::AppResult, id::DbId, AppState};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/user/usage", get(usage))

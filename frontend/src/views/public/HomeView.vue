@@ -9,7 +9,7 @@ import { useLocale } from '../../composables/useLocale'
 import { useAuthStore } from '../../stores/auth'
 import { readError } from '../../utils/errors'
 
-const githubUrl = 'https://github.com/asf26/main'
+const githubUrl = 'https://github.com/neogate-io/NeoGate'
 const auth = useAuthStore()
 const { locale, t, toggleLocale } = useLocale()
 const { installScript, copyInstallScript } = useInstallScript(t)

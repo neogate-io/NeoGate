@@ -21,7 +21,10 @@ use crate::{
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/user/apikeys", get(list_apikeys).post(create_apikey))
-        .route("/api/user/apikeys/{id}", patch(update_apikey).delete(delete_apikey))
+        .route(
+            "/api/user/apikeys/{id}",
+            patch(update_apikey).delete(delete_apikey),
+        )
 }
 
 #[derive(Debug, Serialize)]

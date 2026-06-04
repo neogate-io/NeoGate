@@ -1,210 +1,119 @@
 # NeoGate
 
-[中文文档](README.zh-CN.md)
+[English](README.en.md)
 
-NeoGate is a minimal Rust/Axum LLM API gateway.
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-It provides the backend foundation for:
+NeoGate 是一个使用 Rust 构建的轻量级大模型 API 网关，目标是提供极致的请求转发性能，并保持简单易用。它帮助团队把多个模型供应商收拢到统一入口，集中管理访问密钥、模型路由和用量记录。
 
-- users and downstream `user_key` authentication
-- upstream `channel` management
-- per-channel upstream `channel_key` pools
-- OpenAI-compatible and Anthropic-compatible relay routes
-- usage recording and basic upstream key cooldown
+仓库地址：[neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
-This repository intentionally starts with backend-only infrastructure. There is no frontend, payment system, or complex user console in this first framework.
+## 1. 功能概览
 
-## Database Model
+- 给团队、客户或内部应用分发独立 API key，不再直接暴露上游供应商密钥。
+- 在一个后台里管理 OpenAI、Anthropic 等上游模型服务，并按模型、优先级和权重分配请求。
+- 对外提供 OpenAI 兼容和 Anthropic 兼容接口，让现有客户端少改配置即可接入。
+- 记录用户和 API key 的调用用量，方便排查问题、分析成本和后续计费。
+- 在上游 key 失败时自动冷却并切换可用 key，减少单个密钥异常对服务的影响。
+- 支持用户通过邮箱自助领取 API key，适合搭建轻量的模型服务入口。
+- 提供中英文管理界面，适合自部署社区版，也方便后续扩展企业管控能力。
 
-The PostgreSQL schema is intentionally small:
+## 2. 适用场景
 
-- `"user"`: gateway users
-- `user_key`: downstream API keys used by clients calling NeoGate
-- `wallet`: credit balances for users and user keys
-- `channel`: upstream provider service groups, with priority, weight, and key selection mode
-- `channel_endpoint`: protocol-specific upstream endpoints inside a channel, with protocol, Base URL, model allowlist, and health state
-- `channel_key`: upstream API keys inside each channel
-- `provider`: upstream provider catalog entries, including default OpenAI-compatible and Anthropic-compatible endpoint settings
-- `usage`: relay usage records
-- `billing`: durable billing outbox
-- `credit_allocation` and `credit_ledger`: wallet allocation state and immutable credit ledger entries
+- 团队内部已经在使用多个大模型供应商，希望统一入口和运维方式。
+- 正在为客户、成员或内部系统提供模型调用能力，需要比直接共享上游 key 更可控的方案。
+- 需要在内网、私有云或自有服务器中部署模型访问入口，保持密钥、用量和路由策略可控。
+- 需要一个轻量网关作为 AI 应用、自动化工具、开发者平台或内部模型服务的基础设施。
 
-`"user"` is quoted in SQL because `user` is a PostgreSQL keyword.
+## 3. 快速开始
 
-## Quick Start
+### 1. 准备数据库
 
-Create a database:
+NeoGate 需要 PostgreSQL 16 或兼容版本。
 
 ```bash
 createdb neogate
 ```
 
-Run the backend:
+### 2. 启动后端
 
 ```bash
-cp .env.example .env
-# edit .env, especially DATABASE_URL and admin secrets
+cp backend/.env.example backend/.env
+```
+
+编辑 `backend/.env`，至少确认这些配置：
+
+```dotenv
+DATABASE_URL=postgres://localhost/neogate
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=password
+ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
+UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
+```
+
+启动后端：
+
+```bash
 cd backend
 cargo run
 ```
 
-Optional SMTP delivery for public API key claims is configured in `.env`:
+后端默认监听：
 
-```dotenv
-MAIL_SMTP_HOST=smtp.example.com
-MAIL_SMTP_PORT=587
-MAIL_SMTP_USERNAME=apikey
-MAIL_SMTP_PASSWORD=secret
-MAIL_FROM_EMAIL=noreply@example.com
-MAIL_FROM_NAME=
-MAIL_SUBJECT_PREFIX=
+```text
+http://127.0.0.1:8080
 ```
 
-`MAIL_SMTP_TLS` defaults to `true`. `MAIL_FROM_NAME` and `MAIL_SUBJECT_PREFIX` are optional; when left empty, the backend uses `NeoGate` for all public API key emails. `.env` is gitignored and should hold the real SMTP password.
-
-## Frontend Install Script
-
-The admin frontend uses same-origin `/api` requests. In local development, Vite only proxies `/api` to the Rust backend. The install script configures Codex/Claude to call the Rust backend directly instead of relaying `/v1` or `/anthropic` through Vite.
-
-For production, use Vite's standard env files to set the public backend origin. On the deployment host, copy the template to `.env.production.local`:
+### 3. 启动前端
 
 ```bash
 cd frontend
-cp .env.example .env.production.local
+pnpm install
+pnpm dev
 ```
 
-```dotenv
-VITE_NEOGATE_BACKEND_ORIGIN=https://api.example.com
-```
+前端开发服务会代理管理后台请求到后端。生产部署时，可以通过 `VITE_NEOGATE_BACKEND_ORIGIN` 指定后端公网地址。
 
-The generated install script uses `https://api.example.com/v1` for Codex/OpenAI and `https://api.example.com/anthropic` for Claude/Anthropic. You can also pass `VITE_NEOGATE_BACKEND_ORIGIN=https://api.example.com` when building or running Vite.
+### 4. Docker 启动
 
-## Deployment Notes
-
-NeoGate has two runtime modes:
-
-- `RUNTIME_MODE=standalone`: no Redis dependency. Hot credit, cache invalidation, and relay caches are process-local, so run a single backend instance.
-- `RUNTIME_MODE=distributed`: multiple stateless backend replicas share Redis for hot credit and cache invalidation. Set `REDIS_URL` to a writable Redis endpoint. This supports a single Redis primary or a Sentinel-managed primary exposed through your infrastructure; Redis Cluster hash-slot sharding is intentionally not supported.
-
-`PROCESS_ROLE` controls which work a process performs:
-
-- `PROCESS_ROLE=all`: serve HTTP and run background billing/recovery workers. This is the default and keeps single-node deployments simple.
-- `PROCESS_ROLE=api`: serve HTTP, write billing outbox rows, and flush this process's lightweight usage queue, but do not scan durable billing backlog or run allocation recovery.
-- `PROCESS_ROLE=worker`: run background billing/recovery workers without opening the HTTP listener.
-
-Admin login tokens and public API key draft tokens are signed with `ADMIN_TOKEN_SECRET`; they are not stored in process memory. Upstream channel keys are encrypted at rest with `UPSTREAM_SECRET_KEY` and decrypted through a small in-memory cache on the relay path.
-
-For production, set `APP_ENV=production`. Production mode rejects the example admin password/signing secret and upstream encryption secret, and requires both secrets to be at least 32 characters.
-
-Configuration is grouped in `.env.example` as:
-
-- `App`: environment, bind address, and CORS
-- `Database`: local PostgreSQL connection and Docker Compose database settings
-- `Admin`: admin login and signing secret
-- `Relay`: upstream protocol defaults and upstream key encryption secret
-- `Mail`: SMTP delivery for public API key claims
-- `Advanced optional tuning`: pool size, request timeout, key cooldown, relay caches, and background usage recording
-
-Common production settings:
-
-```dotenv
-APP_ENV=production
-RUNTIME_MODE=standalone
-PROCESS_ROLE=all
-CORS_ALLOWED_ORIGINS=https://admin.example.com,https://console.example.com
-DB_POOL_MAX_CONNECTIONS=10
-RELAY_BODY_LIMIT_BYTES=16777216
-HTTP_POOL_MAX_IDLE_PER_HOST=100
-HTTP_POOL_IDLE_TIMEOUT_SECONDS=90
-USER_AUTH_CACHE_TTL_SECONDS=60
-ROUTING_CACHE_TTL_SECONDS=30
-PRICE_CACHE_TTL_SECONDS=300
-USAGE_FLUSH_INTERVAL_MS=1000
-USAGE_QUEUE_SIZE=8192
-BILLING_OUTBOX_MAX_PENDING=10000
-BILLING_OUTBOX_MAX_AGE_SECONDS=300
-CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS=900
-CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS=60
-DEFAULT_OUTPUT_TOKENS=2048
-```
-
-For multi-replica deployments:
-
-```dotenv
-RUNTIME_MODE=distributed
-REDIS_URL=redis://redis.example.com:6379/
-REDIS_KEY_PREFIX=neogate
-```
-
-For simple multi-replica deployments, run multiple `PROCESS_ROLE=api` replicas behind the load balancer and at least one `PROCESS_ROLE=worker` replica for billing backlog processing and allocation recovery.
-
-Health probes:
-
-- `GET /healthz`: process liveness
-- `GET /readyz`: readiness, including PostgreSQL connectivity, Redis connectivity when `RUNTIME_MODE=distributed`, billing outbox write health, and billing backlog thresholds
-
-Billing settlements are inserted into the durable `billing` outbox with short retry, then finalized by a background worker in batches. Non-billing relay usage is still queued in memory and flushed to PostgreSQL asynchronously. If a non-billing usage flush fails, the in-process batch is kept for retry; a process crash can lose unflushed non-billing usage records. Stale active credit allocations are periodically recovered after `CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS`; before recovery, NeoGate removes matching hot-credit entries from the configured runtime store.
-
-Container startup:
+也可以使用 Docker Compose 启动：
 
 ```bash
-cp .env.example .env
-# edit .env and replace every change-me value before production use
+cp backend/.env.example .env
 docker compose up --build
 ```
 
-Login (`POST /api/login`) returns a generated session token. Admin endpoints accept:
+生产环境请先替换 `.env` 中的默认密码和密钥。
 
-- `Authorization: Bearer <login_session_token>`
+## 4. 部署模式
 
-Gateway relay endpoints accept either:
+NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用单节点部署就够了：不需要 Redis，配置简单，部署和排障成本也更低。
 
-- `Authorization: Bearer <user_key>`
-- `x-api-key: <user_key>`
+- 单节点部署：默认模式，无需配置 `RUNTIME_MODE`，适合个人项目、小团队和早期生产环境。
+- 集群部署：设置 `RUNTIME_MODE=distributed`，多个后端实例共享 Redis，适合明确需要多副本和横向扩展的场景。
 
-## Relay Routes
+没有明确的多副本需求时，建议优先使用单节点部署。
 
-- `POST /v1/chat/completions`
-- `POST /v1/responses`
-- `POST /v1/messages`
+## 5. 生产建议
 
-OpenAI-compatible requests are forwarded with:
+上线前至少确认：
 
-```text
-Authorization: Bearer <decrypted channel key>
-```
+- 设置 `APP_ENV=production`。
+- 替换默认管理员密码。
+- 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`。
+- 设置正确的 `CORS_ALLOWED_ORIGINS`。
+- 如需公开邮箱领取 API key，配置 SMTP。
+- 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。
 
-Anthropic-compatible requests are forwarded with:
+## 6. 开源协议
 
-```text
-x-api-key: <decrypted channel key>
-anthropic-version: <incoming value or ANTHROPIC_VERSION>
-```
+NeoGate 社区版使用 [GNU Affero General Public License v3.0](LICENSE) 开源协议（`AGPL-3.0-only`）。
 
-## Minimal Admin Flow
+NeoGate 同时提供分层商业授权：普通企业内部使用可申请免费的书面 Internal Commercial License；客户交付、托管服务、SaaS、OEM、MSP、白标、转售等场景需要单独 Commercial License；企业版功能使用商业 EULA。详见 [LICENSING.md](LICENSING.md)。
 
-1. Create a user with `POST /api/admin/users`.
-2. Create a downstream key with `POST /api/admin/user-keys`.
-3. Create an upstream channel with `POST /api/admin/channels`.
-4. Add upstream keys with `POST /api/admin/channels/:id/keys`.
-5. Configure input/output prices for the fetched upstream models on the Prices page.
-6. Call the relay routes with the generated downstream key.
+NeoGate 名称、Logo 及相关标识不随 AGPL 授权，使用边界见 [TRADEMARKS.md](TRADEMARKS.md)。
 
-## Selection Rules
+## 7. 获取帮助
 
-For each relay request, NeoGate:
-
-1. validates the downstream `user_key`
-2. filters channel endpoints by provider, protocol, requested model, enabled state, health, cooldown, and available keys on the parent channel
-3. chooses the highest-priority channel tier
-4. chooses a channel by weight inside that tier
-5. chooses a channel key by `polling` or `random`
-6. cools down the selected channel key on upstream failure
-
-## Verification
-
-```bash
-cd backend
-cargo test
-cargo check
-```
+- 问题反馈：[GitHub Issues](https://github.com/neogate-io/NeoGate/issues)
+- 代码贡献：[Pull Requests](https://github.com/neogate-io/NeoGate/pulls)

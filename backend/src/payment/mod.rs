@@ -23,6 +23,7 @@ use crate::{
     AppState,
 };
 
+pub(crate) mod settings;
 mod zpay;
 
 const PAYMENT_CURRENCY: &str = "CNY";
@@ -118,7 +119,8 @@ pub async fn create_user_payment_order(
     req: CreatePaymentOrderRequest,
 ) -> AppResult<CreatePaymentOrderResponse> {
     let provider = PaymentProvider::from_code(&req.provider)?;
-    if !state.config.payment.provider_enabled(provider) {
+    let payment_config = settings::runtime_payment_config(state).await?;
+    if !payment_config.provider_enabled(provider) {
         return Err(AppError::BadRequest(format!(
             "payment provider is not enabled: {}",
             provider.as_str()
@@ -133,7 +135,7 @@ pub async fn create_user_payment_order(
     let order_id = Uuid::new_v4();
     let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
     let wallet = wallet::owner_wallet(&state.db.pool, WalletType::User, auth.user_id).await?;
-    let notify_url = notify_url(state, provider)?;
+    let notify_url = notify_url(&payment_config, provider)?;
     let gateway_req = GatewayCreateRequest {
         order_id,
         payable_amount_minor,
@@ -142,7 +144,7 @@ pub async fn create_user_payment_order(
         notify_url,
         return_url: req.return_url.clone(),
     };
-    let gateway_res = gateway_for(state, provider)?.create_checkout(gateway_req)?;
+    let gateway_res = gateway_for(&payment_config, provider)?.create_checkout(gateway_req)?;
 
     sqlx::query(
         "INSERT INTO payment
@@ -196,7 +198,9 @@ async fn notify_payment(
     body: Bytes,
 ) -> AppResult<impl IntoResponse> {
     let provider = PaymentProvider::from_code(&provider)?;
-    let notification = gateway_for(&state, provider)?.parse_notification(&headers, &body)?;
+    let payment_config = settings::runtime_payment_config(&state).await?;
+    let notification =
+        gateway_for(&payment_config, provider)?.parse_notification(&headers, &body)?;
     record_payment_event(&state, provider, &notification).await?;
     settle_payment_notification(&state, provider, notification).await?;
     Ok("success")
@@ -208,7 +212,8 @@ async fn notify_payment_query(
     Query(params): Query<HashMap<String, String>>,
 ) -> AppResult<impl IntoResponse> {
     let provider = PaymentProvider::from_code(&provider)?;
-    let notification = gateway_for(&state, provider)?.parse_query_notification(params)?;
+    let payment_config = settings::runtime_payment_config(&state).await?;
+    let notification = gateway_for(&payment_config, provider)?.parse_query_notification(params)?;
     record_payment_event(&state, provider, &notification).await?;
     settle_payment_notification(&state, provider, notification).await?;
     Ok("success")
@@ -357,16 +362,22 @@ fn payment_order_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PaymentOrder
     })
 }
 
-fn gateway_for(state: &AppState, provider: PaymentProvider) -> AppResult<Box<dyn PaymentGateway>> {
+fn gateway_for(
+    payment_config: &crate::config::PaymentConfig,
+    provider: PaymentProvider,
+) -> AppResult<Box<dyn PaymentGateway>> {
     match provider {
         PaymentProvider::Zpay => Ok(Box::new(zpay::ZpayGateway::new(
-            state.config.payment.zpay.clone(),
+            payment_config.zpay.clone(),
         )?)),
     }
 }
 
-fn notify_url(state: &AppState, provider: PaymentProvider) -> AppResult<String> {
-    let Some(base_url) = state.config.payment.return_base_url.as_deref() else {
+fn notify_url(
+    payment_config: &crate::config::PaymentConfig,
+    provider: PaymentProvider,
+) -> AppResult<String> {
+    let Some(base_url) = payment_config.return_base_url.as_deref() else {
         return Err(AppError::BadRequest(
             "PAYMENT_RETURN_BASE_URL is required to create payment orders".to_string(),
         ));

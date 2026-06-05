@@ -1,4 +1,4 @@
-import type { SmtpSetting } from '../types/admin'
+import type { PaymentSetting, SmtpSetting } from '../types/admin'
 import { adminRequest } from './request'
 
 export function getSmtpSetting() {
@@ -34,6 +34,26 @@ export function testSmtpSetting(input: {
   subject_prefix?: string | null
 }) {
   return adminRequest<{ ok: boolean }>('/api/admin/settings/smtp/test', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function getPaymentSetting() {
+  return adminRequest<PaymentSetting>('/api/admin/settings/payment')
+}
+
+export function savePaymentSetting(input: {
+  payment_enabled: boolean
+  return_base_url?: string | null
+  zpay_api_url: string
+  zpay_merchant_id?: string | null
+  zpay_secret_key?: string | null
+  clear_zpay_secret_key: boolean
+  zpay_default_pay_type: string
+  zpay_site_name: string
+}) {
+  return adminRequest<PaymentSetting>('/api/admin/settings/payment', {
     method: 'POST',
     body: JSON.stringify(input)
   })

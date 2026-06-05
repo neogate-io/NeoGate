@@ -61,6 +61,9 @@ use self::{
         UpdateUserKeyRequest, UpdateUserRequest, UserGroupRecord, UserKeyRecord, UserRecord,
     },
 };
+use crate::payment::settings::{
+    get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
+};
 
 pub use user::public_router;
 
@@ -104,6 +107,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/settings/smtp/test",
             post(test_smtp_setting_handler),
+        )
+        .route(
+            "/api/admin/settings/payment",
+            get(payment_setting).post(upsert_payment_setting_handler),
         )
         .route(
             "/api/admin/provider-prices",
@@ -557,6 +564,21 @@ async fn test_smtp_setting_handler(
     Json(req): Json<UpsertSmtpSettingRequest>,
 ) -> AppResult<Json<TestSmtpSettingResponse>> {
     Ok(Json(test_smtp_setting(&state, req).await?))
+}
+
+async fn payment_setting(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<PaymentSettingRecord>> {
+    Ok(Json(get_payment_setting(&state).await?))
+}
+
+async fn upsert_payment_setting_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpsertPaymentSettingRequest>,
+) -> AppResult<Json<PaymentSettingRecord>> {
+    Ok(Json(upsert_payment_setting(&state, req).await?))
 }
 
 async fn sync_pricing_templates_handler(

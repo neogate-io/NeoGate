@@ -204,6 +204,18 @@ export type SmtpSetting = {
   updated_at?: string | null
 }
 
+export type PaymentSetting = {
+  configured: boolean
+  payment_enabled: boolean
+  return_base_url?: string | null
+  zpay_api_url: string
+  zpay_merchant_id?: string | null
+  zpay_secret_key_set: boolean
+  zpay_default_pay_type: string
+  zpay_site_name: string
+  updated_at?: string | null
+}
+
 export type CredentialQuotaWindow = {
   percent?: number | null
   used?: number | null

@@ -11,7 +11,7 @@
 .admin-shell > .el-aside .el-menu-item,
 .admin-shell > .el-aside .el-sub-menu .el-menu-item,
 .admin-shell > .el-aside .el-sub-menu__title {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .admin-shell > .el-aside .el-sub-menu .el-menu-item {
@@ -175,7 +175,7 @@
   .admin-shell > .el-aside .el-menu-item,
   .admin-shell > .el-aside .el-sub-menu .el-menu-item,
   .admin-shell > .el-aside .el-sub-menu__title {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .admin-shell > .el-aside .el-sub-menu .el-menu-item {

@@ -40,6 +40,15 @@ body {
   flex: 1 1 auto;
 }
 
+.root-shell-without-footer .app-shell {
+  height: 100dvh;
+  min-height: 100vh;
+}
+
+.root-shell-without-footer .app-shell > .el-aside {
+  height: 100dvh;
+}
+
 .powered-footer {
   align-items: center;
   color: #8a95a5;

@@ -21,7 +21,8 @@ const navItems = [
 
 const settingItems = [
   { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' },
-  { path: '/admin/settings/smtp', key: 'smtpSettings' }
+  { path: '/admin/settings/smtp', key: 'smtpSettings' },
+  { path: '/admin/settings/payment', key: 'paymentSettings' }
 ] as const
 
 const activeRoute = computed(() => route.path)

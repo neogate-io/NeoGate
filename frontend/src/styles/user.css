@@ -1,0 +1,168 @@
+.user-shell > .el-aside {
+  background: #ffffff;
+  border-right-color: #e6eaf0;
+  color: #111827;
+  padding: 24px 12px;
+}
+
+.user-shell > .el-aside h1 {
+  font-size: 21px;
+  letter-spacing: 0;
+  margin: 0 0 22px;
+  padding: 0 4px;
+}
+
+.user-shell > .el-aside .shell-logo {
+  justify-content: center;
+  height: 56px;
+  margin: 0 0 20px;
+  padding: 0 4px;
+}
+
+.user-shell > .el-aside .shell-logo-image {
+  height: auto;
+  width: 110px;
+}
+
+.user-shell > .el-aside .el-menu {
+  --el-menu-active-color: var(--user-primary);
+  --el-menu-hover-bg-color: #f3f6fb;
+  --el-menu-text-color: #5a6678;
+}
+
+.user-shell > .el-aside .el-menu-item {
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.user-shell > .el-aside .el-menu-item.is-active {
+  background: var(--user-primary-soft);
+  border-left-color: var(--user-primary);
+  box-shadow: none;
+}
+
+.user-shell {
+  --user-bg: #f7f9fc;
+  --user-panel: #ffffff;
+  --user-border: #dfe5ee;
+  --user-border-soft: #edf1f6;
+  --user-text: #111827;
+  --user-muted: #697586;
+  --user-subtle: #8a95a5;
+  --user-primary: var(--brand-blue);
+  --user-primary-hover: var(--brand-blue-hover);
+  --user-primary-soft: var(--brand-blue-soft);
+  --user-primary-softer: var(--brand-blue-softer);
+  --user-primary-border: var(--brand-blue-border);
+  --user-primary-border-strong: var(--brand-blue-border-strong);
+  --el-color-primary: var(--user-primary);
+  --el-color-primary-dark-2: #0c669f;
+  --el-color-primary-light-3: #5ab1df;
+  --el-color-primary-light-5: #8bc8e9;
+  --el-color-primary-light-7: #b7dcf2;
+  --el-color-primary-light-8: #d3edf9;
+  --el-color-primary-light-9: var(--user-primary-soft);
+  background: var(--user-bg);
+  height: auto;
+  min-height: calc(100dvh - 38px);
+  overflow: visible;
+}
+
+.user-shell > .el-aside {
+  align-self: flex-start;
+  height: calc(100dvh - 38px);
+  position: sticky;
+  top: 0;
+}
+
+.user-shell .content {
+  height: auto;
+  min-height: calc(100dvh - 38px);
+  overflow: visible;
+}
+
+.user-panel {
+  background: var(--user-panel, #ffffff);
+  border: 1px solid var(--user-border, #e3e8ef);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025), 0 10px 30px rgba(15, 23, 42, 0.035);
+  min-width: 0;
+}
+
+.user-section-header {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.user-section-header h3 {
+  color: var(--user-text, #111827);
+  font-size: 16px;
+  font-weight: 780;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.user-section-header > span {
+  color: var(--user-muted, #697586);
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.user-eyebrow {
+  color: var(--user-subtle, #8a95a5);
+  font-size: 12px;
+  font-weight: 780;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.user-api-keys-view {
+  max-width: 1120px;
+}
+
+@media (max-width: 900px) {
+  .user-shell > .el-aside {
+    gap: 10px;
+    position: static;
+    top: auto;
+  }
+
+  .user-shell > .el-aside .shell-logo {
+    height: 38px;
+    justify-content: flex-start;
+    margin: 0;
+    padding: 0;
+  }
+
+  .user-shell > .el-aside .shell-logo-image {
+    width: 96px;
+  }
+
+  .user-shell > .el-aside .el-menu {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    overflow: visible;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .user-shell > .el-aside .el-menu-item {
+    border-left: 0;
+    border-bottom: 3px solid transparent;
+    justify-content: center;
+    margin-bottom: 0;
+    min-width: 0;
+  }
+
+  .user-shell > .el-aside .el-menu-item.is-active {
+    border-bottom-color: var(--user-primary);
+  }
+}

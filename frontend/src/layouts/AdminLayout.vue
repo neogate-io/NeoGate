@@ -38,7 +38,7 @@ async function logout() {
 </script>
 
 <template>
-  <el-container class="app-shell">
+  <el-container class="app-shell admin-shell">
     <el-aside width="220px">
       <h1>{{ t('appName') }}</h1>
       <el-menu
@@ -69,7 +69,7 @@ async function logout() {
       <header class="page-header">
         <h2>{{ activeRouteLabel }}</h2>
         <div class="header-actions">
-          <el-button class="admin-action-button home-language-button" :aria-label="t('language')" @click="toggleLocale">
+          <el-button class="admin-action-button admin-language-button" :aria-label="t('language')" @click="toggleLocale">
             {{ nextLocaleLabel }}
           </el-button>
           <el-button class="admin-action-button" :icon="SwitchButton" @click="logout">{{ t('logout') }}</el-button>

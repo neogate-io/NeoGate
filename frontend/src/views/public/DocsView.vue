@@ -245,7 +245,7 @@ const content = computed(() => {
               <h2>{{ content.menu[0][2] }}</h2>
               <p>{{ content.startIntro }}</p>
             </div>
-            <div class="docs-feature-grid docs-start-grid">
+            <div class="docs-feature-grid">
               <article v-for="[title, text] in content.startCards" :key="title" class="docs-feature">
                 <el-icon><Key v-if="title.includes('API')" /><Link v-else /></el-icon>
                 <h3>{{ title }}</h3>

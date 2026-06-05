@@ -46,11 +46,11 @@ Edit `backend/.env` and confirm at least these settings:
 
 ```dotenv
 DATABASE_URL=postgres://localhost/neogate
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=password
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
 UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
 ```
+
+On first backend startup, NeoGate creates the default admin `admin` / `password` when the `admin` table is empty. Later admin logins use the password hash stored in the database.
 
 Start the backend:
 
@@ -84,7 +84,7 @@ cp backend/.env.example .env
 docker compose up --build
 ```
 
-Replace default passwords and secrets before using it in production.
+When using Docker Compose, uncomment and set `POSTGRES_PASSWORD` in `.env` first. Replace default secrets before using it in production.
 
 ## 4. Deployment Modes
 
@@ -100,7 +100,7 @@ If you do not clearly need multiple backend replicas, prefer single-node deploym
 Before going live:
 
 - Set `APP_ENV=production`.
-- Replace the default admin password.
+- Replace the default admin password after first startup.
 - Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`.
 - Set the correct `CORS_ALLOWED_ORIGINS`.
 - Configure SMTP in the admin settings if you want public email-based API key claims.

@@ -28,7 +28,7 @@ impl ZpayGateway {
         self.config
             .secret_key
             .as_deref()
-            .ok_or_else(|| AppError::BadRequest("ZPAY_SECRET_KEY is required".to_string()))
+            .ok_or_else(|| AppError::BadRequest("ZPAY secret key is required".to_string()))
     }
 }
 
@@ -38,12 +38,12 @@ impl PaymentGateway for ZpayGateway {
             .config
             .api_url
             .as_deref()
-            .ok_or_else(|| AppError::BadRequest("ZPAY_API_URL is required".to_string()))?;
+            .ok_or_else(|| AppError::BadRequest("ZPAY API URL is required".to_string()))?;
         let merchant_id = self
             .config
             .merchant_id
             .as_deref()
-            .ok_or_else(|| AppError::BadRequest("ZPAY_MERCHANT_ID is required".to_string()))?;
+            .ok_or_else(|| AppError::BadRequest("ZPAY merchant ID is required".to_string()))?;
         let money = format!("{:.2}", req.payable_amount_minor as f64 / 100.0);
         let out_trade_no = req.order_id.simple().to_string();
         let Some(return_url) = req.return_url else {

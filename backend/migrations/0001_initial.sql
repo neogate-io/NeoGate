@@ -38,6 +38,20 @@ CREATE TABLE user_code (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE admin (
+    id BIGSERIAL PRIMARY KEY,
+    username CITEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled')),
+    role TEXT NOT NULL DEFAULT 'owner' CHECK (role IN ('owner', 'admin', 'viewer')),
+    last_login_at TIMESTAMPTZ,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ,
+    password_changed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE user_key (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
@@ -241,6 +255,14 @@ CREATE TABLE billing (
     processed_at TIMESTAMPTZ
 );
 
+CREATE TABLE setting (
+    id BIGSERIAL PRIMARY KEY,
+    key TEXT NOT NULL UNIQUE CHECK (length(trim(key)) > 0),
+    value JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE provider_model (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL REFERENCES provider(code) ON DELETE CASCADE,
@@ -389,6 +411,7 @@ CREATE TABLE usage_daily (
 CREATE INDEX idx_user_key_user_id ON user_key(user_id);
 CREATE INDEX idx_user_key_key_prefix ON user_key(key_prefix);
 CREATE INDEX idx_user_user_group ON "user"(user_group_id);
+CREATE INDEX idx_admin_status ON admin(status);
 CREATE INDEX idx_user_code_email_active
     ON user_code(email, expires_at)
     WHERE consumed_at IS NULL;

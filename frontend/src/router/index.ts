@@ -37,7 +37,8 @@ export const router = createRouter({
         { path: 'settings', redirect: '/admin/settings/pricing-policies' },
         { path: 'settings/pricing-policies', name: 'pricingPolicy', component: () => import('../views/admin/SettingsView.vue'), meta: { messageKey: 'pricingPolicy' } },
         { path: 'settings/smtp', name: 'smtpSettings', component: () => import('../views/admin/SmtpSettingsView.vue'), meta: { messageKey: 'smtpSettings' } },
-        { path: 'settings/payment', name: 'paymentSettings', component: () => import('../views/admin/PaymentSettingsView.vue'), meta: { messageKey: 'paymentSettings' } }
+        { path: 'settings/payment', name: 'paymentSettings', component: () => import('../views/admin/PaymentSettingsView.vue'), meta: { messageKey: 'paymentSettings' } },
+        { path: 'settings/admin-password', name: 'adminPasswordSettings', component: () => import('../views/admin/AdminPasswordSettingsView.vue'), meta: { messageKey: 'adminPasswordSettings' } }
       ]
     },
     { path: '/:pathMatch(.*)*', redirect: '/' }

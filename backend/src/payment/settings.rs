@@ -83,14 +83,7 @@ pub async fn upsert_payment_setting(
     } else if let Some(setting) = existing {
         setting.zpay_secret_key_ciphertext
     } else {
-        state
-            .config
-            .payment
-            .zpay
-            .secret_key
-            .as_deref()
-            .map(|secret_key| state.secrets.encrypt(secret_key))
-            .transpose()?
+        None
     };
 
     if req.payment_enabled {

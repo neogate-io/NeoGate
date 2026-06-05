@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    auth::AdminAuth,
+    auth::{self, AdminAuth},
     billing::WalletType,
     cache::InvalidationEvent,
     error::{AppError, AppResult},
@@ -111,6 +111,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/settings/payment",
             get(payment_setting).post(upsert_payment_setting_handler),
+        )
+        .route(
+            "/api/admin/settings/admin-password",
+            post(update_admin_password_handler),
         )
         .route(
             "/api/admin/provider-prices",
@@ -579,6 +583,71 @@ async fn upsert_payment_setting_handler(
     Json(req): Json<UpsertPaymentSettingRequest>,
 ) -> AppResult<Json<PaymentSettingRecord>> {
     Ok(Json(upsert_payment_setting(&state, req).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAdminPasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+async fn update_admin_password_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpdateAdminPasswordRequest>,
+) -> AppResult<Json<Value>> {
+    if req.current_password.is_empty() {
+        return Err(AppError::BadRequest(
+            "current password is required".to_string(),
+        ));
+    }
+    auth::validate_user_password_input(&req.new_password)?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT id, password_hash
+        FROM admin
+        WHERE status = 'enabled'
+        ORDER BY id ASC
+        "#,
+    )
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let Some(admin_id) = rows.iter().find_map(|row| {
+        let id: DbId = row.try_get("id").ok()?;
+        let password_hash: String = row.try_get("password_hash").ok()?;
+        auth::verify_user_password(
+            &req.current_password,
+            &state.config.admin_token_secret,
+            &password_hash,
+        )
+        .then_some(id)
+    }) else {
+        return Err(AppError::BadRequest(
+            "current password is incorrect".to_string(),
+        ));
+    };
+
+    let password_hash =
+        auth::hash_user_password(&req.new_password, &state.config.admin_token_secret);
+    sqlx::query(
+        r#"
+        UPDATE admin
+        SET password_hash = $2,
+            failed_login_attempts = 0,
+            locked_until = NULL,
+            password_changed_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(admin_id)
+    .bind(password_hash)
+    .execute(&state.db.pool)
+    .await?;
+
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn sync_pricing_templates_handler(

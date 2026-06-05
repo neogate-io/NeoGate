@@ -26,6 +26,9 @@ use crate::{
     user,
 };
 
+const DEFAULT_ADMIN_USERNAME: &str = "admin";
+const DEFAULT_ADMIN_PASSWORD: &str = "password";
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -81,6 +84,7 @@ pub async fn run() -> anyhow::Result<()> {
 async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     let db = Db::connect(&config).await?;
     sqlx::migrate!("./migrations").run(&db.pool).await?;
+    bootstrap_admin(&config, &db).await?;
     let secrets = SecretStore::new(&config.upstream_secret_key, config.secret_cache_max_entries);
     let email = EmailService::new(db.clone(), secrets.clone());
 
@@ -197,6 +201,38 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     Ok(state)
 }
 
+async fn bootstrap_admin(config: &Config, db: &Db) -> anyhow::Result<()> {
+    let password_hash =
+        auth::hash_user_password(DEFAULT_ADMIN_PASSWORD, &config.admin_token_secret);
+    let mut tx = db.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('neogate.bootstrap_admin'))")
+        .execute(&mut *tx)
+        .await?;
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO admin (username, password_hash, role, password_changed_at)
+        SELECT $1, $2, 'owner', now()
+        WHERE NOT EXISTS (SELECT 1 FROM admin)
+        ON CONFLICT (username) DO NOTHING
+        "#,
+    )
+    .bind(DEFAULT_ADMIN_USERNAME)
+    .bind(&password_hash)
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        tracing::info!(
+            "bootstrapped initial admin account {}",
+            DEFAULT_ADMIN_USERNAME
+        );
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
 fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(auth::router())
@@ -281,7 +317,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use axum::{
-        body::{to_bytes, Body},
+        body::Body,
         http::{Request, StatusCode},
         routing::get,
         Router,
@@ -311,8 +347,6 @@ mod tests {
                 production: false,
                 runtime_mode: config::RuntimeMode::Standalone,
                 process_role: config::ProcessRole::All,
-                admin_username: "admin".to_string(),
-                admin_password: "password".to_string(),
                 admin_token_secret: "test-admin-token-secret".to_string(),
                 admin_session_ttl: Duration::from_secs(3600),
                 upstream_secret_key: "test-upstream-secret-key".to_string(),
@@ -420,32 +454,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_login_issues_session_token_instead_of_config_token() {
+    async fn protected_admin_accepts_signed_session_token() {
         let state = test_state();
+        let token = auth::issue_admin_token(
+            state.config.admin_session_ttl,
+            &state.config.admin_token_secret,
+        );
         let app = Router::new()
-            .merge(auth::router())
             .merge(admin::router())
             .route("/protected-admin", get(protected_admin))
             .with_state(state);
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/login")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"username":"admin","password":"password"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let token = value["token"].as_str().unwrap();
 
         assert_ne!(token, "admin");
         assert!(token.starts_with("neo_admin_"));

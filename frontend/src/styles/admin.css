@@ -8,6 +8,20 @@
   width: 100%;
 }
 
+.admin-shell > .el-aside h1 {
+  text-align: center;
+}
+
+.admin-shell-title-link {
+  color: inherit;
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+
+.admin-shell-title-link:hover {
+  opacity: 0.78;
+}
+
 .admin-shell > .el-aside .el-menu-item,
 .admin-shell > .el-aside .el-sub-menu .el-menu-item,
 .admin-shell > .el-aside .el-sub-menu__title {

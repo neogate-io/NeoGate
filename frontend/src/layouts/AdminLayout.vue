@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RouterView, useRoute, useRouter } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { Connection, Key, Monitor, Setting, SwitchButton, User } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { isMessageKey } from '../i18n'
@@ -22,7 +22,8 @@ const navItems = [
 const settingItems = [
   { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' },
   { path: '/admin/settings/smtp', key: 'smtpSettings' },
-  { path: '/admin/settings/payment', key: 'paymentSettings' }
+  { path: '/admin/settings/payment', key: 'paymentSettings' },
+  { path: '/admin/settings/admin-password', key: 'adminPasswordSettings' }
 ] as const
 
 const activeRoute = computed(() => route.path)
@@ -52,8 +53,10 @@ async function logout() {
 
 <template>
   <el-container class="app-shell admin-shell">
-    <el-aside width="220px">
-      <h1>{{ t('appName') }}</h1>
+    <el-aside width="248px">
+      <h1>
+        <RouterLink class="admin-shell-title-link" to="/">{{ t('appName') }}</RouterLink>
+      </h1>
       <el-menu
         :key="settingsOpen ? 'settings-open' : 'settings-closed'"
         :default-active="activeRoute"

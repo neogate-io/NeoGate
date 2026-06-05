@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -12,8 +13,6 @@ pub struct Config {
     pub production: bool,
     pub runtime_mode: RuntimeMode,
     pub process_role: ProcessRole,
-    pub admin_username: String,
-    pub admin_password: String,
     pub admin_token_secret: String,
     pub admin_session_ttl: Duration,
     pub upstream_secret_key: String,
@@ -136,15 +135,12 @@ impl Config {
             production,
             runtime_mode,
             process_role,
-            admin_username: env::var("ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string()),
-            admin_password: env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "password".to_string()),
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
                 .unwrap_or_else(|_| "change-me-admin-token-secret-in-production".to_string()),
             admin_session_ttl: Duration::from_secs(parse_u64("ADMIN_SESSION_TTL_SECONDS", 86400)),
             upstream_secret_key: env::var("UPSTREAM_SECRET_KEY")
                 .unwrap_or_else(|_| "change-me-upstream-secret-key-in-production".to_string()),
-            anthropic_version: env::var("ANTHROPIC_VERSION")
-                .unwrap_or_else(|_| "2023-06-01".to_string()),
+            anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)),
             request_timeout: Duration::from_secs(parse_u64("REQUEST_TIMEOUT_SECONDS", 120)),
             upstream_connect_timeout: Duration::from_secs(parse_u64(
@@ -194,7 +190,7 @@ impl Config {
                 "BILLING_OUTBOX_MAX_AGE_SECONDS",
                 300,
             )),
-            payment: PaymentConfig::from_env()?,
+            payment: PaymentConfig::default(),
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
         };
@@ -253,7 +249,6 @@ impl Config {
         }
 
         if self.production {
-            reject_default("ADMIN_PASSWORD", &self.admin_password, "password")?;
             reject_default(
                 "ADMIN_TOKEN_SECRET",
                 &self.admin_token_secret,
@@ -293,23 +288,23 @@ pub struct ZpayConfig {
     pub site_name: String,
 }
 
-impl PaymentConfig {
-    fn from_env() -> Result<Self> {
-        Ok(Self {
-            enabled_providers: parse_payment_providers("PAYMENT_PROVIDERS", ""),
-            return_base_url: optional("PAYMENT_RETURN_BASE_URL"),
+impl Default for PaymentConfig {
+    fn default() -> Self {
+        Self {
+            enabled_providers: Vec::new(),
+            return_base_url: None,
             zpay: ZpayConfig {
-                api_url: optional("ZPAY_API_URL")
-                    .or_else(|| Some("https://zpayz.cn/submit.php".to_string())),
-                merchant_id: optional("ZPAY_MERCHANT_ID"),
-                secret_key: optional("ZPAY_SECRET_KEY"),
-                default_pay_type: env::var("ZPAY_DEFAULT_PAY_TYPE")
-                    .unwrap_or_else(|_| "wxpay".to_string()),
-                site_name: env::var("ZPAY_SITE_NAME").unwrap_or_else(|_| "NeoGate".to_string()),
+                api_url: Some("https://zpayz.cn/submit.php".to_string()),
+                merchant_id: None,
+                secret_key: None,
+                default_pay_type: "wxpay".to_string(),
+                site_name: "NeoGate".to_string(),
             },
-        })
+        }
     }
+}
 
+impl PaymentConfig {
     pub fn provider_enabled(&self, provider: PaymentProvider) -> bool {
         self.enabled_providers.contains(&provider)
     }
@@ -385,13 +380,6 @@ fn parse_csv(name: &str, default: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .collect()
-}
-
-fn parse_payment_providers(name: &str, default: &str) -> Vec<PaymentProvider> {
-    parse_csv(name, default)
-        .into_iter()
-        .filter_map(|value| PaymentProvider::from_code(&value).ok())
         .collect()
 }
 

@@ -45,11 +45,11 @@ cp backend/.env.example backend/.env
 
 ```dotenv
 DATABASE_URL=postgres://localhost/neogate
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=password
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
 UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
 ```
+
+首次启动后端时会在 `admin` 表为空时创建默认管理员 `admin` / `password`，后续管理员登录使用数据库中的密码哈希。
 
 启动后端：
 
@@ -83,7 +83,7 @@ cp backend/.env.example .env
 docker compose up --build
 ```
 
-生产环境请先替换 `.env` 中的默认密码和密钥。
+使用 Docker Compose 时，请先在 `.env` 中取消注释并设置 `POSTGRES_PASSWORD`。生产环境请替换 `.env` 中的默认密钥。
 
 ## 4. 部署模式
 
@@ -99,7 +99,7 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 上线前至少确认：
 
 - 设置 `APP_ENV=production`。
-- 替换默认管理员密码。
+- 首次启动后替换默认管理员密码。
 - 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`。
 - 设置正确的 `CORS_ALLOWED_ORIGINS`。
 - 如需公开邮箱领取 API key，在管理员后台的系统设置中配置 SMTP。

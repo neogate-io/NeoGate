@@ -22,6 +22,8 @@ use crate::{
 const PASSWORD_RESET_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const LOGIN_VERIFICATION_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const MIN_USER_PASSWORD_LEN: usize = 8;
+const MAX_ADMIN_LOGIN_FAILURES: i32 = 5;
+const ADMIN_LOGIN_LOCK_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone)]
 pub struct UserSessionAuth {
@@ -108,21 +110,8 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> AppResult<Json<LoginResponse>> {
-    if req
-        .username
-        .eq_ignore_ascii_case(&state.config.admin_username)
-    {
-        if req.password != state.config.admin_password {
-            return Err(AppError::Unauthorized);
-        }
-
-        return Ok(Json(LoginResponse {
-            token: issue_admin_token(
-                state.config.admin_session_ttl,
-                &state.config.admin_token_secret,
-            ),
-            role: "admin".to_string(),
-        }));
+    if let Some(response) = login_admin(&state, &req.username, &req.password).await? {
+        return Ok(Json(response));
     }
 
     let user_id = login_or_create_user(
@@ -140,6 +129,89 @@ async fn login(
         ),
         role: "user".to_string(),
     }))
+}
+
+async fn login_admin(
+    state: &AppState,
+    username: &str,
+    password: &str,
+) -> AppResult<Option<LoginResponse>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, password_hash, status, COALESCE(locked_until > now(), FALSE) AS locked
+        FROM admin
+        WHERE username = $1
+        ORDER BY id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(username)
+    .fetch_optional(&state.db.pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let id: DbId = row.try_get("id")?;
+    let status: String = row.try_get("status")?;
+    let locked: bool = row.try_get("locked")?;
+    if status != "enabled" || locked {
+        return Err(AppError::Unauthorized);
+    }
+
+    let password_hash: String = row.try_get("password_hash")?;
+    if !verify_user_password(password, &state.config.admin_token_secret, &password_hash) {
+        record_admin_login_failure(state, id).await?;
+        return Err(AppError::Unauthorized);
+    }
+
+    record_admin_login_success(state, id).await?;
+    Ok(Some(LoginResponse {
+        token: issue_admin_token(
+            state.config.admin_session_ttl,
+            &state.config.admin_token_secret,
+        ),
+        role: "admin".to_string(),
+    }))
+}
+
+async fn record_admin_login_failure(state: &AppState, id: DbId) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE admin
+        SET failed_login_attempts = failed_login_attempts + 1,
+            locked_until = CASE
+                WHEN failed_login_attempts + 1 >= $2 THEN now() + $3::interval
+                ELSE locked_until
+            END,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(MAX_ADMIN_LOGIN_FAILURES)
+    .bind(format!("{} seconds", ADMIN_LOGIN_LOCK_TTL.as_secs()))
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn record_admin_login_success(state: &AppState, id: DbId) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE admin
+        SET failed_login_attempts = 0,
+            locked_until = NULL,
+            last_login_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
 }
 
 async fn request_login_verification_code(
@@ -411,7 +483,7 @@ fn generate_login_verification_code() -> String {
     format!("{:06}", rand::rng().random_range(0..1_000_000))
 }
 
-fn validate_user_password_input(password: &str) -> AppResult<()> {
+pub(crate) fn validate_user_password_input(password: &str) -> AppResult<()> {
     if password.is_empty() {
         return Err(AppError::BadRequest("password is required".to_string()));
     }

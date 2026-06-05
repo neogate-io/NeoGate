@@ -379,7 +379,7 @@ fn notify_url(
 ) -> AppResult<String> {
     let Some(base_url) = payment_config.return_base_url.as_deref() else {
         return Err(AppError::BadRequest(
-            "PAYMENT_RETURN_BASE_URL is required to create payment orders".to_string(),
+            "payment return base URL is required to create payment orders".to_string(),
         ));
     };
     Ok(format!(
@@ -456,7 +456,7 @@ impl ZpayConfig {
     fn require_ready(&self) -> AppResult<()> {
         if self.api_url.is_none() || self.merchant_id.is_none() || self.secret_key.is_none() {
             return Err(AppError::BadRequest(
-                "ZPAY_API_URL, ZPAY_MERCHANT_ID and ZPAY_SECRET_KEY are required".to_string(),
+                "ZPAY API URL, merchant ID and secret key are required".to_string(),
             ));
         }
         Ok(())

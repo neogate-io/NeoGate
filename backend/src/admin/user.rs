@@ -9,7 +9,7 @@ use crate::{
         generate_user_key, generate_user_key_from_parts_and_seed, is_generated_user_key,
         issue_user_key_draft_token, key_prefix, user_key_draft_parts_from_token, UserAuth,
     },
-    billing::{wallet, DebitPart, WalletId, WalletType, MICRO_USD_PER_USD},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
     email::EmailLocale,
     error::{AppError, AppResult},
     id::DbId,
@@ -191,7 +191,7 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     .fetch_one(&mut *tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;
-    wallet::create_owner_wallet(&mut tx, WalletType::User, user_id).await?;
+    account::create_credit_account(&mut tx, CreditAccountType::User, user_id).await?;
     tx.commit().await?;
     get_user(state, user_id).await
 }
@@ -227,14 +227,14 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Ve
                   u.last_active_at, u.created_at, u.updated_at
            FROM "user" u
            JOIN user_group ug ON ug.id = u.user_group_id
-           JOIN wallet w ON w.owner_type = 'user' AND w.owner_id = u.id
+           JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
            LEFT JOIN (
                SELECT uk.user_id,
                       count(uk.id) AS user_key_count,
                       COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
                       COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM user_key uk
-               LEFT JOIN wallet kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
                GROUP BY uk.user_id
            ) ukw ON ukw.user_id = u.id"#,
     );
@@ -289,7 +289,7 @@ pub async fn update_user(
     .ok_or(AppError::NotFound)?;
     let user_id: DbId = row.try_get("id")?;
     if disabling {
-        recover_user_hot_wallets(state, id).await?;
+        recover_user_hot_credit_accounts(state, id).await?;
     }
     get_user(state, user_id).await
 }
@@ -306,7 +306,7 @@ pub async fn list_user_groups(state: &AppState) -> AppResult<Vec<UserGroupRecord
 }
 
 pub async fn delete_user(state: &AppState, id: DbId) -> AppResult<()> {
-    recover_user_hot_wallets(state, id).await?;
+    recover_user_hot_credit_accounts(state, id).await?;
     let result = sqlx::query(r#"DELETE FROM "user" WHERE id = $1"#)
         .bind(id)
         .execute(&state.db.pool)
@@ -327,14 +327,14 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
                   u.last_active_at, u.created_at, u.updated_at
            FROM "user" u
            JOIN user_group ug ON ug.id = u.user_group_id
-           JOIN wallet w ON w.owner_type = 'user' AND w.owner_id = u.id
+           JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
            LEFT JOIN (
                SELECT uk.user_id,
                       count(uk.id) AS user_key_count,
                       COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
                       COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM user_key uk
-               LEFT JOIN wallet kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
                GROUP BY uk.user_id
            ) ukw ON ukw.user_id = u.id
            WHERE u.id = $1"#,
@@ -402,7 +402,7 @@ pub async fn create_user_key(
     .fetch_one(&mut *tx)
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
-    wallet::create_owner_wallet(&mut tx, WalletType::UserKey, user_key_id).await?;
+    account::create_credit_account(&mut tx, CreditAccountType::UserKey, user_key_id).await?;
     tx.commit().await?;
 
     Ok(CreatedUserKey {
@@ -430,10 +430,12 @@ pub async fn claim_public_user_key(
 
     let (user_id, created_user) = find_or_create_user_by_email(&mut tx, &email).await?;
     if created_user {
-        let wallet = wallet::owner_wallet_for_update(&mut tx, WalletType::User, user_id).await?;
+        let credit_account =
+            account::owner_credit_account_for_update(&mut tx, CreditAccountType::User, user_id)
+                .await?;
         adjust_credit_in_tx(
             &mut tx,
-            wallet,
+            credit_account,
             MICRO_USD_PER_USD,
             "gift",
             serde_json::json!({ "source": "public_user_key_claim" }),
@@ -455,7 +457,7 @@ pub async fn claim_public_user_key(
     .fetch_one(&mut *tx)
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
-    wallet::create_owner_wallet(&mut tx, WalletType::UserKey, user_key_id).await?;
+    account::create_credit_account(&mut tx, CreditAccountType::UserKey, user_key_id).await?;
     tx.commit().await?;
 
     state
@@ -510,7 +512,7 @@ pub async fn list_user_keys(
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id",
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id",
     );
 
     if let Some(user_id) = query.user_id {
@@ -566,15 +568,17 @@ pub async fn update_user_key(
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
     if disabling {
-        let wallet = wallet::owner_wallet(&state.db.pool, WalletType::UserKey, id).await?;
-        recover_hot_wallet(state, wallet).await?;
+        let credit_account =
+            account::owner_credit_account(&state.db.pool, CreditAccountType::UserKey, id).await?;
+        recover_hot_credit_account(state, credit_account).await?;
     }
     get_user_key(state, user_key_id).await
 }
 
 pub async fn delete_user_key(state: &AppState, id: DbId) -> AppResult<()> {
-    let wallet = wallet::owner_wallet(&state.db.pool, WalletType::UserKey, id).await?;
-    recover_hot_wallet(state, wallet).await?;
+    let credit_account =
+        account::owner_credit_account(&state.db.pool, CreditAccountType::UserKey, id).await?;
+    recover_hot_credit_account(state, credit_account).await?;
     let result = sqlx::query("DELETE FROM user_key WHERE id = $1")
         .bind(id)
         .execute(&state.db.pool)
@@ -592,7 +596,7 @@ async fn get_user_key(state: &AppState, id: DbId) -> AppResult<UserKeyRecord> {
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.id = $1",
     )
     .bind(id)
@@ -711,26 +715,30 @@ async fn find_or_create_user_by_email(
     .fetch_one(&mut **tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;
-    wallet::create_owner_wallet(tx, WalletType::User, user_id).await?;
+    account::create_credit_account(tx, CreditAccountType::User, user_id).await?;
     Ok((user_id, true))
 }
 
 pub async fn adjust_credit(
     state: &AppState,
-    wallet_type: WalletType,
+    credit_account_type: CreditAccountType,
     owner_id: DbId,
     amount_micro_usd: i64,
     reason: &str,
 ) -> AppResult<i64> {
     let mut tx = state.db.pool.begin().await?;
-    let wallet = wallet::owner_wallet_for_update(&mut tx, wallet_type, owner_id).await?;
+    let credit_account =
+        account::owner_credit_account_for_update(&mut tx, credit_account_type, owner_id).await?;
     if amount_micro_usd < 0 {
-        let recovered = state.billing.drain_hot_wallet(&wallet).await?;
+        let recovered = state
+            .billing
+            .drain_hot_credit_account(&credit_account)
+            .await?;
         recover_hot_credit_in_tx(&mut tx, &recovered).await?;
     }
     let balance_after = adjust_credit_in_tx(
         &mut tx,
-        wallet,
+        credit_account,
         amount_micro_usd,
         reason,
         serde_json::json!({ "source": "admin" }),
@@ -740,31 +748,37 @@ pub async fn adjust_credit(
     Ok(balance_after)
 }
 
-async fn recover_hot_wallet(state: &AppState, wallet: WalletId) -> AppResult<()> {
+async fn recover_hot_credit_account(
+    state: &AppState,
+    credit_account: CreditAccountId,
+) -> AppResult<()> {
     let mut tx = state.db.pool.begin().await?;
-    wallet::lock_for_update(&mut tx, &wallet).await?;
-    let recovered = state.billing.drain_hot_wallet(&wallet).await?;
+    account::lock_for_update(&mut tx, &credit_account).await?;
+    let recovered = state
+        .billing
+        .drain_hot_credit_account(&credit_account)
+        .await?;
     recover_hot_credit_in_tx(&mut tx, &recovered).await?;
     tx.commit().await?;
     Ok(())
 }
 
-async fn recover_user_hot_wallets(state: &AppState, user_id: DbId) -> AppResult<()> {
+async fn recover_user_hot_credit_accounts(state: &AppState, user_id: DbId) -> AppResult<()> {
     let rows = sqlx::query(
         "SELECT w.id
-         FROM wallet w
+         FROM credit_account w
          WHERE w.owner_type = 'user' AND w.owner_id = $1
          UNION ALL
          SELECT w.id
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.user_id = $1",
     )
     .bind(user_id)
     .fetch_all(&state.db.pool)
     .await?;
     for row in rows {
-        recover_hot_wallet(state, WalletId::new(row.try_get("id")?)).await?;
+        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
     }
     Ok(())
 }
@@ -777,14 +791,14 @@ async fn recover_hot_credit_in_tx(
     if total <= 0 {
         return Ok(());
     }
-    let Some(wallet) = parts.first().map(|part| &part.wallet) else {
+    let Some(credit_account) = parts.first().map(|part| &part.credit_account) else {
         return Ok(());
     };
 
-    wallet::decrement_reserved(tx, wallet, total).await?;
+    account::decrement_reserved(tx, credit_account, total).await?;
 
     for part in parts {
-        wallet::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
     }
 
     Ok(())
@@ -792,7 +806,7 @@ async fn recover_hot_credit_in_tx(
 
 async fn adjust_credit_in_tx(
     tx: &mut Transaction<'_, Postgres>,
-    wallet: WalletId,
+    credit_account: CreditAccountId,
     amount_micro_usd: i64,
     reason: &str,
     metadata: serde_json::Value,
@@ -808,15 +822,15 @@ async fn adjust_credit_in_tx(
         )));
     }
 
-    let balance_after = wallet::adjust_balance(tx, &wallet, amount_micro_usd).await?;
+    let balance_after = account::adjust_balance(tx, &credit_account, amount_micro_usd).await?;
 
     sqlx::query(
         "INSERT INTO credit_ledger
-         (wallet_id, amount_micro_usd, balance_after_micro_usd, reason,
+         (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
           transaction_id, metadata)
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount_micro_usd)
     .bind(balance_after)
     .bind(reason)

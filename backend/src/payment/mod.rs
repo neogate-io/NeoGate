@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserSessionAuth,
-    billing::{wallet, WalletType, MICRO_USD_PER_USD},
+    billing::{account, CreditAccountType, MICRO_USD_PER_USD},
     config::{PaymentProvider, ZpayConfig},
     error::{AppError, AppResult},
     id::DbId,
@@ -134,7 +134,9 @@ pub async fn create_user_payment_order(
 
     let order_id = Uuid::new_v4();
     let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
-    let wallet = wallet::owner_wallet(&state.db.pool, WalletType::User, auth.user_id).await?;
+    let credit_account =
+        account::owner_credit_account(&state.db.pool, CreditAccountType::User, auth.user_id)
+            .await?;
     let notify_url = notify_url(&payment_config, provider)?;
     let gateway_req = GatewayCreateRequest {
         order_id,
@@ -148,13 +150,13 @@ pub async fn create_user_payment_order(
 
     sqlx::query(
         "INSERT INTO payment
-         (id, user_id, wallet_id, provider, provider_order_id, status, currency,
+         (id, user_id, credit_account_id, provider, provider_order_id, status, currency,
           amount_micro_usd, payable_amount_minor, checkout_url, return_url)
          VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)",
     )
     .bind(order_id)
     .bind(auth.user_id)
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(provider.as_str())
     .bind(gateway_res.provider_order_id.as_deref())
     .bind(PAYMENT_CURRENCY)
@@ -226,7 +228,7 @@ async fn settle_payment_notification(
 ) -> AppResult<()> {
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
-        "SELECT id, wallet_id, amount_micro_usd, payable_amount_minor, status
+        "SELECT id, credit_account_id, amount_micro_usd, payable_amount_minor, status
          FROM payment
          WHERE id = $1 AND provider = $2
          FOR UPDATE",
@@ -275,17 +277,18 @@ async fn settle_payment_notification(
     .await?;
 
     if notification.status == PaymentStatus::Paid {
-        let wallet_id: DbId = row.try_get("wallet_id")?;
+        let credit_account_id: DbId = row.try_get("credit_account_id")?;
         let amount_micro_usd: i64 = row.try_get("amount_micro_usd")?;
-        let wallet = crate::billing::WalletId::new(wallet_id);
-        let balance_after = wallet::adjust_balance(&mut tx, &wallet, amount_micro_usd).await?;
+        let credit_account = crate::billing::CreditAccountId::new(credit_account_id);
+        let balance_after =
+            account::adjust_balance(&mut tx, &credit_account, amount_micro_usd).await?;
         sqlx::query(
             "INSERT INTO credit_ledger
-             (wallet_id, amount_micro_usd, balance_after_micro_usd, reason,
+             (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
               transaction_id, metadata)
              VALUES ($1, $2, $3, 'recharge', $4, $5)",
         )
-        .bind(wallet_id)
+        .bind(credit_account_id)
         .bind(amount_micro_usd)
         .bind(balance_after)
         .bind(notification.order_id)

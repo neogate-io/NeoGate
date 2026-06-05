@@ -5,68 +5,68 @@ use crate::{
     id::DbId,
 };
 
-use super::{WalletId, WalletType};
+use super::{CreditAccountId, CreditAccountType};
 
-pub(crate) async fn create_owner_wallet(
+pub(crate) async fn create_credit_account(
     tx: &mut Transaction<'_, Postgres>,
-    wallet_type: WalletType,
+    credit_account_type: CreditAccountType,
     owner_id: DbId,
-) -> AppResult<WalletId> {
+) -> AppResult<CreditAccountId> {
     let row = sqlx::query(
-        "INSERT INTO wallet (owner_type, owner_id)
+        "INSERT INTO credit_account (owner_type, owner_id)
          VALUES ($1, $2)
          RETURNING id",
     )
-    .bind(wallet_type.as_str())
+    .bind(credit_account_type.as_str())
     .bind(owner_id)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(WalletId::new(row.try_get("id")?))
+    Ok(CreditAccountId::new(row.try_get("id")?))
 }
 
-pub(crate) async fn owner_wallet(
+pub(crate) async fn owner_credit_account(
     pool: &PgPool,
-    wallet_type: WalletType,
+    credit_account_type: CreditAccountType,
     owner_id: DbId,
-) -> AppResult<WalletId> {
+) -> AppResult<CreditAccountId> {
     let row = sqlx::query(
         "SELECT id
-         FROM wallet
+         FROM credit_account
          WHERE owner_type = $1 AND owner_id = $2",
     )
-    .bind(wallet_type.as_str())
+    .bind(credit_account_type.as_str())
     .bind(owner_id)
     .fetch_optional(pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    Ok(WalletId::new(row.try_get("id")?))
+    Ok(CreditAccountId::new(row.try_get("id")?))
 }
 
-pub(crate) async fn owner_wallet_for_update(
+pub(crate) async fn owner_credit_account_for_update(
     tx: &mut Transaction<'_, Postgres>,
-    wallet_type: WalletType,
+    credit_account_type: CreditAccountType,
     owner_id: DbId,
-) -> AppResult<WalletId> {
+) -> AppResult<CreditAccountId> {
     let row = sqlx::query(
         "SELECT id
-         FROM wallet
+         FROM credit_account
          WHERE owner_type = $1 AND owner_id = $2
          FOR UPDATE",
     )
-    .bind(wallet_type.as_str())
+    .bind(credit_account_type.as_str())
     .bind(owner_id)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(AppError::NotFound)?;
-    Ok(WalletId::new(row.try_get("id")?))
+    Ok(CreditAccountId::new(row.try_get("id")?))
 }
 
 pub(crate) async fn lock_for_update(
     tx: &mut Transaction<'_, Postgres>,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
 ) -> AppResult<()> {
-    sqlx::query("SELECT id FROM wallet WHERE id = $1 FOR UPDATE")
-        .bind(wallet.id)
+    sqlx::query("SELECT id FROM credit_account WHERE id = $1 FOR UPDATE")
+        .bind(credit_account.id)
         .fetch_optional(&mut **tx)
         .await?
         .map(|_| ())
@@ -75,17 +75,17 @@ pub(crate) async fn lock_for_update(
 
 pub(crate) async fn adjust_balance(
     tx: &mut Transaction<'_, Postgres>,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
     amount_micro_usd: i64,
 ) -> AppResult<i64> {
     let row = sqlx::query(
-        "UPDATE wallet
+        "UPDATE credit_account
          SET balance_micro_usd = balance_micro_usd + $2,
              updated_at = now()
          WHERE id = $1 AND balance_micro_usd + $2 >= reserved_micro_usd
          RETURNING balance_micro_usd",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount_micro_usd)
     .fetch_optional(&mut **tx)
     .await?
@@ -96,27 +96,27 @@ pub(crate) async fn adjust_balance(
 
 pub(crate) async fn decrement_reserved(
     tx: &mut Transaction<'_, Postgres>,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
     amount_micro_usd: i64,
 ) -> AppResult<()> {
-    decrement_reserved_returning_balance(tx, wallet, amount_micro_usd)
+    decrement_reserved_returning_balance(tx, credit_account, amount_micro_usd)
         .await
         .map(|_| ())
 }
 
 pub(crate) async fn decrement_reserved_returning_balance(
     tx: &mut Transaction<'_, Postgres>,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
     amount_micro_usd: i64,
 ) -> AppResult<i64> {
     let row = sqlx::query(
-        "UPDATE wallet
+        "UPDATE credit_account
          SET reserved_micro_usd = reserved_micro_usd - $2,
              updated_at = now()
          WHERE id = $1
          RETURNING balance_micro_usd",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount_micro_usd)
     .fetch_one(&mut **tx)
     .await?;
@@ -125,18 +125,18 @@ pub(crate) async fn decrement_reserved_returning_balance(
 
 pub(crate) async fn debit_reserved_balance(
     tx: &mut Transaction<'_, Postgres>,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
     amount_micro_usd: i64,
 ) -> AppResult<i64> {
     let row = sqlx::query(
-        "UPDATE wallet
+        "UPDATE credit_account
          SET balance_micro_usd = balance_micro_usd - $2,
              reserved_micro_usd = reserved_micro_usd - $2,
              updated_at = now()
          WHERE id = $1
          RETURNING balance_micro_usd",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount_micro_usd)
     .fetch_one(&mut **tx)
     .await?;

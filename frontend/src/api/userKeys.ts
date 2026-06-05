@@ -50,12 +50,12 @@ export function createUserKey(email: string, draftId: string, locale: string) {
   })
 }
 
-export function adjustCredit(walletType: 'user' | 'user_key', walletId: number, amountMicroUsd: number) {
+export function adjustCredit(creditAccountType: 'user' | 'user_key', ownerId: number, amountMicroUsd: number) {
   return adminRequest<{ balance_micro_usd: number }>('/api/admin/credits', {
     method: 'POST',
     body: JSON.stringify({
-      wallet_type: walletType,
-      wallet_id: walletId,
+      credit_account_type: creditAccountType,
+      owner_id: ownerId,
       amount_micro_usd: amountMicroUsd,
       reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
     })

@@ -66,7 +66,7 @@ CREATE TABLE user_key (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE wallet (
+CREATE TABLE credit_account (
     id BIGSERIAL PRIMARY KEY,
     owner_type TEXT NOT NULL CHECK (owner_type IN ('user', 'user_key')),
     owner_id BIGINT NOT NULL,
@@ -75,7 +75,7 @@ CREATE TABLE wallet (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (owner_type, owner_id),
-    CONSTRAINT wallet_credit_non_negative CHECK (
+    CONSTRAINT credit_account_balance_non_negative CHECK (
         balance_micro_usd >= 0
         AND reserved_micro_usd >= 0
         AND reserved_micro_usd <= balance_micro_usd
@@ -85,7 +85,7 @@ CREATE TABLE wallet (
 CREATE TABLE payment (
     id UUID PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-    wallet_id BIGINT NOT NULL REFERENCES wallet(id),
+    credit_account_id BIGINT NOT NULL REFERENCES credit_account(id),
     provider TEXT NOT NULL,
     provider_order_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'failed', 'canceled', 'expired')),
@@ -354,7 +354,7 @@ CREATE TABLE pricing_policy (
 
 CREATE TABLE credit_allocation (
     id BIGSERIAL PRIMARY KEY,
-    wallet_id BIGINT NOT NULL REFERENCES wallet(id),
+    credit_account_id BIGINT NOT NULL REFERENCES credit_account(id),
     amount_micro_usd BIGINT NOT NULL CHECK (amount_micro_usd > 0),
     consumed_micro_usd BIGINT NOT NULL DEFAULT 0 CHECK (consumed_micro_usd >= 0),
     returned_micro_usd BIGINT NOT NULL DEFAULT 0 CHECK (returned_micro_usd >= 0),
@@ -366,7 +366,7 @@ CREATE TABLE credit_allocation (
 
 CREATE TABLE credit_ledger (
     id BIGSERIAL PRIMARY KEY,
-    wallet_id BIGINT NOT NULL REFERENCES wallet(id),
+    credit_account_id BIGINT NOT NULL REFERENCES credit_account(id),
     amount_micro_usd BIGINT NOT NULL,
     balance_after_micro_usd BIGINT,
     reason TEXT NOT NULL CHECK (reason IN ('recharge', 'gift', 'adjustment', 'usage', 'refund', 'allocation_recover')),
@@ -452,14 +452,14 @@ CREATE INDEX idx_pricing_policy_user_group_enabled
     ON pricing_policy(user_group, enabled, priority DESC);
 CREATE UNIQUE INDEX idx_usage_billing_transaction_id ON usage(billing_transaction_id)
     WHERE billing_transaction_id IS NOT NULL;
-CREATE INDEX idx_credit_allocation_wallet ON credit_allocation(wallet_id, status, created_at ASC);
+CREATE INDEX idx_credit_allocation_account ON credit_allocation(credit_account_id, status, created_at ASC);
 CREATE INDEX idx_credit_allocation_active_stale ON credit_allocation(created_at ASC, id ASC)
     WHERE status = 'active';
-CREATE INDEX idx_credit_ledger_wallet_created ON credit_ledger(wallet_id, created_at DESC);
+CREATE INDEX idx_credit_ledger_account_created ON credit_ledger(credit_account_id, created_at DESC);
 CREATE INDEX idx_credit_ledger_usage ON credit_ledger(usage_id);
 CREATE INDEX idx_credit_ledger_allocation ON credit_ledger(allocation_id);
 CREATE UNIQUE INDEX idx_credit_ledger_transaction_allocation
-    ON credit_ledger(transaction_id, allocation_id, wallet_id)
+    ON credit_ledger(transaction_id, allocation_id, credit_account_id)
     WHERE allocation_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
     day,

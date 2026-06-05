@@ -18,10 +18,10 @@ use crate::{
     id::DbId,
 };
 
+pub(crate) mod account;
 mod credit;
 mod metering;
 pub mod outbox;
-pub(crate) mod wallet;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
 pub use metering::{
@@ -43,12 +43,12 @@ pub struct Billing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WalletType {
+pub enum CreditAccountType {
     User,
     UserKey,
 }
 
-impl WalletType {
+impl CreditAccountType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::User => "user",
@@ -58,11 +58,11 @@ impl WalletType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct WalletId {
+pub struct CreditAccountId {
     pub id: DbId,
 }
 
-impl WalletId {
+impl CreditAccountId {
     pub fn new(id: DbId) -> Self {
         Self { id }
     }
@@ -97,7 +97,7 @@ impl TokenUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebitPart {
-    pub wallet: WalletId,
+    pub credit_account: CreditAccountId,
     pub allocation_id: DbId,
     pub amount_micro_usd: i64,
     generation: u64,
@@ -134,7 +134,7 @@ struct AllocationRecoverySummary {
 
 struct AllocationRecoverySample {
     allocation_id: DbId,
-    wallet_id: DbId,
+    credit_account_id: DbId,
     amount_micro_usd: i64,
     consumed_micro_usd: i64,
     already_returned_micro_usd: i64,
@@ -146,7 +146,7 @@ impl fmt::Debug for AllocationRecoverySample {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AllocationRecoverySample")
             .field("allocation_id", &self.allocation_id)
-            .field("wallet_id", &self.wallet_id)
+            .field("credit_account_id", &self.credit_account_id)
             .field("amount_micro_usd", &self.amount_micro_usd)
             .field("consumed_micro_usd", &self.consumed_micro_usd)
             .field(
@@ -232,8 +232,11 @@ impl Billing {
         self.price_cache.invalidate_all();
     }
 
-    pub async fn drain_hot_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>> {
-        self.hot.drain_wallet(wallet).await
+    pub async fn drain_hot_credit_account(
+        &self,
+        credit_account: &CreditAccountId,
+    ) -> AppResult<Vec<DebitPart>> {
+        self.hot.drain_credit_account(credit_account).await
     }
 
     pub fn spawn_allocation_recovery(
@@ -290,8 +293,8 @@ impl Billing {
         pool: &PgPool,
         user_id: DbId,
         user_key_id: DbId,
-        user_key_wallet: &WalletId,
-        user_wallet: &WalletId,
+        user_key_credit_account: &CreditAccountId,
+        user_credit_account: &CreditAccountId,
         estimated_micro_usd: i64,
     ) -> AppResult<DebitHold> {
         if estimated_micro_usd <= 0 {
@@ -302,10 +305,10 @@ impl Billing {
             });
         }
 
-        let wallets = [user_key_wallet.clone(), user_wallet.clone()];
+        let credit_accounts = [user_key_credit_account.clone(), user_credit_account.clone()];
         if let Some(parts) = self
             .hot
-            .try_debit_ordered(&wallets, estimated_micro_usd)
+            .try_debit_ordered(&credit_accounts, estimated_micro_usd)
             .await?
         {
             return Ok(DebitHold {
@@ -315,12 +318,16 @@ impl Billing {
             });
         }
 
-        let lock_id = prefetch_lock_index(user_key_wallet, user_wallet, self.prefetch_locks.len());
+        let lock_id = prefetch_lock_index(
+            user_key_credit_account,
+            user_credit_account,
+            self.prefetch_locks.len(),
+        );
         let _prefetch_guard = self.prefetch_locks[lock_id].lock().await;
 
         if let Some(parts) = self
             .hot
-            .try_debit_ordered(&wallets, estimated_micro_usd)
+            .try_debit_ordered(&credit_accounts, estimated_micro_usd)
             .await?
         {
             return Ok(DebitHold {
@@ -334,15 +341,15 @@ impl Billing {
             pool,
             user_id,
             user_key_id,
-            user_key_wallet,
-            user_wallet,
+            user_key_credit_account,
+            user_credit_account,
             estimated_micro_usd,
         )
         .await?;
 
         let Some(parts) = self
             .hot
-            .try_debit_ordered(&wallets, estimated_micro_usd)
+            .try_debit_ordered(&credit_accounts, estimated_micro_usd)
             .await?
         else {
             return Err(AppError::PaymentRequired);
@@ -365,8 +372,9 @@ impl Billing {
             if part.amount_micro_usd <= 0 {
                 continue;
             }
-            wallet::decrement_reserved(&mut tx, &part.wallet, part.amount_micro_usd).await?;
-            wallet::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micro_usd)
+            account::decrement_reserved(&mut tx, &part.credit_account, part.amount_micro_usd)
+                .await?;
+            account::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micro_usd)
                 .await?;
         }
         tx.commit().await?;
@@ -378,8 +386,8 @@ impl Billing {
         pool: &PgPool,
         user_id: DbId,
         user_key_id: DbId,
-        user_key_wallet: &WalletId,
-        user_wallet: &WalletId,
+        user_key_credit_account: &CreditAccountId,
+        user_credit_account: &CreditAccountId,
         hold: DebitHold,
         usage: Option<TokenUsage>,
         price: &Price,
@@ -398,8 +406,8 @@ impl Billing {
                         pool,
                         user_id,
                         user_key_id,
-                        user_key_wallet,
-                        user_wallet,
+                        user_key_credit_account,
+                        user_credit_account,
                         supplemental_micro_usd,
                     )
                     .await
@@ -489,8 +497,8 @@ impl Billing {
         pool: &PgPool,
         user_id: DbId,
         user_key_id: DbId,
-        user_key_wallet: &WalletId,
-        user_wallet: &WalletId,
+        user_key_credit_account: &CreditAccountId,
+        user_credit_account: &CreditAccountId,
         needed_micro_usd: i64,
     ) -> AppResult<()> {
         let mut tx = pool.begin().await?;
@@ -498,12 +506,18 @@ impl Billing {
         let target = self.prefetch_micro_usd.max(needed_micro_usd);
         let mut allocations = Vec::new();
 
-        if let Some((allocation_id, amount)) =
-            allocate_user_key(&mut tx, user_key_id, user_id, user_key_wallet, target).await?
+        if let Some((allocation_id, amount)) = allocate_user_key(
+            &mut tx,
+            user_key_id,
+            user_id,
+            user_key_credit_account,
+            target,
+        )
+        .await?
         {
             allocations.push((
                 HotAllocation {
-                    wallet: user_key_wallet.clone(),
+                    credit_account: user_key_credit_account.clone(),
                     allocation_id,
                 },
                 amount,
@@ -514,11 +528,11 @@ impl Billing {
         if remaining > 0 {
             let user_target = self.prefetch_micro_usd.max(remaining);
             if let Some((allocation_id, amount)) =
-                allocate_user(&mut tx, user_id, user_wallet, user_target).await?
+                allocate_user(&mut tx, user_id, user_credit_account, user_target).await?
             {
                 allocations.push((
                     HotAllocation {
-                        wallet: user_wallet.clone(),
+                        credit_account: user_credit_account.clone(),
                         allocation_id,
                     },
                     amount,
@@ -540,7 +554,11 @@ impl Billing {
         for (allocation, amount) in &allocations {
             match self
                 .hot
-                .credit_allocation(allocation.wallet.clone(), allocation.allocation_id, *amount)
+                .credit_allocation(
+                    allocation.credit_account.clone(),
+                    allocation.allocation_id,
+                    *amount,
+                )
                 .await
             {
                 Ok(()) => credited += 1,
@@ -566,10 +584,14 @@ fn prefetch_locks() -> Arc<Vec<Mutex<()>>> {
     Arc::new((0..64).map(|_| Mutex::new(())).collect())
 }
 
-fn prefetch_lock_index(user_key_wallet: &WalletId, user_wallet: &WalletId, len: usize) -> usize {
+fn prefetch_lock_index(
+    user_key_credit_account: &CreditAccountId,
+    user_credit_account: &CreditAccountId,
+    len: usize,
+) -> usize {
     let mut hasher = DefaultHasher::new();
-    user_key_wallet.hash(&mut hasher);
-    user_wallet.hash(&mut hasher);
+    user_key_credit_account.hash(&mut hasher);
+    user_credit_account.hash(&mut hasher);
     hasher.finish() as usize % len.max(1)
 }
 
@@ -704,19 +726,19 @@ async fn allocate_user_key(
     tx: &mut Transaction<'_, Postgres>,
     user_key_id: DbId,
     user_id: DbId,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
     target_micro_usd: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
         "SELECT w.balance_micro_usd, w.reserved_micro_usd
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.id = $1 AND uk.user_id = $2 AND w.id = $3
          FOR UPDATE OF w",
     )
     .bind(user_key_id)
     .bind(user_id)
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .fetch_optional(&mut **tx)
     .await?;
     let Some(row) = row else {
@@ -731,21 +753,21 @@ async fn allocate_user_key(
     }
 
     sqlx::query(
-        "UPDATE wallet
+        "UPDATE credit_account
          SET reserved_micro_usd = reserved_micro_usd + $2,
              updated_at = now()
          WHERE id = $1",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount)
     .execute(&mut **tx)
     .await?;
     let row = sqlx::query(
-        "INSERT INTO credit_allocation (wallet_id, amount_micro_usd)
+        "INSERT INTO credit_allocation (credit_account_id, amount_micro_usd)
          VALUES ($1, $2)
          RETURNING id",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount)
     .fetch_one(&mut **tx)
     .await?;
@@ -755,18 +777,18 @@ async fn allocate_user_key(
 async fn allocate_user(
     tx: &mut Transaction<'_, Postgres>,
     user_id: DbId,
-    wallet: &WalletId,
+    credit_account: &CreditAccountId,
     target_micro_usd: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
         r#"SELECT w.balance_micro_usd, w.reserved_micro_usd
            FROM "user" u
-           JOIN wallet w ON w.owner_type = 'user' AND w.owner_id = u.id
+           JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
            WHERE u.id = $1 AND w.id = $2
            FOR UPDATE OF w"#,
     )
     .bind(user_id)
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .fetch_optional(&mut **tx)
     .await?;
     let Some(row) = row else {
@@ -781,21 +803,21 @@ async fn allocate_user(
     }
 
     sqlx::query(
-        "UPDATE wallet
+        "UPDATE credit_account
          SET reserved_micro_usd = reserved_micro_usd + $2,
              updated_at = now()
          WHERE id = $1",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount)
     .execute(&mut **tx)
     .await?;
     let row = sqlx::query(
-        "INSERT INTO credit_allocation (wallet_id, amount_micro_usd)
+        "INSERT INTO credit_allocation (credit_account_id, amount_micro_usd)
          VALUES ($1, $2)
          RETURNING id",
     )
-    .bind(wallet.id)
+    .bind(credit_account.id)
     .bind(amount)
     .fetch_one(&mut **tx)
     .await?;
@@ -807,7 +829,7 @@ async fn fetch_stale_allocations(
     stale_before: DateTime<Utc>,
 ) -> AppResult<Vec<HotAllocation>> {
     let rows = sqlx::query(
-        "SELECT id, wallet_id
+        "SELECT id, credit_account_id
          FROM credit_allocation
          WHERE status = 'active'
            AND created_at < $1
@@ -832,7 +854,7 @@ async fn fetch_stale_allocations(
     rows.into_iter()
         .map(|row| {
             Ok(HotAllocation {
-                wallet: WalletId::new(row.try_get("wallet_id")?),
+                credit_account: CreditAccountId::new(row.try_get("credit_account_id")?),
                 allocation_id: row.try_get("id")?,
             })
         })
@@ -849,7 +871,7 @@ async fn recover_allocations_in_db(
         .collect::<Vec<_>>();
     let mut tx = pool.begin().await?;
     let rows = sqlx::query(
-        "SELECT id, wallet_id, amount_micro_usd, consumed_micro_usd, returned_micro_usd, created_at
+        "SELECT id, credit_account_id, amount_micro_usd, consumed_micro_usd, returned_micro_usd, created_at
          FROM credit_allocation
          WHERE id = ANY($1) AND status = 'active'
          ORDER BY id ASC
@@ -863,7 +885,7 @@ async fn recover_allocations_in_db(
     let mut summary = AllocationRecoverySummary::default();
     for row in rows {
         let allocation_id: DbId = row.try_get("id")?;
-        let wallet_id: DbId = row.try_get("wallet_id")?;
+        let credit_account_id: DbId = row.try_get("credit_account_id")?;
         let amount: i64 = row.try_get("amount_micro_usd")?;
         let consumed: i64 = row.try_get("consumed_micro_usd")?;
         let returned: i64 = row.try_get("returned_micro_usd")?;
@@ -874,19 +896,20 @@ async fn recover_allocations_in_db(
         }
         let age_seconds = (now - created_at).num_seconds().max(0);
 
-        let wallet = WalletId::new(wallet_id);
+        let credit_account = CreditAccountId::new(credit_account_id);
         let balance_after =
-            wallet::decrement_reserved_returning_balance(&mut tx, &wallet, recover_amount).await?;
+            account::decrement_reserved_returning_balance(&mut tx, &credit_account, recover_amount)
+                .await?;
 
-        wallet::mark_allocation_recovered(&mut tx, allocation_id).await?;
+        account::mark_allocation_recovered(&mut tx, allocation_id).await?;
 
         sqlx::query(
             "INSERT INTO credit_ledger
-             (wallet_id, amount_micro_usd, balance_after_micro_usd, reason,
+             (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
               allocation_id, transaction_id, metadata)
              VALUES ($1, 0, $2, 'allocation_recover', $3, $4, $5)",
         )
-        .bind(wallet_id)
+        .bind(credit_account_id)
         .bind(balance_after)
         .bind(allocation_id)
         .bind(Uuid::new_v4())
@@ -907,7 +930,7 @@ async fn recover_allocations_in_db(
         if summary.samples.len() < ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT {
             summary.samples.push(AllocationRecoverySample {
                 allocation_id,
-                wallet_id,
+                credit_account_id,
                 amount_micro_usd: amount,
                 consumed_micro_usd: consumed,
                 already_returned_micro_usd: returned,

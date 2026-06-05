@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    billing::{wallet, BillingCharge, DebitPart, TokenUsage},
+    billing::{account, BillingCharge, DebitPart, TokenUsage},
     error::AppResult,
     id::DbId,
 };
@@ -543,8 +543,8 @@ async fn flush_returned_billing_part(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     part: &DebitPart,
 ) -> AppResult<()> {
-    wallet::decrement_reserved(tx, &part.wallet, part.amount_micro_usd).await?;
-    wallet::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+    account::decrement_reserved(tx, &part.credit_account, part.amount_micro_usd).await?;
+    account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
     Ok(())
 }
 
@@ -971,16 +971,16 @@ async fn flush_billing_part(
     part: &DebitPart,
 ) -> AppResult<()> {
     let balance_after =
-        wallet::debit_reserved_balance(tx, &part.wallet, part.amount_micro_usd).await?;
-    wallet::mark_allocation_consumed(tx, part.allocation_id, part.amount_micro_usd).await?;
+        account::debit_reserved_balance(tx, &part.credit_account, part.amount_micro_usd).await?;
+    account::mark_allocation_consumed(tx, part.allocation_id, part.amount_micro_usd).await?;
 
     sqlx::query(
         "INSERT INTO credit_ledger
-         (wallet_id, amount_micro_usd, balance_after_micro_usd, reason,
+         (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
           usage_id, allocation_id, transaction_id, metadata)
          VALUES ($1, $2, $3, 'usage', $4, $5, $6, $7)",
     )
-    .bind(part.wallet.id)
+    .bind(part.credit_account.id)
     .bind(-part.amount_micro_usd)
     .bind(balance_after)
     .bind(usage_id)
@@ -1007,7 +1007,7 @@ fn coalesce_debit_parts(parts: &[DebitPart]) -> Vec<DebitPart> {
             continue;
         }
 
-        let key = (part.wallet.id, part.allocation_id);
+        let key = (part.credit_account.id, part.allocation_id);
         if let Some(&index) = indexes.get(&key) {
             coalesced[index].amount_micro_usd += part.amount_micro_usd;
         } else {
@@ -1184,24 +1184,24 @@ mod tests {
     }
 
     #[test]
-    fn coalesces_debit_parts_by_wallet_and_allocation() {
+    fn coalesces_debit_parts_by_credit_account_and_allocation() {
         let parts = vec![
             serde_json::from_value(serde_json::json!({
-                "wallet": { "id": 7 },
+                "credit_account": { "id": 7 },
                 "allocation_id": 101,
                 "amount_micro_usd": 30,
                 "generation": 1
             }))
             .unwrap(),
             serde_json::from_value(serde_json::json!({
-                "wallet": { "id": 7 },
+                "credit_account": { "id": 7 },
                 "allocation_id": 101,
                 "amount_micro_usd": 20,
                 "generation": 2
             }))
             .unwrap(),
             serde_json::from_value(serde_json::json!({
-                "wallet": { "id": 7 },
+                "credit_account": { "id": 7 },
                 "allocation_id": 102,
                 "amount_micro_usd": 5,
                 "generation": 3

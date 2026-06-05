@@ -20,7 +20,7 @@ use sqlx::Row;
 
 use crate::{
     auth::{self, AdminAuth},
-    billing::WalletType,
+    billing::CreditAccountType,
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
@@ -251,8 +251,8 @@ async fn delete_user_key_handler(
 
 #[derive(Debug, Deserialize)]
 struct AdjustCreditRequest {
-    wallet_type: String,
-    wallet_id: DbId,
+    credit_account_type: String,
+    owner_id: DbId,
     amount_micro_usd: i64,
     #[serde(default = "default_credit_reason")]
     reason: String,
@@ -272,19 +272,19 @@ async fn adjust_credit_handler(
     _admin: AdminAuth,
     Json(req): Json<AdjustCreditRequest>,
 ) -> AppResult<Json<AdjustCreditResponse>> {
-    let wallet_type = match req.wallet_type.as_str() {
-        "user" => WalletType::User,
-        "user_key" => WalletType::UserKey,
+    let credit_account_type = match req.credit_account_type.as_str() {
+        "user" => CreditAccountType::User,
+        "user_key" => CreditAccountType::UserKey,
         other => {
             return Err(AppError::BadRequest(format!(
-                "invalid wallet type: {other}"
+                "invalid credit_account type: {other}"
             )))
         }
     };
     let balance_micro_usd = adjust_credit(
         &state,
-        wallet_type,
-        req.wallet_id,
+        credit_account_type,
+        req.owner_id,
         req.amount_micro_usd,
         &req.reason,
     )

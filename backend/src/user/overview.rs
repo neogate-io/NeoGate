@@ -43,7 +43,7 @@ async fn overview(
             COALESCE(month.cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
             COALESCE(total.request_count, 0)::BIGINT AS request_count
         FROM "user" u
-        JOIN wallet w ON w.owner_type = 'user' AND w.owner_id = u.id
+        JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
         LEFT JOIN LATERAL (
             SELECT SUM(cost_micro_usd) AS cost_micro_usd
             FROM usage

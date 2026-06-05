@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 use crate::{
-    billing::WalletId,
+    billing::CreditAccountId,
     error::{AppError, AppResult},
     id::DbId,
     AppState,
@@ -199,8 +199,8 @@ pub fn user_key_draft_parts_from_token(
 pub struct UserAuth {
     pub user_id: DbId,
     pub user_key_id: DbId,
-    pub user_wallet: WalletId,
-    pub user_key_wallet: WalletId,
+    pub user_credit_account: CreditAccountId,
+    pub user_key_credit_account: CreditAccountId,
     pub user_group: String,
     pub model_limits: Option<Vec<String>>,
 }
@@ -347,13 +347,13 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             r#"
             SELECT uk.id AS user_key_id, uk.user_id, uk.status AS key_status,
                    uk.secret_ciphertext, uk.expires_at, uk.model_limits, u.status AS user_status,
-                   uw.id AS user_wallet_id, ukw.id AS user_key_wallet_id,
+                   uw.id AS user_credit_account_id, ukw.id AS user_key_credit_account_id,
                    ug.code AS user_group
             FROM user_key uk
             JOIN "user" u ON u.id = uk.user_id
             JOIN user_group ug ON ug.id = u.user_group_id
-            JOIN wallet uw ON uw.owner_type = 'user' AND uw.owner_id = u.id
-            JOIN wallet ukw ON ukw.owner_type = 'user_key' AND ukw.owner_id = uk.id
+            JOIN credit_account uw ON uw.owner_type = 'user' AND uw.owner_id = u.id
+            JOIN credit_account ukw ON ukw.owner_type = 'user_key' AND ukw.owner_id = uk.id
             WHERE uk.key_prefix = $1
             "#,
         )
@@ -386,8 +386,10 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
         let auth = Self {
             user_id: row.try_get("user_id")?,
             user_key_id: row.try_get("user_key_id")?,
-            user_wallet: WalletId::new(row.try_get("user_wallet_id")?),
-            user_key_wallet: WalletId::new(row.try_get("user_key_wallet_id")?),
+            user_credit_account: CreditAccountId::new(row.try_get("user_credit_account_id")?),
+            user_key_credit_account: CreditAccountId::new(
+                row.try_get("user_key_credit_account_id")?,
+            ),
             user_group: row.try_get("user_group")?,
             model_limits: row.try_get("model_limits")?,
         };
@@ -651,8 +653,8 @@ mod tests {
         let auth = UserAuth {
             user_id: 1,
             user_key_id: 1,
-            user_wallet: WalletId::new(100),
-            user_key_wallet: WalletId::new(101),
+            user_credit_account: CreditAccountId::new(100),
+            user_key_credit_account: CreditAccountId::new(101),
             user_group: "default".to_string(),
             model_limits: Some(vec!["gpt-4.1".to_string()]),
         };
@@ -668,8 +670,8 @@ mod tests {
             UserAuth {
                 user_id: 1,
                 user_key_id: 10,
-                user_wallet: WalletId::new(100),
-                user_key_wallet: WalletId::new(110),
+                user_credit_account: CreditAccountId::new(100),
+                user_key_credit_account: CreditAccountId::new(110),
                 user_group: "default".to_string(),
                 model_limits: None,
             },
@@ -680,8 +682,8 @@ mod tests {
             UserAuth {
                 user_id: 1,
                 user_key_id: 11,
-                user_wallet: WalletId::new(100),
-                user_key_wallet: WalletId::new(111),
+                user_credit_account: CreditAccountId::new(100),
+                user_key_credit_account: CreditAccountId::new(111),
                 user_group: "default".to_string(),
                 model_limits: None,
             },
@@ -692,8 +694,8 @@ mod tests {
             UserAuth {
                 user_id: 2,
                 user_key_id: 20,
-                user_wallet: WalletId::new(200),
-                user_key_wallet: WalletId::new(120),
+                user_credit_account: CreditAccountId::new(200),
+                user_key_credit_account: CreditAccountId::new(120),
                 user_group: "default".to_string(),
                 model_limits: None,
             },

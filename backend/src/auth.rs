@@ -12,7 +12,7 @@ use sqlx::{Postgres, Row, Transaction};
 
 pub use crate::core::auth::*;
 use crate::{
-    billing::{wallet, WalletType},
+    billing::{account, CreditAccountType},
     email::EmailLocale,
     error::{AppError, AppResult},
     id::DbId,
@@ -373,7 +373,7 @@ async fn login_or_create_user(
         .fetch_one(&mut *tx)
         .await?;
         let user_id: DbId = row.try_get("id")?;
-        wallet::create_owner_wallet(&mut tx, WalletType::User, user_id).await?;
+        account::create_credit_account(&mut tx, CreditAccountType::User, user_id).await?;
         user_id
     };
 

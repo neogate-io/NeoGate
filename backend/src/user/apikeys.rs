@@ -11,7 +11,7 @@ use sqlx::{Postgres, Row, Transaction};
 
 use crate::{
     auth::{generate_user_key, key_prefix, UserSessionAuth},
-    billing::{wallet, DebitPart, WalletId, WalletType},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart},
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
@@ -78,7 +78,7 @@ async fn list_apikeys(
                 COALESCE(month_usage.month_cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          LEFT JOIN (
              SELECT user_key_id,
                     COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS month_cost_micro_usd
@@ -125,7 +125,7 @@ async fn create_apikey(
     .fetch_one(&mut *tx)
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
-    wallet::create_owner_wallet(&mut tx, WalletType::UserKey, user_key_id).await?;
+    account::create_credit_account(&mut tx, CreditAccountType::UserKey, user_key_id).await?;
     tx.commit().await?;
 
     Ok(Json(CreatedUserApiKey {
@@ -142,8 +142,8 @@ async fn update_apikey(
 ) -> AppResult<Json<UserApiKeyRecord>> {
     validate_status(&req.status)?;
     if req.status == "disabled" {
-        let wallet = user_apikey_wallet(&state, auth.user_id, id).await?;
-        recover_hot_wallet(&state, wallet).await?;
+        let credit_account = user_apikey_credit_account(&state, auth.user_id, id).await?;
+        recover_hot_credit_account(&state, credit_account).await?;
     }
 
     let result = sqlx::query(
@@ -172,8 +172,8 @@ async fn delete_apikey(
     auth: UserSessionAuth,
     Path(id): Path<DbId>,
 ) -> AppResult<Json<DeleteApiKeyResponse>> {
-    let wallet = user_apikey_wallet(&state, auth.user_id, id).await?;
-    recover_hot_wallet(&state, wallet).await?;
+    let credit_account = user_apikey_credit_account(&state, auth.user_id, id).await?;
+    recover_hot_credit_account(&state, credit_account).await?;
 
     let result = sqlx::query("DELETE FROM user_key WHERE id = $1 AND user_id = $2")
         .bind(id)
@@ -199,7 +199,7 @@ async fn get_apikey(state: &AppState, user_id: DbId, id: DbId) -> AppResult<User
                 COALESCE(month_usage.month_cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          LEFT JOIN (
              SELECT user_key_id,
                     COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS month_cost_micro_usd
@@ -218,11 +218,15 @@ async fn get_apikey(state: &AppState, user_id: DbId, id: DbId) -> AppResult<User
     apikey_from_row(state, &row)
 }
 
-async fn user_apikey_wallet(state: &AppState, user_id: DbId, id: DbId) -> AppResult<WalletId> {
+async fn user_apikey_credit_account(
+    state: &AppState,
+    user_id: DbId,
+    id: DbId,
+) -> AppResult<CreditAccountId> {
     let row = sqlx::query(
         "SELECT w.id
          FROM user_key uk
-         JOIN wallet w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.id = $1 AND uk.user_id = $2",
     )
     .bind(id)
@@ -230,13 +234,19 @@ async fn user_apikey_wallet(state: &AppState, user_id: DbId, id: DbId) -> AppRes
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    Ok(WalletId::new(row.try_get("id")?))
+    Ok(CreditAccountId::new(row.try_get("id")?))
 }
 
-async fn recover_hot_wallet(state: &AppState, wallet: WalletId) -> AppResult<()> {
+async fn recover_hot_credit_account(
+    state: &AppState,
+    credit_account: CreditAccountId,
+) -> AppResult<()> {
     let mut tx = state.db.pool.begin().await?;
-    wallet::lock_for_update(&mut tx, &wallet).await?;
-    let recovered = state.billing.drain_hot_wallet(&wallet).await?;
+    account::lock_for_update(&mut tx, &credit_account).await?;
+    let recovered = state
+        .billing
+        .drain_hot_credit_account(&credit_account)
+        .await?;
     recover_hot_credit_in_tx(&mut tx, &recovered).await?;
     tx.commit().await?;
     Ok(())
@@ -250,14 +260,14 @@ async fn recover_hot_credit_in_tx(
     if total <= 0 {
         return Ok(());
     }
-    let Some(wallet) = parts.first().map(|part| &part.wallet) else {
+    let Some(credit_account) = parts.first().map(|part| &part.credit_account) else {
         return Ok(());
     };
 
-    wallet::decrement_reserved(tx, wallet, total).await?;
+    account::decrement_reserved(tx, credit_account, total).await?;
 
     for part in parts {
-        wallet::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
     }
 
     Ok(())

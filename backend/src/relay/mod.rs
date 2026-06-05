@@ -897,8 +897,8 @@ async fn reserve_credit(
             &state.db.pool,
             auth.user_id,
             auth.user_key_id,
-            &auth.user_key_wallet,
-            &auth.user_wallet,
+            &auth.user_key_credit_account,
+            &auth.user_credit_account,
             estimated,
         )
         .await

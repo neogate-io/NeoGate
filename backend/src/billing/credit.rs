@@ -8,20 +8,23 @@ use async_trait::async_trait;
 
 use crate::{error::AppResult, id::DbId};
 
-use super::{DebitPart, WalletId};
+use super::{CreditAccountId, DebitPart};
 
 #[async_trait]
 pub(super) trait HotCreditStore: Send + Sync {
     async fn credit_allocation(
         &self,
-        wallet: WalletId,
+        credit_account: CreditAccountId,
         allocation_id: DbId,
         amount_micro_usd: i64,
     ) -> AppResult<()>;
-    async fn drain_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>>;
+    async fn drain_credit_account(
+        &self,
+        credit_account: &CreditAccountId,
+    ) -> AppResult<Vec<DebitPart>>;
     async fn try_debit_ordered(
         &self,
-        wallets: &[WalletId],
+        credit_accounts: &[CreditAccountId],
         amount_micro_usd: i64,
     ) -> AppResult<Option<Vec<DebitPart>>>;
     async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>>;
@@ -30,12 +33,12 @@ pub(super) trait HotCreditStore: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub(super) struct HotAllocation {
-    pub wallet: WalletId,
+    pub credit_account: CreditAccountId,
     pub allocation_id: DbId,
 }
 
 pub(super) struct MemoryHotCreditStore {
-    shards: Vec<Mutex<HashMap<WalletId, WalletHotCredit>>>,
+    shards: Vec<Mutex<HashMap<CreditAccountId, CreditAccountHotCredit>>>,
 }
 
 pub(super) struct RedisHotCreditStore {
@@ -44,7 +47,7 @@ pub(super) struct RedisHotCreditStore {
 }
 
 #[derive(Debug, Clone, Default)]
-struct WalletHotCredit {
+struct CreditAccountHotCredit {
     generation: u64,
     total_available_micro_usd: i64,
     segments: VecDeque<HotSegment>,
@@ -78,7 +81,7 @@ static REDIS_CREDIT_ALLOCATION_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|
     )
 });
 
-static REDIS_DRAIN_WALLET_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+static REDIS_DRAIN_CREDIT_ACCOUNT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
     redis::Script::new(
         r#"
         local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -94,12 +97,12 @@ static REDIS_DRAIN_WALLET_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
 static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
     redis::Script::new(
         r#"
-        local wallet_count = tonumber(ARGV[1])
+        local account_count = tonumber(ARGV[1])
         local amount = tonumber(ARGV[2])
         local available = 0
-        for i = 1, wallet_count do
+        for i = 1, account_count do
           local list_key = KEYS[i]
-          local total_key = KEYS[wallet_count * 2 + i]
+          local total_key = KEYS[account_count * 2 + i]
           local total = redis.call('GET', total_key)
           if not total then
             local rebuilt = 0
@@ -119,11 +122,11 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
 
         local remaining = amount
         local output = {}
-        for i = 1, wallet_count do
+        for i = 1, account_count do
           if remaining <= 0 then break end
           local list_key = KEYS[i]
-          local gen_key = KEYS[wallet_count + i]
-          local total_key = KEYS[wallet_count * 2 + i]
+          local gen_key = KEYS[account_count + i]
+          local total_key = KEYS[account_count * 2 + i]
           local gen = tonumber(redis.call('GET', gen_key) or '0')
           while remaining > 0 do
             local item = redis.call('LPOP', list_key)
@@ -207,34 +210,37 @@ static REDIS_REMOVE_ALLOCATIONS_SCRIPT: LazyLock<redis::Script> = LazyLock::new(
 impl HotCreditStore for MemoryHotCreditStore {
     async fn credit_allocation(
         &self,
-        wallet: WalletId,
+        credit_account: CreditAccountId,
         allocation_id: DbId,
         amount_micro_usd: i64,
     ) -> AppResult<()> {
         if amount_micro_usd <= 0 {
             return Ok(());
         }
-        let mut balances = self.lock_shard_for_wallet(&wallet);
-        let wallet_hot = balances.entry(wallet).or_default();
-        wallet_hot.total_available_micro_usd += amount_micro_usd;
-        wallet_hot.segments.push_back(HotSegment {
+        let mut balances = self.lock_shard_for_credit_account(&credit_account);
+        let account_hot = balances.entry(credit_account).or_default();
+        account_hot.total_available_micro_usd += amount_micro_usd;
+        account_hot.segments.push_back(HotSegment {
             allocation_id,
             available_micro_usd: amount_micro_usd,
         });
         Ok(())
     }
 
-    async fn drain_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>> {
-        let mut balances = self.lock_shard_for_wallet(wallet);
-        let wallet_hot = balances.entry(wallet.clone()).or_default();
-        let generation = wallet_hot.generation;
-        wallet_hot.generation = wallet_hot.generation.wrapping_add(1);
-        wallet_hot.total_available_micro_usd = 0;
-        Ok(std::mem::take(&mut wallet_hot.segments)
+    async fn drain_credit_account(
+        &self,
+        credit_account: &CreditAccountId,
+    ) -> AppResult<Vec<DebitPart>> {
+        let mut balances = self.lock_shard_for_credit_account(credit_account);
+        let account_hot = balances.entry(credit_account.clone()).or_default();
+        let generation = account_hot.generation;
+        account_hot.generation = account_hot.generation.wrapping_add(1);
+        account_hot.total_available_micro_usd = 0;
+        Ok(std::mem::take(&mut account_hot.segments)
             .into_iter()
             .filter(|segment| segment.available_micro_usd > 0)
             .map(|segment| DebitPart {
-                wallet: wallet.clone(),
+                credit_account: credit_account.clone(),
                 allocation_id: segment.allocation_id,
                 amount_micro_usd: segment.available_micro_usd,
                 generation,
@@ -244,14 +250,17 @@ impl HotCreditStore for MemoryHotCreditStore {
 
     async fn try_debit_ordered(
         &self,
-        wallets: &[WalletId],
+        credit_accounts: &[CreditAccountId],
         amount_micro_usd: i64,
     ) -> AppResult<Option<Vec<DebitPart>>> {
         if amount_micro_usd <= 0 {
             return Ok(Some(Vec::new()));
         }
 
-        let mut shard_ids = wallets.iter().map(Self::shard_index).collect::<Vec<_>>();
+        let mut shard_ids = credit_accounts
+            .iter()
+            .map(Self::shard_index)
+            .collect::<Vec<_>>();
         shard_ids.sort_unstable();
         shard_ids.dedup();
         let mut shards = shard_ids
@@ -266,16 +275,16 @@ impl HotCreditStore for MemoryHotCreditStore {
             })
             .collect::<Vec<_>>();
 
-        let available = wallets
+        let available = credit_accounts
             .iter()
-            .filter_map(|wallet| {
-                let shard_id = Self::shard_index(wallet);
+            .filter_map(|credit_account| {
+                let shard_id = Self::shard_index(credit_account);
                 shards
                     .iter()
                     .find(|(id, _)| *id == shard_id)
-                    .and_then(|(_, balances)| balances.get(wallet))
+                    .and_then(|(_, balances)| balances.get(credit_account))
             })
-            .map(|wallet_hot| wallet_hot.total_available_micro_usd)
+            .map(|account_hot| account_hot.total_available_micro_usd)
             .sum::<i64>();
         if available < amount_micro_usd {
             return Ok(None);
@@ -283,29 +292,29 @@ impl HotCreditStore for MemoryHotCreditStore {
 
         let mut remaining = amount_micro_usd;
         let mut parts = Vec::new();
-        for wallet in wallets {
+        for credit_account in credit_accounts {
             if remaining <= 0 {
                 break;
             }
-            let shard_id = Self::shard_index(wallet);
+            let shard_id = Self::shard_index(credit_account);
             let Some((_, balances)) = shards.iter_mut().find(|(id, _)| *id == shard_id) else {
                 continue;
             };
-            let Some(wallet_hot) = balances.get_mut(wallet) else {
+            let Some(account_hot) = balances.get_mut(credit_account) else {
                 continue;
             };
-            let generation = wallet_hot.generation;
-            let segments = &mut wallet_hot.segments;
+            let generation = account_hot.generation;
+            let segments = &mut account_hot.segments;
             while remaining > 0 {
                 let Some(front) = segments.front_mut() else {
                     break;
                 };
                 let debit = front.available_micro_usd.min(remaining);
                 front.available_micro_usd -= debit;
-                wallet_hot.total_available_micro_usd -= debit;
+                account_hot.total_available_micro_usd -= debit;
                 remaining -= debit;
                 parts.push(DebitPart {
-                    wallet: wallet.clone(),
+                    credit_account: credit_account.clone(),
                     allocation_id: front.allocation_id,
                     amount_micro_usd: debit,
                     generation,
@@ -324,14 +333,14 @@ impl HotCreditStore for MemoryHotCreditStore {
             if part.amount_micro_usd <= 0 {
                 continue;
             }
-            let mut balances = self.lock_shard_for_wallet(&part.wallet);
-            let wallet_hot = balances.entry(part.wallet.clone()).or_default();
-            if wallet_hot.generation != part.generation {
+            let mut balances = self.lock_shard_for_credit_account(&part.credit_account);
+            let account_hot = balances.entry(part.credit_account.clone()).or_default();
+            if account_hot.generation != part.generation {
                 returned.push(part.clone());
                 continue;
             }
-            wallet_hot.total_available_micro_usd += part.amount_micro_usd;
-            wallet_hot.segments.push_front(HotSegment {
+            account_hot.total_available_micro_usd += part.amount_micro_usd;
+            account_hot.segments.push_front(HotSegment {
                 allocation_id: part.allocation_id,
                 available_micro_usd: part.amount_micro_usd,
             });
@@ -343,21 +352,21 @@ impl HotCreditStore for MemoryHotCreditStore {
         if allocations.is_empty() {
             return Ok(());
         }
-        let mut by_wallet: HashMap<WalletId, HashSet<DbId>> = HashMap::new();
+        let mut by_credit_account: HashMap<CreditAccountId, HashSet<DbId>> = HashMap::new();
         for allocation in allocations {
-            by_wallet
-                .entry(allocation.wallet.clone())
+            by_credit_account
+                .entry(allocation.credit_account.clone())
                 .or_default()
                 .insert(allocation.allocation_id);
         }
 
-        for (wallet, allocation_ids) in by_wallet {
-            let mut balances = self.lock_shard_for_wallet(&wallet);
-            let Some(wallet_hot) = balances.get_mut(&wallet) else {
+        for (credit_account, allocation_ids) in by_credit_account {
+            let mut balances = self.lock_shard_for_credit_account(&credit_account);
+            let Some(account_hot) = balances.get_mut(&credit_account) else {
                 continue;
             };
             let mut kept_total = 0;
-            wallet_hot.segments.retain(|segment| {
+            account_hot.segments.retain(|segment| {
                 if allocation_ids.contains(&segment.allocation_id) {
                     false
                 } else {
@@ -365,7 +374,7 @@ impl HotCreditStore for MemoryHotCreditStore {
                     true
                 }
             });
-            wallet_hot.total_available_micro_usd = kept_total;
+            account_hot.total_available_micro_usd = kept_total;
         }
         Ok(())
     }
@@ -382,17 +391,17 @@ impl Default for MemoryHotCreditStore {
 }
 
 impl MemoryHotCreditStore {
-    fn shard_index(wallet: &WalletId) -> usize {
+    fn shard_index(credit_account: &CreditAccountId) -> usize {
         let mut hasher = DefaultHasher::new();
-        wallet.hash(&mut hasher);
+        credit_account.hash(&mut hasher);
         hasher.finish() as usize % HOT_CREDIT_SHARDS
     }
 
-    fn lock_shard_for_wallet(
+    fn lock_shard_for_credit_account(
         &self,
-        wallet: &WalletId,
-    ) -> std::sync::MutexGuard<'_, HashMap<WalletId, WalletHotCredit>> {
-        self.shards[Self::shard_index(wallet)]
+        credit_account: &CreditAccountId,
+    ) -> std::sync::MutexGuard<'_, HashMap<CreditAccountId, CreditAccountHotCredit>> {
+        self.shards[Self::shard_index(credit_account)]
             .lock()
             .expect("hot credit store shard poisoned")
     }
@@ -408,16 +417,16 @@ impl RedisHotCreditStore {
         })
     }
 
-    fn wallet_key(&self, wallet: &WalletId) -> String {
-        format!("{}:hot_credit:{}", self.key_prefix, wallet.id)
+    fn credit_account_key(&self, credit_account: &CreditAccountId) -> String {
+        format!("{}:hot_credit:{}", self.key_prefix, credit_account.id)
     }
 
-    fn generation_key(&self, wallet: &WalletId) -> String {
-        format!("{}:hot_credit_gen:{}", self.key_prefix, wallet.id)
+    fn generation_key(&self, credit_account: &CreditAccountId) -> String {
+        format!("{}:hot_credit_gen:{}", self.key_prefix, credit_account.id)
     }
 
-    fn total_key(&self, wallet: &WalletId) -> String {
-        format!("{}:hot_credit_total:{}", self.key_prefix, wallet.id)
+    fn total_key(&self, credit_account: &CreditAccountId) -> String {
+        format!("{}:hot_credit_total:{}", self.key_prefix, credit_account.id)
     }
 }
 
@@ -425,19 +434,19 @@ impl RedisHotCreditStore {
 impl HotCreditStore for RedisHotCreditStore {
     async fn credit_allocation(
         &self,
-        wallet: WalletId,
+        credit_account: CreditAccountId,
         allocation_id: DbId,
         amount_micro_usd: i64,
     ) -> AppResult<()> {
         if amount_micro_usd <= 0 {
             return Ok(());
         }
-        let wallet_key = self.wallet_key(&wallet);
-        let generation_key = self.generation_key(&wallet);
-        let total_key = self.total_key(&wallet);
+        let credit_account_key = self.credit_account_key(&credit_account);
+        let generation_key = self.generation_key(&credit_account);
+        let total_key = self.total_key(&credit_account);
         let mut conn = self.manager.clone();
         let _: u64 = REDIS_CREDIT_ALLOCATION_SCRIPT
-            .key(wallet_key)
+            .key(credit_account_key)
             .key(generation_key)
             .key(total_key)
             .arg(allocation_id)
@@ -447,49 +456,52 @@ impl HotCreditStore for RedisHotCreditStore {
         Ok(())
     }
 
-    async fn drain_wallet(&self, wallet: &WalletId) -> AppResult<Vec<DebitPart>> {
-        let wallet_key = self.wallet_key(wallet);
-        let generation_key = self.generation_key(wallet);
-        let total_key = self.total_key(wallet);
+    async fn drain_credit_account(
+        &self,
+        credit_account: &CreditAccountId,
+    ) -> AppResult<Vec<DebitPart>> {
+        let credit_account_key = self.credit_account_key(credit_account);
+        let generation_key = self.generation_key(credit_account);
+        let total_key = self.total_key(credit_account);
         let mut conn = self.manager.clone();
-        let items: Vec<String> = REDIS_DRAIN_WALLET_SCRIPT
-            .key(wallet_key)
+        let items: Vec<String> = REDIS_DRAIN_CREDIT_ACCOUNT_SCRIPT
+            .key(credit_account_key)
             .key(generation_key)
             .key(total_key)
             .invoke_async(&mut conn)
             .await?;
         Ok(items
             .into_iter()
-            .filter_map(|item| decode_hot_segment(wallet, &item))
+            .filter_map(|item| decode_hot_segment(credit_account, &item))
             .collect())
     }
 
     async fn try_debit_ordered(
         &self,
-        wallets: &[WalletId],
+        credit_accounts: &[CreditAccountId],
         amount_micro_usd: i64,
     ) -> AppResult<Option<Vec<DebitPart>>> {
         if amount_micro_usd <= 0 {
             return Ok(Some(Vec::new()));
         }
-        if wallets.is_empty() {
+        if credit_accounts.is_empty() {
             return Ok(None);
         }
-        let wallet_keys = wallets
+        let credit_account_keys = credit_accounts
             .iter()
-            .map(|wallet| self.wallet_key(wallet))
+            .map(|credit_account| self.credit_account_key(credit_account))
             .collect::<Vec<_>>();
-        let generation_keys = wallets
+        let generation_keys = credit_accounts
             .iter()
-            .map(|wallet| self.generation_key(wallet))
+            .map(|credit_account| self.generation_key(credit_account))
             .collect::<Vec<_>>();
-        let total_keys = wallets
+        let total_keys = credit_accounts
             .iter()
-            .map(|wallet| self.total_key(wallet))
+            .map(|credit_account| self.total_key(credit_account))
             .collect::<Vec<_>>();
         let mut conn = self.manager.clone();
         let mut invocation = REDIS_DEBIT_ORDERED_SCRIPT.prepare_invoke();
-        for key in &wallet_keys {
+        for key in &credit_account_keys {
             invocation.key(key);
         }
         for key in &generation_keys {
@@ -498,18 +510,21 @@ impl HotCreditStore for RedisHotCreditStore {
         for key in &total_keys {
             invocation.key(key);
         }
-        invocation.arg(wallets.len()).arg(amount_micro_usd);
+        invocation.arg(credit_accounts.len()).arg(amount_micro_usd);
         let values: Vec<String> = invocation.invoke_async(&mut conn).await?;
         if values.is_empty() {
             return Ok(None);
         }
         let mut parts = Vec::new();
         for chunk in values.chunks_exact(4) {
-            let wallet_index = chunk[0]
+            let credit_account_index = chunk[0]
                 .parse::<usize>()
                 .ok()
                 .and_then(|value| value.checked_sub(1));
-            let Some(wallet) = wallet_index.and_then(|index| wallets.get(index)).cloned() else {
+            let Some(credit_account) = credit_account_index
+                .and_then(|index| credit_accounts.get(index))
+                .cloned()
+            else {
                 continue;
             };
             let allocation_id = chunk[1].parse::<DbId>().unwrap_or_default();
@@ -517,7 +532,7 @@ impl HotCreditStore for RedisHotCreditStore {
             let generation = chunk[3].parse::<u64>().unwrap_or_default();
             if allocation_id > 0 && amount > 0 {
                 parts.push(DebitPart {
-                    wallet,
+                    credit_account,
                     allocation_id,
                     amount_micro_usd: amount,
                     generation,
@@ -534,11 +549,11 @@ impl HotCreditStore for RedisHotCreditStore {
             if part.amount_micro_usd <= 0 {
                 continue;
             }
-            let generation_key = self.generation_key(&part.wallet);
-            let wallet_key = self.wallet_key(&part.wallet);
-            let total_key = self.total_key(&part.wallet);
+            let generation_key = self.generation_key(&part.credit_account);
+            let credit_account_key = self.credit_account_key(&part.credit_account);
+            let total_key = self.total_key(&part.credit_account);
             let stored: i64 = REDIS_REFUND_SCRIPT
-                .key(wallet_key)
+                .key(credit_account_key)
                 .key(generation_key)
                 .key(total_key)
                 .arg(part.allocation_id)
@@ -557,20 +572,20 @@ impl HotCreditStore for RedisHotCreditStore {
         if allocations.is_empty() {
             return Ok(());
         }
-        let mut by_wallet: HashMap<WalletId, Vec<DbId>> = HashMap::new();
+        let mut by_credit_account: HashMap<CreditAccountId, Vec<DbId>> = HashMap::new();
         for allocation in allocations {
-            by_wallet
-                .entry(allocation.wallet.clone())
+            by_credit_account
+                .entry(allocation.credit_account.clone())
                 .or_default()
                 .push(allocation.allocation_id);
         }
 
         let mut conn = self.manager.clone();
-        for (wallet, allocation_ids) in by_wallet {
-            let wallet_key = self.wallet_key(&wallet);
-            let total_key = self.total_key(&wallet);
+        for (credit_account, allocation_ids) in by_credit_account {
+            let credit_account_key = self.credit_account_key(&credit_account);
+            let total_key = self.total_key(&credit_account);
             let mut invocation = REDIS_REMOVE_ALLOCATIONS_SCRIPT.prepare_invoke();
-            invocation.key(wallet_key);
+            invocation.key(credit_account_key);
             invocation.key(total_key);
             for allocation_id in allocation_ids {
                 invocation.arg(allocation_id);
@@ -581,13 +596,13 @@ impl HotCreditStore for RedisHotCreditStore {
     }
 }
 
-fn decode_hot_segment(wallet: &WalletId, item: &str) -> Option<DebitPart> {
+fn decode_hot_segment(credit_account: &CreditAccountId, item: &str) -> Option<DebitPart> {
     let mut parts = item.splitn(3, ':');
     let allocation_id = parts.next()?.parse::<DbId>().ok()?;
     let amount_micro_usd = parts.next()?.parse::<i64>().ok()?;
     let generation = parts.next()?.parse::<u64>().ok()?;
     (amount_micro_usd > 0).then(|| DebitPart {
-        wallet: wallet.clone(),
+        credit_account: credit_account.clone(),
         allocation_id,
         amount_micro_usd,
         generation,
@@ -599,20 +614,20 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn hot_credit_store_drains_wallet() {
+    async fn hot_credit_store_drains_credit_account() {
         let store = MemoryHotCreditStore::default();
-        let wallet = WalletId::new(7);
+        let credit_account = CreditAccountId::new(7);
 
         store
-            .credit_allocation(wallet.clone(), 101, 30)
+            .credit_allocation(credit_account.clone(), 101, 30)
             .await
             .unwrap();
         store
-            .credit_allocation(wallet.clone(), 102, 20)
+            .credit_allocation(credit_account.clone(), 102, 20)
             .await
             .unwrap();
 
-        let drained = store.drain_wallet(&wallet).await.unwrap();
+        let drained = store.drain_credit_account(&credit_account).await.unwrap();
         assert_eq!(drained.len(), 2);
         assert_eq!(
             drained
@@ -622,7 +637,7 @@ mod tests {
             50
         );
         assert!(store
-            .try_debit_ordered(&[wallet], 1)
+            .try_debit_ordered(&[credit_account], 1)
             .await
             .unwrap()
             .is_none());
@@ -634,25 +649,25 @@ mod tests {
     #[tokio::test]
     async fn hot_credit_store_removes_allocations() {
         let store = MemoryHotCreditStore::default();
-        let wallet = WalletId::new(7);
+        let credit_account = CreditAccountId::new(7);
 
         store
-            .credit_allocation(wallet.clone(), 101, 30)
+            .credit_allocation(credit_account.clone(), 101, 30)
             .await
             .unwrap();
         store
-            .credit_allocation(wallet.clone(), 102, 20)
+            .credit_allocation(credit_account.clone(), 102, 20)
             .await
             .unwrap();
         store
             .remove_allocations(&[HotAllocation {
-                wallet: wallet.clone(),
+                credit_account: credit_account.clone(),
                 allocation_id: 101,
             }])
             .await
             .unwrap();
 
-        let drained = store.drain_wallet(&wallet).await.unwrap();
+        let drained = store.drain_credit_account(&credit_account).await.unwrap();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].allocation_id, 102);
         assert_eq!(drained[0].amount_micro_usd, 20);

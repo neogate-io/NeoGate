@@ -103,7 +103,7 @@ Before going live:
 - Replace the default admin password.
 - Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`.
 - Set the correct `CORS_ALLOWED_ORIGINS`.
-- Configure SMTP if you want public email-based API key claims.
+- Configure SMTP in the admin settings if you want public email-based API key claims.
 - For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode.
 
 ## 6. License

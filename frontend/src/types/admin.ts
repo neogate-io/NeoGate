@@ -191,6 +191,19 @@ export type PricingPolicy = {
   updated_at: string
 }
 
+export type SmtpSetting = {
+  configured: boolean
+  smtp_host: string
+  smtp_port: number
+  smtp_username?: string | null
+  smtp_password_set: boolean
+  smtp_tls: boolean
+  from_email: string
+  from_name?: string | null
+  subject_prefix?: string | null
+  updated_at?: string | null
+}
+
 export type CredentialQuotaWindow = {
   percent?: number | null
   used?: number | null

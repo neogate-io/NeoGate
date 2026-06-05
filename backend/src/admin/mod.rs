@@ -3,6 +3,7 @@ pub(crate) mod credentials;
 mod openai;
 pub(crate) mod price;
 pub(crate) mod provider;
+pub(crate) mod setting;
 mod user;
 
 use std::sync::Arc;
@@ -49,6 +50,10 @@ use self::{
         ensure_custom_provider, list_providers, provider_default_endpoints, record_provider_models,
         ProviderRecord, CUSTOM_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
     },
+    setting::{
+        get_smtp_setting, test_smtp_setting, upsert_smtp_setting, SmtpSettingRecord,
+        TestSmtpSettingResponse, UpsertSmtpSettingRequest,
+    },
     user::{
         adjust_credit, create_user, create_user_key, delete_user, delete_user_key,
         list_user_groups, list_user_keys, list_users, update_user, update_user_key,
@@ -91,6 +96,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/pricing-policies",
             get(pricing_policies).post(upsert_pricing_policy_handler),
+        )
+        .route(
+            "/api/admin/settings/smtp",
+            get(smtp_setting).post(upsert_smtp_setting_handler),
+        )
+        .route(
+            "/api/admin/settings/smtp/test",
+            post(test_smtp_setting_handler),
         )
         .route(
             "/api/admin/provider-prices",
@@ -521,6 +534,29 @@ async fn pricing_templates(
     _admin: AdminAuth,
 ) -> AppResult<Json<Vec<PricingTemplateRecord>>> {
     Ok(Json(list_pricing_templates(&state).await?))
+}
+
+async fn smtp_setting(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<SmtpSettingRecord>> {
+    Ok(Json(get_smtp_setting(&state).await?))
+}
+
+async fn upsert_smtp_setting_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpsertSmtpSettingRequest>,
+) -> AppResult<Json<SmtpSettingRecord>> {
+    Ok(Json(upsert_smtp_setting(&state, req).await?))
+}
+
+async fn test_smtp_setting_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpsertSmtpSettingRequest>,
+) -> AppResult<Json<TestSmtpSettingResponse>> {
+    Ok(Json(test_smtp_setting(&state, req).await?))
 }
 
 async fn sync_pricing_templates_handler(

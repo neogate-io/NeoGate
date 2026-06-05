@@ -45,7 +45,6 @@ pub struct Config {
     pub payment: PaymentConfig,
     pub db_pool: DbPoolConfig,
     pub cors_allowed_origins: Vec<String>,
-    pub email: EmailConfig,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,18 +113,6 @@ pub struct DbPoolConfig {
     pub min_connections: u32,
     pub max_connections: u32,
     pub acquire_timeout: Duration,
-}
-
-#[derive(Clone, Debug)]
-pub struct EmailConfig {
-    pub smtp_host: String,
-    pub smtp_port: u16,
-    pub smtp_username: Option<String>,
-    pub smtp_password: Option<String>,
-    pub smtp_tls: bool,
-    pub from_email: String,
-    pub from_name: Option<String>,
-    pub subject_prefix: Option<String>,
 }
 
 impl Config {
@@ -210,7 +197,6 @@ impl Config {
             payment: PaymentConfig::from_env()?,
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
-            email: EmailConfig::from_env()?,
         };
         config.validate()?;
         Ok(config)
@@ -356,25 +342,6 @@ impl DbPoolConfig {
     }
 }
 
-impl EmailConfig {
-    pub fn from_env() -> Result<Self> {
-        Ok(Self {
-            smtp_host: required("MAIL_SMTP_HOST")?,
-            smtp_port: parse_u16("MAIL_SMTP_PORT", 587),
-            smtp_username: env::var("MAIL_SMTP_USERNAME")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            smtp_password: env::var("MAIL_SMTP_PASSWORD")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            smtp_tls: parse_bool("MAIL_SMTP_TLS", true),
-            from_email: required("MAIL_FROM_EMAIL")?,
-            from_name: optional("MAIL_FROM_NAME"),
-            subject_prefix: optional("MAIL_SUBJECT_PREFIX"),
-        })
-    }
-}
-
 fn required(name: &str) -> Result<String> {
     env::var(name).with_context(|| format!("{name} is required"))
 }
@@ -384,13 +351,6 @@ fn optional(name: &str) -> Option<String> {
 }
 
 fn parse_u64(name: &str, default: u64) -> u64 {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn parse_u16(name: &str, default: u16) -> u16 {
     env::var(name)
         .ok()
         .and_then(|value| value.parse().ok())
@@ -415,18 +375,6 @@ fn parse_usize(name: &str, default: usize) -> usize {
     env::var(name)
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn parse_bool(name: &str, default: bool) -> bool {
-    env::var(name)
-        .ok()
-        .map(|value| {
-            matches!(
-                value.as_str(),
-                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
-            )
-        })
         .unwrap_or(default)
 }
 

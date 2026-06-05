@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { Connection, Key, Monitor, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import { isMessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useAuthStore } from '../stores/auth'
@@ -19,7 +20,8 @@ const navItems = [
 ] as const
 
 const settingItems = [
-  { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' }
+  { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' },
+  { path: '/admin/settings/smtp', key: 'smtpSettings' }
 ] as const
 
 const activeRoute = computed(() => route.path)
@@ -32,6 +34,16 @@ const activeRouteLabel = computed(() => {
 const nextLocaleLabel = computed(() => (locale.value === 'zh-CN' ? 'EN' : '中'))
 
 async function logout() {
+  try {
+    await ElMessageBox.confirm(t('logoutConfirmMessage'), t('logoutConfirmTitle'), {
+      confirmButtonText: t('logout'),
+      cancelButtonText: t('cancel'),
+      type: 'warning'
+    })
+  } catch {
+    return
+  }
+
   auth.clearToken()
   await router.replace('/')
 }
@@ -69,10 +81,20 @@ async function logout() {
       <header class="page-header">
         <h2>{{ activeRouteLabel }}</h2>
         <div class="header-actions">
-          <el-button class="admin-action-button admin-language-button" :aria-label="t('language')" @click="toggleLocale">
-            {{ nextLocaleLabel }}
-          </el-button>
-          <el-button class="admin-action-button" :icon="SwitchButton" @click="logout">{{ t('logout') }}</el-button>
+          <el-tooltip :content="t('language')" placement="bottom">
+            <el-button class="header-utility-button header-language-button" :aria-label="t('language')" @click="toggleLocale">
+              {{ nextLocaleLabel }}
+            </el-button>
+          </el-tooltip>
+          <span class="header-action-divider" aria-hidden="true"></span>
+          <el-tooltip :content="t('logout')" placement="bottom">
+            <el-button
+              class="header-utility-button header-logout-button"
+              :aria-label="t('logout')"
+              :icon="SwitchButton"
+              @click="logout"
+            />
+          </el-tooltip>
         </div>
       </header>
 

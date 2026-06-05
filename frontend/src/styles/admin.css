@@ -1,11 +1,21 @@
 .admin-shell .content {
-  grid-template-columns: minmax(0, min(100%, 1480px));
+  grid-template-columns: minmax(0, min(100%, 1280px));
   justify-content: center;
   justify-items: stretch;
 }
 
 .admin-shell .page-header {
   width: 100%;
+}
+
+.admin-shell > .el-aside .el-menu-item,
+.admin-shell > .el-aside .el-sub-menu .el-menu-item,
+.admin-shell > .el-aside .el-sub-menu__title {
+  font-size: 14px;
+}
+
+.admin-shell > .el-aside .el-sub-menu .el-menu-item {
+  padding-left: 52px !important;
 }
 
 .admin-action-button.el-button {
@@ -162,6 +172,16 @@
 }
 
 @media (max-width: 520px) {
+  .admin-shell > .el-aside .el-menu-item,
+  .admin-shell > .el-aside .el-sub-menu .el-menu-item,
+  .admin-shell > .el-aside .el-sub-menu__title {
+    font-size: 13px;
+  }
+
+  .admin-shell > .el-aside .el-sub-menu .el-menu-item {
+    padding-left: 44px !important;
+  }
+
   .user-filter-bar.el-form {
     gap: 14px;
     grid-template-columns: 1fr;

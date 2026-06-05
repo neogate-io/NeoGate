@@ -4,8 +4,12 @@ use lettre::{
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
+use serde::Deserialize;
+use sqlx::Row;
 
-use crate::config::EmailConfig;
+use crate::{db::Db, id::DbId, secrets::SecretStore};
+
+pub const SMTP_SETTING_KEY: &str = "smtp";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EmailLocale {
@@ -33,33 +37,44 @@ impl EmailLocale {
 
 #[derive(Clone)]
 pub struct EmailService {
-    config: EmailConfig,
-    mailer: AsyncSmtpTransport<Tokio1Executor>,
+    source: EmailConfigSource,
+}
+
+#[derive(Clone)]
+enum EmailConfigSource {
+    Database { db: Db, secrets: SecretStore },
+    Static(EmailConfig),
+}
+
+#[derive(Clone, Debug)]
+pub struct EmailConfig {
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_tls: bool,
+    pub from_email: String,
+    pub from_name: Option<String>,
+    pub subject_prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredSmtpSetting {
+    smtp_host: String,
+    smtp_port: u16,
+    smtp_username: Option<String>,
+    password_ciphertext: Option<String>,
+    smtp_tls: bool,
+    from_email: String,
+    from_name: Option<String>,
+    subject_prefix: Option<String>,
 }
 
 impl EmailService {
-    pub fn new(config: EmailConfig) -> Result<Self> {
-        let mut builder = if config.smtp_tls && config.smtp_port == 465 {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
-                .context("failed to configure SMTPS relay")?
-        } else if config.smtp_tls {
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp_host)
-                .context("failed to configure STARTTLS SMTP relay")?
-        } else {
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.smtp_host)
+    pub fn new(db: Db, secrets: SecretStore) -> Self {
+        Self {
+            source: EmailConfigSource::Database { db, secrets },
         }
-        .port(config.smtp_port);
-
-        if let (Some(username), Some(password)) =
-            (config.smtp_username.clone(), config.smtp_password.clone())
-        {
-            builder = builder.credentials(Credentials::new(username, password));
-        }
-
-        Ok(Self {
-            config,
-            mailer: builder.build(),
-        })
     }
 
     pub fn test() -> Self {
@@ -74,10 +89,7 @@ impl EmailService {
             subject_prefix: None,
         };
         Self {
-            mailer: AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("localhost")
-                .port(2525)
-                .build(),
-            config,
+            source: EmailConfigSource::Static(config),
         }
     }
 
@@ -87,9 +99,11 @@ impl EmailService {
         api_key: &str,
         locale: EmailLocale,
     ) -> Result<()> {
-        let message = self.api_key_message(to_email, api_key, locale)?;
+        let config = self.config().await?;
+        let mailer = build_mailer(&config)?;
+        let message = api_key_message(&config, to_email, api_key, locale)?;
 
-        self.mailer
+        mailer
             .send(message)
             .await
             .context("failed to send API key email")?;
@@ -103,9 +117,11 @@ impl EmailService {
         reset_url: &str,
         locale: EmailLocale,
     ) -> Result<()> {
-        let message = self.password_reset_message(to_email, reset_url, locale)?;
+        let config = self.config().await?;
+        let mailer = build_mailer(&config)?;
+        let message = password_reset_message(&config, to_email, reset_url, locale)?;
 
-        self.mailer
+        mailer
             .send(message)
             .await
             .context("failed to send password reset email")?;
@@ -119,9 +135,11 @@ impl EmailService {
         code: &str,
         locale: EmailLocale,
     ) -> Result<()> {
-        let message = self.login_verification_code_message(to_email, code, locale)?;
+        let config = self.config().await?;
+        let mailer = build_mailer(&config)?;
+        let message = login_verification_code_message(&config, to_email, code, locale)?;
 
-        self.mailer
+        mailer
             .send(message)
             .await
             .context("failed to send login verification code email")?;
@@ -129,96 +147,213 @@ impl EmailService {
         Ok(())
     }
 
-    fn sender_mailbox(&self, locale: EmailLocale) -> Result<Mailbox> {
-        Ok(Mailbox::new(
-            Some(
-                self.config
-                    .from_name
-                    .clone()
-                    .unwrap_or_else(|| locale.product_name().to_string()),
-            ),
-            self.config
-                .from_email
-                .parse()
-                .context("MAIL_FROM_EMAIL is invalid")?,
-        ))
+    pub async fn send_test(config: &EmailConfig, to_email: &str) -> Result<()> {
+        let locale = EmailLocale::ZhCn;
+        let mailer = build_mailer(config)?;
+        let message = smtp_test_message(config, to_email, locale)?;
+
+        mailer
+            .send(message)
+            .await
+            .context("failed to send SMTP test email")?;
+
+        Ok(())
     }
 
+    async fn config(&self) -> Result<EmailConfig> {
+        match &self.source {
+            EmailConfigSource::Static(config) => Ok(config.clone()),
+            EmailConfigSource::Database { db, secrets } => load_smtp_config(db, secrets).await,
+        }
+    }
+
+    #[cfg(test)]
     fn api_key_message(
         &self,
         to_email: &str,
         api_key: &str,
         locale: EmailLocale,
     ) -> Result<Message> {
-        let content = api_key_email_content(locale);
-        let subject_prefix = self
-            .config
-            .subject_prefix
-            .as_deref()
-            .unwrap_or_else(|| locale.product_name());
-        let subject = api_key_email_subject(subject_prefix, content);
-        Message::builder()
-            .from(self.sender_mailbox(locale)?)
-            .to(to_email
-                .parse::<Mailbox>()
-                .context("recipient email address is invalid")?)
-            .subject(subject)
-            .multipart(MultiPart::alternative_plain_html(
-                api_key_email_text_body(api_key, content),
-                api_key_email_html_body(api_key, content),
-            ))
-            .context("failed to build API key email")
+        let config = match &self.source {
+            EmailConfigSource::Static(config) => config,
+            EmailConfigSource::Database { .. } => {
+                anyhow::bail!("API key email requires resolved SMTP settings")
+            }
+        };
+        api_key_message(config, to_email, api_key, locale)
+    }
+}
+
+fn build_mailer(config: &EmailConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
+    let mut builder = if config.smtp_tls && config.smtp_port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
+            .context("failed to configure SMTPS relay")?
+    } else if config.smtp_tls {
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp_host)
+            .context("failed to configure STARTTLS SMTP relay")?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.smtp_host)
+    }
+    .port(config.smtp_port);
+
+    if let (Some(username), Some(password)) =
+        (config.smtp_username.clone(), config.smtp_password.clone())
+    {
+        builder = builder.credentials(Credentials::new(username, password));
     }
 
-    fn password_reset_message(
-        &self,
-        to_email: &str,
-        reset_url: &str,
-        locale: EmailLocale,
-    ) -> Result<Message> {
-        let content = password_reset_email_content(locale);
-        let subject_prefix = self
-            .config
-            .subject_prefix
-            .as_deref()
-            .unwrap_or_else(|| locale.product_name());
-        Message::builder()
-            .from(self.sender_mailbox(locale)?)
-            .to(to_email
-                .parse::<Mailbox>()
-                .context("recipient email address is invalid")?)
-            .subject(format!("{subject_prefix} {}", content.subject))
-            .multipart(MultiPart::alternative_plain_html(
-                password_reset_email_text_body(reset_url, content),
-                password_reset_email_html_body(reset_url, content),
-            ))
-            .context("failed to build password reset email")
-    }
+    Ok(builder.build())
+}
 
-    fn login_verification_code_message(
-        &self,
-        to_email: &str,
-        code: &str,
-        locale: EmailLocale,
-    ) -> Result<Message> {
-        let content = login_verification_code_email_content(locale);
-        let subject_prefix = self
-            .config
-            .subject_prefix
-            .as_deref()
-            .unwrap_or_else(|| locale.product_name());
-        Message::builder()
-            .from(self.sender_mailbox(locale)?)
-            .to(to_email
-                .parse::<Mailbox>()
-                .context("recipient email address is invalid")?)
-            .subject(format!("{subject_prefix} {}", content.subject))
-            .multipart(MultiPart::alternative_plain_html(
-                login_verification_code_email_text_body(code, content),
-                login_verification_code_email_html_body(code, content),
-            ))
-            .context("failed to build login verification code email")
+async fn load_smtp_config(db: &Db, secrets: &SecretStore) -> Result<EmailConfig> {
+    let row = sqlx::query("SELECT id, value FROM setting WHERE key = $1")
+        .bind(SMTP_SETTING_KEY)
+        .fetch_optional(&db.pool)
+        .await?
+        .context("SMTP settings are not configured")?;
+
+    let id: DbId = row.try_get("id")?;
+    let value: serde_json::Value = row.try_get("value")?;
+    let setting: StoredSmtpSetting =
+        serde_json::from_value(value).context("SMTP settings are invalid")?;
+    let smtp_password = setting
+        .password_ciphertext
+        .as_deref()
+        .map(|ciphertext| secrets.plaintext(id, ciphertext))
+        .transpose()?;
+
+    let config = EmailConfig {
+        smtp_host: setting.smtp_host,
+        smtp_port: setting.smtp_port,
+        smtp_username: setting.smtp_username,
+        smtp_password,
+        smtp_tls: setting.smtp_tls,
+        from_email: setting.from_email,
+        from_name: setting.from_name,
+        subject_prefix: setting.subject_prefix,
+    };
+    validate_email_config(&config)?;
+    Ok(config)
+}
+
+fn validate_email_config(config: &EmailConfig) -> Result<()> {
+    if config.smtp_host.trim().is_empty() {
+        anyhow::bail!("SMTP host is not configured");
     }
+    if config.smtp_port == 0 {
+        anyhow::bail!("SMTP port is invalid");
+    }
+    if config.from_email.trim().is_empty() {
+        anyhow::bail!("SMTP sender email is not configured");
+    }
+    Ok(())
+}
+
+fn sender_mailbox(config: &EmailConfig, locale: EmailLocale) -> Result<Mailbox> {
+    Ok(Mailbox::new(
+        Some(
+            config
+                .from_name
+                .clone()
+                .unwrap_or_else(|| locale.product_name().to_string()),
+        ),
+        config
+            .from_email
+            .parse()
+            .context("SMTP sender email is invalid")?,
+    ))
+}
+
+fn api_key_message(
+    config: &EmailConfig,
+    to_email: &str,
+    api_key: &str,
+    locale: EmailLocale,
+) -> Result<Message> {
+    let content = api_key_email_content(locale);
+    let subject_prefix = config
+        .subject_prefix
+        .as_deref()
+        .unwrap_or_else(|| locale.product_name());
+    let subject = api_key_email_subject(subject_prefix, content);
+    Message::builder()
+        .from(sender_mailbox(config, locale)?)
+        .to(to_email
+            .parse::<Mailbox>()
+            .context("recipient email address is invalid")?)
+        .subject(subject)
+        .multipart(MultiPart::alternative_plain_html(
+            api_key_email_text_body(api_key, content),
+            api_key_email_html_body(api_key, content),
+        ))
+        .context("failed to build API key email")
+}
+
+fn password_reset_message(
+    config: &EmailConfig,
+    to_email: &str,
+    reset_url: &str,
+    locale: EmailLocale,
+) -> Result<Message> {
+    let content = password_reset_email_content(locale);
+    let subject_prefix = config
+        .subject_prefix
+        .as_deref()
+        .unwrap_or_else(|| locale.product_name());
+    Message::builder()
+        .from(sender_mailbox(config, locale)?)
+        .to(to_email
+            .parse::<Mailbox>()
+            .context("recipient email address is invalid")?)
+        .subject(format!("{subject_prefix} {}", content.subject))
+        .multipart(MultiPart::alternative_plain_html(
+            password_reset_email_text_body(reset_url, content),
+            password_reset_email_html_body(reset_url, content),
+        ))
+        .context("failed to build password reset email")
+}
+
+fn login_verification_code_message(
+    config: &EmailConfig,
+    to_email: &str,
+    code: &str,
+    locale: EmailLocale,
+) -> Result<Message> {
+    let content = login_verification_code_email_content(locale);
+    let subject_prefix = config
+        .subject_prefix
+        .as_deref()
+        .unwrap_or_else(|| locale.product_name());
+    Message::builder()
+        .from(sender_mailbox(config, locale)?)
+        .to(to_email
+            .parse::<Mailbox>()
+            .context("recipient email address is invalid")?)
+        .subject(format!("{subject_prefix} {}", content.subject))
+        .multipart(MultiPart::alternative_plain_html(
+            login_verification_code_email_text_body(code, content),
+            login_verification_code_email_html_body(code, content),
+        ))
+        .context("failed to build login verification code email")
+}
+
+fn smtp_test_message(config: &EmailConfig, to_email: &str, locale: EmailLocale) -> Result<Message> {
+    let subject_prefix = config
+        .subject_prefix
+        .as_deref()
+        .unwrap_or_else(|| locale.product_name());
+    let subject = format!("{subject_prefix} SMTP 测试邮件");
+    Message::builder()
+        .from(sender_mailbox(config, locale)?)
+        .to(to_email
+            .parse::<Mailbox>()
+            .context("recipient email address is invalid")?)
+        .subject(subject)
+        .multipart(MultiPart::alternative_plain_html(
+            smtp_test_email_text_body(),
+            smtp_test_email_html_body(),
+        ))
+        .context("failed to build SMTP test email")
 }
 
 #[derive(Clone, Copy)]
@@ -467,6 +602,38 @@ fn password_reset_email_html_body(reset_url: &str, content: PasswordResetEmailCo
   </body>
 </html>"#
     )
+}
+
+fn smtp_test_email_text_body() -> String {
+    "NeoGate SMTP 测试邮件\n\n如果你收到这封邮件，说明 SMTP 配置可以正常发送邮件。".to_string()
+}
+
+fn smtp_test_email_html_body() -> String {
+    r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NeoGate SMTP 测试邮件</title>
+  </head>
+  <body style="margin:0;background:#f5f7fb;color:#172033;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #e1e6ef;border-radius:8px;overflow:hidden;">
+            <tr>
+              <td style="padding:28px 32px;">
+                <h1 style="margin:0;color:#111827;font-size:24px;line-height:32px;font-weight:700;">NeoGate SMTP 测试邮件</h1>
+                <p style="margin:12px 0 0;color:#4b5563;font-size:15px;line-height:24px;">如果你收到这封邮件，说明 SMTP 配置可以正常发送邮件。</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"#
+        .to_string()
 }
 
 fn escape_html(value: &str) -> String {

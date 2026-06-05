@@ -102,7 +102,7 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 - 替换默认管理员密码。
 - 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`。
 - 设置正确的 `CORS_ALLOWED_ORIGINS`。
-- 如需公开邮箱领取 API key，配置 SMTP。
+- 如需公开邮箱领取 API key，在管理员后台的系统设置中配置 SMTP。
 - 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。
 
 ## 6. 开源协议

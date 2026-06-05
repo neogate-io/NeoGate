@@ -81,7 +81,8 @@ pub async fn run() -> anyhow::Result<()> {
 async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     let db = Db::connect(&config).await?;
     sqlx::migrate!("./migrations").run(&db.pool).await?;
-    let email = EmailService::new(config.email.clone())?;
+    let secrets = SecretStore::new(&config.upstream_secret_key, config.secret_cache_max_entries);
+    let email = EmailService::new(db.clone(), secrets.clone());
 
     let http = Client::builder()
         .read_timeout(config.request_timeout)
@@ -97,7 +98,6 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     } else {
         None
     };
-    let secrets = SecretStore::new(&config.upstream_secret_key, config.secret_cache_max_entries);
     let selector = Selector::with_cache_ttl(config.routing_cache_ttl);
     let billing = if config.runtime_mode.is_distributed() {
         Billing::new_redis(
@@ -358,16 +358,6 @@ mod tests {
                     acquire_timeout: Duration::from_secs(5),
                 },
                 cors_allowed_origins: vec!["*".to_string()],
-                email: config::EmailConfig {
-                    smtp_host: "localhost".to_string(),
-                    smtp_port: 587,
-                    smtp_username: None,
-                    smtp_password: None,
-                    smtp_tls: true,
-                    from_email: "noreply@example.com".to_string(),
-                    from_name: None,
-                    subject_prefix: None,
-                },
             },
             usage: relay::UsageRecorder::disabled(),
             usage_daily: relay::UsageDailyRecorder::disabled(),

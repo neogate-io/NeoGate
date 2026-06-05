@@ -55,10 +55,11 @@ use self::{
         TestSmtpSettingResponse, UpsertSmtpSettingRequest,
     },
     user::{
-        adjust_credit, create_user, create_user_key, delete_user, delete_user_key,
-        list_user_groups, list_user_keys, list_users, update_user, update_user_key,
-        CreateUserKeyRequest, CreateUserRequest, CreatedUserKey, ListUserKeysQuery, ListUsersQuery,
-        UpdateUserKeyRequest, UpdateUserRequest, UserGroupRecord, UserKeyRecord, UserRecord,
+        adjust_credit, adjust_user_key_model_credit, create_user, create_user_key, delete_user,
+        delete_user_key, list_user_groups, list_user_keys, list_users, update_user,
+        update_user_key, CreateUserKeyRequest, CreateUserRequest, CreatedUserKey,
+        ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
+        UserGroupRecord, UserKeyModelCreditRecord, UserKeyRecord, UserRecord,
     },
 };
 use crate::payment::settings::{
@@ -82,6 +83,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/user-keys/{id}",
             patch(update_user_key_handler).delete(delete_user_key_handler),
+        )
+        .route(
+            "/api/admin/user-key-model-credits",
+            post(adjust_user_key_model_credit_handler),
         )
         .route("/api/admin/credits", post(adjust_credit_handler))
         .route(
@@ -258,6 +263,15 @@ struct AdjustCreditRequest {
     reason: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct AdjustUserKeyModelCreditRequest {
+    user_key_id: DbId,
+    model: String,
+    amount_micro_usd: i64,
+    #[serde(default = "default_credit_reason")]
+    reason: String,
+}
+
 #[derive(Debug, Serialize)]
 struct AdjustCreditResponse {
     balance_micro_usd: i64,
@@ -275,6 +289,7 @@ async fn adjust_credit_handler(
     let credit_account_type = match req.credit_account_type.as_str() {
         "user" => CreditAccountType::User,
         "user_key" => CreditAccountType::UserKey,
+        "user_key_model" => CreditAccountType::UserKeyModel,
         other => {
             return Err(AppError::BadRequest(format!(
                 "invalid credit_account type: {other}"
@@ -290,6 +305,22 @@ async fn adjust_credit_handler(
     )
     .await?;
     Ok(Json(AdjustCreditResponse { balance_micro_usd }))
+}
+
+async fn adjust_user_key_model_credit_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<AdjustUserKeyModelCreditRequest>,
+) -> AppResult<Json<UserKeyModelCreditRecord>> {
+    let record = adjust_user_key_model_credit(
+        &state,
+        req.user_key_id,
+        req.model,
+        req.amount_micro_usd,
+        &req.reason,
+    )
+    .await?;
+    Ok(Json(record))
 }
 
 async fn channels(

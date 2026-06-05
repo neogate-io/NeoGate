@@ -81,6 +81,13 @@ pub struct UserKeyRecord {
 }
 
 #[derive(Debug, Serialize)]
+pub struct UserKeyModelCreditRecord {
+    pub user_key_model_id: DbId,
+    pub credit_account_id: DbId,
+    pub balance_micro_usd: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CreatedUserKey {
     pub record: UserKeyRecord,
     pub key: String,
@@ -568,17 +575,13 @@ pub async fn update_user_key(
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
     if disabling {
-        let credit_account =
-            account::owner_credit_account(&state.db.pool, CreditAccountType::UserKey, id).await?;
-        recover_hot_credit_account(state, credit_account).await?;
+        recover_user_key_hot_credit_accounts(state, id).await?;
     }
     get_user_key(state, user_key_id).await
 }
 
 pub async fn delete_user_key(state: &AppState, id: DbId) -> AppResult<()> {
-    let credit_account =
-        account::owner_credit_account(&state.db.pool, CreditAccountType::UserKey, id).await?;
-    recover_hot_credit_account(state, credit_account).await?;
+    recover_user_key_hot_credit_accounts(state, id).await?;
     let result = sqlx::query("DELETE FROM user_key WHERE id = $1")
         .bind(id)
         .execute(&state.db.pool)
@@ -638,6 +641,19 @@ fn normalize_user_key_name(name: &str) -> AppResult<String> {
         ));
     }
     Ok(name.to_string())
+}
+
+fn normalize_model_name(model: &str) -> AppResult<String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AppError::BadRequest("model is required".to_string()));
+    }
+    if model.chars().count() > 255 {
+        return Err(AppError::BadRequest(
+            "model must be 255 characters or fewer".to_string(),
+        ));
+    }
+    Ok(model.to_string())
 }
 
 fn mask_api_key(api_key: &str) -> String {
@@ -748,6 +764,79 @@ pub async fn adjust_credit(
     Ok(balance_after)
 }
 
+pub async fn adjust_user_key_model_credit(
+    state: &AppState,
+    user_key_id: DbId,
+    model: String,
+    amount_micro_usd: i64,
+    reason: &str,
+) -> AppResult<UserKeyModelCreditRecord> {
+    let model = normalize_model_name(&model)?;
+    let mut tx = state.db.pool.begin().await?;
+    let user_key_exists = sqlx::query("SELECT id FROM user_key WHERE id = $1 FOR KEY SHARE")
+        .bind(user_key_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+    if !user_key_exists {
+        return Err(AppError::NotFound);
+    }
+
+    let row = sqlx::query(
+        "INSERT INTO user_key_model (user_key_id, model, enabled)
+         VALUES ($1, $2, TRUE)
+         ON CONFLICT (user_key_id, model)
+         DO UPDATE SET enabled = TRUE, updated_at = now()
+         RETURNING id",
+    )
+    .bind(user_key_id)
+    .bind(&model)
+    .fetch_one(&mut *tx)
+    .await?;
+    let user_key_model_id: DbId = row.try_get("id")?;
+    let credit_account = account::get_or_create_credit_account_for_update(
+        &mut tx,
+        CreditAccountType::UserKeyModel,
+        user_key_model_id,
+    )
+    .await?;
+
+    if amount_micro_usd < 0 {
+        let recovered = state
+            .billing
+            .drain_hot_credit_account(&credit_account)
+            .await?;
+        recover_hot_credit_in_tx(&mut tx, &recovered).await?;
+    }
+    let balance_after = adjust_credit_in_tx(
+        &mut tx,
+        credit_account.clone(),
+        amount_micro_usd,
+        reason,
+        serde_json::json!({
+            "source": "admin",
+            "user_key_id": user_key_id,
+            "model": model.clone(),
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+
+    state
+        .cache_invalidator
+        .invalidate(
+            state,
+            crate::cache::InvalidationEvent::UserKey { id: user_key_id },
+        )
+        .await;
+
+    Ok(UserKeyModelCreditRecord {
+        user_key_model_id,
+        credit_account_id: credit_account.id,
+        balance_micro_usd: balance_after,
+    })
+}
+
 async fn recover_hot_credit_account(
     state: &AppState,
     credit_account: CreditAccountId,
@@ -772,11 +861,43 @@ async fn recover_user_hot_credit_accounts(state: &AppState, user_id: DbId) -> Ap
          SELECT w.id
          FROM user_key uk
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         WHERE uk.user_id = $1
+         UNION ALL
+         SELECT w.id
+         FROM user_key uk
+         JOIN user_key_model ukm ON ukm.user_key_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
          WHERE uk.user_id = $1",
     )
     .bind(user_id)
     .fetch_all(&state.db.pool)
     .await?;
+    for row in rows {
+        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
+    }
+    Ok(())
+}
+
+async fn recover_user_key_hot_credit_accounts(
+    state: &AppState,
+    user_key_id: DbId,
+) -> AppResult<()> {
+    let rows = sqlx::query(
+        "SELECT w.id
+         FROM credit_account w
+         WHERE w.owner_type = 'user_key' AND w.owner_id = $1
+         UNION ALL
+         SELECT w.id
+         FROM user_key_model ukm
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
+         WHERE ukm.user_key_id = $1",
+    )
+    .bind(user_key_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+    if rows.is_empty() {
+        return Err(AppError::NotFound);
+    }
     for row in rows {
         recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
     }

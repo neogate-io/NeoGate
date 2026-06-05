@@ -142,8 +142,10 @@ async fn update_apikey(
 ) -> AppResult<Json<UserApiKeyRecord>> {
     validate_status(&req.status)?;
     if req.status == "disabled" {
-        let credit_account = user_apikey_credit_account(&state, auth.user_id, id).await?;
-        recover_hot_credit_account(&state, credit_account).await?;
+        let credit_accounts = user_apikey_credit_accounts(&state, auth.user_id, id).await?;
+        for credit_account in credit_accounts {
+            recover_hot_credit_account(&state, credit_account).await?;
+        }
     }
 
     let result = sqlx::query(
@@ -172,8 +174,10 @@ async fn delete_apikey(
     auth: UserSessionAuth,
     Path(id): Path<DbId>,
 ) -> AppResult<Json<DeleteApiKeyResponse>> {
-    let credit_account = user_apikey_credit_account(&state, auth.user_id, id).await?;
-    recover_hot_credit_account(&state, credit_account).await?;
+    let credit_accounts = user_apikey_credit_accounts(&state, auth.user_id, id).await?;
+    for credit_account in credit_accounts {
+        recover_hot_credit_account(&state, credit_account).await?;
+    }
 
     let result = sqlx::query("DELETE FROM user_key WHERE id = $1 AND user_id = $2")
         .bind(id)
@@ -218,23 +222,33 @@ async fn get_apikey(state: &AppState, user_id: DbId, id: DbId) -> AppResult<User
     apikey_from_row(state, &row)
 }
 
-async fn user_apikey_credit_account(
+async fn user_apikey_credit_accounts(
     state: &AppState,
     user_id: DbId,
     id: DbId,
-) -> AppResult<CreditAccountId> {
-    let row = sqlx::query(
+) -> AppResult<Vec<CreditAccountId>> {
+    let rows = sqlx::query(
         "SELECT w.id
          FROM user_key uk
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         WHERE uk.id = $1 AND uk.user_id = $2
+         UNION ALL
+         SELECT w.id
+         FROM user_key uk
+         JOIN user_key_model ukm ON ukm.user_key_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
          WHERE uk.id = $1 AND uk.user_id = $2",
     )
     .bind(id)
     .bind(user_id)
-    .fetch_optional(&state.db.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    Ok(CreditAccountId::new(row.try_get("id")?))
+    .fetch_all(&state.db.pool)
+    .await?;
+    if rows.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    rows.iter()
+        .map(|row| Ok(CreditAccountId::new(row.try_get("id")?)))
+        .collect()
 }
 
 async fn recover_hot_credit_account(

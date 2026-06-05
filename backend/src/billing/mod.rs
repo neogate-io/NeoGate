@@ -46,6 +46,7 @@ pub struct Billing {
 pub enum CreditAccountType {
     User,
     UserKey,
+    UserKeyModel,
 }
 
 impl CreditAccountType {
@@ -53,6 +54,7 @@ impl CreditAccountType {
         match self {
             Self::User => "user",
             Self::UserKey => "user_key",
+            Self::UserKeyModel => "user_key_model",
         }
     }
 }
@@ -293,6 +295,7 @@ impl Billing {
         pool: &PgPool,
         user_id: DbId,
         user_key_id: DbId,
+        user_key_model_credit_account: Option<&CreditAccountId>,
         user_key_credit_account: &CreditAccountId,
         user_credit_account: &CreditAccountId,
         estimated_micro_usd: i64,
@@ -305,7 +308,11 @@ impl Billing {
             });
         }
 
-        let credit_accounts = [user_key_credit_account.clone(), user_credit_account.clone()];
+        let credit_accounts = ordered_credit_accounts(
+            user_key_model_credit_account,
+            user_key_credit_account,
+            user_credit_account,
+        );
         if let Some(parts) = self
             .hot
             .try_debit_ordered(&credit_accounts, estimated_micro_usd)
@@ -319,6 +326,7 @@ impl Billing {
         }
 
         let lock_id = prefetch_lock_index(
+            user_key_model_credit_account,
             user_key_credit_account,
             user_credit_account,
             self.prefetch_locks.len(),
@@ -341,6 +349,7 @@ impl Billing {
             pool,
             user_id,
             user_key_id,
+            user_key_model_credit_account,
             user_key_credit_account,
             user_credit_account,
             estimated_micro_usd,
@@ -386,6 +395,7 @@ impl Billing {
         pool: &PgPool,
         user_id: DbId,
         user_key_id: DbId,
+        user_key_model_credit_account: Option<&CreditAccountId>,
         user_key_credit_account: &CreditAccountId,
         user_credit_account: &CreditAccountId,
         hold: DebitHold,
@@ -406,6 +416,7 @@ impl Billing {
                         pool,
                         user_id,
                         user_key_id,
+                        user_key_model_credit_account,
                         user_key_credit_account,
                         user_credit_account,
                         supplemental_micro_usd,
@@ -497,6 +508,7 @@ impl Billing {
         pool: &PgPool,
         user_id: DbId,
         user_key_id: DbId,
+        user_key_model_credit_account: Option<&CreditAccountId>,
         user_key_credit_account: &CreditAccountId,
         user_credit_account: &CreditAccountId,
         needed_micro_usd: i64,
@@ -506,23 +518,47 @@ impl Billing {
         let target = self.prefetch_micro_usd.max(needed_micro_usd);
         let mut allocations = Vec::new();
 
-        if let Some((allocation_id, amount)) = allocate_user_key(
-            &mut tx,
-            user_key_id,
-            user_id,
-            user_key_credit_account,
-            target,
-        )
-        .await?
-        {
-            allocations.push((
-                HotAllocation {
-                    credit_account: user_key_credit_account.clone(),
-                    allocation_id,
-                },
-                amount,
-            ));
-            remaining = (remaining - amount).max(0);
+        if let Some(user_key_model_credit_account) = user_key_model_credit_account {
+            if let Some((allocation_id, amount)) = allocate_user_key_model(
+                &mut tx,
+                user_key_id,
+                user_id,
+                user_key_model_credit_account,
+                target,
+            )
+            .await?
+            {
+                allocations.push((
+                    HotAllocation {
+                        credit_account: user_key_model_credit_account.clone(),
+                        allocation_id,
+                    },
+                    amount,
+                ));
+                remaining = (remaining - amount).max(0);
+            }
+        }
+
+        if remaining > 0 {
+            let key_target = self.prefetch_micro_usd.max(remaining);
+            if let Some((allocation_id, amount)) = allocate_user_key(
+                &mut tx,
+                user_key_id,
+                user_id,
+                user_key_credit_account,
+                key_target,
+            )
+            .await?
+            {
+                allocations.push((
+                    HotAllocation {
+                        credit_account: user_key_credit_account.clone(),
+                        allocation_id,
+                    },
+                    amount,
+                ));
+                remaining = (remaining - amount).max(0);
+            }
         }
 
         if remaining > 0 {
@@ -584,12 +620,28 @@ fn prefetch_locks() -> Arc<Vec<Mutex<()>>> {
     Arc::new((0..64).map(|_| Mutex::new(())).collect())
 }
 
+fn ordered_credit_accounts(
+    user_key_model_credit_account: Option<&CreditAccountId>,
+    user_key_credit_account: &CreditAccountId,
+    user_credit_account: &CreditAccountId,
+) -> Vec<CreditAccountId> {
+    let mut credit_accounts = Vec::with_capacity(3);
+    if let Some(credit_account) = user_key_model_credit_account {
+        credit_accounts.push(credit_account.clone());
+    }
+    credit_accounts.push(user_key_credit_account.clone());
+    credit_accounts.push(user_credit_account.clone());
+    credit_accounts
+}
+
 fn prefetch_lock_index(
+    user_key_model_credit_account: Option<&CreditAccountId>,
     user_key_credit_account: &CreditAccountId,
     user_credit_account: &CreditAccountId,
     len: usize,
 ) -> usize {
     let mut hasher = DefaultHasher::new();
+    user_key_model_credit_account.hash(&mut hasher);
     user_key_credit_account.hash(&mut hasher);
     user_credit_account.hash(&mut hasher);
     hasher.finish() as usize % len.max(1)
@@ -746,32 +798,38 @@ async fn allocate_user_key(
     };
     let balance: i64 = row.try_get("balance_micro_usd")?;
     let reserved: i64 = row.try_get("reserved_micro_usd")?;
-    let available = (balance - reserved).max(0);
-    let amount = target_micro_usd.min(available);
-    if amount <= 0 {
-        return Ok(None);
-    }
+    reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
+}
 
-    sqlx::query(
-        "UPDATE credit_account
-         SET reserved_micro_usd = reserved_micro_usd + $2,
-             updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(credit_account.id)
-    .bind(amount)
-    .execute(&mut **tx)
-    .await?;
+async fn allocate_user_key_model(
+    tx: &mut Transaction<'_, Postgres>,
+    user_key_id: DbId,
+    user_id: DbId,
+    credit_account: &CreditAccountId,
+    target_micro_usd: i64,
+) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
-        "INSERT INTO credit_allocation (credit_account_id, amount_micro_usd)
-         VALUES ($1, $2)
-         RETURNING id",
+        "SELECT w.balance_micro_usd, w.reserved_micro_usd
+         FROM user_key_model ukm
+         JOIN user_key uk ON uk.id = ukm.user_key_id
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
+         WHERE ukm.user_key_id = $1
+           AND uk.user_id = $2
+           AND w.id = $3
+           AND ukm.enabled = TRUE
+         FOR UPDATE OF w",
     )
+    .bind(user_key_id)
+    .bind(user_id)
     .bind(credit_account.id)
-    .bind(amount)
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    Ok(Some((row.try_get("id")?, amount)))
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let balance: i64 = row.try_get("balance_micro_usd")?;
+    let reserved: i64 = row.try_get("reserved_micro_usd")?;
+    reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
 }
 
 async fn allocate_user(
@@ -796,6 +854,16 @@ async fn allocate_user(
     };
     let balance: i64 = row.try_get("balance_micro_usd")?;
     let reserved: i64 = row.try_get("reserved_micro_usd")?;
+    reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
+}
+
+async fn reserve_available_credit(
+    tx: &mut Transaction<'_, Postgres>,
+    credit_account: &CreditAccountId,
+    balance: i64,
+    reserved: i64,
+    target_micro_usd: i64,
+) -> AppResult<Option<(DbId, i64)>> {
     let available = (balance - reserved).max(0);
     let amount = target_micro_usd.min(available);
     if amount <= 0 {

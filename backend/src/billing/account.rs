@@ -24,6 +24,25 @@ pub(crate) async fn create_credit_account(
     Ok(CreditAccountId::new(row.try_get("id")?))
 }
 
+pub(crate) async fn get_or_create_credit_account_for_update(
+    tx: &mut Transaction<'_, Postgres>,
+    credit_account_type: CreditAccountType,
+    owner_id: DbId,
+) -> AppResult<CreditAccountId> {
+    let row = sqlx::query(
+        "INSERT INTO credit_account (owner_type, owner_id)
+         VALUES ($1, $2)
+         ON CONFLICT (owner_type, owner_id)
+         DO UPDATE SET owner_type = EXCLUDED.owner_type
+         RETURNING id",
+    )
+    .bind(credit_account_type.as_str())
+    .bind(owner_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(CreditAccountId::new(row.try_get("id")?))
+}
+
 pub(crate) async fn owner_credit_account(
     pool: &PgPool,
     credit_account_type: CreditAccountType,

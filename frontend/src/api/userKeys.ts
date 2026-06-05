@@ -50,12 +50,28 @@ export function createUserKey(email: string, draftId: string, locale: string) {
   })
 }
 
-export function adjustCredit(creditAccountType: 'user' | 'user_key', ownerId: number, amountMicroUsd: number) {
+export function adjustCredit(creditAccountType: 'user' | 'user_key' | 'user_key_model', ownerId: number, amountMicroUsd: number) {
   return adminRequest<{ balance_micro_usd: number }>('/api/admin/credits', {
     method: 'POST',
     body: JSON.stringify({
       credit_account_type: creditAccountType,
       owner_id: ownerId,
+      amount_micro_usd: amountMicroUsd,
+      reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
+    })
+  })
+}
+
+export function adjustUserKeyModelCredit(userKeyId: number, model: string, amountMicroUsd: number) {
+  return adminRequest<{
+    user_key_model_id: number
+    credit_account_id: number
+    balance_micro_usd: number
+  }>('/api/admin/user-key-model-credits', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_key_id: userKeyId,
+      model,
       amount_micro_usd: amountMicroUsd,
       reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
     })

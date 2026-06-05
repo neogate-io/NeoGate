@@ -201,6 +201,7 @@ pub struct UserAuth {
     pub user_key_id: DbId,
     pub user_credit_account: CreditAccountId,
     pub user_key_credit_account: CreditAccountId,
+    pub user_key_model_credit_accounts: Arc<HashMap<String, CreditAccountId>>,
     pub user_group: String,
     pub model_limits: Option<Vec<String>>,
 }
@@ -383,13 +384,19 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             return Err(AppError::Forbidden);
         }
 
+        let user_key_id: DbId = row.try_get("user_key_id")?;
         let auth = Self {
             user_id: row.try_get("user_id")?,
-            user_key_id: row.try_get("user_key_id")?,
+            user_key_id,
             user_credit_account: CreditAccountId::new(row.try_get("user_credit_account_id")?),
             user_key_credit_account: CreditAccountId::new(
                 row.try_get("user_key_credit_account_id")?,
             ),
+            user_key_model_credit_accounts: fetch_user_key_model_credit_accounts(
+                state,
+                user_key_id,
+            )
+            .await?,
             user_group: row.try_get("user_group")?,
             model_limits: row.try_get("model_limits")?,
         };
@@ -401,6 +408,10 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
 }
 
 impl UserAuth {
+    pub fn model_credit_account(&self, model: &str) -> Option<&CreditAccountId> {
+        self.user_key_model_credit_accounts.get(model)
+    }
+
     pub fn ensure_model_allowed(&self, model: &str) -> AppResult<()> {
         if let Some(limits) = &self.model_limits {
             if !limits.iter().any(|item| item == model) {
@@ -409,6 +420,30 @@ impl UserAuth {
         }
         Ok(())
     }
+}
+
+async fn fetch_user_key_model_credit_accounts(
+    state: &AppState,
+    user_key_id: DbId,
+) -> AppResult<Arc<HashMap<String, CreditAccountId>>> {
+    let rows = sqlx::query(
+        "SELECT ukm.model, w.id AS credit_account_id
+         FROM user_key_model ukm
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
+         WHERE ukm.user_key_id = $1 AND ukm.enabled = TRUE",
+    )
+    .bind(user_key_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let mut accounts = HashMap::with_capacity(rows.len());
+    for row in rows {
+        accounts.insert(
+            row.try_get("model")?,
+            CreditAccountId::new(row.try_get("credit_account_id")?),
+        );
+    }
+    Ok(Arc::new(accounts))
 }
 
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -655,6 +690,7 @@ mod tests {
             user_key_id: 1,
             user_credit_account: CreditAccountId::new(100),
             user_key_credit_account: CreditAccountId::new(101),
+            user_key_model_credit_accounts: Arc::new(HashMap::new()),
             user_group: "default".to_string(),
             model_limits: Some(vec!["gpt-4.1".to_string()]),
         };
@@ -672,6 +708,7 @@ mod tests {
                 user_key_id: 10,
                 user_credit_account: CreditAccountId::new(100),
                 user_key_credit_account: CreditAccountId::new(110),
+                user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
                 model_limits: None,
             },
@@ -684,6 +721,7 @@ mod tests {
                 user_key_id: 11,
                 user_credit_account: CreditAccountId::new(100),
                 user_key_credit_account: CreditAccountId::new(111),
+                user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
                 model_limits: None,
             },
@@ -696,6 +734,7 @@ mod tests {
                 user_key_id: 20,
                 user_credit_account: CreditAccountId::new(200),
                 user_key_credit_account: CreditAccountId::new(120),
+                user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
                 model_limits: None,
             },

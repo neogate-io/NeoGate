@@ -6,7 +6,10 @@ use futures_util::StreamExt;
 
 use crate::{
     auth::UserAuth,
-    billing::{parse_usage_from_bytes, parse_usage_from_sse_data, DebitHold, Price, TokenUsage},
+    billing::{
+        parse_usage_from_bytes, parse_usage_from_sse_data, CreditAccountId, DebitHold, Price,
+        TokenUsage,
+    },
     AppState,
 };
 
@@ -29,6 +32,7 @@ pub(super) struct RelayContext {
     pub(super) streamed: bool,
     pub(super) price: Price,
     pub(super) hold: DebitHold,
+    pub(super) user_key_model_credit_account: Option<CreditAccountId>,
     pub(super) started: Instant,
 }
 
@@ -95,6 +99,7 @@ impl StreamingRelay {
                     &ctx.state.db.pool,
                     ctx.auth.user_id,
                     ctx.auth.user_key_id,
+                    ctx.user_key_model_credit_account.as_ref(),
                     &ctx.auth.user_key_credit_account,
                     &ctx.auth.user_credit_account,
                     ctx.hold.clone(),

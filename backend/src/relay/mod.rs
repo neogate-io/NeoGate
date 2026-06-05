@@ -130,6 +130,7 @@ async fn anthropic_messages(
         state.billing.default_output_tokens(),
     )?;
     auth.ensure_model_allowed(&meta.model)?;
+    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
     let started = Instant::now();
     let upstream = state
         .selector
@@ -149,7 +150,15 @@ async fn anthropic_messages(
             &auth.user_group,
         )
         .await?;
-    let hold = reserve_credit(&state, &auth, &body, output_tokens, &price).await?;
+    let hold = reserve_credit(
+        &state,
+        &auth,
+        user_key_model_credit_account.as_ref(),
+        &body,
+        output_tokens,
+        &price,
+    )
+    .await?;
     let response = forward_anthropic(&state, &headers, &upstream, body).await;
     finish_relay(
         RelayContext {
@@ -162,6 +171,7 @@ async fn anthropic_messages(
             streamed: meta.stream,
             price,
             hold,
+            user_key_model_credit_account,
             started,
         },
         response,
@@ -186,6 +196,7 @@ async fn relay_openai(
         output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
     auth.ensure_model_allowed(&meta.model)?;
+    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
 
     let mut model_unavailable_reroutes = 0;
     loop {
@@ -200,7 +211,15 @@ async fn relay_openai(
                 &auth.user_group,
             )
             .await?;
-        let hold = reserve_credit(&state, &auth, &body, output_tokens, &price).await?;
+        let hold = reserve_credit(
+            &state,
+            &auth,
+            user_key_model_credit_account.as_ref(),
+            &body,
+            output_tokens,
+            &price,
+        )
+        .await?;
         let ctx = RelayContext {
             state: Arc::clone(&state),
             auth: auth.clone(),
@@ -211,6 +230,7 @@ async fn relay_openai(
             streamed: meta.stream,
             price,
             hold,
+            user_key_model_credit_account: user_key_model_credit_account.clone(),
             started,
         };
         let response = forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await;
@@ -885,6 +905,7 @@ pub(in crate::relay) async fn release_empty_hold(state: &AppState, hold: DebitHo
 async fn reserve_credit(
     state: &AppState,
     auth: &UserAuth,
+    user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,
     body: &[u8],
     output_tokens: i64,
     price: &Price,
@@ -897,6 +918,7 @@ async fn reserve_credit(
             &state.db.pool,
             auth.user_id,
             auth.user_key_id,
+            user_key_model_credit_account,
             &auth.user_key_credit_account,
             &auth.user_credit_account,
             estimated,

@@ -126,7 +126,7 @@ export const router = createRouter({
         {
           path: 'settings/admin-password',
           name: 'adminPasswordSettings',
-          component: () => import('../views/admin/AdminPasswordSettingsView.vue'),
+          component: () => import('../views/admin/PasswordSettingsView.vue'),
           meta: { messageKey: 'adminPasswordSettings' }
         }
       ]

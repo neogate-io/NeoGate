@@ -54,6 +54,12 @@ export function formatCompactDateTime(value?: string | null) {
   return `${year}/${month}/${day} ${hour}:${minute}`
 }
 
+export function maskApiKey(value: string) {
+  if (!value || value.includes('*')) return value
+  if (value.length <= 18) return value
+  return `${value.slice(0, 8)}********${value.slice(-6)}`
+}
+
 export function formatDurationMs(ms?: number | null) {
   if (ms == null) return '-'
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`

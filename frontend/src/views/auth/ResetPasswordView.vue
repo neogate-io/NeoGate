@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { Lock } from '@element-plus/icons-vue'
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { resetPassword } from '../../api/auth'
+import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { ApiError } from '../../utils/errors'
 
 const route = useRoute()
 const router = useRouter()
-const { locale, t, toggleLocale } = useLocale()
+const { t } = useLocale()
 const password = ref('')
 const error = ref('')
 const submitting = ref(false)
-const nextLocaleLabel = computed(() => (locale.value === 'zh-CN' ? 'EN' : '中'))
 const minPasswordLength = 8
 
 async function submitReset() {
@@ -57,9 +57,7 @@ function readResetError(err: unknown) {
 
 <template>
   <main class="login-shell">
-    <el-button class="login-language home-language-button" :aria-label="t('language')" @click="toggleLocale">
-      {{ nextLocaleLabel }}
-    </el-button>
+    <LocaleToggleButton class="login-language home-language-button" />
     <section class="login-stage">
       <el-form class="login-panel" @submit.prevent="submitReset">
         <div class="login-panel-heading">
@@ -78,7 +76,13 @@ function readResetError(err: unknown) {
             />
           </label>
         </div>
-        <el-button class="login-submit" native-type="submit" type="primary" size="large" :loading="submitting">
+        <el-button
+          class="login-submit"
+          native-type="submit"
+          type="primary"
+          size="large"
+          :loading="submitting"
+        >
           {{ t('resetPassword') }}
         </el-button>
         <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />

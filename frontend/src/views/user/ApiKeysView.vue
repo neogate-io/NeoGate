@@ -12,7 +12,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { UserKey } from '../../types/admin'
 import { readError } from '../../utils/errors'
-import { formatCompactDateTime } from '../../utils/format'
+import { formatCompactDateTime, maskApiKey } from '../../utils/format'
 
 const { t } = useLocale()
 const createLoading = ref(false)
@@ -26,12 +26,6 @@ const { data: apiKeys, loading, reload } = useAsyncData(() => getOwnUserKeys(), 
 
 function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
-}
-
-function maskApiKey(value: string) {
-  if (!value || value.includes('*')) return value
-  if (value.length <= 18) return value
-  return `${value.slice(0, 8)}********${value.slice(-6)}`
 }
 
 async function copyText(value: string) {

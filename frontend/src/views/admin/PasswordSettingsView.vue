@@ -72,16 +72,16 @@ async function save() {
 </script>
 
 <template>
-  <section class="admin-password-view">
-    <el-form class="admin-password-form" label-position="top" @submit.prevent="save">
-      <div class="admin-password-body">
-        <section class="admin-password-section">
-          <header class="admin-password-section-header">
+  <section class="admin-settings-view">
+    <el-form class="admin-settings-form is-narrow" label-position="top" @submit.prevent="save">
+      <div class="admin-settings-body">
+        <section class="admin-settings-section">
+          <header class="admin-settings-section-header">
             <el-icon><Lock /></el-icon>
             <h3>{{ t('adminPasswordSection') }}</h3>
           </header>
 
-          <div class="admin-password-grid">
+          <div class="admin-settings-grid admin-password-grid">
             <el-form-item :label="t('currentAdminPassword')">
               <el-input
                 v-model="form.currentPassword"
@@ -114,8 +114,14 @@ async function save() {
           </div>
         </section>
 
-        <div class="admin-password-actions">
-          <el-button class="admin-action-button" native-type="submit" type="primary" :icon="Select" :loading="saving">
+        <div class="admin-settings-actions admin-password-actions">
+          <el-button
+            class="admin-action-button"
+            native-type="submit"
+            type="primary"
+            :icon="Select"
+            :loading="saving"
+          >
             {{ t('save') }}
           </el-button>
         </div>
@@ -125,93 +131,21 @@ async function save() {
 </template>
 
 <style scoped>
-.admin-password-view {
-  display: flex;
-  justify-content: flex-start;
-  width: 100%;
-}
-
-.admin-password-form {
-  background: #fff;
-  border: 1px solid #e2e7ef;
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-  overflow: hidden;
-  width: min(620px, 100%);
-}
-
-.admin-password-body {
-  display: grid;
-  padding: 4px 18px 18px;
-}
-
-.admin-password-section {
-  border-bottom: 1px solid #edf1f5;
-  display: grid;
-  gap: 14px;
-  padding: 18px 0 20px;
-}
-
-.admin-password-section-header {
-  align-items: center;
-  color: #202b3c;
-  display: grid;
-  gap: 9px;
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.admin-password-section-header .el-icon {
-  color: var(--brand-blue);
-  font-size: 17px;
-}
-
-.admin-password-section-header h3 {
-  font-size: 15px;
-  font-weight: 760;
-  line-height: 1.25;
-  margin: 0;
-}
-
 .admin-password-grid {
-  display: grid;
-  gap: 16px;
   grid-template-columns: minmax(260px, 420px);
 }
 
-.admin-password-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-.admin-password-form :deep(.el-form-item__label) {
-  color: #3f4a5c;
-  font-size: 13px;
-  font-weight: 720;
-  line-height: 1.2;
-  margin-bottom: 8px;
-}
-
-.admin-password-form :deep(.el-input__wrapper) {
-  border-radius: 7px;
-  min-height: 34px;
-}
-
 .admin-password-actions {
-  display: flex;
+  border-top: 0;
   justify-content: flex-start;
+  margin-left: 0;
+  min-width: 0;
   padding-top: 18px;
 }
 
 @media (max-width: 640px) {
-  .admin-password-form {
-    width: 100%;
-  }
-
   .admin-password-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .admin-password-actions .el-button {
-    width: 100%;
   }
 }
 </style>

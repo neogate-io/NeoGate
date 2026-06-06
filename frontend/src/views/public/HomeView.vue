@@ -4,6 +4,7 @@ import type { InputInstance } from 'element-plus/es/components/input/index'
 import { DocumentCopy, Key, UserFilled } from '@element-plus/icons-vue'
 import { computed, nextTick, ref } from 'vue'
 import { createUserKey, createUserKeyDraft } from '../../api/userKeys'
+import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useInstallScript } from '../../composables/useInstallScript'
 import { useLocale } from '../../composables/useLocale'
 import { useAuthStore } from '../../stores/auth'
@@ -11,11 +12,10 @@ import { readError } from '../../utils/errors'
 
 const githubUrl = 'https://github.com/neogate-io/NeoGate'
 const auth = useAuthStore()
-const { locale, t, toggleLocale } = useLocale()
+const { locale, t } = useLocale()
 const { installScript, copyInstallScript } = useInstallScript(t)
 const apiKeyDialogOpen = ref(false)
 const emailInput = ref<InputInstance>()
-const nextLocaleLabel = computed(() => (locale.value === 'zh-CN' ? 'EN' : '中'))
 const homeEmail = ref('')
 const homeDraftId = ref('')
 const homeMaskedDraftKey = ref('')
@@ -90,7 +90,6 @@ function resetHomeApiKey() {
   homeKeySubmitting.value = false
   homeKeySent.value = false
 }
-
 </script>
 
 <template>
@@ -104,10 +103,14 @@ function resetHomeApiKey() {
         <RouterLink to="/docs">{{ t('docs') }}</RouterLink>
       </nav>
       <div class="home-header-actions">
-        <el-button class="home-language-button" :aria-label="t('language')" @click="toggleLocale">
-          {{ nextLocaleLabel }}
-        </el-button>
-        <a class="github-link" :href="githubUrl" target="_blank" rel="noreferrer" :aria-label="t('github')">
+        <LocaleToggleButton class="home-language-button" />
+        <a
+          class="github-link"
+          :href="githubUrl"
+          target="_blank"
+          rel="noreferrer"
+          :aria-label="t('github')"
+        >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
               fill="currentColor"
@@ -115,7 +118,12 @@ function resetHomeApiKey() {
             />
           </svg>
         </a>
-        <RouterLink v-if="auth.isAuthed" class="home-login-link home-account-link" :to="dashboardLink" :aria-label="t('admin')">
+        <RouterLink
+          v-if="auth.isAuthed"
+          class="home-login-link home-account-link"
+          :to="dashboardLink"
+          :aria-label="t('admin')"
+        >
           <el-icon><UserFilled /></el-icon>
         </RouterLink>
         <RouterLink v-else class="home-login-link" to="/login">{{ t('signIn') }}</RouterLink>

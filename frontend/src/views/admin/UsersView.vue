@@ -12,6 +12,7 @@ import {
   formatCompactDateTime,
   formatDateTime,
   formatMicroUsd,
+  maskApiKey,
   usdToMicroUsd
 } from '../../utils/format'
 
@@ -40,12 +41,6 @@ function formatAvailableUsd(microUsd?: number | null) {
 
 function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
-}
-
-function maskApiKey(value: string) {
-  if (!value || value.includes('*')) return value
-  if (value.length <= 18) return value
-  return `${value.slice(0, 8)}********${value.slice(-6)}`
 }
 
 function openCreditDialog(row: User) {

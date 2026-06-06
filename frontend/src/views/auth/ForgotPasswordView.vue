@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { User } from '@element-plus/icons-vue'
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { requestPasswordReset } from '../../api/auth'
+import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { ApiError } from '../../utils/errors'
 
-const { locale, t, toggleLocale } = useLocale()
+const { locale, t } = useLocale()
 const email = ref('')
 const error = ref('')
 const sending = ref(false)
-const nextLocaleLabel = computed(() => (locale.value === 'zh-CN' ? 'EN' : '中'))
 
 async function sendPasswordReset() {
   error.value = ''
@@ -41,9 +41,7 @@ function readForgotPasswordError(err: unknown) {
 
 <template>
   <main class="login-shell">
-    <el-button class="login-language home-language-button" :aria-label="t('language')" @click="toggleLocale">
-      {{ nextLocaleLabel }}
-    </el-button>
+    <LocaleToggleButton class="login-language home-language-button" />
     <section class="login-stage">
       <el-form class="login-panel" @submit.prevent="sendPasswordReset">
         <div class="login-panel-heading">
@@ -53,10 +51,22 @@ function readForgotPasswordError(err: unknown) {
         <div class="login-fields">
           <label class="login-field">
             <span>{{ t('email') }}</span>
-            <el-input v-model="email" :prefix-icon="User" :placeholder="t('loginAccountPlaceholder')" type="email" size="large" />
+            <el-input
+              v-model="email"
+              :prefix-icon="User"
+              :placeholder="t('loginAccountPlaceholder')"
+              type="email"
+              size="large"
+            />
           </label>
         </div>
-        <el-button class="login-submit" native-type="submit" type="primary" size="large" :loading="sending">
+        <el-button
+          class="login-submit"
+          native-type="submit"
+          type="primary"
+          size="large"
+          :loading="sending"
+        >
           {{ t('sendPasswordReset') }}
         </el-button>
         <RouterLink class="login-secondary-link" to="/login">{{ t('backToLogin') }}</RouterLink>

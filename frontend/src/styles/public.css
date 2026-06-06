@@ -1,11 +1,22 @@
+.login-shell,
+.home-page,
+.docs-page {
+  --public-surface: #ffffff;
+  --public-surface-soft: rgba(255, 255, 255, 0.78);
+  --public-border: #dde5ef;
+  --public-border-soft: rgba(216, 225, 236, 0.86);
+  --public-text: #111827;
+  --public-muted: #64748b;
+  --public-shadow: 0 14px 35px rgba(15, 23, 42, 0.055);
+}
+
 .login-shell {
   align-items: center;
   background:
-  linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(246, 248, 252, 0.94) 100%),
-  #f6f8fb;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(246, 248, 252, 0.94) 100%), #f6f8fb;
   display: flex;
-  min-height: calc(100vh - 38px);
   justify-content: center;
+  min-height: calc(100dvh - 38px);
   overflow: hidden;
   padding: 24px;
   position: relative;
@@ -13,10 +24,10 @@
 
 .login-shell::before {
   background-image:
-  linear-gradient(rgba(30, 35, 41, 0.055) 1px, transparent 1px),
-  linear-gradient(90deg, rgba(30, 35, 41, 0.055) 1px, transparent 1px);
+    linear-gradient(rgba(30, 35, 41, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 35, 41, 0.055) 1px, transparent 1px);
   background-size: 42px 42px;
-  content: "";
+  content: '';
   inset: 0;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65), transparent 78%);
   pointer-events: none;
@@ -24,8 +35,8 @@
 }
 
 .login-panel {
-  background: #fff;
-  border: 1px solid #e2e6ee;
+  background: var(--public-surface);
+  border: 1px solid var(--public-border);
   border-radius: 8px;
   box-shadow: 0 16px 44px rgba(15, 23, 42, 0.1);
   display: grid;
@@ -52,7 +63,7 @@
 }
 
 .login-panel-heading h1 {
-  color: #111827;
+  color: var(--public-text);
   font-size: 30px;
   font-weight: 820;
   line-height: 1.16;
@@ -61,7 +72,7 @@
 }
 
 .login-panel-heading p {
-  color: #64748b;
+  color: var(--public-muted);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
@@ -163,9 +174,8 @@
 }
 
 .home-page {
-  background:
-  linear-gradient(180deg, #ffffff 0, #f6f8fb 42%, #f2f5f9 100%);
-  min-height: calc(100vh - 38px);
+  background: linear-gradient(180deg, #ffffff 0, #f6f8fb 42%, #f2f5f9 100%);
+  min-height: calc(100dvh - 38px);
 }
 
 .home-header {
@@ -187,7 +197,7 @@
 .home-nav a,
 .github-link,
 .home-login-link {
-  color: #111827;
+  color: var(--public-text);
   text-decoration: none;
 }
 
@@ -238,15 +248,23 @@
   min-width: 48px;
 }
 
+.github-link,
+.home-login-link,
+.home-account-link {
+  border-radius: 8px;
+  height: 34px;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
 .github-link {
   align-items: center;
-  background: #fff;
-  border: 1px solid #dde4ee;
-  border-radius: 8px;
+  background: var(--public-surface);
+  border: 1px solid var(--public-border);
   display: inline-flex;
-  height: 34px;
   justify-content: center;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   width: 34px;
 }
 
@@ -259,15 +277,12 @@
   align-items: center;
   background: var(--brand-blue);
   border: 1px solid var(--brand-blue);
-  border-radius: 8px;
   color: #fff;
   display: inline-flex;
   font-size: 14px;
   font-weight: 700;
-  height: 34px;
   justify-content: center;
   padding: 0 16px;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   white-space: nowrap;
 }
 
@@ -278,9 +293,9 @@
 }
 
 .home-account-link {
-  background: #fff;
-  border-color: #dde4ee;
-  color: #111827;
+  background: var(--public-surface);
+  border-color: var(--public-border);
+  color: var(--public-text);
   font-size: 16px;
   padding: 0;
   width: 34px;
@@ -306,7 +321,7 @@
   display: grid;
   gap: 58px;
   justify-items: center;
-  min-height: calc(100vh - 110px);
+  min-height: calc(100dvh - 110px);
   padding: 28px 18px 56px;
 }
 
@@ -315,7 +330,7 @@
 }
 
 .home-intro h1 {
-  color: #111827;
+  color: var(--public-text);
   font-size: clamp(34px, 5.4vw, 68px);
   letter-spacing: 0;
   line-height: 1.08;
@@ -360,7 +375,7 @@
 }
 
 .api-key-dialog .el-dialog__title {
-  color: #1f2937;
+  color: var(--public-text);
   font-size: 21px;
   font-weight: 750;
   line-height: 1.25;
@@ -411,7 +426,7 @@
 }
 
 .api-key-preview code {
-  color: #111827;
+  color: var(--public-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 14px;
   font-weight: 700;
@@ -469,7 +484,7 @@
 
 .install-command {
   align-items: stretch;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--public-surface-soft);
   border: 1px solid rgba(219, 226, 236, 0.7);
   border-radius: 8px;
   box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
@@ -498,10 +513,9 @@
 }
 
 .docs-page {
-  background:
-  linear-gradient(180deg, #ffffff 0, #f6f8fb 38%, #eef3f8 100%);
+  background: linear-gradient(180deg, #ffffff 0, #f6f8fb 38%, #eef3f8 100%);
   color: #172033;
-  min-height: calc(100vh - 38px);
+  min-height: calc(100dvh - 38px);
   overflow-x: clip;
   width: 100%;
 }
@@ -521,7 +535,7 @@
 }
 
 .docs-hero h1 {
-  color: #111827;
+  color: var(--public-text);
   font-size: clamp(30px, 3.4vw, 42px);
   letter-spacing: 0;
   line-height: 1.12;
@@ -529,7 +543,7 @@
 }
 
 .docs-hero p {
-  color: #5f6f84;
+  color: var(--public-muted);
   font-size: 18px;
   line-height: 1.65;
   margin: 0;
@@ -543,7 +557,7 @@
 }
 
 .docs-sidebar {
-  border-right: 1px solid #dbe3ee;
+  border-right: 1px solid var(--public-border);
   display: grid;
   gap: 18px;
   padding: 2px 22px 2px 0;
@@ -552,7 +566,7 @@
 }
 
 .docs-sidebar h2 {
-  color: #111827;
+  color: var(--public-text);
   font-size: 17px;
   font-weight: 820;
   line-height: 1.2;
@@ -572,7 +586,9 @@
   line-height: 1.25;
   padding: 9px 0 9px 12px;
   text-decoration: none;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .docs-sidebar a:hover {
@@ -591,7 +607,7 @@
 .docs-sidebar a.docs-sidebar-sub-link::before {
   background: #cbd5e1;
   border-radius: 999px;
-  content: "";
+  content: '';
   height: 4px;
   left: 17px;
   position: absolute;
@@ -607,7 +623,7 @@
 }
 
 .docs-section {
-  border-top: 1px solid #dbe3ee;
+  border-top: 1px solid var(--public-border);
   display: grid;
   gap: 18px;
   min-width: 0;
@@ -640,7 +656,7 @@
 }
 
 .docs-section-heading h2 {
-  color: #111827;
+  color: var(--public-text);
   font-size: 25px;
   font-weight: 800;
   line-height: 1.2;
@@ -672,7 +688,7 @@
 }
 
 .docs-check-item {
-  background: rgba(255, 255, 255, 0.66);
+  background: var(--public-surface-soft);
   border: 1px solid rgba(216, 225, 236, 0.78);
   border-radius: 8px;
   display: grid;
@@ -682,7 +698,7 @@
 }
 
 .docs-check-item h3 {
-  color: #111827;
+  color: var(--public-text);
   font-size: 15px;
   font-weight: 780;
   line-height: 1.25;
@@ -699,10 +715,10 @@
 .docs-feature,
 .docs-step-card,
 .docs-faq-item {
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(216, 225, 236, 0.86);
+  background: var(--public-surface-soft);
+  border: 1px solid var(--public-border-soft);
   border-radius: 8px;
-  box-shadow: 0 14px 35px rgba(15, 23, 42, 0.055);
+  box-shadow: var(--public-shadow);
   min-width: 0;
 }
 
@@ -727,7 +743,7 @@
 
 .docs-feature h3,
 .docs-faq-item h3 {
-  color: #111827;
+  color: var(--public-text);
   font-size: 16px;
   font-weight: 780;
   line-height: 1.25;
@@ -756,6 +772,7 @@
   min-width: 0;
   overflow-x: auto;
   padding: 14px 16px;
+  scrollbar-color: rgba(226, 232, 240, 0.38) transparent;
 }
 
 .docs-copy-block {
@@ -774,7 +791,10 @@
   position: absolute;
   right: 7px;
   top: 7px;
-  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
   width: 26px;
   z-index: 1;
 }
@@ -800,12 +820,12 @@
 
 @media (hover: none) {
   .docs-copy-block .el-button {
-  opacity: 1;
+    opacity: 1;
   }
 }
 
 .docs-step-card {
-  background: rgba(255, 255, 255, 0.64);
+  background: rgba(255, 255, 255, 0.68);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
   display: grid;
   gap: 10px;
@@ -813,7 +833,7 @@
 }
 
 .docs-step-card h3 {
-  color: #111827;
+  color: var(--public-text);
   font-size: 15px;
   font-weight: 780;
   line-height: 1.25;
@@ -846,6 +866,10 @@
 @media (max-width: 900px) {
   .install-command {
     grid-template-columns: 1fr;
+  }
+
+  .install-command .el-button {
+    min-height: 44px;
   }
 
   .docs-main {
@@ -896,8 +920,17 @@
   }
 
   .home-header {
+    gap: 12px;
     grid-template-columns: 1fr auto;
     padding: 12px 16px;
+  }
+
+  .home-brand-logo {
+    width: 122px;
+  }
+
+  .home-header-actions {
+    gap: 8px;
   }
 
   .home-nav {
@@ -919,7 +952,7 @@
   }
 
   .docs-sidebar {
-    border-bottom: 1px solid #dbe3ee;
+    border-bottom: 1px solid var(--public-border);
     border-right: 0;
     gap: 12px;
     padding: 0 0 16px;
@@ -977,6 +1010,11 @@
 
   .docs-code-sample {
     padding: 16px;
+  }
+
+  .install-command code {
+    padding: 14px;
+    white-space: pre;
   }
 
   .api-key-dialog .el-dialog__header {

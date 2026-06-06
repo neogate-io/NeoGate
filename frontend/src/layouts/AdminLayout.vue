@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { Connection, Key, Monitor, Setting, SwitchButton, User } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
+import LocaleToggleButton from '../components/LocaleToggleButton.vue'
 import { isMessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
-import { useAuthStore } from '../stores/auth'
+import { useLogout } from '../composables/useLogout'
 
-const auth = useAuthStore()
-const { locale, t, toggleLocale } = useLocale()
+const { t } = useLocale()
 const route = useRoute()
-const router = useRouter()
+const logout = useLogout(t)
 
 const navItems = [
   { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
@@ -33,22 +32,6 @@ const activeRouteLabel = computed(() => {
   const messageKey = route.meta.messageKey
   return t(isMessageKey(messageKey) ? messageKey : 'userManagement')
 })
-const nextLocaleLabel = computed(() => (locale.value === 'zh-CN' ? 'EN' : '中'))
-
-async function logout() {
-  try {
-    await ElMessageBox.confirm(t('logoutConfirmMessage'), t('logoutConfirmTitle'), {
-      confirmButtonText: t('logout'),
-      cancelButtonText: t('cancel'),
-      type: 'warning'
-    })
-  } catch {
-    return
-  }
-
-  auth.clearToken()
-  await router.replace('/')
-}
 </script>
 
 <template>
@@ -86,9 +69,7 @@ async function logout() {
         <h2>{{ activeRouteLabel }}</h2>
         <div class="header-actions">
           <el-tooltip :content="t('language')" placement="bottom">
-            <el-button class="header-utility-button header-language-button" :aria-label="t('language')" @click="toggleLocale">
-              {{ nextLocaleLabel }}
-            </el-button>
+            <LocaleToggleButton class="header-utility-button header-language-button" />
           </el-tooltip>
           <span class="header-action-divider" aria-hidden="true"></span>
           <el-tooltip :content="t('logout')" placement="bottom">

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Lock, User } from '@element-plus/icons-vue'
 import { ElMessage, type InputInstance } from 'element-plus'
-import { computed, nextTick, ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { login as loginAccount, requestLoginVerificationCode } from '../../api/auth'
 import type { LoginRole } from '../../api/auth'
+import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { useAuthStore } from '../../stores/auth'
 import { ApiError, readError } from '../../utils/errors'
@@ -12,7 +13,7 @@ import { ApiError, readError } from '../../utils/errors'
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-const { locale, t, toggleLocale } = useLocale()
+const { locale, t } = useLocale()
 const username = ref('')
 const password = ref('')
 const verificationCode = ref('')
@@ -22,7 +23,6 @@ const sendingVerificationCode = ref(false)
 const showVerificationCode = ref(false)
 const passwordInput = ref<InputInstance>()
 const verificationInput = ref<InputInstance>()
-const nextLocaleLabel = computed(() => (locale.value === 'zh-CN' ? 'EN' : '中'))
 const minPasswordLength = 8
 
 watch(username, () => {
@@ -111,9 +111,7 @@ function readRedirectPath(role: LoginRole) {
 
 <template>
   <main class="login-shell">
-    <el-button class="login-language home-language-button" :aria-label="t('language')" @click="toggleLocale">
-      {{ nextLocaleLabel }}
-    </el-button>
+    <LocaleToggleButton class="login-language home-language-button" />
     <section class="login-stage">
       <el-form class="login-panel" @submit.prevent="login">
         <div class="login-panel-heading">
@@ -134,7 +132,9 @@ function readRedirectPath(role: LoginRole) {
           <label class="login-field">
             <span class="login-field-row">
               <span>{{ t('password') }}</span>
-              <RouterLink class="login-text-button" to="/forgot-password">{{ t('forgotPassword') }}</RouterLink>
+              <RouterLink class="login-text-button" to="/forgot-password">{{
+                t('forgotPassword')
+              }}</RouterLink>
             </span>
             <el-input
               ref="passwordInput"
@@ -171,7 +171,13 @@ function readRedirectPath(role: LoginRole) {
             </div>
           </label>
         </div>
-        <el-button class="login-submit" native-type="submit" type="primary" size="large" :loading="signingIn">
+        <el-button
+          class="login-submit"
+          native-type="submit"
+          type="primary"
+          size="large"
+          :loading="signingIn"
+        >
           {{ t('signIn') }}
         </el-button>
         <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />

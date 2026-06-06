@@ -10,7 +10,7 @@
     "build": "pnpm typecheck && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --check package.json eslint.config.js .prettierrc src/api/me.ts src/api/request.ts src/composables/useAsyncData.ts src/router/index.ts src/stores/auth.ts src/utils/format.ts vite.config.ts",
+    "format": "prettier --check package.json eslint.config.js .prettierrc src/api/me.ts src/api/request.ts src/composables/useAsyncData.ts src/composables/useLocale.ts src/composables/useLogout.ts src/components/LocaleToggleButton.vue src/layouts/AdminLayout.vue src/layouts/UserLayout.vue src/router/index.ts src/stores/auth.ts src/styles/admin.css src/styles/user.css src/styles/public.css src/utils/format.ts src/views/admin/ChannelsView.vue src/views/admin/PasswordSettingsView.vue src/views/admin/PaymentSettingsView.vue src/views/admin/SmtpSettingsView.vue src/views/admin/UsersView.vue src/views/auth/ForgotPasswordView.vue src/views/auth/LoginView.vue src/views/auth/ResetPasswordView.vue src/views/public/DocsView.vue src/views/public/HomeView.vue src/views/user/ApiKeysView.vue src/components/admin/channels/*.vue vite.config.ts",
     "format:write": "prettier --write .",
     "test": "vitest run --passWithNoTests"
   },

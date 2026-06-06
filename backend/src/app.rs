@@ -14,9 +14,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
     admin, auth,
+    bootstrap,
     billing::{outbox::BillingOutbox, Billing},
     cache,
-    config::Config,
+    config::{Config, RuntimeProbe, DEFAULT_RELAY_BODY_LIMIT_BYTES},
     db::Db,
     email::EmailService,
     health::{self, RuntimeHealth},
@@ -59,6 +60,23 @@ pub async fn run() -> anyhow::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    let probe = RuntimeProbe::from_env()?;
+    if !probe.full_config_ready() {
+        let app = bootstrap::router()
+            .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
+            .layer(cors_layer_from_origins(&["*".to_string()])?)
+            .layer(TraceLayer::new_for_http());
+        let listener = tokio::net::TcpListener::bind(&probe.bind_addr).await?;
+        tracing::info!(
+            "neogate bootstrap listener running on {} because runtime configuration is incomplete",
+            probe.bind_addr
+        );
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+        return Ok(());
+    }
 
     let config = Config::from_env()?;
     let state = build_state(config.clone()).await?;
@@ -263,6 +281,10 @@ fn router(state: Arc<AppState>) -> Router {
 }
 
 fn cors_layer(config: &Config) -> anyhow::Result<CorsLayer> {
+    cors_layer_from_origins(&config.cors_allowed_origins)
+}
+
+fn cors_layer_from_origins(cors_allowed_origins: &[String]) -> anyhow::Result<CorsLayer> {
     let allowed_methods = [
         Method::GET,
         Method::POST,
@@ -280,16 +302,14 @@ fn cors_layer(config: &Config) -> anyhow::Result<CorsLayer> {
         .allow_methods(allowed_methods)
         .allow_headers(allowed_headers);
 
-    if config
-        .cors_allowed_origins
+    if cors_allowed_origins
         .iter()
         .any(|origin| origin == "*")
     {
         return Ok(layer.allow_origin(Any));
     }
 
-    let origins = config
-        .cors_allowed_origins
+    let origins = cors_allowed_origins
         .iter()
         .map(|origin| origin.parse::<HeaderValue>())
         .collect::<Result<Vec<_>, _>>()?;
@@ -325,6 +345,9 @@ async fn shutdown_signal() {
 }
 
 fn load_dotenv() {
+    if let Ok(path) = std::env::var("NEOGATE_ENV_FILE") {
+        dotenvy::from_path(path).ok();
+    }
     dotenvy::from_filename(".env").ok();
     dotenvy::from_filename("../.env").ok();
 }
@@ -362,6 +385,7 @@ mod tests {
                 database_url: "postgres://localhost/neogate".to_string(),
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 public_base_url: Some("http://localhost:8080".to_string()),
+                site_name: "NeoGate".to_string(),
                 production: false,
                 runtime_mode: config::RuntimeMode::Standalone,
                 process_role: config::ProcessRole::All,

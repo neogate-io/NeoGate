@@ -14,15 +14,15 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 - Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight.
 - Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect with minimal changes.
 - Track usage by user and API key for troubleshooting, cost analysis, and future billing.
-- Choose internal team mode or billing mode during first-run setup: internal mode does not limit user API keys by credit by default, while billing mode requires users to have available credit before calls.
+- Choose a service mode during first-run setup, using NeoGate either as an internal team gateway or as a paid service with billing and payment support.
 - Cool down failing upstream keys and continue routing through available keys.
 
-## 2. Use Cases
+## 2. Service Modes
 
-- Teams already using multiple model providers and wanting one operational entry point.
-- Products, internal tools, or developer platforms that need controlled model access without sharing upstream provider keys directly.
-- Teams that need to deploy a model access layer in their own environment while keeping keys, usage, and routing policies under control.
-- AI applications, automation tools, and internal model services that need a lightweight gateway foundation.
+NeoGate asks you to choose internal team mode or billing mode during first-run setup. Both modes provide a unified entry point, hide upstream provider keys, route models, and record usage. The main difference is whether users need credit balance and whether payment gateways are enabled.
+
+- Internal team mode: for company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members. By default, users can call without available credit; NeoGate still records usage and cost for analysis and internal management.
+- Billing mode: for paid access offered to customers, developers, or external users. Users need available credit before calls and can recharge through a payment gateway. Before going live, configure model prices, recharge plans, and the payment gateway.
 
 ## 3. Quick Start
 
@@ -45,6 +45,7 @@ Edit `backend/.env` and confirm at least these settings:
 ```dotenv
 DATABASE_URL=postgres://localhost/neogate
 PUBLIC_BASE_URL=https://neogate.example.com
+SITE_NAME=NeoGate
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
 UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
 ```
@@ -76,21 +77,28 @@ The local frontend dev server proxies admin requests to the backend. For product
 
 ### 4. Docker
 
-You can also start NeoGate with Docker Compose:
+The standalone Compose file includes the frontend Nginx service, backend, and PostgreSQL. Start it and open `http://localhost:8080` to complete the first-run wizard:
 
 ```bash
-cp backend/.env.example .env
+cp deploy/env/standalone.env.example .env
 docker compose up --build
 ```
 
-When using Docker Compose, uncomment and set `POSTGRES_PASSWORD` in `.env` first. Replace default secrets before using it in production.
+The cluster Compose file includes frontend Nginx, backend API, and worker services, but does not include PostgreSQL or Redis. Prepare external PostgreSQL, Redis, and shared secrets first:
+
+```bash
+cp deploy/env/cluster.env.example .env.cluster
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml up --build
+```
+
+Before production use, replace default passwords, domains, and secrets in `.env` / `.env.cluster`.
 
 ## 4. Deployment Modes
 
 NeoGate can run as a single-node deployment or a clustered deployment. For most teams, single-node deployment is enough to start with: it does not require Redis, keeps configuration simple, and is easier to operate and troubleshoot.
 
-- Single-node deployment: the default mode. No `RUNTIME_MODE` configuration is required. Suitable for personal projects, small teams, and early production deployments.
-- Clustered deployment: set `RUNTIME_MODE=distributed`, where multiple backend replicas share Redis. Use this when you clearly need multiple replicas and horizontal scaling.
+- Single-node deployment: the default mode. No `RUNTIME_MODE` configuration is required. Suitable for personal projects, small teams, and early production deployments. `docker-compose.yml` starts frontend Nginx, backend, and PostgreSQL.
+- Clustered deployment: set `RUNTIME_MODE=distributed`, where multiple backend API/worker replicas share PostgreSQL and Redis. Use this when you clearly need multiple replicas and horizontal scaling. `docker-compose.cluster.yml` does not include PostgreSQL or Redis.
 
 If you do not clearly need multiple backend replicas, prefer single-node deployment first.
 
@@ -102,8 +110,10 @@ Before going live:
 - Replace the default admin password after first startup.
 - Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`.
 - Set a trusted `PUBLIC_BASE_URL` for password reset links.
+- Set `SITE_NAME` for page, email, and payment gateway display.
 - If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration.
 - Configure SMTP in the admin settings if you want public email-based API key claims.
+- For billing mode, configure model prices, recharge plans, and the payment gateway in the admin console.
 - For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode.
 
 ## 6. License

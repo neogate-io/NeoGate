@@ -14,15 +14,15 @@ NeoGate 是一个使用 Rust 构建的轻量级大模型 API 网关，目标是�
 - 在一个后台里管理 OpenAI、Anthropic 等上游模型服务，并按模型、优先级和权重分配请求。
 - 对外提供 OpenAI 兼容和 Anthropic 兼容接口，让现有客户端少改配置即可接入。
 - 记录用户和 API key 的调用用量，方便排查问题、分析成本和后续计费。
-- 支持首次运行时选择团队内部模式或计费模式：内部模式默认不限制用户端 API key 额度，计费模式要求用户拥有可用额度后才能调用。
+- 支持首次运行时选择服务模式，既可作为团队内部网关使用，也可开启计费和支付能力面向用户收费。
 - 在上游 key 失败时自动冷却并切换可用 key，减少单个密钥异常对服务的影响。
 
-## 2. 适用场景
+## 2. 服务模式
 
-- 团队内部已经在使用多个大模型供应商，希望统一入口和运维方式。
-- 正在为客户、成员或内部系统提供模型调用能力，需要比直接共享上游 key 更可控的方案。
-- 需要在内网、私有云或自有服务器中部署模型访问入口，保持密钥、用量和路由策略可控。
-- 需要一个轻量网关作为 AI 应用、自动化工具、开发者平台或内部模型服务的基础设施。
+NeoGate 首次运行时需要选择团队内部模式或计费模式。两种模式都支持统一入口、上游密钥隐藏、模型路由和用量记录，主要区别在于是否要求用户先有额度、是否接入支付通道。
+
+- 团队内部模式：适合公司、部门或项目组自用，也适合给内部应用、自动化脚本和成员分发 API key。默认不要求可用额度即可调用；系统仍会记录用量和费用，便于成本分析和内部管理。
+- 计费模式：适合面向客户、开发者或外部用户提供收费模型调用服务。用户需要有可用额度后才能调用，并可通过支付通道充值；上线前需要配置模型价格、充值套餐和支付通道。
 
 ## 3. 快速开始
 
@@ -45,6 +45,7 @@ cp backend/.env.example backend/.env
 ```dotenv
 DATABASE_URL=postgres://localhost/neogate
 PUBLIC_BASE_URL=https://neogate.example.com
+SITE_NAME=NeoGate
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
 UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
 ```
@@ -76,21 +77,28 @@ pnpm dev
 
 ### 4. Docker 启动
 
-也可以使用 Docker Compose 启动：
+单机版 Compose 包含前端 Nginx、后端和 PostgreSQL，启动后访问 `http://localhost:8080` 完成首次运行向导：
 
 ```bash
-cp backend/.env.example .env
+cp deploy/env/standalone.env.example .env
 docker compose up --build
 ```
 
-使用 Docker Compose 时，请先在 `.env` 中取消注释并设置 `POSTGRES_PASSWORD`。生产环境请替换 `.env` 中的默认密钥。
+集群版 Compose 只包含前端 Nginx、后端 API 和 worker，不包含 PostgreSQL/Redis。先准备外部 PostgreSQL、Redis 和共享密钥：
+
+```bash
+cp deploy/env/cluster.env.example .env.cluster
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml up --build
+```
+
+生产环境请替换 `.env` / `.env.cluster` 中的默认密码、域名和密钥。
 
 ## 4. 部署模式
 
 NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用单节点部署就够了：不需要 Redis，配置简单，部署和排障成本也更低。
 
-- 单节点部署：默认模式，无需配置 `RUNTIME_MODE`，适合个人项目、小团队和早期生产环境。
-- 集群部署：设置 `RUNTIME_MODE=distributed`，多个后端实例共享 Redis，适合明确需要多副本和横向扩展的场景。
+- 单节点部署：默认模式，无需配置 `RUNTIME_MODE`，适合个人项目、小团队和早期生产环境。`docker-compose.yml` 会同时启动前端 Nginx、后端和 PostgreSQL。
+- 集群部署：设置 `RUNTIME_MODE=distributed`，多个后端 API/worker 共享 PostgreSQL 和 Redis，适合明确需要多副本和横向扩展的场景。`docker-compose.cluster.yml` 不包含 PostgreSQL/Redis。
 
 没有明确的多副本需求时，建议优先使用单节点部署。
 
@@ -102,8 +110,10 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 - 首次启动后替换默认管理员密码。
 - 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`。
 - 设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接。
+- 设置 `SITE_NAME`，用于页面、邮件和支付网关显示。
 - 如果前端与 API 是跨域访问，设置正确的 `CORS_ALLOWED_ORIGINS`；同域反向代理部署通常无需额外配置。
 - 如需公开邮箱领取 API key，在管理员后台的系统设置中配置 SMTP。
+- 如需使用计费模式，在管理员后台配置模型价格、充值套餐和支付通道。
 - 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。
 
 ## 6. 开源协议

@@ -1,9 +1,11 @@
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 
 pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-production";
+pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Clone, Debug)]
@@ -11,6 +13,7 @@ pub struct Config {
     pub database_url: String,
     pub bind_addr: SocketAddr,
     pub public_base_url: Option<String>,
+    pub site_name: String,
     pub production: bool,
     pub runtime_mode: RuntimeMode,
     pub process_role: ProcessRole,
@@ -55,6 +58,19 @@ pub struct Config {
 pub enum RuntimeMode {
     Standalone,
     Distributed,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeProbe {
+    pub runtime_mode: RuntimeMode,
+    pub bind_addr: SocketAddr,
+    pub database_url: Option<String>,
+    pub redis_url: Option<String>,
+    pub public_base_url: Option<String>,
+    pub site_name: Option<String>,
+    pub admin_token_secret: Option<String>,
+    pub upstream_secret_key: Option<String>,
+    pub env_file: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +147,7 @@ impl Config {
         let process_role = ProcessRole::from_env_value(
             &env::var("PROCESS_ROLE").unwrap_or_else(|_| "all".to_string()),
         )?;
-        let config = Self {
+        let mut config = Self {
             database_url: required("DATABASE_URL")?,
             bind_addr: env::var("BIND_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
@@ -140,14 +156,19 @@ impl Config {
             public_base_url: optional("PUBLIC_BASE_URL")
                 .map(normalize_public_base_url)
                 .transpose()?,
+            site_name: env::var("SITE_NAME")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "NeoGate".to_string()),
             production,
             runtime_mode,
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
-                .unwrap_or_else(|_| "change-me-admin-token-secret-in-production".to_string()),
+                .unwrap_or_else(|_| DEFAULT_ADMIN_TOKEN_SECRET.to_string()),
             admin_session_ttl: Duration::from_secs(parse_u64("ADMIN_SESSION_TTL_SECONDS", 86400)),
             upstream_secret_key: env::var("UPSTREAM_SECRET_KEY")
-                .unwrap_or_else(|_| "change-me-upstream-secret-key-in-production".to_string()),
+                .unwrap_or_else(|_| DEFAULT_UPSTREAM_SECRET_KEY.to_string()),
             anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)),
             request_timeout: Duration::from_secs(parse_u64("REQUEST_TIMEOUT_SECONDS", 120)),
@@ -215,6 +236,7 @@ impl Config {
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
         };
+        config.payment.zpay.site_name = config.site_name.clone();
         config.validate()?;
         Ok(config)
     }
@@ -288,18 +310,84 @@ impl Config {
             reject_default(
                 "ADMIN_TOKEN_SECRET",
                 &self.admin_token_secret,
-                "change-me-admin-token-secret-in-production",
+                DEFAULT_ADMIN_TOKEN_SECRET,
             )?;
             require_secret_len("ADMIN_TOKEN_SECRET", &self.admin_token_secret, 32)?;
             reject_default(
                 "UPSTREAM_SECRET_KEY",
                 &self.upstream_secret_key,
-                "change-me-upstream-secret-key-in-production",
+                DEFAULT_UPSTREAM_SECRET_KEY,
             )?;
             require_secret_len("UPSTREAM_SECRET_KEY", &self.upstream_secret_key, 32)?;
         }
 
         Ok(())
+    }
+}
+
+impl RuntimeProbe {
+    pub fn from_env() -> Result<Self> {
+        let runtime_mode = RuntimeMode::from_env_value(
+            &env::var("RUNTIME_MODE").unwrap_or_else(|_| "standalone".to_string()),
+        )?;
+        let bind_addr = env::var("BIND_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
+            .parse()
+            .context("BIND_ADDR must be host:port")?;
+        let public_base_url = optional("PUBLIC_BASE_URL")
+            .map(normalize_public_base_url)
+            .transpose()?;
+        let env_file = env::var("NEOGATE_ENV_FILE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(default_env_file);
+
+        Ok(Self {
+            runtime_mode,
+            bind_addr,
+            database_url: optional("DATABASE_URL"),
+            redis_url: optional("REDIS_URL"),
+            public_base_url,
+            site_name: optional("SITE_NAME").map(|value| value.trim().to_string()),
+            admin_token_secret: optional("ADMIN_TOKEN_SECRET"),
+            upstream_secret_key: optional("UPSTREAM_SECRET_KEY"),
+            env_file,
+        })
+    }
+
+    pub fn database_configured(&self) -> bool {
+        self.database_url.is_some()
+    }
+
+    pub fn redis_configured(&self) -> bool {
+        self.redis_url.is_some()
+    }
+
+    pub fn site_configured(&self) -> bool {
+        self.site_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+            && self.public_base_url.is_some()
+    }
+
+    pub fn secrets_configured(&self) -> bool {
+        configured_secret(
+            self.admin_token_secret.as_deref(),
+            DEFAULT_ADMIN_TOKEN_SECRET,
+        ) && configured_secret(
+            self.upstream_secret_key.as_deref(),
+            DEFAULT_UPSTREAM_SECRET_KEY,
+        )
+    }
+
+    pub fn full_config_ready(&self) -> bool {
+        self.database_configured()
+            && self.site_configured()
+            && self.secrets_configured()
+            && (!self.runtime_mode.is_distributed() || self.redis_configured())
     }
 }
 
@@ -442,6 +530,21 @@ fn require_secret_len(name: &str, value: &str, min_len: usize) -> Result<()> {
         anyhow::bail!("{name} must be at least {min_len} characters in production");
     }
     Ok(())
+}
+
+fn configured_secret(value: Option<&str>, default: &str) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| value.len() >= 32 && *value != default)
+        .is_some()
+}
+
+fn default_env_file() -> PathBuf {
+    if std::path::Path::new("backend").is_dir() {
+        PathBuf::from("backend/.env")
+    } else {
+        PathBuf::from(".env")
+    }
 }
 
 #[cfg(test)]

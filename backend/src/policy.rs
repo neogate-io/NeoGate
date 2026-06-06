@@ -6,8 +6,24 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 
 use crate::{
+    admin::{
+        channel::{
+            create_channel, create_channel_key, ChannelEndpointInput, CreateChannelKeyRequest,
+            CreateChannelRequest, KeySelectionMode,
+        },
+        fetch_upstream_models,
+        price::{upsert_provider_price, UpsertProviderPriceRequest},
+        provider::{
+            ensure_custom_provider, list_providers, provider_default_endpoints,
+            record_provider_models, ProviderRecord,
+        },
+        setting::{upsert_smtp_setting, UpsertSmtpSettingRequest},
+    },
     auth::{AdminAuth, UserSessionAuth},
+    cache::InvalidationEvent,
+    config::RuntimeProbe,
     error::{AppError, AppResult},
+    payment::settings::{upsert_payment_setting, UpsertPaymentSettingRequest},
     AppState,
 };
 
@@ -22,7 +38,20 @@ pub enum ServiceMode {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServicePolicyRecord {
+    pub runtime_mode: String,
+    pub env_write_supported: bool,
+    pub database_configured: bool,
+    pub database_connected: bool,
+    pub redis_configured: bool,
+    pub redis_connected: Option<bool>,
+    pub secrets_configured: bool,
+    pub site_configured: bool,
     pub setup_completed: bool,
+    pub bootstrap_required: bool,
+    pub bootstrap_blocked_reason: Option<String>,
+    pub restart_required: bool,
+    pub site_name: Option<String>,
+    pub public_base_url: Option<String>,
     pub service_mode: ServiceMode,
     pub credit_required: bool,
     pub recharge_enabled: bool,
@@ -32,6 +61,46 @@ pub struct ServicePolicyRecord {
 #[derive(Debug, Deserialize)]
 pub struct CompleteSetupRequest {
     pub service_mode: ServiceMode,
+    pub admin_password: Option<String>,
+    pub credit_required: Option<bool>,
+    pub channel: Option<SetupChannelRequest>,
+    #[serde(default)]
+    pub prices: Vec<SetupProviderPriceRequest>,
+    pub smtp: Option<UpsertSmtpSettingRequest>,
+    pub payment: Option<UpsertPaymentSettingRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetupChannelRequest {
+    pub provider: String,
+    pub name: String,
+    pub protocol: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    pub secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetupProviderPriceRequest {
+    pub provider: String,
+    pub model: String,
+    pub input_price_usd_micros: i64,
+    pub output_price_usd_micros: i64,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetupFetchUpstreamModelsRequest {
+    provider: String,
+    protocol: String,
+    base_url: String,
+    secret: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupFetchUpstreamModelsResponse {
+    models: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +119,9 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/setup/status", get(setup_status))
         .route("/api/setup", axum::routing::post(complete_setup))
+        .route("/api/setup/complete", axum::routing::post(complete_setup))
+        .route("/api/setup/providers", get(setup_providers))
+        .route("/api/setup/upstream-models", axum::routing::post(setup_upstream_models))
         .route("/api/user/service-policy", get(user_service_policy))
         .route(
             "/api/admin/settings/service-policy",
@@ -97,14 +169,120 @@ async fn complete_setup(
         return Err(AppError::Conflict("setup has already been completed".to_string()));
     }
 
+    let admin_password = req
+        .admin_password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("admin password is required".to_string()))?;
+    crate::auth::validate_user_password_input(admin_password)?;
+    let channel_req = req
+        .channel
+        .ok_or_else(|| AppError::BadRequest("upstream channel is required".to_string()))?;
+    if req.prices.is_empty() {
+        return Err(AppError::BadRequest(
+            "at least one model price is required".to_string(),
+        ));
+    }
+    reset_initial_admin_password(&state, admin_password).await?;
+    let channel = create_setup_channel(&state, channel_req).await?;
+    for price in req.prices {
+        upsert_provider_price(
+            &state,
+            UpsertProviderPriceRequest {
+                provider: price.provider,
+                model: price.model,
+                input_price_usd_micros: price.input_price_usd_micros,
+                output_price_usd_micros: price.output_price_usd_micros,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                enabled: price.enabled,
+            },
+        )
+        .await?;
+    }
+    if let Some(smtp) = req.smtp {
+        upsert_smtp_setting(&state, smtp).await?;
+    }
+    if let Some(payment) = req.payment {
+        if req.service_mode != ServiceMode::Paid && payment.payment_enabled {
+            return Err(AppError::BadRequest(
+                "payment can only be enabled in paid service mode".to_string(),
+            ));
+        }
+        upsert_payment_setting(&state, payment).await?;
+    }
+
     let stored = StoredServicePolicy {
         setup_completed: true,
         service_mode: req.service_mode,
-        credit_required: req.service_mode == ServiceMode::Paid,
+        credit_required: req.service_mode == ServiceMode::Paid
+            || req.credit_required.unwrap_or(false),
     };
     let record = upsert_stored_policy(&mut tx, stored).await?;
     tx.commit().await?;
+    state.billing.invalidate_all_prices();
+    state
+        .cache_invalidator
+        .invalidate(&state, InvalidationEvent::Routing)
+        .await;
+    tracing::info!(
+        "first-run setup completed with initial channel {}",
+        channel.id
+    );
     Ok(Json(record))
+}
+
+async fn setup_upstream_models(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetupFetchUpstreamModelsRequest>,
+) -> AppResult<Json<SetupFetchUpstreamModelsResponse>> {
+    if current_service_policy(&state).await?.setup_completed {
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
+    }
+    let provider = req.provider.trim();
+    let protocol = req.protocol.trim();
+    let base_url = req.base_url.trim();
+    let secret = req.secret.trim();
+    if provider.is_empty() {
+        return Err(AppError::BadRequest("provider is required".to_string()));
+    }
+    if protocol != "openai" && protocol != "anthropic" {
+        return Err(AppError::BadRequest(format!(
+            "invalid protocol: {protocol}"
+        )));
+    }
+    if base_url.is_empty() {
+        return Err(AppError::BadRequest("base_url is required".to_string()));
+    }
+    if secret.is_empty() {
+        return Err(AppError::BadRequest(
+            "upstream api key is required".to_string(),
+        ));
+    }
+    if provider == "custom" {
+        ensure_custom_provider(&state).await?;
+    }
+    provider_default_endpoints(&state, provider)
+        .await?
+        .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider}")))?;
+
+    let models = fetch_upstream_models(&state, protocol, base_url, secret).await?;
+    record_provider_models(&state, provider, &models, "upstream", false).await?;
+    Ok(Json(SetupFetchUpstreamModelsResponse { models }))
+}
+
+async fn setup_providers(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<Vec<ProviderRecord>>> {
+    if current_service_policy(&state).await?.setup_completed {
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
+    }
+    Ok(Json(list_providers(&state).await?))
 }
 
 async fn user_service_policy(
@@ -179,6 +357,111 @@ async fn upsert_stored_policy(
     ))
 }
 
+async fn reset_initial_admin_password(state: &AppState, password: &str) -> AppResult<()> {
+    let password_hash = crate::auth::hash_user_password(password, &state.config.admin_token_secret);
+    let result = sqlx::query(
+        r#"
+        UPDATE admin
+        SET password_hash = $1,
+            failed_login_attempts = 0,
+            locked_until = NULL,
+            password_changed_at = now(),
+            updated_at = now()
+        WHERE id = (
+            SELECT id
+            FROM admin
+            WHERE status = 'enabled'
+            ORDER BY id ASC
+            LIMIT 1
+        )
+        "#,
+    )
+    .bind(password_hash)
+    .execute(&state.db.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::BadRequest(
+            "no enabled admin account is available".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn create_setup_channel(
+    state: &AppState,
+    req: SetupChannelRequest,
+) -> AppResult<crate::admin::channel::ChannelRecord> {
+    let provider = req.provider.trim().to_string();
+    let name = req.name.trim().to_string();
+    let protocol = req.protocol.trim().to_string();
+    let base_url = req.base_url.trim().to_string();
+    let secret = req.secret.trim().to_string();
+    let models: Vec<String> = req
+        .models
+        .into_iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect();
+    if provider.is_empty() {
+        return Err(AppError::BadRequest("provider is required".to_string()));
+    }
+    if name.is_empty() {
+        return Err(AppError::BadRequest("channel name is required".to_string()));
+    }
+    if protocol != "openai" && protocol != "anthropic" {
+        return Err(AppError::BadRequest(format!(
+            "invalid protocol: {protocol}"
+        )));
+    }
+    if base_url.is_empty() {
+        return Err(AppError::BadRequest("base_url is required".to_string()));
+    }
+    if secret.is_empty() {
+        return Err(AppError::BadRequest(
+            "upstream api key is required".to_string(),
+        ));
+    }
+    if models.is_empty() {
+        return Err(AppError::BadRequest(
+            "at least one upstream model is required".to_string(),
+        ));
+    }
+
+    let channel = create_channel(
+        state,
+        CreateChannelRequest {
+            provider,
+            name: name.clone(),
+            endpoints: vec![ChannelEndpointInput {
+                protocol,
+                base_url: Some(base_url),
+                models,
+                enabled: true,
+            }],
+            protocol: None,
+            base_url: None,
+            models: Vec::new(),
+            enabled: true,
+            priority: 0,
+            weight: 1,
+            key_selection_mode: KeySelectionMode::Polling,
+            use_credentials: false,
+        },
+    )
+    .await?;
+    create_channel_key(
+        state,
+        channel.id,
+        CreateChannelKeyRequest {
+            name,
+            secret,
+            enabled: true,
+        },
+    )
+    .await?;
+    Ok(channel)
+}
+
 fn default_stored_policy() -> StoredServicePolicy {
     StoredServicePolicy {
         setup_completed: false,
@@ -199,8 +482,31 @@ fn record_from_stored(
     updated_at: Option<DateTime<Utc>>,
 ) -> ServicePolicyRecord {
     let stored = normalize_stored_policy(stored);
+    let probe = RuntimeProbe::from_env().ok();
+    let runtime_mode = probe
+        .as_ref()
+        .map(|probe| probe.runtime_mode.as_str().to_string())
+        .unwrap_or_else(|| "standalone".to_string());
+    let redis_configured = probe.as_ref().map(|probe| probe.redis_configured()).unwrap_or(false);
+    let is_distributed = runtime_mode == "distributed";
     ServicePolicyRecord {
+        runtime_mode,
+        env_write_supported: !is_distributed,
+        database_configured: true,
+        database_connected: true,
+        redis_configured,
+        redis_connected: is_distributed.then_some(redis_configured),
+        secrets_configured: true,
+        site_configured: true,
         setup_completed: stored.setup_completed,
+        bootstrap_required: false,
+        bootstrap_blocked_reason: None,
+        restart_required: false,
+        site_name: probe
+            .as_ref()
+            .and_then(|probe| probe.site_name.clone())
+            .or_else(|| Some("NeoGate".to_string())),
+        public_base_url: probe.as_ref().and_then(|probe| probe.public_base_url.clone()),
         service_mode: stored.service_mode,
         credit_required: stored.credit_required,
         recharge_enabled: stored.service_mode == ServiceMode::Paid,

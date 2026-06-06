@@ -487,7 +487,7 @@ async fn upstream_model_secret_from_channel(
     Ok(state.secrets.plaintext(key_id, &secret_ciphertext)?)
 }
 
-async fn fetch_upstream_models(
+pub(crate) async fn fetch_upstream_models(
     state: &AppState,
     protocol: &str,
     base_url: &str,

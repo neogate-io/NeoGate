@@ -1,0 +1,46 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - api
+    environment:
+      API_UPSTREAM: http://api:8080
+      NEOGATE_PUBLIC_ORIGIN: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env.cluster
+    environment:
+      RUNTIME_MODE: distributed
+      PROCESS_ROLE: api
+      BIND_ADDR: 0.0.0.0:8080
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/readyz >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env.cluster
+    environment:
+      RUNTIME_MODE: distributed
+      PROCESS_ROLE: worker
+    restart: unless-stopped

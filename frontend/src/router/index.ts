@@ -1,9 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getAdminServicePolicy, getSetupStatus, getUserServicePolicy } from '../api/policy'
 import { useAuthStore } from '../stores/auth'
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/setup',
+      name: 'setup',
+      component: () => import('../views/setup/SetupView.vue'),
+      meta: { messageKey: 'setup' }
+    },
     {
       path: '/',
       name: 'home',
@@ -137,6 +144,20 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
+  const setup = await getSetupStatus().catch(() => null)
+
+  if (setup && !setup.setup_completed && to.name !== 'setup') {
+    return {
+      name: 'setup',
+      query: { redirect: to.fullPath }
+    }
+  }
+
+  if (setup?.setup_completed && to.name === 'setup') {
+    return {
+      name: 'login'
+    }
+  }
 
   const requiresAuth = to.meta.admin === true || to.meta.user === true
   if (requiresAuth && !auth.isAuthed) {
@@ -159,6 +180,20 @@ router.beforeEach(async (to) => {
 
   if (to.meta.user === true && auth.isAdmin) {
     return '/admin'
+  }
+
+  if (to.name === 'paymentSettings') {
+    const servicePolicy = await getAdminServicePolicy().catch(() => null)
+    if (servicePolicy && servicePolicy.service_mode !== 'paid') {
+      return '/admin/settings/pricing-policies'
+    }
+  }
+
+  if (to.name === 'userRecharge') {
+    const servicePolicy = await getUserServicePolicy().catch(() => null)
+    if (servicePolicy && !servicePolicy.recharge_enabled) {
+      return '/home/overview'
+    }
   }
 
   if (to.name === 'login' && auth.isAuthed && (await auth.verifySession())) {

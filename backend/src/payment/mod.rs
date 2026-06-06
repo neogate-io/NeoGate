@@ -20,6 +20,7 @@ use crate::{
     config::{PaymentProvider, ZpayConfig},
     error::{AppError, AppResult},
     id::DbId,
+    policy::{self, ServiceMode},
     AppState,
 };
 
@@ -118,6 +119,11 @@ pub async fn create_user_payment_order(
     auth: UserSessionAuth,
     req: CreatePaymentOrderRequest,
 ) -> AppResult<CreatePaymentOrderResponse> {
+    if policy::service_mode(state).await? != ServiceMode::Paid {
+        return Err(AppError::BadRequest(
+            "recharge is only available in paid service mode".to_string(),
+        ));
+    }
     let provider = PaymentProvider::from_code(&req.provider)?;
     let payment_config = settings::runtime_payment_config(state).await?;
     if !payment_config.provider_enabled(provider) {

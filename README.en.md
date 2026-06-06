@@ -11,13 +11,11 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 ## 1. What You Can Do
 
 - Issue independent API keys to teams, customers, or internal apps without exposing upstream provider keys.
-- Manage OpenAI, Anthropic, and other upstream model services from one admin console.
-- Route requests by model, priority, weight, allowlist, and key selection policy.
+- Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight.
 - Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect with minimal changes.
 - Track usage by user and API key for troubleshooting, cost analysis, and future billing.
+- Choose internal team mode or billing mode during first-run setup: internal mode does not limit user API keys by credit by default, while billing mode requires users to have available credit before calls.
 - Cool down failing upstream keys and continue routing through available keys.
-- Let users claim API keys by email for a lightweight self-service model access flow.
-- Use the Chinese and English admin UI for self-hosted community deployments and future enterprise controls.
 
 ## 2. Use Cases
 

@@ -6,3 +6,4 @@ dist/
 frontend/.env.local
 frontend/.env.*.local
 .sqlx/
+scripts/

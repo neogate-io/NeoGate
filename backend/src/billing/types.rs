@@ -72,6 +72,12 @@ pub struct DebitHold {
     pub transaction_id: Uuid,
     pub estimated_micro_usd: i64,
     pub parts: Vec<DebitPart>,
+    #[serde(default = "default_charge_credit")]
+    pub charge_credit: bool,
+}
+
+fn default_charge_credit() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

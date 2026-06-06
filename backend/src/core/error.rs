@@ -93,6 +93,8 @@ pub enum AppError {
     Forbidden,
     #[error("payment required")]
     PaymentRequired,
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
     #[error("not found")]
@@ -155,6 +157,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,

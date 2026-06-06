@@ -21,6 +21,7 @@ use crate::{
     email::EmailService,
     health::{self, RuntimeHealth},
     payment,
+    policy,
     relay::{self, selector::Selector},
     secrets::SecretStore,
     task,
@@ -255,6 +256,7 @@ fn router(state: Arc<AppState>) -> Router {
         .merge(user::router())
         .merge(health::router())
         .merge(payment::router())
+        .merge(policy::router())
         .merge(admin::public_router())
         .merge(relay::router())
         .with_state(state)

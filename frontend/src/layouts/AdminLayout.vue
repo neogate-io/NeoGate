@@ -1,29 +1,39 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { Connection, Key, Monitor, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import { getAdminServicePolicy } from '../api/policy'
 import LocaleToggleButton from '../components/LocaleToggleButton.vue'
-import { isMessageKey } from '../i18n'
+import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
+import { useAsyncData } from '../composables/useAsyncData'
 
 const { t } = useLocale()
 const route = useRoute()
 const logout = useLogout(t)
+const { data: servicePolicy } = useAsyncData(() => getAdminServicePolicy(), null)
+type AdminNavItem = { path: string; key: MessageKey; icon: Component }
+type SettingNavItem = { path: string; key: MessageKey }
 
-const navItems = [
+const navItems: AdminNavItem[] = [
   { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
   { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
   { path: '/admin/keys', key: 'userManagement', icon: User },
   { path: '/admin/usage', key: 'usage', icon: Monitor }
 ] as const
 
-const settingItems = [
-  { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' },
-  { path: '/admin/settings/smtp', key: 'smtpSettings' },
-  { path: '/admin/settings/payment', key: 'paymentSettings' },
-  { path: '/admin/settings/admin-password', key: 'adminPasswordSettings' }
-] as const
+const settingItems = computed(() => {
+  const items: SettingNavItem[] = [
+    { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' },
+    { path: '/admin/settings/smtp', key: 'smtpSettings' }
+  ]
+  if (servicePolicy.value?.service_mode === 'paid') {
+    items.push({ path: '/admin/settings/payment', key: 'paymentSettings' })
+  }
+  items.push({ path: '/admin/settings/admin-password', key: 'adminPasswordSettings' })
+  return items
+})
 
 const activeRoute = computed(() => route.path)
 const settingsOpen = computed(() => route.path.startsWith('/admin/settings'))

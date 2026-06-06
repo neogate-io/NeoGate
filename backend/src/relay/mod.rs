@@ -22,6 +22,7 @@ use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
@@ -31,6 +32,7 @@ use crate::{
     },
     cache::InvalidationEvent,
     error::{AppError, AppResult},
+    policy,
     AppState,
 };
 
@@ -434,6 +436,14 @@ pub(in crate::relay) async fn reserve_credit(
 ) -> AppResult<DebitHold> {
     let input_tokens = estimate_input_tokens(body);
     let estimated = estimated_cost_micro_usd(input_tokens, output_tokens, price);
+    if !policy::credit_required(state).await? {
+        return Ok(DebitHold {
+            transaction_id: Uuid::new_v4(),
+            estimated_micro_usd: estimated,
+            parts: Vec::new(),
+            charge_credit: false,
+        });
+    }
     state
         .billing
         .reserve(

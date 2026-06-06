@@ -1,22 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { DataBoard, Key, Monitor, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { getUserServicePolicy } from '../api/policy'
 import LocaleToggleButton from '../components/LocaleToggleButton.vue'
-import { isMessageKey } from '../i18n'
+import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
+import { useAsyncData } from '../composables/useAsyncData'
 
 const { t } = useLocale()
 const route = useRoute()
 const logout = useLogout(t)
+const { data: servicePolicy } = useAsyncData(() => getUserServicePolicy(), null)
+type NavItem = { path: string; key: MessageKey; icon: Component }
 
-const navItems = [
-  { path: '/home/overview', key: 'overview', icon: DataBoard },
-  { path: '/home/apikeys', key: 'apiKey', icon: Key },
-  { path: '/home/usage', key: 'usage', icon: Monitor },
-  { path: '/home/recharge', key: 'recharge', icon: Wallet }
-] as const
+const navItems = computed(() => {
+  const items: NavItem[] = [
+    { path: '/home/overview', key: 'overview', icon: DataBoard },
+    { path: '/home/apikeys', key: 'apiKey', icon: Key },
+    { path: '/home/usage', key: 'usage', icon: Monitor }
+  ]
+  if (servicePolicy.value?.recharge_enabled) {
+    items.push({ path: '/home/recharge', key: 'recharge', icon: Wallet })
+  }
+  return items
+})
 
 const activeRoute = computed(() => route.path)
 const activeRouteLabel = computed(() => {

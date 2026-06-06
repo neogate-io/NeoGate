@@ -6,6 +6,7 @@ mod config;
 mod core;
 mod health;
 mod payment;
+mod policy;
 mod relay;
 mod task;
 mod usage;

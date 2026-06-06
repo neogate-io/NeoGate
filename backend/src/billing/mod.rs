@@ -237,6 +237,7 @@ impl Billing {
                 transaction_id: Uuid::new_v4(),
                 estimated_micro_usd: 0,
                 parts: Vec::new(),
+                charge_credit: true,
             });
         }
 
@@ -250,6 +251,7 @@ impl Billing {
                 transaction_id: Uuid::new_v4(),
                 estimated_micro_usd,
                 parts,
+                charge_credit: true,
             });
         }
 
@@ -265,6 +267,7 @@ impl Billing {
                 transaction_id: Uuid::new_v4(),
                 estimated_micro_usd,
                 parts,
+                charge_credit: true,
             });
         }
 
@@ -282,6 +285,7 @@ impl Billing {
             transaction_id: Uuid::new_v4(),
             estimated_micro_usd,
             parts,
+            charge_credit: true,
         })
     }
 
@@ -320,6 +324,19 @@ impl Billing {
             None => (hold.estimated_micro_usd, "usage_missing".to_string()),
         };
         let cost_micro_usd = cost_micro_usd.max(0);
+
+        if !hold.charge_credit {
+            return Ok(BillingCharge {
+                transaction_id: hold.transaction_id,
+                input_tokens: usage.map(|usage| usage.input_tokens),
+                output_tokens: usage.map(|usage| usage.output_tokens),
+                total_tokens: usage.map(TokenUsage::total_tokens),
+                cost_micro_usd,
+                status,
+                parts: Vec::new(),
+                returned_parts: Vec::new(),
+            });
+        }
 
         if cost_micro_usd >= hold.estimated_micro_usd {
             if cost_micro_usd > hold.estimated_micro_usd {

@@ -3,13 +3,22 @@ import { computed, ref } from 'vue'
 import { Calendar, DataLine, Document, Key, Monitor, Wallet } from '@element-plus/icons-vue'
 import { RouterLink } from 'vue-router'
 import { getUserOverview } from '../../api/overview'
+import { getUserServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import { formatMicroUsd, toDateKey } from '../../utils/format'
 
 const { t } = useLocale()
 const { data: overview, loading } = useAsyncData(() => getUserOverview(), null)
+const { data: servicePolicy, loading: policyLoading } = useAsyncData(
+  () => getUserServicePolicy(),
+  null
+)
 const hoveredChartIndex = ref<number | null>(null)
+const showBalance = computed(
+  () => Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
+)
+const showRecharge = computed(() => Boolean(servicePolicy.value?.recharge_enabled))
 
 const usageMetricCards = computed(() => [
   {
@@ -183,8 +192,12 @@ function getCostForDate(date: Date) {
 
 <template>
   <section class="user-overview-view">
-    <div v-loading="loading" class="overview-summary-grid">
-      <div class="user-panel overview-balance-card">
+    <div
+      v-loading="loading || policyLoading"
+      class="overview-summary-grid"
+      :class="{ 'without-balance': !showBalance }"
+    >
+      <div v-if="showBalance" class="user-panel overview-balance-card">
         <div class="overview-balance-watermark" aria-hidden="true">
           <el-icon><Wallet /></el-icon>
         </div>
@@ -198,7 +211,7 @@ function getCostForDate(date: Date) {
           <strong>{{ formatMicroUsd(overview?.available_micro_usd) }}</strong>
           <small class="overview-balance-estimate">{{ balanceEstimate }}</small>
         </div>
-        <el-button class="overview-card-cta" :tag="RouterLink" to="/home/recharge">
+        <el-button v-if="showRecharge" class="overview-card-cta" :tag="RouterLink" to="/home/recharge">
           {{ t('goRecharge') }}
         </el-button>
       </div>
@@ -309,6 +322,11 @@ function getCostForDate(date: Date) {
   gap: 12px;
   grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
   grid-template-rows: repeat(2, minmax(132px, 1fr));
+}
+
+.overview-summary-grid.without-balance {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: none;
 }
 
 .overview-balance-card,

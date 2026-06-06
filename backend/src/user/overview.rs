@@ -46,23 +46,19 @@ async fn overview(
         JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
         LEFT JOIN LATERAL (
             SELECT SUM(cost_micro_usd) AS cost_micro_usd
-            FROM usage
+            FROM usage_daily
             WHERE user_id = u.id
-              AND created_at >= date_trunc('day', now())
-              AND billing_status IN ('billed', 'undercharged')
-              AND cost_micro_usd IS NOT NULL
+              AND day = current_date
         ) today ON TRUE
         LEFT JOIN LATERAL (
             SELECT SUM(cost_micro_usd) AS cost_micro_usd
-            FROM usage
+            FROM usage_daily
             WHERE user_id = u.id
-              AND created_at >= date_trunc('month', now())
-              AND billing_status IN ('billed', 'undercharged')
-              AND cost_micro_usd IS NOT NULL
+              AND day >= date_trunc('month', now())::date
         ) month ON TRUE
         LEFT JOIN LATERAL (
-            SELECT COUNT(*) AS request_count
-            FROM usage
+            SELECT SUM(request_count) AS request_count
+            FROM usage_daily
             WHERE user_id = u.id
         ) total ON TRUE
         WHERE u.id = $1
@@ -94,16 +90,14 @@ async fn daily_costs(state: &AppState, user_id: crate::id::DbId) -> AppResult<Ve
     let rows = sqlx::query(
         r#"
         SELECT
-            to_char(created_at::date, 'YYYY-MM-DD') AS date,
+            to_char(day, 'YYYY-MM-DD') AS date,
             SUM(cost_micro_usd)::BIGINT AS cost_micro_usd
-        FROM usage
+        FROM usage_daily
         WHERE user_id = $1
-          AND created_at >= (current_date - interval '29 days')
-          AND billing_status IN ('billed', 'undercharged')
-          AND cost_micro_usd IS NOT NULL
+          AND day >= (current_date - 29)
           AND cost_micro_usd > 0
-        GROUP BY created_at::date
-        ORDER BY created_at::date
+        GROUP BY day
+        ORDER BY day
         "#,
     )
     .bind(user_id)

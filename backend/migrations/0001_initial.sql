@@ -66,9 +66,20 @@ CREATE TABLE user_key (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE user_key_model (
+    id BIGSERIAL PRIMARY KEY,
+    user_key_id BIGINT NOT NULL REFERENCES user_key(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_key_id, model),
+    CHECK (length(trim(model)) > 0)
+);
+
 CREATE TABLE credit_account (
     id BIGSERIAL PRIMARY KEY,
-    owner_type TEXT NOT NULL CHECK (owner_type IN ('user', 'user_key')),
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('user', 'user_key', 'user_key_model')),
     owner_id BIGINT NOT NULL,
     balance_micro_usd BIGINT NOT NULL DEFAULT 0,
     reserved_micro_usd BIGINT NOT NULL DEFAULT 0,
@@ -408,8 +419,51 @@ CREATE TABLE usage_daily (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE task_upstream (
+    id BIGSERIAL PRIMARY KEY,
+    task_type TEXT NOT NULL CHECK (
+        task_type IN ('openai_response', 'anthropic_message_batch')
+    ),
+    upstream_task_id TEXT NOT NULL,
+
+    user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    user_key_id BIGINT NOT NULL REFERENCES user_key(id) ON DELETE CASCADE,
+
+    protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+    provider TEXT NOT NULL,
+    model TEXT,
+
+    channel_id BIGINT REFERENCES channel(id) ON DELETE SET NULL,
+    channel_endpoint_id BIGINT REFERENCES channel_endpoint(id) ON DELETE SET NULL,
+    channel_key_id BIGINT REFERENCES channel_key(id) ON DELETE SET NULL,
+    credential_id BIGINT REFERENCES credential(id) ON DELETE SET NULL,
+    upstream_base_url TEXT NOT NULL,
+
+    status TEXT NOT NULL,
+    terminal BOOLEAN NOT NULL DEFAULT FALSE,
+
+    billing_hold JSONB,
+    billing_status TEXT NOT NULL DEFAULT 'held' CHECK (
+        billing_status IN ('held', 'settled', 'released', 'failed')
+    ),
+    usage_summary JSONB NOT NULL DEFAULT '{}',
+    upstream_metadata JSONB NOT NULL DEFAULT '{}',
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_polled_at TIMESTAMPTZ,
+    next_poll_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+
+    UNIQUE (task_type, provider, upstream_task_id),
+    UNIQUE (user_key_id, task_type, upstream_task_id)
+);
+
 CREATE INDEX idx_user_key_user_id ON user_key(user_id);
 CREATE INDEX idx_user_key_key_prefix ON user_key(key_prefix);
+CREATE INDEX idx_user_key_model_enabled_key
+    ON user_key_model(user_key_id)
+    WHERE enabled = TRUE;
 CREATE INDEX idx_user_user_group ON "user"(user_group_id);
 CREATE INDEX idx_admin_status ON admin(status);
 CREATE INDEX idx_user_code_email_active
@@ -437,8 +491,14 @@ CREATE INDEX idx_credential_provider_plan
     WHERE enabled = TRUE AND plan_type IS NOT NULL;
 CREATE INDEX idx_usage_created ON usage(created_at DESC);
 CREATE INDEX idx_usage_user_created ON usage(user_id, created_at DESC);
+CREATE INDEX idx_usage_user_billable_created
+    ON usage(user_id, created_at DESC)
+    WHERE billing_status IN ('billed', 'undercharged')
+      AND cost_micro_usd IS NOT NULL;
 CREATE INDEX idx_usage_channel_created ON usage(channel_id, created_at DESC);
 CREATE INDEX idx_billing_pending_created ON billing(created_at ASC)
+    WHERE status = 'pending';
+CREATE INDEX idx_billing_pending_attempts_created ON billing(attempts ASC, created_at ASC)
     WHERE status = 'pending';
 CREATE INDEX idx_provider_model_provider_enabled ON provider_model(provider, enabled, model);
 CREATE INDEX idx_provider_plan_lookup
@@ -473,7 +533,13 @@ CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
 );
 CREATE INDEX idx_usage_daily_day ON usage_daily(day DESC);
 CREATE INDEX idx_usage_daily_user_day ON usage_daily(user_id, day DESC);
+CREATE INDEX idx_usage_daily_user_key_day ON usage_daily(user_id, user_key_id, day DESC);
 CREATE INDEX idx_usage_daily_provider_model_day ON usage_daily(provider, model, day DESC);
+CREATE INDEX idx_task_upstream_owner
+    ON task_upstream(user_key_id, task_type, provider, upstream_task_id);
+CREATE INDEX idx_task_upstream_polling
+    ON task_upstream(next_poll_at)
+    WHERE terminal = FALSE;
 
 INSERT INTO provider_model (provider, model, display_name, source, enabled)
 SELECT provider.code, model, model, 'seed', FALSE

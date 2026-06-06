@@ -171,7 +171,17 @@ static REDIS_REFUND_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
           end
           redis.call('SET', KEYS[3], total)
         end
-        redis.call('LPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. ARGV[3])
+        local head = redis.call('LINDEX', KEYS[1], 0)
+        if head then
+          local head_allocation_id, head_amount, head_gen = string.match(head, '([^:]+):([^:]+):([^:]+)')
+          if head_allocation_id == ARGV[1] and tonumber(head_gen) == expected then
+            redis.call('LSET', KEYS[1], 0, ARGV[1] .. ':' .. tostring(tonumber(head_amount) + tonumber(ARGV[2])) .. ':' .. ARGV[3])
+          else
+            redis.call('LPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. ARGV[3])
+          end
+        else
+          redis.call('LPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. ARGV[3])
+        end
         redis.call('INCRBY', KEYS[3], ARGV[2])
         return 1
         "#,

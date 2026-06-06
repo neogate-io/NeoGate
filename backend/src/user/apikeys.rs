@@ -82,9 +82,9 @@ async fn list_apikeys(
          LEFT JOIN (
              SELECT user_key_id,
                     COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS month_cost_micro_usd
-             FROM usage
+             FROM usage_daily
              WHERE user_id = $1
-               AND created_at >= date_trunc('month', now())
+               AND day >= date_trunc('month', now())::date
              GROUP BY user_key_id
          ) month_usage ON month_usage.user_key_id = uk.id
          WHERE uk.user_id = $1
@@ -207,9 +207,9 @@ async fn get_apikey(state: &AppState, user_id: DbId, id: DbId) -> AppResult<User
          LEFT JOIN (
              SELECT user_key_id,
                     COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS month_cost_micro_usd
-             FROM usage
+             FROM usage_daily
              WHERE user_id = $2
-               AND created_at >= date_trunc('month', now())
+               AND day >= date_trunc('month', now())::date
              GROUP BY user_key_id
          ) month_usage ON month_usage.user_key_id = uk.id
          WHERE uk.id = $1 AND uk.user_id = $2",

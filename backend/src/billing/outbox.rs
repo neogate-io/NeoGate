@@ -22,6 +22,7 @@ use crate::{
 };
 
 const BILLING_BATCH_SIZE: i64 = 100;
+const BILLING_PROCESS_CHUNK_SIZE: i64 = 10;
 const BILLING_MAX_BATCHES_PER_TICK: usize = 10;
 const BILLING_MAX_ATTEMPTS: i32 = 10;
 const BILLING_OUTBOX_WRITE_ATTEMPTS: u32 = 7;
@@ -54,6 +55,12 @@ pub struct BillingOutboxWriteStatus {
 pub struct BillingOutboxBacklogStatus {
     pub pending_count: i64,
     pub oldest_pending_age_seconds: i64,
+}
+
+struct PendingBillingRecord {
+    id: DbId,
+    transaction_id: Uuid,
+    payload: serde_json::Value,
 }
 
 impl BillingOutbox {
@@ -409,45 +416,176 @@ async fn process_billing_outbox_batch(
     daily: &UsageDailyRecorder,
     limit: i64,
 ) -> AppResult<u64> {
-    let mut tx = pool.begin().await?;
-    let rows = sqlx::query(
-        "SELECT id, transaction_id, payload
-         FROM billing
-         WHERE status = 'pending'
-         ORDER BY created_at ASC
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED",
-    )
-    .bind(limit)
-    .fetch_all(&mut *tx)
-    .await?;
-
     let mut processed = 0;
-    let mut processed_usages = Vec::with_capacity(rows.len());
-    for row in rows {
-        let id: DbId = row.try_get("id")?;
-        let transaction_id: Uuid = row.try_get("transaction_id")?;
-        let payload: serde_json::Value = row.try_get("payload")?;
-        match process_billing_payload(&mut tx, id, transaction_id, payload).await {
+    let mut remaining = limit.max(0);
+    let mut selected_ids = Vec::new();
+    while remaining > 0 {
+        let chunk_limit = remaining.min(BILLING_PROCESS_CHUNK_SIZE);
+        let result =
+            process_billing_outbox_chunk(pool, activity, daily, chunk_limit, &selected_ids).await?;
+        processed += result.processed;
+        remaining -= result.selected as i64;
+        selected_ids.extend(result.selected_ids);
+        if result.selected < chunk_limit as u64 {
+            break;
+        }
+    }
+    Ok(processed)
+}
+
+struct BillingOutboxChunkResult {
+    selected: u64,
+    selected_ids: Vec<DbId>,
+    processed: u64,
+}
+
+async fn process_billing_outbox_chunk(
+    pool: &PgPool,
+    activity: &ActivityRecorder,
+    daily: &UsageDailyRecorder,
+    limit: i64,
+    excluded_ids: &[DbId],
+) -> AppResult<BillingOutboxChunkResult> {
+    let mut tx = pool.begin().await?;
+    let records = fetch_pending_billing_records(&mut tx, limit, excluded_ids).await?;
+    if records.is_empty() {
+        tx.commit().await?;
+        return Ok(BillingOutboxChunkResult {
+            selected: 0,
+            selected_ids: Vec::new(),
+            processed: 0,
+        });
+    }
+
+    let selected = records.len() as u64;
+    let selected_ids = records.iter().map(|record| record.id).collect::<Vec<_>>();
+    let mut processed_usages = Vec::with_capacity(records.len());
+    for record in &records {
+        match process_billing_payload(
+            &mut tx,
+            record.id,
+            record.transaction_id,
+            record.payload.clone(),
+        )
+        .await
+        {
             Ok(usage) => processed_usages.push(usage),
             Err(err) => {
                 let _ = tx.rollback().await;
-                tracing::warn!(billing_id = %id, "failed to process billing record: {err}");
-                if let Err(record_err) = record_billing_failure(pool, id, &err).await {
-                    tracing::warn!(
-                        billing_id = %id,
-                        "failed to record billing processing failure: {record_err}"
-                    );
-                }
-                return Err(err);
+                tracing::warn!(
+                    billing_id = %record.id,
+                    selected,
+                    "failed to process billing chunk; retrying selected records individually: {err}"
+                );
+                let processed =
+                    process_billing_records_individually(pool, activity, daily, records).await?;
+                return Ok(BillingOutboxChunkResult {
+                    selected,
+                    selected_ids,
+                    processed,
+                });
             }
         }
-        processed += 1;
     }
     tx.commit().await?;
     activity.record(&processed_usages);
     daily.record(&processed_usages);
+    Ok(BillingOutboxChunkResult {
+        selected,
+        selected_ids,
+        processed: processed_usages.len() as u64,
+    })
+}
+
+async fn fetch_pending_billing_records(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    limit: i64,
+    excluded_ids: &[DbId],
+) -> AppResult<Vec<PendingBillingRecord>> {
+    let rows = sqlx::query(
+        "SELECT id, transaction_id, payload
+         FROM billing
+         WHERE status = 'pending'
+           AND NOT (id = ANY($2::BIGINT[]))
+         ORDER BY attempts ASC, created_at ASC
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED",
+    )
+    .bind(limit)
+    .bind(excluded_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(PendingBillingRecord {
+                id: row.try_get("id")?,
+                transaction_id: row.try_get("transaction_id")?,
+                payload: row.try_get("payload")?,
+            })
+        })
+        .collect()
+}
+
+async fn process_billing_records_individually(
+    pool: &PgPool,
+    activity: &ActivityRecorder,
+    daily: &UsageDailyRecorder,
+    records: Vec<PendingBillingRecord>,
+) -> AppResult<u64> {
+    let mut processed = 0;
+    let mut processed_usages = Vec::new();
+    for record in records {
+        if let Some(usage) = process_billing_outbox_record(pool, record.id).await? {
+            processed += 1;
+            processed_usages.push(usage);
+        }
+    }
+    activity.record(&processed_usages);
+    daily.record(&processed_usages);
     Ok(processed)
+}
+
+async fn process_billing_outbox_record(pool: &PgPool, id: DbId) -> AppResult<Option<UsageInsert>> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(
+        "SELECT id, transaction_id, payload
+         FROM billing
+         WHERE id = $1 AND status = 'pending'
+         FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let record = PendingBillingRecord {
+        id: row.try_get("id")?,
+        transaction_id: row.try_get("transaction_id")?,
+        payload: row.try_get("payload")?,
+    };
+
+    match process_billing_payload(&mut tx, record.id, record.transaction_id, record.payload).await {
+        Ok(usage) => {
+            tx.commit().await?;
+            Ok(Some(usage))
+        }
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::warn!(billing_id = %record.id, "failed to process billing record: {err}");
+            if let Err(record_err) = record_billing_failure(pool, record.id, &err).await {
+                tracing::warn!(
+                    billing_id = %record.id,
+                    "failed to record billing processing failure: {record_err}"
+                );
+                return Err(record_err);
+            }
+            Ok(None)
+        }
+    }
 }
 
 async fn process_billing_payload(

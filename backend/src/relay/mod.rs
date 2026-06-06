@@ -1,17 +1,17 @@
+mod body;
 mod credential;
 mod models;
 mod request;
 pub mod selector;
 mod streaming;
 mod upstream;
-pub(crate) mod usage;
 
 use std::{sync::Arc, time::Instant};
 
 use axum::{
     body::Body,
-    extract::{FromRequest, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    extract::{OriginalUri, Path, Query, State},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
     routing::{get, post},
     Router,
@@ -19,13 +19,14 @@ use axum::{
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::StreamExt;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
     auth::UserAuth,
     billing::{
-        estimate_input_tokens, estimated_cost_micro_usd, BillingCharge, DebitHold, Price,
-        TokenUsage,
+        estimate_input_tokens, estimated_cost_micro_usd, parse_usage_from_bytes, BillingCharge,
+        DebitHold, Price, TokenUsage,
     },
     cache::InvalidationEvent,
     error::{AppError, AppResult},
@@ -34,6 +35,11 @@ use crate::{
 
 use self::selector::{SelectedUpstream, UpstreamProtocol};
 use self::streaming::RelayContext;
+use crate::task::{
+    billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
+};
+use crate::usage::{KeyFailure, UsageInsert};
+use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 use models::{list_anthropic_models, list_openai_models};
 use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
@@ -41,52 +47,19 @@ pub(crate) use upstream::upstream_url;
 use upstream::{
     forward_anthropic, forward_openai, log_relay_upstream_failure, relay_upstream_error,
 };
-pub use usage::{ActivityRecorder, UsageDailyRecorder, UsageRecorder};
-use usage::{KeyFailure, UsageInsert};
+pub(crate) use upstream::{forward_anthropic_bound, forward_openai_bound};
+use upstream_task::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
 const MODEL_UNAVAILABLE_MAX_REROUTES: usize = 3;
 const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
 const UPSTREAM_ERROR_BODY_LOG_LIMIT: usize = 1000;
 const UPSTREAM_ERROR_BODY_READ_LIMIT: usize = 64 * 1024;
 
-struct RelayBody(Bytes);
-
-impl FromRequest<Arc<AppState>> for RelayBody {
-    type Rejection = AppError;
-
-    async fn from_request(req: Request, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
-        let method = req.method().clone();
-        let path = req.uri().path().to_string();
-        let content_length = req
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-
-        match Bytes::from_request(req, state).await {
-            Ok(body) => Ok(Self(body)),
-            Err(rejection) => {
-                let status = rejection.status();
-                let message = rejection.body_text();
-                tracing::warn!(
-                    %method,
-                    %path,
-                    status = status.as_u16(),
-                    ?content_length,
-                    relay_body_limit_bytes = state.config.relay_body_limit_bytes,
-                    rejection = %message,
-                    "relay request body rejected"
-                );
-                if status == StatusCode::PAYLOAD_TOO_LARGE {
-                    return Err(AppError::PayloadTooLarge(format!(
-                        "request body exceeds {} bytes",
-                        state.config.relay_body_limit_bytes
-                    )));
-                }
-                Err(AppError::BadRequest(message))
-            }
-        }
-    }
+#[derive(Debug, Deserialize)]
+struct AnthropicBatchListQuery {
+    limit: Option<i64>,
+    after_id: Option<String>,
+    before_id: Option<String>,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -94,8 +67,30 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/models", get(list_openai_models))
         .route("/v1/chat/completions", post(openai_chat_completions))
         .route("/v1/responses", post(openai_responses))
+        .route("/v1/responses/{response_id}", get(openai_response))
+        .route(
+            "/v1/responses/{response_id}/cancel",
+            post(cancel_openai_response),
+        )
         .route("/anthropic/v1/messages/models", get(list_anthropic_models))
+        .route("/v1/messages", post(anthropic_messages))
         .route("/anthropic/v1/messages", post(anthropic_messages))
+        .route(
+            "/v1/messages/batches",
+            post(create_anthropic_message_batch).get(list_anthropic_message_batches),
+        )
+        .route(
+            "/v1/messages/batches/{message_batch_id}",
+            get(anthropic_message_batch).delete(delete_anthropic_message_batch),
+        )
+        .route(
+            "/v1/messages/batches/{message_batch_id}/cancel",
+            post(cancel_anthropic_message_batch),
+        )
+        .route(
+            "/v1/messages/batches/{message_batch_id}/results",
+            get(anthropic_message_batch_results),
+        )
 }
 
 async fn openai_chat_completions(
@@ -112,6 +107,47 @@ async fn openai_responses(
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
     relay_openai(state, auth, body, "/v1/responses").await
+}
+
+async fn openai_response(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    Path(response_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+) -> AppResult<Response> {
+    let (task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::OpenAiResponse,
+        &response_id,
+    )
+    .await?;
+    let path = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| uri.path());
+    let response = forward_openai_bound(&state, &upstream, Method::GET, path, None).await?;
+    if openai_response_query_streams(path) {
+        return finish_openai_stream_response(state, auth, task, upstream, response);
+    }
+    finish_task_json_response(state, auth, task, response).await
+}
+
+async fn cancel_openai_response(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    Path(response_id): Path<String>,
+) -> AppResult<Response> {
+    let (task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::OpenAiResponse,
+        &response_id,
+    )
+    .await?;
+    let path = format!("/v1/responses/{response_id}/cancel");
+    let response = forward_openai_bound(&state, &upstream, Method::POST, &path, None).await?;
+    finish_task_json_response(state, auth, task, response).await
 }
 
 async fn anthropic_messages(
@@ -179,6 +215,196 @@ async fn anthropic_messages(
     .await
 }
 
+async fn create_anthropic_message_batch(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    let model = anthropic_batch_model(&body)?;
+    let request_count = anthropic_batch_request_count(&body)?;
+    auth.ensure_model_allowed(&model)?;
+    let user_key_model_credit_account = auth.model_credit_account(&model).cloned();
+    let upstream = state
+        .selector
+        .select(
+            &state.db.pool,
+            &state.secrets,
+            UpstreamProtocol::Anthropic,
+            &model,
+        )
+        .await?;
+    ensure_key_backed_async_upstream(&upstream)?;
+    let price = state
+        .billing
+        .price_for(&state.db.pool, &upstream.provider, &model, &auth.user_group)
+        .await?;
+    let hold = reserve_credit(
+        &state,
+        &auth,
+        user_key_model_credit_account.as_ref(),
+        &body,
+        state
+            .billing
+            .default_output_tokens()
+            .saturating_mul(request_count),
+        &price,
+    )
+    .await?;
+    let response = match forward_anthropic_bound(
+        &state,
+        &headers,
+        &upstream,
+        Method::POST,
+        "/v1/messages/batches",
+        Some(body),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            release_empty_hold(
+                &state,
+                hold,
+                "anthropic batch create upstream request error",
+            )
+            .await;
+            return Err(err);
+        }
+    };
+    finish_anthropic_batch_create(state, auth, upstream, model, hold, response).await
+}
+
+async fn list_anthropic_message_batches(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    Query(query): Query<AnthropicBatchListQuery>,
+) -> AppResult<Response> {
+    let requested_limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let tasks = upstream_task::list_tasks_for_auth(
+        &state.db.pool,
+        &auth,
+        UpstreamTaskType::AnthropicMessageBatch,
+        requested_limit + 1,
+        query.after_id.as_deref(),
+        query.before_id.as_deref(),
+    )
+    .await?;
+    let has_more = tasks.len() as i64 > requested_limit;
+    let data = tasks
+        .into_iter()
+        .take(requested_limit as usize)
+        .map(|task| {
+            json!({
+                "id": task.upstream_task_id,
+                "type": "message_batch",
+                "processing_status": task.status,
+                "request_counts": task_upstream_counts(&task),
+                "created_at": task_created_at(&task),
+            })
+        })
+        .collect::<Vec<_>>();
+    let first_id = data
+        .first()
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let last_id = data
+        .last()
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    response_from_bytes(
+        StatusCode::OK,
+        HeaderValue::from_static("application/json"),
+        Bytes::from(
+            json!({
+                "data": data,
+                "first_id": first_id,
+                "last_id": last_id,
+                "has_more": has_more
+            })
+            .to_string(),
+        ),
+    )
+}
+
+async fn anthropic_message_batch(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    Path(message_batch_id): Path<String>,
+) -> AppResult<Response> {
+    let (task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::AnthropicMessageBatch,
+        &message_batch_id,
+    )
+    .await?;
+    let path = format!("/v1/messages/batches/{message_batch_id}");
+    let response =
+        forward_anthropic_bound(&state, &headers, &upstream, Method::GET, &path, None).await?;
+    finish_task_json_response(state, auth, task, response).await
+}
+
+async fn cancel_anthropic_message_batch(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    Path(message_batch_id): Path<String>,
+) -> AppResult<Response> {
+    let (task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::AnthropicMessageBatch,
+        &message_batch_id,
+    )
+    .await?;
+    let path = format!("/v1/messages/batches/{message_batch_id}/cancel");
+    let response =
+        forward_anthropic_bound(&state, &headers, &upstream, Method::POST, &path, None).await?;
+    finish_task_json_response(state, auth, task, response).await
+}
+
+async fn delete_anthropic_message_batch(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    Path(message_batch_id): Path<String>,
+) -> AppResult<Response> {
+    let (_task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::AnthropicMessageBatch,
+        &message_batch_id,
+    )
+    .await?;
+    let path = format!("/v1/messages/batches/{message_batch_id}");
+    let response =
+        forward_anthropic_bound(&state, &headers, &upstream, Method::DELETE, &path, None).await?;
+    raw_upstream_response(response).await
+}
+
+async fn anthropic_message_batch_results(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    Path(message_batch_id): Path<String>,
+) -> AppResult<Response> {
+    let (task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::AnthropicMessageBatch,
+        &message_batch_id,
+    )
+    .await?;
+    let path = format!("/v1/messages/batches/{message_batch_id}/results");
+    let response =
+        forward_anthropic_bound(&state, &headers, &upstream, Method::GET, &path, None).await?;
+    finish_anthropic_results_response(state, auth, task, response).await
+}
+
 async fn relay_openai(
     state: Arc<AppState>,
     auth: UserAuth,
@@ -196,6 +422,20 @@ async fn relay_openai(
         output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
     auth.ensure_model_allowed(&meta.model)?;
+    if matches!(body_kind, BodyKind::OpenaiResponses) && meta.background {
+        if meta.store == Some(false) {
+            return Err(AppError::BadRequest(
+                "background responses require store=true".to_string(),
+            ));
+        }
+        if meta.stream {
+            return Err(AppError::BadRequest(
+                "create-time streaming for background responses is not supported; retrieve with stream=true to resume".to_string(),
+            ));
+        }
+        return create_openai_background_response(state, auth, body, meta.model, output_tokens)
+            .await;
+    }
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
 
     let mut model_unavailable_reroutes = 0;
@@ -296,6 +536,625 @@ async fn relay_openai(
             Err(err) => return finish_relay(ctx, Err(err)).await,
         }
     }
+}
+
+async fn create_openai_background_response(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    body: Bytes,
+    model: String,
+    output_tokens: i64,
+) -> AppResult<Response> {
+    let started = Instant::now();
+    let upstream = state
+        .selector
+        .select(
+            &state.db.pool,
+            &state.secrets,
+            UpstreamProtocol::Openai,
+            &model,
+        )
+        .await?;
+    ensure_key_backed_async_upstream(&upstream)?;
+    let price = state
+        .billing
+        .price_for(&state.db.pool, &upstream.provider, &model, &auth.user_group)
+        .await?;
+    let user_key_model_credit_account = auth.model_credit_account(&model).cloned();
+    let hold = reserve_credit(
+        &state,
+        &auth,
+        user_key_model_credit_account.as_ref(),
+        &body,
+        output_tokens,
+        &price,
+    )
+    .await?;
+    let response = forward_openai(
+        &state,
+        &upstream,
+        UpstreamProtocol::Openai,
+        body,
+        "/v1/responses",
+    )
+    .await;
+    let ctx = RelayContext {
+        state: Arc::clone(&state),
+        auth: auth.clone(),
+        upstream: upstream.clone(),
+        protocol: UpstreamProtocol::Openai,
+        path: "/v1/responses",
+        model: model.clone(),
+        streamed: false,
+        price,
+        hold: hold.clone(),
+        user_key_model_credit_account,
+        started,
+    };
+
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return handle_upstream_http_error(ctx, status, upstream_response).await;
+    }
+
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let body = match upstream_response.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            release_empty_hold(&state, hold, "openai background response body read error").await;
+            return Err(err.into());
+        }
+    };
+    let value: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(err) => {
+            release_empty_hold(&state, hold, "openai background response parse error").await;
+            return Err(err.into());
+        }
+    };
+    let response_id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::BadRequest("upstream response is missing id".to_string()));
+    let response_id = match response_id {
+        Ok(response_id) => response_id,
+        Err(err) => {
+            release_empty_hold(&state, hold, "openai background response missing id").await;
+            return Err(err);
+        }
+    };
+    let status_text = value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("queued");
+    let terminal = openai_response_terminal(status_text);
+    if let Err(err) = upstream_task::insert_task(
+        &state.db.pool,
+        NewUpstreamTask {
+            task_type: UpstreamTaskType::OpenAiResponse,
+            upstream_task_id: response_id,
+            auth: &auth,
+            protocol: UpstreamProtocol::Openai,
+            upstream: &upstream,
+            model: Some(&model),
+            status: status_text,
+            terminal,
+            hold: &hold,
+            upstream_metadata: value.clone(),
+        },
+        state.config.task_upstream_poll_interval,
+        state.config.task_upstream_retention,
+    )
+    .await
+    {
+        release_empty_hold(&state, hold, "openai background task insert error").await;
+        return Err(err);
+    }
+    if terminal {
+        let usage = parse_usage_from_bytes(&body, false);
+        task_billing::finalize_for_auth(
+            &state,
+            &auth,
+            response_id,
+            UpstreamTaskType::OpenAiResponse,
+            usage,
+            terminal,
+        )
+        .await?;
+    }
+    response_from_bytes(status, content_type, body)
+}
+
+async fn finish_anthropic_batch_create(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    upstream: SelectedUpstream,
+    model: String,
+    hold: DebitHold,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let body = match upstream_response.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            release_empty_hold(&state, hold, "anthropic batch create body read error").await;
+            return Err(err.into());
+        }
+    };
+    if !status.is_success() {
+        release_empty_hold(&state, hold, "anthropic batch create upstream error").await;
+        return response_from_bytes(status, content_type, body);
+    }
+    let value: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(err) => {
+            release_empty_hold(&state, hold, "anthropic batch create parse error").await;
+            return Err(err.into());
+        }
+    };
+    let batch_id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::BadRequest("upstream batch response is missing id".to_string()));
+    let batch_id = match batch_id {
+        Ok(batch_id) => batch_id.to_string(),
+        Err(err) => {
+            release_empty_hold(&state, hold, "anthropic batch create missing id").await;
+            return Err(err);
+        }
+    };
+    let status_text = value
+        .get("processing_status")
+        .and_then(Value::as_str)
+        .unwrap_or("in_progress")
+        .to_string();
+    if let Err(err) = upstream_task::insert_task(
+        &state.db.pool,
+        NewUpstreamTask {
+            task_type: UpstreamTaskType::AnthropicMessageBatch,
+            upstream_task_id: &batch_id,
+            auth: &auth,
+            protocol: UpstreamProtocol::Anthropic,
+            upstream: &upstream,
+            model: Some(&model),
+            status: &status_text,
+            terminal: anthropic_batch_terminal(&status_text),
+            hold: &hold,
+            upstream_metadata: value,
+        },
+        state.config.task_upstream_poll_interval,
+        state.config.task_upstream_retention,
+    )
+    .await
+    {
+        release_empty_hold(&state, hold, "anthropic batch task insert error").await;
+        return Err(err);
+    }
+    response_from_bytes(status, content_type, body)
+}
+
+async fn finish_task_json_response(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    task: UpstreamTask,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let body = upstream_response.bytes().await?;
+    if status.is_success() {
+        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+            let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
+            let usage = parse_usage_from_bytes(&body, false);
+            upstream_task::update_task_from_upstream_value(
+                &state.db.pool,
+                task.id,
+                task.task_type,
+                &task.upstream_task_id,
+                &status_text,
+                terminal,
+                value,
+                usage,
+                state.config.task_upstream_poll_interval,
+            )
+            .await?;
+            if terminal {
+                task_billing::finalize_for_auth(
+                    &state,
+                    &auth,
+                    &task.upstream_task_id,
+                    task.task_type,
+                    usage,
+                    true,
+                )
+                .await?;
+            }
+        }
+    }
+    response_from_bytes(status, content_type, body)
+}
+
+fn finish_openai_stream_response(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    task: UpstreamTask,
+    upstream: SelectedUpstream,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
+    let relay = OpenAiTaskStreamRelay {
+        state: Some(state),
+        auth: Some(auth),
+        task: Some(task),
+        upstream: Some(upstream),
+        status,
+        stream: upstream_response.bytes_stream().boxed(),
+    };
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from_stream(futures_util::stream::unfold(
+            Some(relay),
+            |relay| async move {
+                let mut relay = relay?;
+                match relay.stream.next().await {
+                    Some(Ok(chunk)) => Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay))),
+                    Some(Err(err)) => Some((Err(std::io::Error::other(err)), None)),
+                    None => {
+                        relay.finish().await;
+                        None
+                    }
+                }
+            },
+        )))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+async fn finish_anthropic_results_response(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    task: UpstreamTask,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/x-jsonlines"));
+    let relay = AnthropicResultsRelay {
+        state: Some(state),
+        auth: Some(auth),
+        task: Some(task),
+        status,
+        usage_parser: AnthropicResultsUsageParser::default(),
+        stream: upstream_response.bytes_stream().boxed(),
+    };
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from_stream(futures_util::stream::unfold(
+            Some(relay),
+            |relay| async move {
+                let mut relay = relay?;
+                match relay.stream.next().await {
+                    Some(Ok(chunk)) => {
+                        if relay.status.is_success() {
+                            relay.usage_parser.observe(&chunk);
+                        }
+                        Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
+                    }
+                    Some(Err(err)) => Some((Err(std::io::Error::other(err)), None)),
+                    None => {
+                        relay.finish().await;
+                        None
+                    }
+                }
+            },
+        )))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+async fn raw_upstream_response(upstream_response: reqwest::Response) -> AppResult<Response> {
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let body = upstream_response.bytes().await?;
+    response_from_bytes(status, content_type, body)
+}
+
+fn response_from_bytes(
+    status: StatusCode,
+    content_type: HeaderValue,
+    body: Bytes,
+) -> AppResult<Response> {
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+fn task_status_from_value(
+    task_type: UpstreamTaskType,
+    value: &Value,
+    task: &UpstreamTask,
+) -> (String, bool) {
+    match task_type {
+        UpstreamTaskType::OpenAiResponse => {
+            let status = value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.status)
+                .to_string();
+            let terminal = openai_response_terminal(&status);
+            (status, terminal)
+        }
+        UpstreamTaskType::AnthropicMessageBatch => {
+            let status = value
+                .get("processing_status")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.status)
+                .to_string();
+            let terminal = anthropic_batch_terminal(&status);
+            (status, terminal)
+        }
+    }
+}
+
+fn openai_response_terminal(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "failed" | "cancelled" | "canceled" | "incomplete"
+    )
+}
+
+fn anthropic_batch_terminal(status: &str) -> bool {
+    matches!(status, "ended" | "canceled" | "cancelled" | "expired")
+}
+
+fn anthropic_batch_model(body: &[u8]) -> AppResult<String> {
+    let value: Value = serde_json::from_slice(body)?;
+    let requests = value
+        .get("requests")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::BadRequest("requests is required".to_string()))?;
+    if requests.is_empty() {
+        return Err(AppError::BadRequest(
+            "requests must not be empty".to_string(),
+        ));
+    }
+    let mut model = None;
+    for (index, request) in requests.iter().enumerate() {
+        let item_model = request
+            .get("params")
+            .and_then(|params| params.get("model"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::BadRequest(format!("requests[{index}].params.model is required"))
+            })?;
+        if let Some(model) = model {
+            if model != item_model {
+                return Err(AppError::BadRequest(
+                    "message batches must use a single model".to_string(),
+                ));
+            }
+        } else {
+            model = Some(item_model);
+        }
+    }
+    let model = model.expect("non-empty requests set model");
+    Ok(model.to_string())
+}
+
+fn anthropic_batch_request_count(body: &[u8]) -> AppResult<i64> {
+    let value: Value = serde_json::from_slice(body)?;
+    let count = value
+        .get("requests")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::BadRequest("requests is required".to_string()))?
+        .len();
+    i64::try_from(count)
+        .map_err(|_| AppError::BadRequest("too many batch requests".to_string()))
+        .map(|count| count.max(1))
+}
+
+struct AnthropicResultsRelay {
+    state: Option<Arc<AppState>>,
+    auth: Option<UserAuth>,
+    task: Option<UpstreamTask>,
+    status: StatusCode,
+    usage_parser: AnthropicResultsUsageParser,
+    stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
+}
+
+struct OpenAiTaskStreamRelay {
+    state: Option<Arc<AppState>>,
+    auth: Option<UserAuth>,
+    task: Option<UpstreamTask>,
+    upstream: Option<SelectedUpstream>,
+    status: StatusCode,
+    stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
+}
+
+impl OpenAiTaskStreamRelay {
+    async fn finish(mut self) {
+        let (Some(state), Some(auth), Some(task), Some(upstream)) = (
+            self.state.take(),
+            self.auth.take(),
+            self.task.take(),
+            self.upstream.take(),
+        ) else {
+            return;
+        };
+        if !self.status.is_success() {
+            return;
+        }
+        if let Err(err) = refresh_openai_task_after_stream(&state, &auth, &task, &upstream).await {
+            tracing::warn!("failed to refresh openai response after stream resume: {err}");
+        }
+    }
+}
+
+impl Drop for OpenAiTaskStreamRelay {
+    fn drop(&mut self) {
+        if self.state.is_some() || self.auth.is_some() || self.task.is_some() {
+            tracing::warn!("openai response stream ended before completion; skipping task refresh");
+        }
+    }
+}
+
+async fn refresh_openai_task_after_stream(
+    state: &AppState,
+    auth: &UserAuth,
+    task: &UpstreamTask,
+    upstream: &SelectedUpstream,
+) -> AppResult<()> {
+    let path = format!("/v1/responses/{}", task.upstream_task_id);
+    let response = forward_openai_bound(state, upstream, Method::GET, &path, None).await?;
+    let status = StatusCode::from_u16(response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return Ok(());
+    }
+    let body = response.bytes().await?;
+    let value: Value = serde_json::from_slice(&body)?;
+    let (status_text, terminal) = task_status_from_value(task.task_type, &value, task);
+    let usage = parse_usage_from_bytes(&body, false);
+    upstream_task::update_task_from_upstream_value(
+        &state.db.pool,
+        task.id,
+        task.task_type,
+        &task.upstream_task_id,
+        &status_text,
+        terminal,
+        value,
+        usage,
+        state.config.task_upstream_poll_interval,
+    )
+    .await?;
+    if terminal {
+        task_billing::finalize_for_auth(
+            state,
+            auth,
+            &task.upstream_task_id,
+            task.task_type,
+            usage,
+            true,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+impl AnthropicResultsRelay {
+    async fn finish(mut self) {
+        let (Some(state), Some(auth), Some(task)) =
+            (self.state.take(), self.auth.take(), self.task.take())
+        else {
+            return;
+        };
+        if !self.status.is_success() {
+            return;
+        }
+        let usage = std::mem::take(&mut self.usage_parser).finish();
+        if usage.is_some() || task.terminal {
+            if let Err(err) = task_billing::finalize_for_auth(
+                &state,
+                &auth,
+                &task.upstream_task_id,
+                task.task_type,
+                usage,
+                true,
+            )
+            .await
+            {
+                tracing::warn!("failed to finalize anthropic batch results billing: {err}");
+            }
+        }
+    }
+}
+
+impl Drop for AnthropicResultsRelay {
+    fn drop(&mut self) {
+        if self.state.is_some() || self.auth.is_some() || self.task.is_some() {
+            tracing::warn!("anthropic batch results stream ended before completion; skipping partial billing settlement");
+        }
+    }
+}
+
+fn task_upstream_counts(task: &UpstreamTask) -> Value {
+    task.upstream_metadata
+        .get("request_counts")
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "processing": 0,
+                "succeeded": 0,
+                "errored": 0,
+                "canceled": 0,
+                "expired": 0
+            })
+        })
+}
+
+fn task_created_at(task: &UpstreamTask) -> String {
+    task.upstream_metadata
+        .get("created_at")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| task.created_at.to_rfc3339())
+}
+
+fn openai_response_query_streams(path: &str) -> bool {
+    path.split_once('?')
+        .and_then(|(_, query)| serde_urlencoded::from_str::<Vec<(String, String)>>(query).ok())
+        .map(|pairs| {
+            pairs
+                .iter()
+                .any(|(key, value)| key == "stream" && value == "true")
+        })
+        .unwrap_or(false)
+}
+
+fn ensure_key_backed_async_upstream(upstream: &SelectedUpstream) -> AppResult<()> {
+    if upstream.channel_key_id.is_none() || upstream.credential_id.is_some() {
+        return Err(AppError::BadRequest(
+            "async tasks require a key-backed upstream channel".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn select_openai_upstream(
@@ -1058,5 +1917,53 @@ mod tests {
         assert!(append_limited_error_body(&mut body, &chunk));
 
         assert_eq!(body.len(), UPSTREAM_ERROR_BODY_READ_LIMIT);
+    }
+
+    #[test]
+    fn openai_response_terminal_statuses_are_detected() {
+        assert!(openai_response_terminal("completed"));
+        assert!(openai_response_terminal("failed"));
+        assert!(openai_response_terminal("cancelled"));
+        assert!(!openai_response_terminal("in_progress"));
+    }
+
+    #[test]
+    fn anthropic_batch_model_reads_first_request_params() {
+        let body = Bytes::from_static(
+            br#"{"requests":[{"custom_id":"one","params":{"model":"claude-sonnet"}}]}"#,
+        );
+
+        assert_eq!(anthropic_batch_model(&body).unwrap(), "claude-sonnet");
+    }
+
+    #[test]
+    fn anthropic_batch_model_rejects_mixed_models() {
+        let body = Bytes::from_static(
+            br#"{"requests":[{"params":{"model":"claude-a"}},{"params":{"model":"claude-b"}}]}"#,
+        );
+
+        assert!(anthropic_batch_model(&body).is_err());
+    }
+
+    #[test]
+    fn openai_response_query_streams_detects_true_flag() {
+        assert!(openai_response_query_streams(
+            "/v1/responses/resp_123?starting_after=10&stream=true"
+        ));
+        assert!(!openai_response_query_streams(
+            "/v1/responses/resp_123?stream=false"
+        ));
+    }
+
+    #[test]
+    fn anthropic_results_usage_sums_successful_messages() {
+        let body = br#"{"custom_id":"one","result":{"type":"succeeded","message":{"usage":{"input_tokens":7,"output_tokens":3}}}}
+{"custom_id":"two","result":{"type":"succeeded","message":{"usage":{"input_tokens":5,"output_tokens":2}}}}
+"#;
+
+        let usage = crate::task::results::anthropic_results_usage(body).unwrap();
+
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 5);
     }
 }

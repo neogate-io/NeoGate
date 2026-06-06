@@ -41,6 +41,10 @@ pub struct Config {
     pub usage_queue_size: usize,
     pub billing_outbox_max_pending: i64,
     pub billing_outbox_max_age: Duration,
+    pub task_upstream_poll_interval: Duration,
+    pub task_upstream_poll_batch_size: i64,
+    pub task_upstream_retention: Duration,
+    pub task_upstream_stale_hold_release: Duration,
     pub payment: PaymentConfig,
     pub db_pool: DbPoolConfig,
     pub cors_allowed_origins: Vec<String>,
@@ -190,6 +194,19 @@ impl Config {
                 "BILLING_OUTBOX_MAX_AGE_SECONDS",
                 300,
             )),
+            task_upstream_poll_interval: Duration::from_secs(parse_u64(
+                "TASK_UPSTREAM_POLL_INTERVAL_SECONDS",
+                30,
+            )),
+            task_upstream_poll_batch_size: parse_i64("TASK_UPSTREAM_POLL_BATCH_SIZE", 100),
+            task_upstream_retention: Duration::from_secs(parse_u64(
+                "TASK_UPSTREAM_RETENTION_SECONDS",
+                2_592_000,
+            )),
+            task_upstream_stale_hold_release: Duration::from_secs(parse_u64(
+                "TASK_UPSTREAM_STALE_HOLD_RELEASE_SECONDS",
+                parse_u64("CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS", 900),
+            )),
             payment: PaymentConfig::default(),
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
@@ -234,6 +251,18 @@ impl Config {
         }
         if self.billing_outbox_max_pending < 0 {
             anyhow::bail!("BILLING_OUTBOX_MAX_PENDING must be non-negative");
+        }
+        if self.task_upstream_poll_interval.is_zero() {
+            anyhow::bail!("TASK_UPSTREAM_POLL_INTERVAL_SECONDS must be positive");
+        }
+        if self.task_upstream_poll_batch_size <= 0 {
+            anyhow::bail!("TASK_UPSTREAM_POLL_BATCH_SIZE must be positive");
+        }
+        if self.task_upstream_retention.is_zero() {
+            anyhow::bail!("TASK_UPSTREAM_RETENTION_SECONDS must be positive");
+        }
+        if self.task_upstream_stale_hold_release.is_zero() {
+            anyhow::bail!("TASK_UPSTREAM_STALE_HOLD_RELEASE_SECONDS must be positive");
         }
         if self.user_auth_cache_max_entries == 0 {
             anyhow::bail!("USER_AUTH_CACHE_MAX_ENTRIES must be positive");

@@ -7,6 +7,8 @@ mod core;
 mod health;
 mod payment;
 mod relay;
+mod task;
+mod usage;
 mod user;
 
 pub use app::AppState;

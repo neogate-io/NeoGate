@@ -23,6 +23,8 @@ use crate::{
     payment,
     relay::{self, selector::Selector},
     secrets::SecretStore,
+    task,
+    usage::{ActivityRecorder, UsageDailyRecorder, UsageRecorder},
     user,
 };
 
@@ -32,8 +34,8 @@ const DEFAULT_ADMIN_PASSWORD: &str = "password";
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
-    pub usage: relay::UsageRecorder,
-    pub usage_daily: relay::UsageDailyRecorder,
+    pub usage: UsageRecorder,
+    pub usage_daily: UsageDailyRecorder,
     pub credential_models: relay::CredentialModelRecorder,
     pub billing_outbox: BillingOutbox,
     pub billing: Billing,
@@ -131,21 +133,21 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     } else {
         (cache::CacheInvalidator::local(), None)
     };
-    let usage_daily = relay::UsageDailyRecorder::spawn(
+    let usage_daily = UsageDailyRecorder::spawn(
         db.pool.clone(),
         config
             .usage_flush_interval
             .saturating_mul(10)
             .max(std::time::Duration::from_secs(5)),
     );
-    let activity = relay::ActivityRecorder::spawn(
+    let activity = ActivityRecorder::spawn(
         db.pool.clone(),
         config
             .usage_flush_interval
             .saturating_mul(10)
             .max(std::time::Duration::from_secs(10)),
     );
-    let usage = relay::UsageRecorder::spawn(
+    let usage = UsageRecorder::spawn(
         db.pool.clone(),
         config.usage_flush_interval,
         config.usage_queue_size,
@@ -197,6 +199,7 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
             listener.spawn(Arc::clone(&state));
         }
     }
+    task::worker::spawn(Arc::clone(&state));
 
     Ok(state)
 }
@@ -375,6 +378,10 @@ mod tests {
                 usage_queue_size: 1024,
                 billing_outbox_max_pending: 10_000,
                 billing_outbox_max_age: Duration::from_secs(300),
+                task_upstream_poll_interval: Duration::from_secs(30),
+                task_upstream_poll_batch_size: 100,
+                task_upstream_retention: Duration::from_secs(2_592_000),
+                task_upstream_stale_hold_release: Duration::from_secs(900),
                 payment: config::PaymentConfig {
                     enabled_providers: Vec::new(),
                     return_base_url: None,
@@ -393,8 +400,8 @@ mod tests {
                 },
                 cors_allowed_origins: vec!["*".to_string()],
             },
-            usage: relay::UsageRecorder::disabled(),
-            usage_daily: relay::UsageDailyRecorder::disabled(),
+            usage: UsageRecorder::disabled(),
+            usage_daily: UsageDailyRecorder::disabled(),
             credential_models: relay::CredentialModelRecorder::disabled(),
             billing_outbox: BillingOutbox::new(pool.clone()),
             billing: Billing::new_memory(Duration::from_secs(30), 1024, 100_000, 4096),

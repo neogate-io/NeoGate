@@ -17,6 +17,8 @@ pub(super) enum BodyKind {
 pub(super) struct RelayRequestMeta {
     pub(super) model: String,
     pub(super) stream: bool,
+    pub(super) background: bool,
+    pub(super) store: Option<bool>,
 }
 
 pub(super) struct PreparedRelayBody {
@@ -30,6 +32,8 @@ struct RequestProbe<'a> {
     #[serde(borrow)]
     model: Option<Cow<'a, str>>,
     stream: Option<bool>,
+    background: Option<bool>,
+    store: Option<bool>,
     max_completion_tokens: Option<i64>,
     max_tokens: Option<i64>,
     max_output_tokens: Option<i64>,
@@ -91,6 +95,8 @@ fn request_meta_from_probe(probe: &RequestProbe<'_>) -> AppResult<RelayRequestMe
     Ok(RelayRequestMeta {
         model: model.to_string(),
         stream: probe.stream.unwrap_or(false),
+        background: probe.background.unwrap_or(false),
+        store: probe.store,
     })
 }
 
@@ -173,6 +179,7 @@ mod tests {
         assert_eq!(prepared.body, body);
         assert_eq!(prepared.meta.model, "gpt-4.1");
         assert!(!prepared.meta.stream);
+        assert!(!prepared.meta.background);
         assert_eq!(prepared.output_tokens, 128);
     }
 

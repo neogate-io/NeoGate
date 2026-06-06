@@ -1,4 +1,4 @@
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use bytes::Bytes;
 use serde_json::{json, Value};
 use tokio::time::Duration;
@@ -20,7 +20,7 @@ pub(super) async fn forward_openai(
     upstream: &SelectedUpstream,
     protocol: UpstreamProtocol,
     body: Bytes,
-    path: &'static str,
+    path: &str,
 ) -> AppResult<reqwest::Response> {
     if protocol == UpstreamProtocol::OpenAiOauth {
         return forward_openai_oauth(state, upstream, body, path).await;
@@ -41,7 +41,7 @@ async fn forward_openai_oauth(
     state: &AppState,
     upstream: &SelectedUpstream,
     body: Bytes,
-    path: &'static str,
+    path: &str,
 ) -> AppResult<reqwest::Response> {
     if path != "/v1/responses" {
         return Err(AppError::BadRequest(
@@ -73,6 +73,29 @@ async fn forward_openai_oauth(
         ..upstream.clone()
     };
     send_openai_oauth_request(state, &refreshed_upstream, &url, refreshed_account_id, body).await
+}
+
+pub(crate) async fn forward_openai_bound(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    path: &str,
+    body: Option<Bytes>,
+) -> AppResult<reqwest::Response> {
+    let url = upstream_url(&upstream.base_url, path);
+    send_upstream_request(state, upstream, UpstreamProtocol::Openai, path, || {
+        let mut request = state
+            .http
+            .request(method.clone(), url.clone())
+            .bearer_auth(&upstream.secret);
+        if let Some(body) = body.clone() {
+            request = request
+                .header("content-type", "application/json")
+                .body(body);
+        }
+        request
+    })
+    .await
 }
 
 async fn send_openai_oauth_request(
@@ -216,11 +239,49 @@ pub(super) async fn forward_anthropic(
     .await
 }
 
+pub(crate) async fn forward_anthropic_bound(
+    state: &AppState,
+    headers: &HeaderMap,
+    upstream: &SelectedUpstream,
+    method: Method,
+    path: &str,
+    body: Option<Bytes>,
+) -> AppResult<reqwest::Response> {
+    let url = upstream_url(&upstream.base_url, path);
+    let anthropic_version = headers
+        .get("anthropic-version")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(&state.config.anthropic_version)
+        .to_string();
+    let anthropic_beta = headers
+        .get("anthropic-beta")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+
+    send_upstream_request(state, upstream, UpstreamProtocol::Anthropic, path, || {
+        let mut request = state
+            .http
+            .request(method.clone(), url.clone())
+            .header("x-api-key", &upstream.secret)
+            .header("anthropic-version", &anthropic_version);
+        if let Some(beta) = &anthropic_beta {
+            request = request.header("anthropic-beta", beta);
+        }
+        if let Some(body) = body.clone() {
+            request = request
+                .header("content-type", "application/json")
+                .body(body);
+        }
+        request
+    })
+    .await
+}
+
 async fn send_upstream_request<F>(
     state: &AppState,
     upstream: &SelectedUpstream,
     protocol: UpstreamProtocol,
-    path: &'static str,
+    path: &str,
     mut build: F,
 ) -> AppResult<reqwest::Response>
 where

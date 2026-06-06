@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::{
     error::{AppError, AppResult},
     id::DbId,
-    relay::usage::{self, ActivityRecorder, UsageDailyRecorder, UsageInsert},
+    usage::{self, ActivityRecorder, UsageDailyRecorder, UsageInsert},
 };
 
 const BILLING_BATCH_SIZE: i64 = 100;

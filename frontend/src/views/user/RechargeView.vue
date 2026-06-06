@@ -2,9 +2,15 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Check, CreditCard, Refresh, View } from '@element-plus/icons-vue'
-import { createRechargeOrder, getRechargeOrders, type PaymentOrder, type PayType } from '../../api/recharge'
+import {
+  createRechargeOrder,
+  getRechargeOrders,
+  type PaymentOrder,
+  type PayType
+} from '../../api/recharge'
 import { useLocale } from '../../composables/useLocale'
 import { readError } from '../../utils/errors'
+import { formatDateTime, formatMicroUsd, usdToMicroUsd } from '../../utils/format'
 
 const { locale, t } = useLocale()
 const usdPerCny = 5
@@ -20,7 +26,13 @@ const loading = ref(false)
 const plans = computed(() => [
   { key: 'trial', amount: 10, name: t('trialPlan'), hint: t('trialPlanHint') },
   { key: 'builder', amount: 50, name: t('builderPlan'), hint: t('builderPlanHint') },
-  { key: 'growth', amount: 100, name: t('growthPlan'), hint: t('growthPlanHint'), recommended: true },
+  {
+    key: 'growth',
+    amount: 100,
+    name: t('growthPlan'),
+    hint: t('growthPlanHint'),
+    recommended: true
+  },
   { key: 'pro', amount: 200, name: t('proPlan'), hint: t('proPlanHint') },
   { key: 'business', amount: 1000, name: t('businessPlan'), hint: t('businessPlanHint') },
   { key: 'enterprise', amount: 2000, name: t('enterprisePlan'), hint: t('enterprisePlanHint') }
@@ -31,16 +43,12 @@ const amountUsd = computed(() => {
   return Number.isInteger(custom) && custom > 0 ? custom : selectedAmount.value
 })
 
-const amountMicroUsd = computed(() => Math.round(amountUsd.value * 1_000_000))
+const amountMicroUsd = computed(() => usdToMicroUsd(amountUsd.value))
 const payableCny = computed(() => amountUsd.value / usdPerCny)
 
 function selectPlan(amount: number) {
   selectedAmount.value = amount
   customAmount.value = null
-}
-
-function formatUsd(microUsd: number) {
-  return `$${(microUsd / 1_000_000).toFixed(2)}`
 }
 
 function formatUsdAmount(amount: number) {
@@ -63,7 +71,7 @@ function formatCny(amount: number) {
 }
 
 function formatTime(value: string) {
-  return new Date(value).toLocaleString(locale.value)
+  return formatDateTime(value, locale.value)
 }
 
 function orderStatusType(status: string) {
@@ -98,14 +106,22 @@ async function reloadOrders() {
 }
 
 async function submitRecharge() {
-  if (!Number.isFinite(amountUsd.value) || !Number.isInteger(amountUsd.value) || amountUsd.value <= 0) {
+  if (
+    !Number.isFinite(amountUsd.value) ||
+    !Number.isInteger(amountUsd.value) ||
+    amountUsd.value <= 0
+  ) {
     ElMessage.error(t('rechargeAmountRequired'))
     return
   }
 
   submitting.value = true
   try {
-    const result = await createRechargeOrder(amountMicroUsd.value, payType.value, window.location.href)
+    const result = await createRechargeOrder(
+      amountMicroUsd.value,
+      payType.value,
+      window.location.href
+    )
     if (ordersLoaded.value || historyDialogVisible.value) await reloadOrders()
     if (result.checkout_url) {
       window.location.href = result.checkout_url
@@ -135,7 +151,10 @@ async function submitRecharge() {
             v-for="plan in plans"
             :key="plan.key"
             class="plan-card"
-            :class="{ active: customAmount == null && selectedAmount === plan.amount, recommended: plan.recommended }"
+            :class="{
+              active: customAmount == null && selectedAmount === plan.amount,
+              recommended: plan.recommended
+            }"
             type="button"
             @click="selectPlan(plan.amount)"
           >
@@ -143,7 +162,9 @@ async function submitRecharge() {
             <span class="plan-name">{{ plan.name }}</span>
             <strong>{{ formatUsdAmount(plan.amount) }}</strong>
             <span class="plan-hint">{{ plan.hint }}</span>
-            <el-icon v-if="customAmount == null && selectedAmount === plan.amount"><Check /></el-icon>
+            <el-icon v-if="customAmount == null && selectedAmount === plan.amount"
+              ><Check
+            /></el-icon>
           </button>
         </div>
 
@@ -167,7 +188,13 @@ async function submitRecharge() {
           <div>
             <h3>{{ t('orderInfo') }}</h3>
           </div>
-          <el-button class="recharge-history-trigger" text :icon="View" :loading="loading" @click="openRechargeHistory">
+          <el-button
+            class="recharge-history-trigger"
+            text
+            :icon="View"
+            :loading="loading"
+            @click="openRechargeHistory"
+          >
             {{ t('viewRechargeOrders') }}
           </el-button>
         </div>
@@ -228,7 +255,7 @@ async function submitRecharge() {
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
           <el-table-column :label="t('amount')" min-width="110">
-            <template #default="{ row }">{{ formatUsd(row.amount_micro_usd) }}</template>
+            <template #default="{ row }">{{ formatMicroUsd(row.amount_micro_usd) }}</template>
           </el-table-column>
           <el-table-column :label="t('payAmount')" min-width="120">
             <template #default="{ row }">{{ formatPayable(row) }}</template>
@@ -252,7 +279,7 @@ async function submitRecharge() {
             </div>
             <div>
               <span>{{ t('amount') }}</span>
-              <strong>{{ formatUsd(row.amount_micro_usd) }}</strong>
+              <strong>{{ formatMicroUsd(row.amount_micro_usd) }}</strong>
             </div>
             <div>
               <span>{{ t('payAmount') }}</span>
@@ -378,7 +405,7 @@ async function submitRecharge() {
 
 .custom-amount-input::before {
   color: #8a95a5;
-  content: "$";
+  content: '$';
   font-size: 14px;
   font-weight: 720;
   left: 12px;

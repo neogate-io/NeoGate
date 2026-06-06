@@ -45,6 +45,7 @@ cp backend/.env.example backend/.env
 
 ```dotenv
 DATABASE_URL=postgres://localhost/neogate
+PUBLIC_BASE_URL=https://neogate.example.com
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
 UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
 ```
@@ -101,7 +102,8 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 - 设置 `APP_ENV=production`。
 - 首次启动后替换默认管理员密码。
 - 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`。
-- 设置正确的 `CORS_ALLOWED_ORIGINS`。
+- 设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接。
+- 如果前端与 API 是跨域访问，设置正确的 `CORS_ALLOWED_ORIGINS`；同域反向代理部署通常无需额外配置。
 - 如需公开邮箱领取 API key，在管理员后台的系统设置中配置 SMTP。
 - 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。
 

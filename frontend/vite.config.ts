@@ -12,7 +12,9 @@ function requestOrigin(headers: Record<string, string | string[] | undefined>) {
   const forwardedProto = forwarded.proto || firstHeader(headers['x-forwarded-proto'])
   const forwardedHost = forwarded.host || firstHeader(headers['x-forwarded-host'])
   const host = forwardedHost || firstHeader(headers.host) || 'localhost:5173'
-  const proto = forwardedProto || (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https')
+  const proto =
+    forwardedProto ||
+    (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https')
   return `${proto}://${host}`
 }
 
@@ -41,7 +43,10 @@ function normalizeBackendOrigin(value: string | undefined) {
     return defaultBackendOrigin
   }
 
-  return origin.replace(/\/+$/, '').replace(/\/v1$/, '').replace(/\/anthropic$/, '')
+  return origin
+    .replace(/\/+$/, '')
+    .replace(/\/v1$/, '')
+    .replace(/\/anthropic$/, '')
 }
 
 function renderInstallScript(installOrigin: string, backendOrigin: string) {
@@ -59,11 +64,16 @@ function isIgnorablePureAnnotationWarning(log: { code?: string; id?: string; mes
   )
 }
 
-function installMiddleware(backendOrigin: string, req: { url?: string; headers: Record<string, string | string[] | undefined> }, res: {
-  statusCode: number
-  setHeader(name: string, value: string): void
-  end(body: string): void
-}, next: () => void) {
+function installMiddleware(
+  backendOrigin: string,
+  req: { url?: string; headers: Record<string, string | string[] | undefined> },
+  res: {
+    statusCode: number
+    setHeader(name: string, value: string): void
+    end(body: string): void
+  },
+  next: () => void
+) {
   if ((req.url || '').split('?')[0] !== '/install') {
     next()
     return
@@ -86,10 +96,14 @@ export default defineConfig(({ mode }) => {
         name: 'neogate-install-script',
         enforce: 'pre',
         configureServer(server) {
-          server.middlewares.use((req, res, next) => installMiddleware(backendOrigin, req, res, next))
+          server.middlewares.use((req, res, next) =>
+            installMiddleware(backendOrigin, req, res, next)
+          )
         },
         configurePreviewServer(server) {
-          server.middlewares.use((req, res, next) => installMiddleware(backendOrigin, req, res, next))
+          server.middlewares.use((req, res, next) =>
+            installMiddleware(backendOrigin, req, res, next)
+          )
         }
       },
       vue()
@@ -104,8 +118,40 @@ export default defineConfig(({ mode }) => {
         },
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules/element-plus') || id.includes('node_modules/@element-plus/icons-vue')) {
-              return 'element'
+            if (id.includes('node_modules/@element-plus/icons-vue')) {
+              return 'element-icons'
+            }
+            if (id.includes('node_modules/element-plus')) {
+              if (id.includes('/components/table/')) return 'element-table'
+              if (
+                id.includes('/components/dialog/') ||
+                id.includes('/components/message/') ||
+                id.includes('/components/message-box/') ||
+                id.includes('/components/loading/') ||
+                id.includes('/components/tooltip/')
+              ) {
+                return 'element-feedback'
+              }
+              if (
+                id.includes('/components/form/') ||
+                id.includes('/components/input/') ||
+                id.includes('/components/input-number/') ||
+                id.includes('/components/select/') ||
+                id.includes('/components/date-picker/') ||
+                id.includes('/components/switch/')
+              ) {
+                return 'element-form'
+              }
+              if (
+                id.includes('/components/button/') ||
+                id.includes('/components/menu/') ||
+                id.includes('/components/dropdown/') ||
+                id.includes('/components/pagination/') ||
+                id.includes('/components/segmented/')
+              ) {
+                return 'element-controls'
+              }
+              return 'element-core'
             }
             if (
               id.includes('node_modules/vue') ||

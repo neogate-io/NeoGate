@@ -46,6 +46,7 @@ pub struct AppState {
     pub secrets: SecretStore,
     pub selector: Selector,
     pub user_auth_cache: auth::UserAuthCache,
+    pub auth_rate_limiter: auth::AuthRateLimiter,
     pub cache_invalidator: cache::CacheInvalidator,
 }
 
@@ -175,6 +176,16 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
         );
     }
 
+    let auth_rate_limiter = if config.runtime_mode.is_distributed() {
+        auth::AuthRateLimiter::redis(
+            config.redis_url.as_deref().expect("validated redis url"),
+            config.redis_key_prefix.clone(),
+        )
+        .await?
+    } else {
+        auth::AuthRateLimiter::local()
+    };
+
     let state = Arc::new(AppState {
         config: config.clone(),
         usage,
@@ -192,6 +203,7 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
             config.user_auth_cache_ttl,
             config.user_auth_cache_max_entries,
         ),
+        auth_rate_limiter,
         cache_invalidator,
     });
     if config.process_role.runs_api() {
@@ -347,6 +359,7 @@ mod tests {
             config: Config {
                 database_url: "postgres://localhost/neogate".to_string(),
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
+                public_base_url: Some("http://localhost:8080".to_string()),
                 production: false,
                 runtime_mode: config::RuntimeMode::Standalone,
                 process_role: config::ProcessRole::All,
@@ -412,6 +425,7 @@ mod tests {
             secrets: SecretStore::new("test-upstream-secret-key", 1024),
             selector: Selector::new(),
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
+            auth_rate_limiter: auth::AuthRateLimiter::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
         })
     }

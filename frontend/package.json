@@ -6,8 +6,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "typecheck": "vue-tsc --noEmit",
+    "build": "pnpm typecheck && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "format": "prettier --check package.json eslint.config.js .prettierrc src/api/me.ts src/api/request.ts src/composables/useAsyncData.ts src/router/index.ts src/stores/auth.ts src/utils/format.ts vite.config.ts",
+    "format:write": "prettier --write .",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
@@ -17,9 +22,16 @@
     "vue-router": "^5.0.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@vitejs/plugin-vue": "^6.0.7",
+    "eslint": "^10.4.1",
+    "eslint-plugin-vue": "^10.9.2",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.1",
     "vite": "^8.0.14",
+    "vitest": "^4.1.8",
     "vue-tsc": "^3.3.2"
   }
 }

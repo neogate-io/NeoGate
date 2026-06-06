@@ -10,6 +10,7 @@ const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 pub struct Config {
     pub database_url: String,
     pub bind_addr: SocketAddr,
+    pub public_base_url: Option<String>,
     pub production: bool,
     pub runtime_mode: RuntimeMode,
     pub process_role: ProcessRole,
@@ -136,6 +137,9 @@ impl Config {
                 .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
                 .parse()
                 .context("BIND_ADDR must be host:port")?,
+            public_base_url: optional("PUBLIC_BASE_URL")
+                .map(normalize_public_base_url)
+                .transpose()?,
             production,
             runtime_mode,
             process_role,
@@ -276,6 +280,9 @@ impl Config {
         if self.usage_queue_size > 1_000_000 {
             anyhow::bail!("USAGE_QUEUE_SIZE must be <= 1000000");
         }
+        if self.production && self.public_base_url.is_none() {
+            anyhow::bail!("PUBLIC_BASE_URL is required in production");
+        }
 
         if self.production {
             reject_default(
@@ -410,6 +417,17 @@ fn parse_csv(name: &str, default: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+fn normalize_public_base_url(value: String) -> Result<String> {
+    let value = value.trim().trim_end_matches('/').to_string();
+    if value.is_empty() {
+        anyhow::bail!("PUBLIC_BASE_URL must not be empty");
+    }
+    if !(value.starts_with("https://") || value.starts_with("http://")) {
+        anyhow::bail!("PUBLIC_BASE_URL must start with http:// or https://");
+    }
+    Ok(value)
 }
 
 fn reject_default(name: &str, value: &str, default: &str) -> Result<()> {

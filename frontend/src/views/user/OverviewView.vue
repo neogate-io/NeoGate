@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router'
 import { getUserOverview } from '../../api/overview'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
+import { formatMicroUsd, toDateKey } from '../../utils/format'
 
 const { t } = useLocale()
 const { data: overview, loading } = useAsyncData(() => getUserOverview(), null)
@@ -14,14 +15,19 @@ const usageMetricCards = computed(() => [
   {
     key: 'todayCost',
     label: t('todayCost'),
-    value: formatUsd(overview.value?.today_cost_micro_usd),
-    trend: buildTrend(todayCost.value, yesterdayCost.value, t('comparedWithYesterday'), t('trendNoYesterdayCost')),
+    value: formatMicroUsd(overview.value?.today_cost_micro_usd),
+    trend: buildTrend(
+      todayCost.value,
+      yesterdayCost.value,
+      t('comparedWithYesterday'),
+      t('trendNoYesterdayCost')
+    ),
     icon: DataLine
   },
   {
     key: 'monthCost',
     label: t('monthCost'),
-    value: formatUsd(overview.value?.month_cost_micro_usd),
+    value: formatMicroUsd(overview.value?.month_cost_micro_usd),
     trend: buildTrend(
       currentMonthCost.value,
       previousMonthSamePeriodCost.value,
@@ -86,7 +92,9 @@ const chartPoints = computed(() => {
   }))
 })
 
-const chartPolyline = computed(() => chartPoints.value.map((point) => `${point.x},${point.y}`).join(' '))
+const chartPolyline = computed(() =>
+  chartPoints.value.map((point) => `${point.x},${point.y}`).join(' ')
+)
 const chartArea = computed(() => `0,92 ${chartPolyline.value} 100,92`)
 const chartAxisTicks = computed(() => {
   const indexes = [0, 7, 14, 21, 29]
@@ -95,7 +103,7 @@ const chartAxisTicks = computed(() => {
     .filter((point): point is NonNullable<typeof point> => Boolean(point))
 })
 const hoveredChartPoint = computed(() =>
-  hoveredChartIndex.value == null ? null : chartPoints.value[hoveredChartIndex.value] ?? null
+  hoveredChartIndex.value == null ? null : (chartPoints.value[hoveredChartIndex.value] ?? null)
 )
 const chartTooltipStyle = computed(() => {
   const point = hoveredChartPoint.value
@@ -137,11 +145,6 @@ const previousMonthSamePeriodCost = computed(() => {
   return total
 })
 
-function formatUsd(microUsd?: number | null) {
-  if (microUsd == null) return '-'
-  return `$${(microUsd / 1_000_000).toFixed(2)}`
-}
-
 function formatPercent(value: number) {
   const sign = value > 0 ? '+' : ''
   return `${sign}${value.toFixed(0)}%`
@@ -176,14 +179,6 @@ function formatFullChartDate(value: string) {
 function getCostForDate(date: Date) {
   return dailyCostMap.value.get(toDateKey(date)) ?? 0
 }
-
-function toDateKey(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 </script>
 
 <template>
@@ -200,23 +195,15 @@ function toDateKey(date: Date) {
           <span>{{ t('currentBalance') }}</span>
         </div>
         <div class="overview-balance-value">
-          <strong>{{ formatUsd(overview?.available_micro_usd) }}</strong>
+          <strong>{{ formatMicroUsd(overview?.available_micro_usd) }}</strong>
           <small class="overview-balance-estimate">{{ balanceEstimate }}</small>
         </div>
-        <el-button
-          class="overview-card-cta"
-          :tag="RouterLink"
-          to="/home/recharge"
-        >
+        <el-button class="overview-card-cta" :tag="RouterLink" to="/home/recharge">
           {{ t('goRecharge') }}
         </el-button>
       </div>
 
-      <div
-        v-for="item in usageMetricCards"
-        :key="item.key"
-        class="user-panel overview-usage-card"
-      >
+      <div v-for="item in usageMetricCards" :key="item.key" class="user-panel overview-usage-card">
         <div class="overview-dashboard-icon">
           <el-icon><component :is="item.icon" /></el-icon>
         </div>
@@ -233,15 +220,18 @@ function toDateKey(date: Date) {
       <div class="user-section-header">
         <div>
           <span class="user-eyebrow">{{ t('trendSummary') }}</span>
-          <h3>{{ formatUsd(overview?.month_cost_micro_usd) }}</h3>
+          <h3>{{ formatMicroUsd(overview?.month_cost_micro_usd) }}</h3>
         </div>
         <span>{{ t('trendPill') }}</span>
       </div>
-      <div
-        class="overview-chart-wrap"
-        @mouseleave="hoveredChartIndex = null"
-      >
-        <svg class="overview-line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" :aria-label="t('last30DaysCost')">
+      <div class="overview-chart-wrap" @mouseleave="hoveredChartIndex = null">
+        <svg
+          class="overview-line-chart"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          role="img"
+          :aria-label="t('last30DaysCost')"
+        >
           <polygon class="overview-chart-area" :points="chartArea" />
           <polyline class="overview-chart-line" :points="chartPolyline" />
           <g v-if="hoveredChartPoint" class="overview-chart-active">
@@ -257,28 +247,20 @@ function toDateKey(date: Date) {
             height="100"
             tabindex="0"
             role="button"
-            :aria-label="`${formatFullChartDate(point.date)} ${formatUsd(point.cost_micro_usd)}`"
+            :aria-label="`${formatFullChartDate(point.date)} ${formatMicroUsd(point.cost_micro_usd)}`"
             @mouseenter="hoveredChartIndex = index"
             @mousemove="hoveredChartIndex = index"
             @focus="hoveredChartIndex = index"
             @blur="hoveredChartIndex = null"
           />
         </svg>
-        <div
-          v-if="hoveredChartPoint"
-          class="overview-chart-tooltip"
-          :style="chartTooltipStyle"
-        >
+        <div v-if="hoveredChartPoint" class="overview-chart-tooltip" :style="chartTooltipStyle">
           <span>{{ formatFullChartDate(hoveredChartPoint.date) }}</span>
-          <strong>{{ formatUsd(hoveredChartPoint.cost_micro_usd) }}</strong>
+          <strong>{{ formatMicroUsd(hoveredChartPoint.cost_micro_usd) }}</strong>
         </div>
       </div>
       <div class="overview-chart-axis">
-        <span
-          v-for="tick in chartAxisTicks"
-          :key="tick.date"
-          :style="{ left: `${tick.x}%` }"
-        >
+        <span v-for="tick in chartAxisTicks" :key="tick.date" :style="{ left: `${tick.x}%` }">
           {{ tick.label }}
         </span>
       </div>
@@ -336,7 +318,9 @@ function toDateKey(date: Date) {
   gap: 13px;
   padding: 24px 22px;
   position: relative;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .overview-balance-card:hover,
@@ -344,7 +328,9 @@ function toDateKey(date: Date) {
 .overview-trend-panel:hover,
 .overview-action-card:hover {
   border-color: var(--user-primary-border, #b7dcf2);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03), 0 14px 34px rgba(15, 23, 42, 0.055);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    0 14px 34px rgba(15, 23, 42, 0.055);
 }
 
 .overview-balance-card {
@@ -524,7 +510,9 @@ function toDateKey(date: Date) {
   gap: 12px;
   min-height: 236px;
   padding: 22px 22px 18px;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .overview-chart-wrap {
@@ -534,8 +522,26 @@ function toDateKey(date: Date) {
 
 .overview-line-chart {
   background:
-    linear-gradient(to bottom, transparent 0 24%, rgba(226, 232, 240, 0.55) 24% 24.5%, transparent 24.5% 49%, rgba(226, 232, 240, 0.55) 49% 49.5%, transparent 49.5% 74%, rgba(226, 232, 240, 0.55) 74% 74.5%, transparent 74.5%),
-    linear-gradient(to right, transparent 0 24%, rgba(226, 232, 240, 0.32) 24% 24.3%, transparent 24.3% 49%, rgba(226, 232, 240, 0.32) 49% 49.3%, transparent 49.3% 74%, rgba(226, 232, 240, 0.32) 74% 74.3%, transparent 74.3%);
+    linear-gradient(
+      to bottom,
+      transparent 0 24%,
+      rgba(226, 232, 240, 0.55) 24% 24.5%,
+      transparent 24.5% 49%,
+      rgba(226, 232, 240, 0.55) 49% 49.5%,
+      transparent 49.5% 74%,
+      rgba(226, 232, 240, 0.55) 74% 74.5%,
+      transparent 74.5%
+    ),
+    linear-gradient(
+      to right,
+      transparent 0 24%,
+      rgba(226, 232, 240, 0.32) 24% 24.3%,
+      transparent 24.3% 49%,
+      rgba(226, 232, 240, 0.32) 49% 49.3%,
+      transparent 49.3% 74%,
+      rgba(226, 232, 240, 0.32) 74% 74.3%,
+      transparent 74.3%
+    );
   border-radius: 8px;
   height: 100%;
   overflow: visible;
@@ -593,7 +599,7 @@ function toDateKey(date: Date) {
   border-right: 6px solid transparent;
   border-top: 6px solid #111827;
   bottom: -5px;
-  content: "";
+  content: '';
   left: 50%;
   position: absolute;
   transform: translateX(-50%);
@@ -649,7 +655,9 @@ function toDateKey(date: Date) {
   min-height: 98px;
   padding: 22px 20px;
   text-decoration: none;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .overview-action-card:hover {

@@ -2,11 +2,17 @@
 import { DocumentCopy, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ref } from 'vue'
-import { createOwnUserKey, deleteOwnUserKey, getOwnUserKeys, updateOwnUserKeyStatus } from '../../api/userKeys'
+import {
+  createOwnUserKey,
+  deleteOwnUserKey,
+  getOwnUserKeys,
+  updateOwnUserKeyStatus
+} from '../../api/userKeys'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { UserKey } from '../../types/admin'
 import { readError } from '../../utils/errors'
+import { formatCompactDateTime } from '../../utils/format'
 
 const { t } = useLocale()
 const createLoading = ref(false)
@@ -17,17 +23,6 @@ const apiKeyName = ref('')
 const newKeyDialogVisible = ref(false)
 const newKey = ref('')
 const { data: apiKeys, loading, reload } = useAsyncData(() => getOwnUserKeys(), [])
-
-function formatCompactDateTime(value?: string | null) {
-  if (!value) return '-'
-  const date = new Date(value)
-  const year = date.getFullYear()
-  const month = date.getMonth() + 1
-  const day = date.getDate()
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${year}/${month}/${day} ${hours}:${minutes}`
-}
 
 function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
@@ -138,7 +133,12 @@ async function confirmDeleteApiKey(row: UserKey) {
 
 <template>
   <section class="user-api-keys-view">
-    <div v-loading="loading" class="key-card-grid" :class="{ 'is-empty': apiKeys.length === 0 }" role="list">
+    <div
+      v-loading="loading"
+      class="key-card-grid"
+      :class="{ 'is-empty': apiKeys.length === 0 }"
+      role="list"
+    >
       <article v-for="row in apiKeys" :key="row.id" class="user-panel key-card" role="listitem">
         <div class="key-list-name-row">
           <strong>{{ row.name }}</strong>
@@ -198,8 +198,15 @@ async function confirmDeleteApiKey(row: UserKey) {
         </dl>
       </article>
 
-      <button class="user-panel key-create-card" type="button" role="listitem" @click="openCreateDialog">
-        <span class="key-create-icon"><el-icon><Plus /></el-icon></span>
+      <button
+        class="user-panel key-create-card"
+        type="button"
+        role="listitem"
+        @click="openCreateDialog"
+      >
+        <span class="key-create-icon"
+          ><el-icon><Plus /></el-icon
+        ></span>
         <strong>{{ t('createNewApiKey') }}</strong>
       </button>
     </div>
@@ -217,8 +224,12 @@ async function confirmDeleteApiKey(row: UserKey) {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="createLoading" @click="createDialogVisible = false">{{ t('cancel') }}</el-button>
-        <el-button type="primary" :loading="createLoading" @click="createApiKey">{{ t('create') }}</el-button>
+        <el-button :disabled="createLoading" @click="createDialogVisible = false">{{
+          t('cancel')
+        }}</el-button>
+        <el-button type="primary" :loading="createLoading" @click="createApiKey">{{
+          t('create')
+        }}</el-button>
       </template>
     </el-dialog>
 
@@ -264,13 +275,17 @@ async function confirmDeleteApiKey(row: UserKey) {
   gap: 14px;
   min-height: 132px;
   padding: 16px;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .key-card:hover,
 .key-create-card:hover {
   border-color: var(--user-primary-border, #b7dcf2);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03), 0 14px 34px rgba(15, 23, 42, 0.055);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    0 14px 34px rgba(15, 23, 42, 0.055);
 }
 
 .key-list-name-row {
@@ -316,7 +331,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 .key-status-pill::before {
   background: #94a3b8;
   border-radius: 999px;
-  content: "";
+  content: '';
   display: block;
   height: 8px;
   width: 8px;
@@ -510,7 +525,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 .new-api-key-box code {
   color: #111827;
   flex: 1 1 auto;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   font-size: 13px;
   line-height: 1.5;
   min-width: 0;

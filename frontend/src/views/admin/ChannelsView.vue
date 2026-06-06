@@ -13,6 +13,7 @@ import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
 import type { Channel, PricingTemplate, ProviderPrice } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
+import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { findPricingTemplate, priceKey } from '../../utils/pricing'
 
 const { locale, t } = useLocale()
@@ -60,38 +61,29 @@ const templates = ref<PricingTemplate[]>([])
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
 const syncingTemplates = ref(false)
-const priceForms = reactive<Record<string, {
-  provider: string
-  model: string
-  inputUsdPerMillion: number
-  outputUsdPerMillion: number
-  cacheReadUsdPerMillion: number
-  cacheWriteUsdPerMillion: number | null
-  enabled: boolean
-  hasPrice: boolean
-  templateSource?: string
-}>>({})
+const priceForms = reactive<
+  Record<
+    string,
+    {
+      provider: string
+      model: string
+      inputUsdPerMillion: number
+      outputUsdPerMillion: number
+      cacheReadUsdPerMillion: number
+      cacheWriteUsdPerMillion: number | null
+      enabled: boolean
+      hasPrice: boolean
+      templateSource?: string
+    }
+  >
+>({})
 
-const MICRO_USD_PER_USD = 1_000_000
-
-const priceByModel = computed(() => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price])))
+const priceByModel = computed(
+  () => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price]))
+)
 function channelModelList(row: Channel) {
   const models = row.endpoints.flatMap((endpoint) => endpoint.models)
   return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
-}
-
-function microUsdToUsd(value: number) {
-  return value / MICRO_USD_PER_USD
-}
-
-function usdToMicroUsd(value: number) {
-  return Math.round(value * MICRO_USD_PER_USD)
-}
-
-function formatUsdPerMillion(value: number) {
-  return `$${value.toLocaleString('en-US', {
-    maximumFractionDigits: 6
-  })}`
 }
 
 function derivedCacheReadPrice(inputPrice: number) {
@@ -138,7 +130,9 @@ function channelPriceStatus(row: Channel) {
     return { missing: 0, total: 0, type: 'info' as const, label: '-' }
   }
 
-  const missing = models.filter((model) => !priceByModel.value.get(priceKey(row.provider, model))?.enabled).length
+  const missing = models.filter(
+    (model) => !priceByModel.value.get(priceKey(row.provider, model))?.enabled
+  ).length
   if (missing === 0) {
     return { missing, total: models.length, type: 'success' as const, label: t('priceReady') }
   }
@@ -202,11 +196,15 @@ async function loadPricingData() {
 
 async function syncReferencePrices() {
   try {
-    await ElMessageBox.confirm(referenceSyncConfirmContent(), t('syncReferencePricesConfirmTitle'), {
-      confirmButtonText: t('syncReferencePricesConfirmButton'),
-      cancelButtonText: t('cancel'),
-      customClass: 'reference-sync-confirm'
-    })
+    await ElMessageBox.confirm(
+      referenceSyncConfirmContent(),
+      t('syncReferencePricesConfirmTitle'),
+      {
+        confirmButtonText: t('syncReferencePricesConfirmButton'),
+        cancelButtonText: t('cancel'),
+        customClass: 'reference-sync-confirm'
+      }
+    )
   } catch {
     return
   }
@@ -235,18 +233,25 @@ function openPriceDialog(row: Channel) {
     const inputPrice = price?.input_price_usd_micros ?? template?.input_price_usd_micros ?? 0
     const cacheWritePrice = template
       ? template.cache_write_price_usd_micros
-      : price?.cache_write_price_usd_micros ?? inputPrice
+      : (price?.cache_write_price_usd_micros ?? inputPrice)
     priceForms[key] = {
       provider: row.provider,
       model,
       inputUsdPerMillion: microUsdToUsd(inputPrice),
-      outputUsdPerMillion: microUsdToUsd(price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0),
-      cacheReadUsdPerMillion: microUsdToUsd(
-        price?.cache_read_price_usd_micros ?? template?.cache_read_price_usd_micros ?? derivedCacheReadPrice(inputPrice)
+      outputUsdPerMillion: microUsdToUsd(
+        price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0
       ),
-      cacheWriteUsdPerMillion: cacheWritePrice === undefined || cacheWritePrice === null
-        ? template ? null : microUsdToUsd(inputPrice)
-        : microUsdToUsd(cacheWritePrice),
+      cacheReadUsdPerMillion: microUsdToUsd(
+        price?.cache_read_price_usd_micros ??
+          template?.cache_read_price_usd_micros ??
+          derivedCacheReadPrice(inputPrice)
+      ),
+      cacheWriteUsdPerMillion:
+        cacheWritePrice === undefined || cacheWritePrice === null
+          ? template
+            ? null
+            : microUsdToUsd(inputPrice)
+          : microUsdToUsd(cacheWritePrice),
       enabled: price?.enabled ?? true,
       hasPrice: Boolean(price),
       templateSource: template ? pricingTemplateSourceLabel(template, row.provider) : undefined
@@ -268,10 +273,16 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
   if (!template) return ''
   const input = formatUsdPerMillion(microUsdToUsd(template.input_price_usd_micros))
   const output = formatUsdPerMillion(microUsdToUsd(template.output_price_usd_micros))
-  const cacheRead = formatUsdPerMillion(microUsdToUsd(template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)))
-  const cacheWrite = template.cache_write_price_usd_micros === undefined || template.cache_write_price_usd_micros === null
-    ? '$0'
-    : formatUsdPerMillion(microUsdToUsd(template.cache_write_price_usd_micros))
+  const cacheRead = formatUsdPerMillion(
+    microUsdToUsd(
+      template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)
+    )
+  )
+  const cacheWrite =
+    template.cache_write_price_usd_micros === undefined ||
+    template.cache_write_price_usd_micros === null
+      ? '$0'
+      : formatUsdPerMillion(microUsdToUsd(template.cache_write_price_usd_micros))
   return `Token ${input} / ${output}\nCache ${cacheRead} / ${cacheWrite}`
 }
 
@@ -292,9 +303,11 @@ function fillReferencePrice(form: (typeof priceForms)[string]) {
   form.cacheReadUsdPerMillion = microUsdToUsd(
     template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)
   )
-  form.cacheWriteUsdPerMillion = template.cache_write_price_usd_micros === undefined || template.cache_write_price_usd_micros === null
-    ? null
-    : microUsdToUsd(template.cache_write_price_usd_micros)
+  form.cacheWriteUsdPerMillion =
+    template.cache_write_price_usd_micros === undefined ||
+    template.cache_write_price_usd_micros === null
+      ? null
+      : microUsdToUsd(template.cache_write_price_usd_micros)
 }
 
 function cacheWritePricePayload(form: (typeof priceForms)[string]) {
@@ -382,7 +395,11 @@ onMounted(loadPricingData)
 <template>
   <section class="grid">
     <div class="table-toolbar">
-      <el-button class="admin-action-button" :loading="syncingTemplates" @click="syncReferencePrices">
+      <el-button
+        class="admin-action-button"
+        :loading="syncingTemplates"
+        @click="syncReferencePrices"
+      >
         {{ t('syncReferencePrices') }}
       </el-button>
       <el-button class="admin-action-button" type="primary" @click="openCreateDialog">
@@ -390,7 +407,12 @@ onMounted(loadPricingData)
       </el-button>
     </div>
 
-    <el-table v-loading="loading" class="admin-table service-table channel-table" :data="channels" stripe>
+    <el-table
+      v-loading="loading"
+      class="admin-table service-table channel-table"
+      :data="channels"
+      stripe
+    >
       <el-table-column prop="name" :label="t('name')" width="260">
         <template #default="{ row }">
           <span class="channel-name-cell">
@@ -417,7 +439,9 @@ onMounted(loadPricingData)
       </el-table-column>
       <el-table-column :label="t('channelKeyCountShort')" width="90" align="center">
         <template #default="{ row }">
-          <span class="channel-key-count">{{ row.use_credentials ? t('credentialFiles') : (keyCounts.get(row.id) ?? 0) }}</span>
+          <span class="channel-key-count">{{
+            row.use_credentials ? t('credentialFiles') : (keyCounts.get(row.id) ?? 0)
+          }}</span>
         </template>
       </el-table-column>
       <el-table-column :label="t('channelStatus')" width="100" align="center">
@@ -441,7 +465,11 @@ onMounted(loadPricingData)
       <el-table-column :label="t('actions')" width="260" align="center" header-align="center">
         <template #default="{ row }">
           <div class="table-row-actions">
-            <el-button class="admin-action-button price-config-action" :icon="Coin" @click="openPriceDialog(row)">
+            <el-button
+              class="admin-action-button price-config-action"
+              :icon="Coin"
+              @click="openPriceDialog(row)"
+            >
               {{ t('configurePrice') }}
             </el-button>
             <el-button
@@ -469,7 +497,12 @@ onMounted(loadPricingData)
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="createDialogOpen" class="channel-dialog" :title="t('createChannel')" width="620px">
+    <el-dialog
+      v-model="createDialogOpen"
+      class="channel-dialog"
+      :title="t('createChannel')"
+      width="620px"
+    >
       <el-form class="channel-form" label-position="top" @submit.prevent="submitChannel">
         <div class="provider-row">
           <el-form-item class="provider-field" :label="t('provider')">
@@ -545,7 +578,11 @@ onMounted(loadPricingData)
           <el-switch v-model="createForm.use_credentials" />
         </label>
 
-        <el-form-item v-if="!createForm.use_credentials" class="api-key-field" :label="t('apiKeyOrJson')">
+        <el-form-item
+          v-if="!createForm.use_credentials"
+          class="api-key-field"
+          :label="t('apiKeyOrJson')"
+        >
           <el-input
             v-model="secretInput"
             class="secret-input"
@@ -578,7 +615,9 @@ onMounted(loadPricingData)
       <div class="model-picker">
         <div class="model-picker-toolbar">
           <span class="model-count">
-            {{ t('selectedModelCount') }} {{ selectedFetchedModels.length }}/{{ fetchedModels.length }}
+            {{ t('selectedModelCount') }} {{ selectedFetchedModels.length }}/{{
+              fetchedModels.length
+            }}
           </span>
         </div>
 
@@ -592,11 +631,7 @@ onMounted(loadPricingData)
               />
               <span>{{ t('allModels') }}</span>
             </label>
-            <label
-              v-for="model in fetchedModels"
-              :key="model"
-              class="model-checkbox-item"
-            >
+            <label v-for="model in fetchedModels" :key="model" class="model-checkbox-item">
               <input v-model="selectedFetchedModels" type="checkbox" :value="model" />
               <span>{{ model }}</span>
             </label>
@@ -613,7 +648,12 @@ onMounted(loadPricingData)
       </template>
     </el-dialog>
 
-    <el-dialog v-model="editDialogOpen" class="channel-dialog" :title="t('editChannel')" width="620px">
+    <el-dialog
+      v-model="editDialogOpen"
+      class="channel-dialog"
+      :title="t('editChannel')"
+      width="620px"
+    >
       <el-form class="channel-form" label-position="top" @submit.prevent="submitEditChannel">
         <div class="provider-row">
           <el-form-item class="provider-field" :label="t('provider')">
@@ -688,7 +728,11 @@ onMounted(loadPricingData)
           <el-switch v-model="editForm.use_credentials" />
         </label>
 
-        <el-form-item v-if="!editForm.use_credentials" class="api-key-field" :label="t('apiKeyOrJson')">
+        <el-form-item
+          v-if="!editForm.use_credentials"
+          class="api-key-field"
+          :label="t('apiKeyOrJson')"
+        >
           <el-input
             v-model="editSecretInput"
             class="secret-input"
@@ -732,7 +776,11 @@ onMounted(loadPricingData)
         </div>
 
         <div class="price-editor-body">
-          <div v-for="row in Object.values(priceForms)" :key="`${row.provider}:${row.model}`" class="price-editor-row">
+          <div
+            v-for="row in Object.values(priceForms)"
+            :key="`${row.provider}:${row.model}`"
+            class="price-editor-row"
+          >
             <div class="price-model-cell" :title="row.model">
               <ProviderIcon :provider="priceIconProvider(row)" class="price-model-icon" />
               <span>{{ row.model }}</span>
@@ -788,7 +836,9 @@ onMounted(loadPricingData)
             <div class="reference-price-cell">
               <template v-if="hasReferencePrice(row)">
                 <span class="reference-price-summary">{{ referencePriceSummary(row) }}</span>
-                <span class="reference-price-source">{{ row.templateSource || t('pricingTemplate') }}</span>
+                <span class="reference-price-source">{{
+                  row.templateSource || t('pricingTemplate')
+                }}</span>
               </template>
               <el-tag v-else :type="row.hasPrice ? 'info' : 'warning'">
                 {{ referencePriceFallbackLabel(row) }}
@@ -812,7 +862,6 @@ onMounted(loadPricingData)
         </div>
       </template>
     </el-dialog>
-
   </section>
 </template>
 
@@ -1047,7 +1096,7 @@ onMounted(loadPricingData)
 .dialog-section-title::before,
 .dialog-section-title::after {
   background: #dfe4ec;
-  content: "";
+  content: '';
   height: 1px;
 }
 
@@ -1286,7 +1335,7 @@ onMounted(loadPricingData)
   border: 2px solid #c7d7fe;
   border-top-color: var(--brand-blue);
   border-radius: 999px;
-  content: "";
+  content: '';
   height: 13px;
   width: 13px;
 }

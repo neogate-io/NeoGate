@@ -1,0 +1,38 @@
+import type { LoginRole } from './auth'
+import { ApiError } from '../utils/errors'
+
+export type CurrentUser = {
+  role: LoginRole
+}
+
+export async function getCurrentUser(token: string) {
+  const response = await fetch('/api/me', {
+    headers: {
+      authorization: `Bearer ${token}`
+    }
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new ApiError(readErrorMessage(data) ?? response.statusText, response.status)
+  }
+
+  const role = readRole(data)
+  if (!role) {
+    throw new ApiError('invalid current user response', response.status)
+  }
+
+  return { role }
+}
+
+function readRole(data: unknown): LoginRole | '' {
+  if (typeof data !== 'object' || !data || !('role' in data)) return ''
+  const role = (data as { role?: unknown }).role
+  return role === 'admin' || role === 'user' ? role : ''
+}
+
+function readErrorMessage(data: unknown) {
+  if (typeof data === 'object' && data && 'error' in data) {
+    const error = (data as { error?: unknown }).error
+    if (typeof error === 'string') return error
+  }
+}

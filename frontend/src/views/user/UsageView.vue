@@ -5,6 +5,14 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { getUserUsage } from '../../api/monitoring'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
+import {
+  cacheWriteTokens,
+  formatDateTime,
+  formatDurationMs,
+  formatMicroUsd,
+  formatNumber,
+  formatTokenRate
+} from '../../utils/format'
 
 const { locale, t } = useLocale()
 const currentPage = ref(1)
@@ -18,29 +26,25 @@ const usageQueryRange = computed(() => {
     end: endDate.toISOString()
   }
 })
-const { data: usagePage, loading, reload } = useAsyncData(
-  () => getUserUsage(currentPage.value, pageSize.value, usageQueryRange.value.start, usageQueryRange.value.end),
+const {
+  data: usagePage,
+  loading,
+  reload
+} = useAsyncData(
+  () =>
+    getUserUsage(
+      currentPage.value,
+      pageSize.value,
+      usageQueryRange.value.start,
+      usageQueryRange.value.end
+    ),
   { items: [], total: 0, page: 1, limit: 20 }
 )
 
 const filteredItems = computed(() => usagePage.value.items)
 
-function formatUsd(microUsd?: number | null, digits = 6) {
-  if (microUsd == null) return '-'
-  return `$${(microUsd / 1_000_000).toFixed(digits)}`
-}
-
-function formatMs(ms?: number | null) {
-  if (ms == null) return '-'
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
-}
-
-function formatNumber(value?: number | null) {
-  return value == null ? '-' : value.toLocaleString(locale.value)
-}
-
 function formatFullTime(value: string) {
-  return new Date(value).toLocaleString(locale.value, {
+  return formatDateTime(value, locale.value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -48,16 +52,6 @@ function formatFullTime(value: string) {
     minute: '2-digit',
     second: '2-digit'
   })
-}
-
-function cacheWriteTokens(row: { cache_create_in_tokens?: number | null; cache_create_5m_in_tokens?: number | null; cache_create_1h_in_tokens?: number | null }) {
-  const split = (row.cache_create_5m_in_tokens || 0) + (row.cache_create_1h_in_tokens || 0)
-  return split > 0 ? split : row.cache_create_in_tokens || 0
-}
-
-function formatRate(value?: number | null) {
-  if (value == null || value <= 0) return '-'
-  return `${Math.round(value).toLocaleString(locale.value)} t/s`
 }
 
 function statusLabel(statusCode?: number | null) {
@@ -81,7 +75,12 @@ async function handleDateRangeChange() {
 }
 
 async function exportUsage() {
-  const exportPage = await getUserUsage(1, 1000, usageQueryRange.value.start, usageQueryRange.value.end)
+  const exportPage = await getUserUsage(
+    1,
+    1000,
+    usageQueryRange.value.start,
+    usageQueryRange.value.end
+  )
   const headers = [
     t('time'),
     t('model'),
@@ -106,10 +105,10 @@ async function exportUsage() {
     row.total_tokens ?? '',
     row.cache_in_tokens ?? '',
     cacheWriteTokens(row),
-    formatMs(row.latency_ms),
-    formatMs(row.first_response_ms),
-    formatRate(row.output_tokens_per_second),
-    formatUsd(row.cost_micro_usd),
+    formatDurationMs(row.latency_ms),
+    formatDurationMs(row.first_response_ms),
+    formatTokenRate(row.output_tokens_per_second, locale.value),
+    formatMicroUsd(row.cost_micro_usd, 6),
     statusLabel(row.status_code)
   ])
   const csv = [headers, ...rows].map((row) => row.map(escapeCsvCell).join(',')).join('\n')
@@ -173,17 +172,25 @@ function escapeCsvCell(value: string | number) {
               </span>
             </span>
             <span class="usage-token-stack">
-              <span>{{ formatNumber(row.input_tokens) }} / {{ formatNumber(row.output_tokens) }}</span>
-              <small>{{ t('cacheReadShort') }}↓ {{ formatNumber(row.cache_in_tokens) }}</small>
+              <span
+                >{{ formatNumber(row.input_tokens, locale) }} /
+                {{ formatNumber(row.output_tokens, locale) }}</span
+              >
+              <small
+                >{{ t('cacheReadShort') }}↓ {{ formatNumber(row.cache_in_tokens, locale) }}</small
+              >
             </span>
             <span class="usage-latency-cell">
               <span class="usage-latency-pills">
-                <b>{{ formatMs(row.latency_ms) }}</b>
-                <b>{{ formatMs(row.first_response_ms) }}</b>
+                <b>{{ formatDurationMs(row.latency_ms) }}</b>
+                <b>{{ formatDurationMs(row.first_response_ms) }}</b>
               </span>
-              <small>{{ row.streamed ? t('streamShortLabel') : t('nonStreamShortLabel') }} · {{ formatRate(row.output_tokens_per_second) }}</small>
+              <small
+                >{{ row.streamed ? t('streamShortLabel') : t('nonStreamShortLabel') }} ·
+                {{ formatTokenRate(row.output_tokens_per_second, locale) }}</small
+              >
             </span>
-            <span class="usage-cost">{{ formatUsd(row.cost_micro_usd) }}</span>
+            <span class="usage-cost">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
             <span class="usage-details-label">{{ t('viewDetails') }}</span>
           </summary>
           <dl class="usage-detail-grid">
@@ -205,47 +212,50 @@ function escapeCsvCell(value: string | number) {
             </div>
             <div>
               <dt>{{ t('totalTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.total_tokens) }}</dd>
+              <dd>{{ formatNumber(row.total_tokens, locale) }}</dd>
             </div>
             <div>
               <dt>{{ t('inputTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.input_tokens) }}</dd>
+              <dd>{{ formatNumber(row.input_tokens, locale) }}</dd>
             </div>
             <div>
               <dt>{{ t('outputTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.output_tokens) }}</dd>
+              <dd>{{ formatNumber(row.output_tokens, locale) }}</dd>
             </div>
             <div>
               <dt>{{ t('cacheReadTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.cache_in_tokens) }}</dd>
+              <dd>{{ formatNumber(row.cache_in_tokens, locale) }}</dd>
             </div>
             <div>
               <dt>{{ t('cacheWriteTokensDetail') }}</dt>
-              <dd>{{ formatNumber(cacheWriteTokens(row)) }}</dd>
+              <dd>{{ formatNumber(cacheWriteTokens(row), locale) }}</dd>
             </div>
             <div>
               <dt>{{ t('totalLatencyDetail') }}</dt>
-              <dd>{{ formatMs(row.latency_ms) }}</dd>
+              <dd>{{ formatDurationMs(row.latency_ms) }}</dd>
             </div>
             <div>
               <dt>{{ t('firstResponseLatencyDetail') }}</dt>
-              <dd>{{ formatMs(row.first_response_ms) }}</dd>
+              <dd>{{ formatDurationMs(row.first_response_ms) }}</dd>
             </div>
             <div>
               <dt>{{ t('status') }}</dt>
               <dd>
-                <span class="usage-status" :class="{ 'is-error': row.status_code && row.status_code >= 400 }">
+                <span
+                  class="usage-status"
+                  :class="{ 'is-error': row.status_code && row.status_code >= 400 }"
+                >
                   {{ statusLabel(row.status_code) }}
                 </span>
               </dd>
             </div>
             <div>
               <dt>{{ t('throughput') }}</dt>
-              <dd>{{ formatRate(row.output_tokens_per_second) }}</dd>
+              <dd>{{ formatTokenRate(row.output_tokens_per_second, locale) }}</dd>
             </div>
             <div>
               <dt>{{ t('cost') }}</dt>
-              <dd>{{ formatUsd(row.cost_micro_usd) }}</dd>
+              <dd>{{ formatMicroUsd(row.cost_micro_usd, 6) }}</dd>
             </div>
             <div>
               <dt>{{ t('billingStatus') }}</dt>
@@ -257,7 +267,11 @@ function escapeCsvCell(value: string | number) {
             </div>
           </dl>
         </details>
-        <div v-if="loading && filteredItems.length === 0" class="usage-loading-rows" aria-hidden="true">
+        <div
+          v-if="loading && filteredItems.length === 0"
+          class="usage-loading-rows"
+          aria-hidden="true"
+        >
           <span v-for="index in pageSize" :key="index"></span>
         </div>
       </div>
@@ -429,7 +443,7 @@ function escapeCsvCell(value: string | number) {
 
 .usage-time {
   color: #475467;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   font-weight: 400;
   white-space: nowrap;
@@ -513,7 +527,7 @@ function escapeCsvCell(value: string | number) {
   border-radius: 7px;
   color: #0f8f70;
   display: inline-flex;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   font-weight: 400;
   min-height: 24px;
@@ -523,7 +537,7 @@ function escapeCsvCell(value: string | number) {
 .usage-latency-pills b:first-child::before {
   background: #20c997;
   border-radius: 999px;
-  content: "";
+  content: '';
   height: 6px;
   margin-right: 6px;
   width: 6px;
@@ -531,7 +545,7 @@ function escapeCsvCell(value: string | number) {
 
 .usage-cost {
   color: #111827;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12.5px;
   font-weight: 400;
   text-align: left;
@@ -628,10 +642,10 @@ function escapeCsvCell(value: string | number) {
   .usage-row summary {
     gap: 8px 12px;
     grid-template-areas:
-      "model model"
-      "time cost"
-      "tokens latency"
-      "details details";
+      'model model'
+      'time cost'
+      'tokens latency'
+      'details details';
     grid-template-columns: minmax(0, 1fr) auto;
     min-height: 0;
     padding: 14px 16px;

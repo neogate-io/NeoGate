@@ -99,6 +99,8 @@ pub enum AppError {
     NotFound,
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("rate limited: {0}")]
+    RateLimited(String),
     #[error("upstream unavailable: {0}")]
     UpstreamUnavailable(String),
     #[error(transparent)]
@@ -156,6 +158,7 @@ impl IntoResponse for AppError {
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             AppError::UpstreamRequest(_) => unreachable!("handled above"),
             AppError::Sqlx(_)
@@ -167,7 +170,10 @@ impl IntoResponse for AppError {
         };
         if status.is_server_error() {
             tracing::error!(error = %self, error_debug = ?self, "request failed");
-        } else if matches!(self, AppError::BadRequest(_) | AppError::PayloadTooLarge(_)) {
+        } else if matches!(
+            self,
+            AppError::BadRequest(_) | AppError::PayloadTooLarge(_) | AppError::RateLimited(_)
+        ) {
             tracing::warn!(error = %self, "request rejected");
         }
         let message = match &self {

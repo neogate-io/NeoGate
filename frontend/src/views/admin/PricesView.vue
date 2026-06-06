@@ -1,11 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getPricingTemplates, getProviderModels, getProviderPrices, upsertProviderPrice } from '../../api/prices'
+import {
+  getPricingTemplates,
+  getProviderModels,
+  getProviderPrices,
+  upsertProviderPrice
+} from '../../api/prices'
 import { getProviders } from '../../api/providers'
 import { useLocale } from '../../composables/useLocale'
-import type { PricingTemplate, ProviderModel, ProviderPrice, ProviderRecord } from '../../types/admin'
+import type {
+  PricingTemplate,
+  ProviderModel,
+  ProviderPrice,
+  ProviderRecord
+} from '../../types/admin'
 import { readError } from '../../utils/errors'
+import { formatMicrosPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { findPricingTemplate, priceKey } from '../../utils/pricing'
 
 type ProviderModelOption = {
@@ -18,8 +29,6 @@ type PriceRow = ProviderModelOption & {
   price?: ProviderPrice
   template?: PricingTemplate
 }
-
-const MICRO_USD_PER_USD = 1_000_000
 
 const { t } = useLocale()
 const providers = ref<ProviderRecord[]>([])
@@ -59,7 +68,12 @@ const providerModelOptions = computed(() => {
 
   for (const price of prices.value) {
     const provider = providerByCode.value.get(price.provider)
-    addProviderModelOption(options, price.provider, provider?.display_name ?? price.provider, price.model)
+    addProviderModelOption(
+      options,
+      price.provider,
+      provider?.display_name ?? price.provider,
+      price.model
+    )
   }
 
   return Array.from(options.values()).sort((left, right) => {
@@ -117,42 +131,35 @@ function addProviderModelOption(
   }
 }
 
-function microUsdToUsd(value: number) {
-  return value / MICRO_USD_PER_USD
-}
-
-function usdToMicroUsd(value: number) {
-  return Math.round(value * MICRO_USD_PER_USD)
-}
-
 function derivedCacheReadPrice(inputPrice: number) {
   return Math.round(inputPrice / 10)
 }
 
-function formatMillionTokenPrice(value?: number) {
-  if (value === undefined || value === null) return '-'
-  return `$${microUsdToUsd(value).toFixed(6)}`
-}
-
 function formatCacheWritePrice(row: PriceRow) {
   if (!row.price) return '-'
-  if (row.template && (row.template.cache_write_price_usd_micros === undefined || row.template.cache_write_price_usd_micros === null)) {
+  if (
+    row.template &&
+    (row.template.cache_write_price_usd_micros === undefined ||
+      row.template.cache_write_price_usd_micros === null)
+  ) {
     return t('noExtraCacheWriteFee')
   }
-  return row.price.cache_write_price_usd_micros === undefined || row.price.cache_write_price_usd_micros === null
+  return row.price.cache_write_price_usd_micros === undefined ||
+    row.price.cache_write_price_usd_micros === null
     ? t('noExtraCacheWriteFee')
-    : formatMillionTokenPrice(row.price.cache_write_price_usd_micros)
+    : formatMicrosPerMillion(row.price.cache_write_price_usd_micros)
 }
 
 async function load() {
   loading.value = true
   try {
-    const [fetchedProviders, fetchedProviderModels, fetchedPrices, fetchedTemplates] = await Promise.all([
-      getProviders(),
-      getProviderModels(),
-      getProviderPrices(),
-      getPricingTemplates()
-    ])
+    const [fetchedProviders, fetchedProviderModels, fetchedPrices, fetchedTemplates] =
+      await Promise.all([
+        getProviders(),
+        getProviderModels(),
+        getProviderPrices(),
+        getPricingTemplates()
+      ])
     providers.value = fetchedProviders
     providerModels.value = fetchedProviderModels
     prices.value = fetchedPrices
@@ -190,15 +197,22 @@ function applyExistingPrice() {
   const inputPrice = price?.input_price_usd_micros ?? template?.input_price_usd_micros ?? 0
   const cacheWritePrice = template
     ? template.cache_write_price_usd_micros
-    : price?.cache_write_price_usd_micros ?? inputPrice
+    : (price?.cache_write_price_usd_micros ?? inputPrice)
   form.inputUsdPerMillion = microUsdToUsd(inputPrice)
-  form.outputUsdPerMillion = microUsdToUsd(price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0)
-  form.cacheReadUsdPerMillion = microUsdToUsd(
-    price?.cache_read_price_usd_micros ?? template?.cache_read_price_usd_micros ?? derivedCacheReadPrice(inputPrice)
+  form.outputUsdPerMillion = microUsdToUsd(
+    price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0
   )
-  form.cacheWriteUsdPerMillion = cacheWritePrice === undefined || cacheWritePrice === null
-    ? template ? null : microUsdToUsd(inputPrice)
-    : microUsdToUsd(cacheWritePrice)
+  form.cacheReadUsdPerMillion = microUsdToUsd(
+    price?.cache_read_price_usd_micros ??
+      template?.cache_read_price_usd_micros ??
+      derivedCacheReadPrice(inputPrice)
+  )
+  form.cacheWriteUsdPerMillion =
+    cacheWritePrice === undefined || cacheWritePrice === null
+      ? template
+        ? null
+        : microUsdToUsd(inputPrice)
+      : microUsdToUsd(cacheWritePrice)
   form.enabled = price?.enabled ?? true
 }
 
@@ -216,7 +230,8 @@ async function savePrice() {
       input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
       output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
       cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-      cache_write_price_usd_micros: form.cacheWriteUsdPerMillion === null ? null : usdToMicroUsd(form.cacheWriteUsdPerMillion),
+      cache_write_price_usd_micros:
+        form.cacheWriteUsdPerMillion === null ? null : usdToMicroUsd(form.cacheWriteUsdPerMillion),
       enabled: form.enabled
     })
     ElMessage.success(t('priceSaved'))
@@ -245,7 +260,12 @@ onMounted(load)
         </el-select>
       </el-form-item>
       <el-form-item :label="t('model')">
-        <el-select v-model="form.model" filterable :disabled="!form.provider" @change="applyExistingPrice">
+        <el-select
+          v-model="form.model"
+          filterable
+          :disabled="!form.provider"
+          @change="applyExistingPrice"
+        >
           <el-option
             v-for="option in modelOptions"
             :key="option.model"
@@ -283,17 +303,17 @@ onMounted(load)
       <el-table-column prop="model" :label="t('model')" min-width="220" />
       <el-table-column :label="t('inputPrice')" min-width="150">
         <template #default="{ row }">
-          {{ formatMillionTokenPrice(row.price?.input_price_usd_micros) }}
+          {{ formatMicrosPerMillion(row.price?.input_price_usd_micros) }}
         </template>
       </el-table-column>
       <el-table-column :label="t('outputPrice')" min-width="150">
         <template #default="{ row }">
-          {{ formatMillionTokenPrice(row.price?.output_price_usd_micros) }}
+          {{ formatMicrosPerMillion(row.price?.output_price_usd_micros) }}
         </template>
       </el-table-column>
       <el-table-column :label="t('cacheReadPrice')" min-width="160">
         <template #default="{ row }">
-          {{ formatMillionTokenPrice(row.price?.cache_read_price_usd_micros) }}
+          {{ formatMicrosPerMillion(row.price?.cache_read_price_usd_micros) }}
         </template>
       </el-table-column>
       <el-table-column :label="t('cacheWritePrice')" min-width="160">

@@ -5,6 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Algorithm, Argon2, Params, Version,
+};
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, HeaderMap},
@@ -135,28 +139,22 @@ pub fn validate_user_session_token(token: &str, secret: &str) -> Option<DbId> {
 }
 
 pub fn hash_user_password(password: &str, secret: &str) -> String {
-    let salt = Alphanumeric.sample_string(&mut rand::rng(), 32);
-    let digest = user_password_digest(password, secret, &salt);
-    format!("neo_pwd_v1${salt}${digest}")
+    let salt = SaltString::generate(&mut OsRng);
+    let material = password_material(password, secret);
+    password_hasher()
+        .hash_password(material.as_bytes(), &salt)
+        .expect("argon2 password hash parameters are valid")
+        .to_string()
 }
 
 pub fn verify_user_password(password: &str, secret: &str, password_hash: &str) -> bool {
-    let mut parts = password_hash.split('$');
-    let Some("neo_pwd_v1") = parts.next() else {
+    let Ok(parsed_hash) = PasswordHash::new(password_hash) else {
         return false;
     };
-    let Some(salt) = parts.next().filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    let Some(expected) = parts.next() else {
-        return false;
-    };
-    if parts.next().is_some() {
-        return false;
-    }
-
-    let digest = user_password_digest(password, secret, salt);
-    constant_time_eq(digest.as_bytes(), expected.as_bytes())
+    let material = password_material(password, secret);
+    password_hasher()
+        .verify_password(material.as_bytes(), &parsed_hash)
+        .is_ok()
 }
 
 pub fn hash_email_verification_code(email: &str, code: &str, secret: &str) -> String {
@@ -533,12 +531,15 @@ fn password_reset_token_payload(expires_at: i64, email_hex: &str) -> String {
     format!("reset.v1.{expires_at}.{email_hex}")
 }
 
-fn user_password_digest(password: &str, secret: &str, salt: &str) -> String {
-    let mut digest = hmac_sha256_hex(secret.as_bytes(), format!("{salt}:{password}").as_bytes());
-    for _ in 0..10_000 {
-        digest = hmac_sha256_hex(secret.as_bytes(), format!("{salt}:{digest}").as_bytes());
-    }
-    digest
+fn password_hasher() -> Argon2<'static> {
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default())
+}
+
+fn password_material(password: &str, secret: &str) -> String {
+    format!(
+        "{}:{password}",
+        hmac_sha256_hex(secret.as_bytes(), b"password-pepper.v1")
+    )
 }
 
 fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
@@ -645,6 +646,30 @@ mod tests {
         assert!(is_generated_user_key(&key));
         assert!(!is_generated_user_key(&key[3..]));
         assert!(!is_generated_user_key("neo_abcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn user_password_hashes_use_argon2id() {
+        let secret = "test-password-pepper";
+        let hash = hash_user_password("correct horse battery staple", secret);
+
+        assert!(hash.starts_with("$argon2id$"));
+        assert!(verify_user_password(
+            "correct horse battery staple",
+            secret,
+            &hash
+        ));
+        assert!(!verify_user_password("wrong password", secret, &hash));
+        assert!(!verify_user_password(
+            "correct horse battery staple",
+            "different-pepper",
+            &hash
+        ));
+        assert!(!verify_user_password(
+            "correct horse battery staple",
+            secret,
+            "neo_pwd_v1$salt$digest"
+        ));
     }
 
     #[test]

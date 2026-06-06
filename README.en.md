@@ -46,6 +46,7 @@ Edit `backend/.env` and confirm at least these settings:
 
 ```dotenv
 DATABASE_URL=postgres://localhost/neogate
+PUBLIC_BASE_URL=https://neogate.example.com
 ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
 UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
 ```
@@ -102,7 +103,8 @@ Before going live:
 - Set `APP_ENV=production`.
 - Replace the default admin password after first startup.
 - Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`.
-- Set the correct `CORS_ALLOWED_ORIGINS`.
+- Set a trusted `PUBLIC_BASE_URL` for password reset links.
+- If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration.
 - Configure SMTP in the admin settings if you want public email-based API key claims.
 - For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode.
 

@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Calendar, Clock, Delete, Refresh, SwitchButton, Upload, Warning } from '@element-plus/icons-vue'
+import {
+  Calendar,
+  Clock,
+  Delete,
+  Refresh,
+  SwitchButton,
+  Upload,
+  Warning
+} from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   deleteCredential,
@@ -14,6 +22,7 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import type { Credential, CredentialQuotaWindow } from '../../types/admin'
 import { readError } from '../../utils/errors'
+import { formatCompactDateTime } from '../../utils/format'
 
 const { t } = useLocale()
 const credentials = ref<Credential[]>([])
@@ -137,9 +146,10 @@ async function uploadCredential(event: Event) {
     for (const credential of result.imported) {
       mergeCredential(credential)
     }
-    const message = failed > 0
-      ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
-      : `${t('credentialUploadDone')} ${imported}`
+    const message =
+      failed > 0
+        ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
+        : `${t('credentialUploadDone')} ${imported}`
     ElMessage.success(message)
     if (failed > 0) {
       ElMessage.warning(result.failed.map((item) => `${item.filename}: ${item.error}`).join('\n'))
@@ -179,7 +189,7 @@ function isCredentialSelected(id: number) {
 
 function toggleCredentialSelection(id: number, checked: string | number | boolean) {
   const next = new Set(selectedIds.value)
-  if (Boolean(checked)) {
+  if (checked === true || checked === 'true' || checked === 1 || checked === '1') {
     next.add(id)
   } else {
     next.delete(id)
@@ -202,7 +212,13 @@ function quotaTrackWidth(window?: CredentialQuotaWindow | null) {
 }
 
 function credentialTitle(credential: Credential) {
-  return credential.identity_label || credential.email || credential.account_id || credential.filename || t('credentialUnknownIdentity')
+  return (
+    credential.identity_label ||
+    credential.email ||
+    credential.account_id ||
+    credential.filename ||
+    t('credentialUnknownIdentity')
+  )
 }
 
 function isOpenAICredential(credential: Credential) {
@@ -215,29 +231,18 @@ function credentialPlanLabel(credential: Credential) {
   return plan.toUpperCase()
 }
 
-function formatCompactDateTime(value?: string | null) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-  return `${year}/${month}/${day} ${hour}:${minute}`
-}
-
 function formatResetLabel(value?: string | null) {
   if (!value) return `${t('credentialResetAt')}: -`
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return `${t('credentialResetAt')}: -`
 
   const diffMinutes = Math.max(0, Math.round((date.getTime() - Date.now()) / 60000))
-  const relative = diffMinutes < 60
-    ? `${diffMinutes}${t('minuteShort')}`
-    : diffMinutes < 1440
-      ? `${Math.round(diffMinutes / 60)}${t('hourShort')}`
-      : `${Math.round(diffMinutes / 1440)}${t('dayShort')}`
+  const relative =
+    diffMinutes < 60
+      ? `${diffMinutes}${t('minuteShort')}`
+      : diffMinutes < 1440
+        ? `${Math.round(diffMinutes / 60)}${t('hourShort')}`
+        : `${Math.round(diffMinutes / 1440)}${t('dayShort')}`
   const dayLabel = isTomorrow(date) ? t('tomorrow') : formatShortDate(date)
   const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   return `${t('credentialResetAt')}: ${relative} (${dayLabel} ${time})`
@@ -246,9 +251,11 @@ function formatResetLabel(value?: string | null) {
 function isTomorrow(date: Date) {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
-  return date.getFullYear() === tomorrow.getFullYear() &&
+  return (
+    date.getFullYear() === tomorrow.getFullYear() &&
     date.getMonth() === tomorrow.getMonth() &&
     date.getDate() === tomorrow.getDate()
+  )
 }
 
 function formatShortDate(date: Date) {
@@ -276,10 +283,20 @@ void bootstrap()
         type="file"
         @change="uploadCredential"
       />
-      <el-button class="admin-action-button" :icon="Upload" :loading="uploading" @click="openCredentialUpload">
+      <el-button
+        class="admin-action-button"
+        :icon="Upload"
+        :loading="uploading"
+        @click="openCredentialUpload"
+      >
         {{ t('upload') }}
       </el-button>
-      <el-button class="admin-action-button" :icon="Refresh" :loading="refreshingAll || loading" @click="refreshEnabledCredentials">
+      <el-button
+        class="admin-action-button"
+        :icon="Refresh"
+        :loading="refreshingAll || loading"
+        @click="refreshEnabledCredentials"
+      >
         {{ t('refreshAll') }}
       </el-button>
     </div>
@@ -294,7 +311,10 @@ void bootstrap()
         v-for="credential in sortedCredentials"
         :key="credential.id"
         class="credential-card"
-        :class="{ 'is-disabled': !credential.enabled, 'is-selected': isCredentialSelected(credential.id) }"
+        :class="{
+          'is-disabled': !credential.enabled,
+          'is-selected': isCredentialSelected(credential.id)
+        }"
       >
         <button
           class="credential-select"
@@ -313,7 +333,13 @@ void bootstrap()
           <div class="credential-identity">
             <div class="credential-title-block">
               <strong>{{ credentialTitle(credential) }}</strong>
-              <el-tag v-if="isOpenAICredential(credential)" class="credential-plan-tag" :class="{ 'is-disabled': !credential.enabled }" effect="plain" round>
+              <el-tag
+                v-if="isOpenAICredential(credential)"
+                class="credential-plan-tag"
+                :class="{ 'is-disabled': !credential.enabled }"
+                effect="plain"
+                round
+              >
                 {{ credentialPlanLabel(credential) }}
               </el-tag>
               <el-tag v-else class="credential-plan-tag" effect="plain" round>
@@ -330,10 +356,15 @@ void bootstrap()
                 <el-icon><Clock /></el-icon>
                 {{ t('credentialFiveHourQuota') }}
               </span>
-              <strong class="quota-value is-primary">{{ formatPercent(credential.quota?.five_hour) }}</strong>
+              <strong class="quota-value is-primary">{{
+                formatPercent(credential.quota?.five_hour)
+              }}</strong>
             </div>
             <div class="quota-track">
-              <span class="quota-track-fill" :style="{ width: quotaTrackWidth(credential.quota?.five_hour) }" />
+              <span
+                class="quota-track-fill"
+                :style="{ width: quotaTrackWidth(credential.quota?.five_hour) }"
+              />
             </div>
             <p class="quota-reset">{{ formatResetLabel(credential.quota?.five_hour?.reset_at) }}</p>
           </div>
@@ -344,17 +375,24 @@ void bootstrap()
                 <el-icon><Calendar /></el-icon>
                 {{ t('credentialWeeklyQuota') }}
               </span>
-              <strong class="quota-value is-secondary">{{ formatPercent(credential.quota?.weekly) }}</strong>
+              <strong class="quota-value is-secondary">{{
+                formatPercent(credential.quota?.weekly)
+              }}</strong>
             </div>
             <div class="quota-track quota-track-secondary">
-              <span class="quota-track-fill" :style="{ width: quotaTrackWidth(credential.quota?.weekly) }" />
+              <span
+                class="quota-track-fill"
+                :style="{ width: quotaTrackWidth(credential.quota?.weekly) }"
+              />
             </div>
             <p class="quota-reset">{{ formatResetLabel(credential.quota?.weekly?.reset_at) }}</p>
           </div>
         </div>
 
         <div class="credential-footer">
-          <span class="credential-updated-at">{{ formatCompactDateTime(credential.updated_at || credential.last_refresh) }}</span>
+          <span class="credential-updated-at">{{
+            formatCompactDateTime(credential.updated_at || credential.last_refresh)
+          }}</span>
           <div class="credential-actions">
             <el-tooltip :content="credential.enabled ? t('disable') : t('enable')" placement="top">
               <el-button
@@ -453,13 +491,15 @@ void bootstrap()
   overflow: hidden;
   padding: 12px;
   position: relative;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
   width: 100%;
 }
 
 .credential-card::before {
   background: linear-gradient(180deg, #22c55e, var(--brand-blue));
-  content: "";
+  content: '';
   inset: 0 auto 0 0;
   opacity: 0;
   position: absolute;
@@ -542,7 +582,7 @@ void bootstrap()
 .credential-select.is-checked span::after {
   border: solid var(--brand-blue);
   border-width: 0 2px 2px 0;
-  content: "";
+  content: '';
   height: 8px;
   left: 5px;
   position: absolute;

@@ -589,11 +589,11 @@ async fn default_protocol_for_request(
             "invalid provider: {provider_code}"
         )));
     };
-    Ok(defaults
+    defaults
         .into_iter()
         .find(|endpoint| !endpoint.base_url.trim().is_empty())
         .map(|endpoint| endpoint.protocol)
-        .ok_or_else(|| AppError::BadRequest("provider has no default endpoint".to_string()))?)
+        .ok_or_else(|| AppError::BadRequest("provider has no default endpoint".to_string()))
 }
 
 fn normalize_endpoint_inputs<'a>(

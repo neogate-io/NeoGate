@@ -44,6 +44,22 @@ pub struct Billing {
     default_output_tokens: i64,
 }
 
+#[derive(Clone, Copy)]
+pub struct BillingAccounts<'a> {
+    pub user_id: DbId,
+    pub user_key_id: DbId,
+    pub user_key_model_credit_account: Option<&'a CreditAccountId>,
+    pub user_key_credit_account: &'a CreditAccountId,
+    pub user_credit_account: &'a CreditAccountId,
+}
+
+pub struct SettleRequest<'a> {
+    pub accounts: BillingAccounts<'a>,
+    pub hold: DebitHold,
+    pub usage: Option<TokenUsage>,
+    pub price: &'a Price,
+}
+
 #[derive(Debug, Default)]
 struct AllocationRecoverySummary {
     count: u64,
@@ -213,11 +229,7 @@ impl Billing {
     pub async fn reserve(
         &self,
         pool: &PgPool,
-        user_id: DbId,
-        user_key_id: DbId,
-        user_key_model_credit_account: Option<&CreditAccountId>,
-        user_key_credit_account: &CreditAccountId,
-        user_credit_account: &CreditAccountId,
+        accounts: BillingAccounts<'_>,
         estimated_micro_usd: i64,
     ) -> AppResult<DebitHold> {
         if estimated_micro_usd <= 0 {
@@ -228,11 +240,7 @@ impl Billing {
             });
         }
 
-        let credit_accounts = ordered_credit_accounts(
-            user_key_model_credit_account,
-            user_key_credit_account,
-            user_credit_account,
-        );
+        let credit_accounts = ordered_credit_accounts(accounts);
         if let Some(parts) = self
             .hot
             .try_debit_ordered(&credit_accounts, estimated_micro_usd)
@@ -245,12 +253,7 @@ impl Billing {
             });
         }
 
-        let lock_id = prefetch_lock_index(
-            user_key_model_credit_account,
-            user_key_credit_account,
-            user_credit_account,
-            self.prefetch_locks.len(),
-        );
+        let lock_id = prefetch_lock_index(accounts, self.prefetch_locks.len());
         let _prefetch_guard = self.prefetch_locks[lock_id].lock().await;
 
         if let Some(parts) = self
@@ -265,16 +268,7 @@ impl Billing {
             });
         }
 
-        self.prefetch(
-            pool,
-            user_id,
-            user_key_id,
-            user_key_model_credit_account,
-            user_key_credit_account,
-            user_credit_account,
-            estimated_micro_usd,
-        )
-        .await?;
+        self.prefetch(pool, accounts, estimated_micro_usd).await?;
 
         let Some(parts) = self
             .hot
@@ -313,15 +307,14 @@ impl Billing {
     pub async fn settle(
         &self,
         pool: &PgPool,
-        user_id: DbId,
-        user_key_id: DbId,
-        user_key_model_credit_account: Option<&CreditAccountId>,
-        user_key_credit_account: &CreditAccountId,
-        user_credit_account: &CreditAccountId,
-        hold: DebitHold,
-        usage: Option<TokenUsage>,
-        price: &Price,
+        request: SettleRequest<'_>,
     ) -> AppResult<BillingCharge> {
+        let SettleRequest {
+            accounts,
+            hold,
+            usage,
+            price,
+        } = request;
         let (cost_micro_usd, status) = match usage {
             Some(usage) => (cost_for_usage(usage, price), "billed".to_string()),
             None => (hold.estimated_micro_usd, "usage_missing".to_string()),
@@ -331,18 +324,7 @@ impl Billing {
         if cost_micro_usd >= hold.estimated_micro_usd {
             if cost_micro_usd > hold.estimated_micro_usd {
                 let supplemental_micro_usd = cost_micro_usd - hold.estimated_micro_usd;
-                match self
-                    .reserve(
-                        pool,
-                        user_id,
-                        user_key_id,
-                        user_key_model_credit_account,
-                        user_key_credit_account,
-                        user_credit_account,
-                        supplemental_micro_usd,
-                    )
-                    .await
-                {
+                match self.reserve(pool, accounts, supplemental_micro_usd).await {
                     Ok(extra_hold) => {
                         let mut parts = hold.parts;
                         parts.extend(extra_hold.parts);
@@ -426,11 +408,7 @@ impl Billing {
     async fn prefetch(
         &self,
         pool: &PgPool,
-        user_id: DbId,
-        user_key_id: DbId,
-        user_key_model_credit_account: Option<&CreditAccountId>,
-        user_key_credit_account: &CreditAccountId,
-        user_credit_account: &CreditAccountId,
+        accounts: BillingAccounts<'_>,
         needed_micro_usd: i64,
     ) -> AppResult<()> {
         let mut tx = pool.begin().await?;
@@ -438,11 +416,11 @@ impl Billing {
         let target = self.prefetch_micro_usd.max(needed_micro_usd);
         let mut allocations = Vec::new();
 
-        if let Some(user_key_model_credit_account) = user_key_model_credit_account {
+        if let Some(user_key_model_credit_account) = accounts.user_key_model_credit_account {
             if let Some((allocation_id, amount)) = allocate_user_key_model(
                 &mut tx,
-                user_key_id,
-                user_id,
+                accounts.user_key_id,
+                accounts.user_id,
                 user_key_model_credit_account,
                 target,
             )
@@ -463,16 +441,16 @@ impl Billing {
             let key_target = self.prefetch_micro_usd.max(remaining);
             if let Some((allocation_id, amount)) = allocate_user_key(
                 &mut tx,
-                user_key_id,
-                user_id,
-                user_key_credit_account,
+                accounts.user_key_id,
+                accounts.user_id,
+                accounts.user_key_credit_account,
                 key_target,
             )
             .await?
             {
                 allocations.push((
                     HotAllocation {
-                        credit_account: user_key_credit_account.clone(),
+                        credit_account: accounts.user_key_credit_account.clone(),
                         allocation_id,
                     },
                     amount,
@@ -483,12 +461,17 @@ impl Billing {
 
         if remaining > 0 {
             let user_target = self.prefetch_micro_usd.max(remaining);
-            if let Some((allocation_id, amount)) =
-                allocate_user(&mut tx, user_id, user_credit_account, user_target).await?
+            if let Some((allocation_id, amount)) = allocate_user(
+                &mut tx,
+                accounts.user_id,
+                accounts.user_credit_account,
+                user_target,
+            )
+            .await?
             {
                 allocations.push((
                     HotAllocation {
-                        credit_account: user_credit_account.clone(),
+                        credit_account: accounts.user_credit_account.clone(),
                         allocation_id,
                     },
                     amount,
@@ -540,30 +523,21 @@ fn prefetch_locks() -> Arc<Vec<Mutex<()>>> {
     Arc::new((0..64).map(|_| Mutex::new(())).collect())
 }
 
-fn ordered_credit_accounts(
-    user_key_model_credit_account: Option<&CreditAccountId>,
-    user_key_credit_account: &CreditAccountId,
-    user_credit_account: &CreditAccountId,
-) -> Vec<CreditAccountId> {
+fn ordered_credit_accounts(accounts: BillingAccounts<'_>) -> Vec<CreditAccountId> {
     let mut credit_accounts = Vec::with_capacity(3);
-    if let Some(credit_account) = user_key_model_credit_account {
+    if let Some(credit_account) = accounts.user_key_model_credit_account {
         credit_accounts.push(credit_account.clone());
     }
-    credit_accounts.push(user_key_credit_account.clone());
-    credit_accounts.push(user_credit_account.clone());
+    credit_accounts.push(accounts.user_key_credit_account.clone());
+    credit_accounts.push(accounts.user_credit_account.clone());
     credit_accounts
 }
 
-fn prefetch_lock_index(
-    user_key_model_credit_account: Option<&CreditAccountId>,
-    user_key_credit_account: &CreditAccountId,
-    user_credit_account: &CreditAccountId,
-    len: usize,
-) -> usize {
+fn prefetch_lock_index(accounts: BillingAccounts<'_>, len: usize) -> usize {
     let mut hasher = DefaultHasher::new();
-    user_key_model_credit_account.hash(&mut hasher);
-    user_key_credit_account.hash(&mut hasher);
-    user_credit_account.hash(&mut hasher);
+    accounts.user_key_model_credit_account.hash(&mut hasher);
+    accounts.user_key_credit_account.hash(&mut hasher);
+    accounts.user_credit_account.hash(&mut hasher);
     hasher.finish() as usize % len.max(1)
 }
 

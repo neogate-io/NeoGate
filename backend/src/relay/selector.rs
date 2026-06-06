@@ -22,6 +22,9 @@ use crate::{
 
 const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 
+type RouteIndex = HashMap<(UpstreamProtocol, String), Vec<usize>>;
+type WildcardRouteIndex = HashMap<UpstreamProtocol, Vec<usize>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpstreamProtocol {
     Openai,
@@ -100,8 +103,8 @@ struct RoutingCache {
     channels: Vec<ChannelCandidate>,
     keys: HashMap<DbId, Vec<KeyCandidate>>,
     model_blocks: HashMap<ModelBlockKey, DateTime<Utc>>,
-    route_index: HashMap<(UpstreamProtocol, String), Vec<usize>>,
-    wildcard_index: HashMap<UpstreamProtocol, Vec<usize>>,
+    route_index: RouteIndex,
+    wildcard_index: WildcardRouteIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -421,14 +424,9 @@ async fn load_routing_cache(pool: &PgPool) -> AppResult<RoutingCache> {
     })
 }
 
-fn build_route_indexes(
-    channels: &[ChannelCandidate],
-) -> (
-    HashMap<(UpstreamProtocol, String), Vec<usize>>,
-    HashMap<UpstreamProtocol, Vec<usize>>,
-) {
-    let mut route_index: HashMap<(UpstreamProtocol, String), Vec<usize>> = HashMap::new();
-    let mut wildcard_index: HashMap<UpstreamProtocol, Vec<usize>> = HashMap::new();
+fn build_route_indexes(channels: &[ChannelCandidate]) -> (RouteIndex, WildcardRouteIndex) {
+    let mut route_index: RouteIndex = HashMap::new();
+    let mut wildcard_index: WildcardRouteIndex = HashMap::new();
 
     for (index, channel) in channels.iter().enumerate() {
         if channel.models.is_empty() {

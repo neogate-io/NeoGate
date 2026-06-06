@@ -111,14 +111,16 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     let mut usage = parse_usage_from_bytes(&body, false);
     upstream::update_task_from_upstream_value(
         &state.db.pool,
-        task.id,
-        task.task_type,
-        &task.upstream_task_id,
-        &status_text,
-        terminal,
-        value,
-        usage,
-        state.config.task_upstream_poll_interval,
+        upstream::UpstreamTaskUpdate {
+            task_id: task.id,
+            task_type: task.task_type,
+            upstream_task_id: task.upstream_task_id.clone(),
+            status: status_text.clone(),
+            terminal,
+            metadata: value,
+            usage,
+            poll_interval: state.config.task_upstream_poll_interval,
+        },
     )
     .await?;
     if terminal {

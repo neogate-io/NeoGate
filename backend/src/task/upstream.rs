@@ -18,6 +18,17 @@ pub(crate) use super::types::{
 };
 use crate::relay::selector::{SelectedUpstream, UpstreamProtocol};
 
+pub(crate) struct UpstreamTaskUpdate {
+    pub task_id: DbId,
+    pub task_type: UpstreamTaskType,
+    pub upstream_task_id: String,
+    pub status: String,
+    pub terminal: bool,
+    pub metadata: Value,
+    pub usage: Option<TokenUsage>,
+    pub poll_interval: Duration,
+}
+
 pub(crate) async fn insert_task(
     pool: &PgPool,
     task: NewUpstreamTask<'_>,
@@ -339,21 +350,15 @@ impl UpstreamTask {
 
 pub(crate) async fn update_task_from_upstream_value(
     pool: &PgPool,
-    task_id: DbId,
-    task_type: UpstreamTaskType,
-    upstream_task_id: &str,
-    status: &str,
-    terminal: bool,
-    metadata: Value,
-    usage: Option<TokenUsage>,
-    poll_interval: Duration,
+    update: UpstreamTaskUpdate,
 ) -> AppResult<()> {
-    let usage_summary = usage
+    let usage_summary = update
+        .usage
         .map(UsageSummary::from_usage)
         .map(serde_json::to_value)
         .transpose()?
         .unwrap_or_else(|| json!({}));
-    let next_poll_at = (!terminal).then(|| next_poll_at(poll_interval));
+    let next_poll_at = (!update.terminal).then(|| next_poll_at(update.poll_interval));
     sqlx::query(
         r#"
         UPDATE task_upstream
@@ -369,14 +374,14 @@ pub(crate) async fn update_task_from_upstream_value(
           AND id = $8
         "#,
     )
-    .bind(task_type.as_str())
-    .bind(upstream_task_id)
-    .bind(status)
-    .bind(terminal)
-    .bind(metadata)
+    .bind(update.task_type.as_str())
+    .bind(update.upstream_task_id)
+    .bind(update.status)
+    .bind(update.terminal)
+    .bind(update.metadata)
     .bind(usage_summary)
     .bind(next_poll_at)
-    .bind(task_id)
+    .bind(update.task_id)
     .execute(pool)
     .await?;
     Ok(())

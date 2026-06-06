@@ -1,6 +1,6 @@
 use crate::{
     auth::UserAuth,
-    billing::{CreditAccountId, DebitHold, TokenUsage},
+    billing::{BillingAccounts, CreditAccountId, DebitHold, SettleRequest, TokenUsage},
     error::AppResult,
     id::DbId,
     relay::selector::SelectedUpstream,
@@ -134,14 +134,20 @@ async fn finalize_loaded(
             .billing
             .settle(
                 &state.db.pool,
-                billing_context.user_id,
-                billing_context.user_key_id,
-                billing_context.user_key_model_credit_account.as_ref(),
-                &billing_context.user_key_credit_account,
-                &billing_context.user_credit_account,
-                hold.clone(),
-                Some(usage),
-                &price,
+                SettleRequest {
+                    accounts: BillingAccounts {
+                        user_id: billing_context.user_id,
+                        user_key_id: billing_context.user_key_id,
+                        user_key_model_credit_account: billing_context
+                            .user_key_model_credit_account
+                            .as_ref(),
+                        user_key_credit_account: &billing_context.user_key_credit_account,
+                        user_credit_account: &billing_context.user_credit_account,
+                    },
+                    hold: hold.clone(),
+                    usage: Some(usage),
+                    price: &price,
+                },
             )
             .await
         {

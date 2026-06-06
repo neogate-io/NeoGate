@@ -42,7 +42,7 @@ pub struct EmailService {
 
 #[derive(Clone)]
 enum EmailConfigSource {
-    Database { db: Db, secrets: SecretStore },
+    Database { db: Db, secrets: Box<SecretStore> },
     Static(EmailConfig),
 }
 
@@ -73,7 +73,10 @@ struct StoredSmtpSetting {
 impl EmailService {
     pub fn new(db: Db, secrets: SecretStore) -> Self {
         Self {
-            source: EmailConfigSource::Database { db, secrets },
+            source: EmailConfigSource::Database {
+                db,
+                secrets: Box::new(secrets),
+            },
         }
     }
 

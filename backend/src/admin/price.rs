@@ -287,13 +287,15 @@ async fn sync_models_dev_pricing_templates(
             let cache_write_price_usd_micros = usd_per_million_to_micros(cost.cache_write);
             saved += upsert_synced_pricing_template(
                 state,
-                provider,
-                model,
-                input_price_usd_micros,
-                output_price_usd_micros,
-                cache_read_price_usd_micros,
-                cache_write_price_usd_micros,
-                PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+                PricingTemplateUpsert {
+                    provider,
+                    model,
+                    input_price_usd_micros,
+                    output_price_usd_micros,
+                    cache_read_price_usd_micros,
+                    cache_write_price_usd_micros,
+                    source: PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+                },
             )
             .await?;
         }
@@ -326,15 +328,19 @@ async fn enabled_provider_codes(state: &AppState) -> AppResult<HashSet<String>> 
         .map_err(Into::into)
 }
 
-async fn upsert_synced_pricing_template(
-    state: &AppState,
-    provider: &str,
-    model: &str,
+struct PricingTemplateUpsert<'a> {
+    provider: &'a str,
+    model: &'a str,
     input_price_usd_micros: i64,
     output_price_usd_micros: i64,
     cache_read_price_usd_micros: Option<i64>,
     cache_write_price_usd_micros: Option<i64>,
-    source: &str,
+    source: &'a str,
+}
+
+async fn upsert_synced_pricing_template(
+    state: &AppState,
+    template: PricingTemplateUpsert<'_>,
 ) -> AppResult<u64> {
     sqlx::query(
         "INSERT INTO provider_model
@@ -342,8 +348,8 @@ async fn upsert_synced_pricing_template(
          VALUES ($1, $2, $2, 'upstream', FALSE)
          ON CONFLICT (provider, model) DO NOTHING",
     )
-    .bind(provider)
-    .bind(model.trim())
+    .bind(template.provider)
+    .bind(template.model.trim())
     .execute(&state.db.pool)
     .await?;
 
@@ -364,13 +370,13 @@ async fn upsert_synced_pricing_template(
              updated_at = now()
          ",
     )
-    .bind(provider)
-    .bind(model.trim())
-    .bind(input_price_usd_micros)
-    .bind(output_price_usd_micros)
-    .bind(cache_read_price_usd_micros)
-    .bind(cache_write_price_usd_micros)
-    .bind(source)
+    .bind(template.provider)
+    .bind(template.model.trim())
+    .bind(template.input_price_usd_micros)
+    .bind(template.output_price_usd_micros)
+    .bind(template.cache_read_price_usd_micros)
+    .bind(template.cache_write_price_usd_micros)
+    .bind(template.source)
     .execute(&state.db.pool)
     .await?;
     Ok(result.rows_affected())

@@ -8,7 +8,7 @@ import { useLocale } from '../../composables/useLocale'
 import type { PricingPolicy, UserGroup } from '../../types/admin'
 import { readError } from '../../utils/errors'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 
 const policies = ref<PricingPolicy[]>([])
 const userGroups = ref<UserGroup[]>([])
@@ -53,6 +53,11 @@ function userGroupName(code?: string | null) {
   if (!code) return '-'
   const group = userGroupByCode.value.get(code)
   return group ? `${group.name} (${group.code})` : code
+}
+
+function userGroupUserCount(code?: string | null) {
+  if (!code) return '-'
+  return (userGroupByCode.value.get(code)?.user_count ?? 0).toLocaleString(locale.value)
 }
 
 async function load() {
@@ -110,10 +115,17 @@ onMounted(load)
 
 <template>
   <section class="grid">
+    <p class="pricing-policy-note">{{ t('pricingPolicyHint') }}</p>
+
     <el-table v-loading="loading" class="admin-table" :data="rows()" stripe>
       <el-table-column :label="t('userGroup')" min-width="220">
         <template #default="{ row }">
           {{ userGroupName(row.user_group) }}
+        </template>
+      </el-table-column>
+      <el-table-column :label="t('userCount')" min-width="120">
+        <template #default="{ row }">
+          {{ userGroupUserCount(row.user_group) }}
         </template>
       </el-table-column>
       <el-table-column :label="t('pricingPolicyMultiplier')" min-width="160">
@@ -181,6 +193,14 @@ onMounted(load)
 </template>
 
 <style scoped>
+.pricing-policy-note {
+  color: #697586;
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.6;
+  margin: 0;
+}
+
 .dialog-footer {
   display: flex;
   gap: 10px;

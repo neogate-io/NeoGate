@@ -25,6 +25,7 @@ export type UserGroup = {
   name: string
   is_default: boolean
   enabled: boolean
+  user_count: number
   created_at: string
   updated_at: string
 }

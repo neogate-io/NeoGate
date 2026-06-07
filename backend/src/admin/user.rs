@@ -45,6 +45,7 @@ pub struct UserGroupRecord {
     pub name: String,
     pub is_default: bool,
     pub enabled: bool,
+    pub user_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -303,9 +304,13 @@ pub async fn update_user(
 
 pub async fn list_user_groups(state: &AppState) -> AppResult<Vec<UserGroupRecord>> {
     let rows = sqlx::query(
-        "SELECT id, code, name, is_default, enabled, created_at, updated_at
-         FROM user_group
-         ORDER BY is_default DESC, created_at ASC",
+        r#"SELECT ug.id, ug.code, ug.name, ug.is_default, ug.enabled,
+                  COUNT(u.id)::bigint AS user_count,
+                  ug.created_at, ug.updated_at
+           FROM user_group ug
+           LEFT JOIN "user" u ON u.user_group_id = ug.id
+           GROUP BY ug.id, ug.code, ug.name, ug.is_default, ug.enabled, ug.created_at, ug.updated_at
+           ORDER BY ug.is_default DESC, ug.created_at ASC"#,
     )
     .fetch_all(&state.db.pool)
     .await?;
@@ -989,6 +994,7 @@ pub fn user_group_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UserGroupRe
         name: row.try_get("name")?,
         is_default: row.try_get("is_default")?,
         enabled: row.try_get("enabled")?,
+        user_count: row.try_get("user_count")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

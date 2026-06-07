@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
+import { Search, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getPricingTemplates, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useLocale } from '../../composables/useLocale'
 import type { PricingTemplate } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
-import { formatDateTime } from '../../utils/format'
+import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
 
 const { locale, t } = useLocale()
 
@@ -15,6 +16,8 @@ const servicePolicy = ref<ServicePolicy | null>(null)
 const pricingTemplates = ref<PricingTemplate[]>([])
 const servicePolicySaving = ref(false)
 const syncingTemplates = ref(false)
+const referencePricesDialogOpen = ref(false)
+const referencePriceSearch = ref('')
 
 const servicePolicyEditable = computed(() => servicePolicy.value?.service_mode === 'internal')
 const referencePricesLastUpdated = computed(() => {
@@ -28,6 +31,22 @@ const referencePricesLastUpdated = computed(() => {
     ? t('referencePricesNeverSynced')
     : formatDateTime(new Date(latest).toISOString(), locale.value)
 })
+const sortedPricingTemplates = computed(() => {
+  return [...pricingTemplates.value].sort((left, right) => {
+    const providerCompare = left.provider.localeCompare(right.provider)
+    return providerCompare || left.model.localeCompare(right.model)
+  })
+})
+const filteredPricingTemplates = computed(() => {
+  const keyword = referencePriceSearch.value.trim().toLowerCase()
+  if (!keyword) return sortedPricingTemplates.value
+
+  return sortedPricingTemplates.value.filter((template) => {
+    return [template.provider, template.model, template.source].some((value) =>
+      value.toLowerCase().includes(keyword)
+    )
+  })
+})
 const creditRequiredDescription = computed(() => {
   if (!servicePolicyEditable.value) return t('creditRequiredPaidDescription')
   return servicePolicy.value?.credit_required
@@ -37,6 +56,12 @@ const creditRequiredDescription = computed(() => {
 
 function formatSyncCount(value: number) {
   return value.toLocaleString('en-US')
+}
+
+function formatCacheWritePrice(template: PricingTemplate) {
+  return template.cache_write_price_usd_micros == null
+    ? t('noExtraCacheWriteFee')
+    : formatMicrosPerMillion(template.cache_write_price_usd_micros)
 }
 
 function referencePricesSyncedMessage(result: { saved: number; fetched: number; skipped: number }) {
@@ -134,43 +159,24 @@ onMounted(load)
     <div v-loading="loading" class="admin-settings-panel">
       <div class="settings-panel-header">
         <div>
-          <h3>{{ t('creditRequired') }}</h3>
+          <div class="settings-title-row">
+            <h3>{{ t('creditRequired') }}</h3>
+            <el-switch
+              v-if="servicePolicy"
+              v-model="servicePolicy.credit_required"
+              :disabled="!servicePolicy || !servicePolicyEditable || servicePolicySaving"
+              @change="saveServicePolicy"
+            />
+          </div>
           <p>{{ creditRequiredDescription }}</p>
         </div>
       </div>
-
-      <el-form class="settings-form" label-position="top">
-        <el-form-item>
-          <el-switch
-            v-if="servicePolicy"
-            v-model="servicePolicy.credit_required"
-            :disabled="!servicePolicy || !servicePolicyEditable"
-          />
-          <span class="settings-inline-hint">
-            {{
-              servicePolicyEditable
-                ? servicePolicy?.credit_required
-                  ? t('enabled')
-                  : t('disabled')
-                : t('creditRequiredPaidHint')
-            }}
-          </span>
-        </el-form-item>
-        <el-button
-          v-if="servicePolicyEditable"
-          type="primary"
-          :loading="servicePolicySaving"
-          @click="saveServicePolicy"
-        >
-          {{ t('save') }}
-        </el-button>
-      </el-form>
     </div>
 
     <div class="admin-settings-panel">
       <div class="settings-panel-header">
         <div>
-          <h3>{{ t('syncReferencePrices') }}</h3>
+          <h3>{{ t('modelReferencePrices') }}</h3>
           <p>{{ t('syncReferencePricesConfirmIntro') }}</p>
           <p class="reference-sync-meta">
             <span>{{ t('referencePricesLastUpdated') }}</span>
@@ -178,7 +184,14 @@ onMounted(load)
           </p>
         </div>
       </div>
-      <div>
+      <div class="reference-actions">
+        <el-button
+          class="admin-action-button"
+          :icon="View"
+          @click="referencePricesDialogOpen = true"
+        >
+          {{ t('viewReferencePrices') }}
+        </el-button>
         <el-button
           class="admin-action-button"
           type="primary"
@@ -189,6 +202,52 @@ onMounted(load)
         </el-button>
       </div>
     </div>
+
+    <el-dialog
+      v-model="referencePricesDialogOpen"
+      class="reference-prices-dialog"
+      :title="t('modelReferencePrices')"
+      width="960px"
+    >
+      <div class="reference-prices-toolbar">
+        <el-input
+          v-model="referencePriceSearch"
+          clearable
+          :prefix-icon="Search"
+          :placeholder="t('referencePricesSearchPlaceholder')"
+        />
+      </div>
+      <el-table
+        class="admin-table reference-prices-table"
+        :data="filteredPricingTemplates"
+        max-height="62vh"
+        stripe
+      >
+        <el-table-column prop="provider" :label="t('provider')" width="108" />
+        <el-table-column prop="model" :label="t('model')" min-width="210" />
+        <el-table-column :label="t('inputPrice')" min-width="116">
+          <template #default="{ row }">
+            {{ formatMicrosPerMillion(row.input_price_usd_micros) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('outputPrice')" min-width="116">
+          <template #default="{ row }">
+            {{ formatMicrosPerMillion(row.output_price_usd_micros) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('cacheReadPrice')" min-width="124">
+          <template #default="{ row }">
+            {{ formatMicrosPerMillion(row.cache_read_price_usd_micros) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('cacheWritePrice')" min-width="124">
+          <template #default="{ row }">
+            {{ formatCacheWritePrice(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="source" :label="t('source')" width="108" />
+      </el-table>
+    </el-dialog>
   </section>
 </template>
 
@@ -211,6 +270,13 @@ onMounted(load)
   font-size: 18px;
   font-weight: 800;
   margin: 0;
+}
+
+.settings-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .settings-panel-header p {
@@ -238,10 +304,10 @@ onMounted(load)
   font-weight: 780;
 }
 
-.settings-inline-hint {
-  color: #697586;
-  font-size: 13px;
-  margin-left: 10px;
+.reference-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 :global(.reference-sync-confirm) {
@@ -329,5 +395,30 @@ onMounted(load)
   font-weight: 760;
   min-height: 38px;
   min-width: 86px;
+}
+
+:global(.reference-prices-dialog) {
+  max-width: calc(100vw - 32px);
+}
+
+.reference-prices-table {
+  width: 100%;
+}
+
+.reference-prices-toolbar {
+  margin-bottom: 12px;
+  max-width: 360px;
+}
+
+.reference-prices-table :deep(.el-table__cell) {
+  padding: 6px 0;
+}
+
+.reference-prices-table :deep(.cell) {
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 0 8px;
+  white-space: normal;
+  word-break: break-word;
 }
 </style>

@@ -115,7 +115,7 @@ export const router = createRouter({
         {
           path: 'settings/pricing-policies',
           name: 'pricingPolicy',
-          component: () => import('../views/admin/SettingsView.vue'),
+          component: () => import('../views/admin/PricingSettingsView.vue'),
           meta: { messageKey: 'pricingPolicy' }
         },
         {

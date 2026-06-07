@@ -216,6 +216,11 @@ onMounted(load)
           :prefix-icon="Search"
           :placeholder="t('referencePricesSearchPlaceholder')"
         />
+        <span class="reference-result-count">
+          {{ t('referencePricesResult') }}
+          {{ filteredPricingTemplates.length.toLocaleString(locale) }} /
+          {{ pricingTemplates.length.toLocaleString(locale) }}
+        </span>
       </div>
       <el-table
         class="admin-table reference-prices-table"
@@ -246,6 +251,9 @@ onMounted(load)
           </template>
         </el-table-column>
         <el-table-column prop="source" :label="t('source')" width="108" />
+        <template #empty>
+          <el-empty :description="t('noData')" />
+        </template>
       </el-table>
     </el-dialog>
   </section>
@@ -406,8 +414,22 @@ onMounted(load)
 }
 
 .reference-prices-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.reference-prices-toolbar :deep(.el-input) {
   max-width: 360px;
+}
+
+.reference-result-count {
+  color: #697586;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 620;
 }
 
 .reference-prices-table :deep(.el-table__cell) {

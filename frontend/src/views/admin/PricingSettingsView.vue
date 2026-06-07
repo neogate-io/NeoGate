@@ -153,35 +153,40 @@ onMounted(load)
           </el-button>
         </template>
       </el-table-column>
+      <template #empty>
+        <el-empty :description="t('noData')" />
+      </template>
     </el-table>
 
     <el-dialog
       v-model="dialogOpen"
       class="settings-dialog"
       :title="t('editPricingPolicy')"
-      width="460px"
+      width="400px"
     >
       <el-form class="settings-form" label-position="top">
-        <el-form-item :label="t('userGroup')">
-          <el-select v-model="form.userGroup" disabled>
-            <el-option
-              v-for="group in userGroups"
-              :key="group.code"
-              :label="`${group.name} (${group.code})`"
-              :value="group.code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="t('pricingPolicyMultiplier')">
-          <el-input-number v-model="form.multiplierPercent" :min="0" :precision="2" :step="1" />
-        </el-form-item>
+        <div class="settings-form-row">
+          <el-form-item :label="t('userGroup')">
+            <el-select v-model="form.userGroup" disabled>
+              <el-option
+                v-for="group in userGroups"
+                :key="group.code"
+                :label="`${group.name} (${group.code})`"
+                :value="group.code"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="t('pricingPolicyMultiplier')">
+            <el-input-number v-model="form.multiplierPercent" :min="0" :precision="2" :step="1" />
+          </el-form-item>
+        </div>
         <el-form-item :label="t('enabled')">
           <el-switch v-model="form.enabled" />
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <div class="dialog-footer">
+        <div class="dialog-footer admin-dialog-footer">
           <el-button @click="dialogOpen = false">{{ t('cancel') }}</el-button>
           <el-button type="primary" :loading="saving" @click="savePolicy">{{
             t('save')
@@ -207,6 +212,12 @@ onMounted(load)
   justify-content: flex-end;
 }
 
+.settings-form-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 128px;
+}
+
 .settings-form :deep(.el-input-number),
 .settings-form :deep(.el-select) {
   width: 100%;
@@ -214,5 +225,11 @@ onMounted(load)
 
 :global(.settings-dialog) {
   max-width: calc(100vw - 32px);
+}
+
+@media (max-width: 560px) {
+  .settings-form-row {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

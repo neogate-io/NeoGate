@@ -1,7 +1,15 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
-import { Connection, Key, Monitor, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import {
+  Connection,
+  Key,
+  Menu,
+  Monitor,
+  Setting,
+  SwitchButton,
+  User
+} from '@element-plus/icons-vue'
 import { getAdminServicePolicy } from '../api/policy'
 import LocaleToggleButton from '../components/LocaleToggleButton.vue'
 import { isMessageKey, type MessageKey } from '../i18n'
@@ -13,6 +21,7 @@ const { t } = useLocale()
 const route = useRoute()
 const logout = useLogout(t)
 const { data: servicePolicy } = useAsyncData(() => getAdminServicePolicy(), null)
+const adminMenuOpen = ref(false)
 type AdminNavItem = { path: string; key: MessageKey; icon: Component }
 type SettingNavItem = { path: string; key: MessageKey }
 
@@ -43,11 +52,18 @@ const activeRouteLabel = computed(() => {
   const messageKey = route.meta.messageKey
   return t(isMessageKey(messageKey) ? messageKey : 'userManagement')
 })
+
+watch(
+  () => route.fullPath,
+  () => {
+    adminMenuOpen.value = false
+  }
+)
 </script>
 
 <template>
   <el-container class="app-shell admin-shell">
-    <el-aside width="248px">
+    <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
           <img class="shell-logo-image" src="/logo.svg" :alt="t('appName')" />
@@ -60,6 +76,7 @@ const activeRouteLabel = computed(() => {
         mode="vertical"
         router
         unique-opened
+        @select="adminMenuOpen = false"
       >
         <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
           <el-icon><component :is="item.icon" /></el-icon>
@@ -76,9 +93,22 @@ const activeRouteLabel = computed(() => {
         </el-sub-menu>
       </el-menu>
     </el-aside>
+    <button
+      v-if="adminMenuOpen"
+      class="admin-menu-overlay"
+      type="button"
+      :aria-label="t('adminMenu')"
+      @click="adminMenuOpen = false"
+    ></button>
 
     <el-main class="content">
       <header class="page-header">
+        <el-button
+          class="header-utility-button admin-menu-button"
+          :aria-label="t('adminMenu')"
+          :icon="Menu"
+          @click="adminMenuOpen = true"
+        />
         <h2>{{ activeRouteLabel }}</h2>
         <div class="header-actions">
           <el-tooltip :content="t('language')" placement="bottom">

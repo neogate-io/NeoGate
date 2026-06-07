@@ -411,6 +411,9 @@ onMounted(loadPricingData)
           </div>
         </template>
       </el-table-column>
+      <template #empty>
+        <el-empty :description="t('noData')" />
+      </template>
     </el-table>
 
     <ChannelFormDialog

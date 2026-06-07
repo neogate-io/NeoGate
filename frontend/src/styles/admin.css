@@ -92,6 +92,37 @@
   min-width: 48px;
 }
 
+.admin-menu-button.el-button {
+  display: none;
+}
+
+.admin-menu-overlay {
+  display: none;
+}
+
+.admin-pagination-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.admin-result-count {
+  color: #697586;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.admin-dialog-footer {
+  border-top: 1px solid var(--admin-border-soft);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 16px;
+}
+
 .admin-settings-view {
   display: flex;
   justify-content: flex-start;
@@ -278,6 +309,15 @@
   border-radius: 7px;
 }
 
+.usage-filter-bar.el-form {
+  grid-template-columns: 300px 250px 180px auto;
+}
+
+.usage-filter-bar.el-form .el-date-editor,
+.usage-filter-bar.el-form .el-select {
+  width: 100%;
+}
+
 .user-search-actions.el-form-item {
   justify-self: start;
 }
@@ -328,6 +368,43 @@
 }
 
 @media (max-width: 900px) {
+  .admin-shell.app-shell {
+    display: block;
+    min-height: calc(100dvh - 38px);
+  }
+
+  .admin-shell > .el-aside {
+    box-shadow: 18px 0 42px rgba(15, 23, 42, 0.18);
+    height: calc(100dvh - 38px);
+    left: 0;
+    overflow-y: auto;
+    position: fixed;
+    top: 38px;
+    transform: translateX(-104%);
+    transition: transform 180ms ease;
+    width: min(280px, calc(100vw - 48px)) !important;
+    z-index: 40;
+  }
+
+  .admin-shell > .el-aside.is-open {
+    transform: translateX(0);
+  }
+
+  .admin-menu-overlay {
+    background: rgba(15, 23, 42, 0.3);
+    border: 0;
+    display: block;
+    inset: 38px 0 0;
+    padding: 0;
+    position: fixed;
+    z-index: 39;
+  }
+
+  .admin-menu-button.el-button {
+    display: inline-flex;
+    flex: 0 0 auto;
+  }
+
   .admin-settings-form {
     width: 100%;
   }

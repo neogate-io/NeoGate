@@ -78,6 +78,7 @@ const bootstrapForm = reactive({
 })
 
 const setupForm = reactive({
+  adminUsername: 'admin',
   adminPassword: '',
   confirmPassword: '',
   serviceMode: 'internal' as ServiceMode,
@@ -372,6 +373,7 @@ async function submitSetup() {
         }
       : null
     await completeSetupWizard({
+      admin_username: setupForm.adminUsername.trim(),
       admin_password: setupForm.adminPassword,
       service_mode: setupForm.serviceMode,
       credit_required: setupForm.serviceMode === 'internal' ? setupForm.creditRequired : true,
@@ -425,6 +427,10 @@ function validateSetup() {
 }
 
 function validateAdminStep() {
+  if (!setupForm.adminUsername.trim()) {
+    ElMessage.error(t('adminUsernameRequired'))
+    return false
+  }
   if (!setupForm.adminPassword || setupForm.adminPassword.length < 8) {
     ElMessage.error(t('passwordMinLength'))
     return false
@@ -818,7 +824,10 @@ onMounted(load)
                 <p>{{ t('setupAdminPasswordHint') }}</p>
               </div>
             </div>
-            <div class="setup-grid two">
+            <div class="setup-grid admin-credentials-grid">
+              <el-form-item :label="t('username')">
+                <el-input v-model="setupForm.adminUsername" />
+              </el-form-item>
               <el-form-item :label="t('newPassword')">
                 <el-input v-model="setupForm.adminPassword" show-password type="password" />
               </el-form-item>
@@ -1185,6 +1194,8 @@ onMounted(load)
 .setup-panel > .el-form {
   display: grid;
   gap: 20px;
+  max-width: 640px;
+  width: 100%;
 }
 
 .setup-panel-title,
@@ -1227,6 +1238,7 @@ onMounted(load)
   border-top: 1px solid #edf1f5;
   display: grid;
   gap: 16px;
+  max-width: 640px;
   padding-top: 22px;
 }
 
@@ -1252,12 +1264,20 @@ onMounted(load)
 }
 
 .setup-grid.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(220px, 300px));
 }
 
 .setup-grid .el-input-number,
 .setup-grid .el-select {
   width: 100%;
+}
+
+.admin-credentials-grid {
+  max-width: 420px;
+}
+
+.setup-section > .el-form-item {
+  max-width: 560px;
 }
 
 .setup-mode-grid {
@@ -1343,7 +1363,8 @@ onMounted(load)
 .models-row {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 420px) auto;
+  max-width: 560px;
   width: 100%;
 }
 
@@ -1396,6 +1417,7 @@ onMounted(load)
 
 .setup-textarea {
   margin-top: 8px;
+  max-width: 560px;
 }
 
 .provider-option {
@@ -1519,6 +1541,14 @@ onMounted(load)
 
   .models-row {
     grid-template-columns: 1fr;
+    max-width: none;
+  }
+
+  .setup-panel > .el-form,
+  .setup-section,
+  .setup-section > .el-form-item,
+  .setup-textarea {
+    max-width: none;
   }
 
   .setup-inline-control,

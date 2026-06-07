@@ -1,28 +1,15 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg id="_图层_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 631 186">
-  <!-- Generator: Adobe Illustrator 29.6.1, SVG Export Plug-In . SVG Version: 2.1.1 Build 9)  -->
-  <defs>
-    <style>
-      .st0, .st1 {
-        isolation: isolate;
-      }
-
-      .st1 {
-        font-family: 'AlibabaPuHuiTi_2_85_Bold', 'Alibaba PuHuiTi 2.0';
-        font-size: 108px;
-        letter-spacing: .05em;
-      }
-
-      .st1, .st2 {
-        fill: #142131;
-      }
-    </style>
-  </defs>
-  <g>
-    <path class="st2" d="M7.28,26.64c0-7.84,8.73-12.51,15.24-8.14l94.28,62.9,94.28-62.9c6.51-4.37,15.24.3,15.24,8.14v136.16c0,7.47-7.92,12.21-14.5,8.73l-44.7-23.53v-74l-50.32,13.32-50.32-13.32v74l-44.7,23.53c-6.59,3.48-14.5-1.26-14.5-8.73V26.64h0Z"/>
-    <path class="st2" d="M116.8,108.04c4.37,15.69,10.95,22.27,26.64,26.64-15.69,4.37-22.27,10.95-26.64,26.64-4.37-15.69-10.95-22.27-26.64-26.64,15.69-4.37,22.27-10.95,26.64-26.64Z"/>
-  </g>
-  <g class="st0">
-    <text class="st1" transform="translate(266.65 134.68)"><tspan x="0" y="0">NeoGate</tspan></text>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 292 70" role="img" aria-labelledby="neogate-logo-title">
+  <title id="neogate-logo-title">NeoGate</title>
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M9 54V17l31 37V17" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M78 42H50c.9 9.8 8 16.2 18.1 15.4 5.2-.4 9.3-2.4 12.1-5.8" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M50 42c0-10.5 7.9-18.4 18.3-18.4 9.6 0 16.7 6.6 17.9 16.1" />
+  <circle fill="none" stroke="#061226" stroke-width="6.5" cx="111" cy="41" r="17" />
+  <circle fill="none" stroke="#061226" stroke-width="6.5" cx="196" cy="41" r="16.5" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M212.5 27v27" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M237 19v35" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M224 29h26" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M282 42h-28c.9 9.8 8 16.2 18.1 15.4 5.2-.4 9.3-2.4 12.1-5.8" />
+  <path fill="none" stroke="#061226" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M254 42c0-10.5 7.9-18.4 18.3-18.4 9.6 0 16.7 6.6 17.9 16.1" />
+  <path fill="none" stroke="#168BD3" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round" d="M173 21.6c-5.1-5.7-12.3-9.1-20.3-9.1-15.2 0-27.2 11.8-27.2 27s12 27 27.2 27c14.3 0 25.6-10.4 26.8-24.1h-24.8" />
+  <path fill="none" stroke="#168BD3" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round" d="M169.2 42.4h-14.5" />
 </svg>

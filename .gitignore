@@ -3,6 +3,7 @@ node_modules/
 dist/
 .env
 *.bak
+.DS_Store
 frontend/.env.local
 frontend/.env.*.local
 .sqlx/

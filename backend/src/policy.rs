@@ -66,6 +66,7 @@ pub struct ServicePolicyRecord {
 #[derive(Debug, Deserialize)]
 pub struct CompleteSetupRequest {
     pub service_mode: ServiceMode,
+    pub admin_username: Option<String>,
     pub admin_password: Option<String>,
     pub credit_required: Option<bool>,
     pub channel: Option<SetupChannelRequest>,
@@ -223,6 +224,12 @@ async fn complete_setup(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::BadRequest("admin password is required".to_string()))?;
+    let admin_username = req
+        .admin_username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("admin");
     crate::auth::validate_user_password_input(admin_password)?;
     if req.channel.is_none() && !req.prices.is_empty() {
         return Err(AppError::BadRequest(
@@ -234,7 +241,7 @@ async fn complete_setup(
             "at least one model price is required".to_string(),
         ));
     }
-    reset_initial_admin_password(&state, admin_password).await?;
+    reset_initial_admin_credentials(&state, admin_username, admin_password).await?;
     let channel = if let Some(channel_req) = req.channel {
         Some(create_setup_channel(&state, channel_req).await?)
     } else {
@@ -415,12 +422,17 @@ async fn upsert_stored_policy(
     ))
 }
 
-async fn reset_initial_admin_password(state: &AppState, password: &str) -> AppResult<()> {
+async fn reset_initial_admin_credentials(
+    state: &AppState,
+    username: &str,
+    password: &str,
+) -> AppResult<()> {
     let password_hash = crate::auth::hash_user_password(password, &state.config.admin_token_secret);
     let result = sqlx::query(
         r#"
         UPDATE admin
-        SET password_hash = $1,
+        SET username = $1,
+            password_hash = $2,
             failed_login_attempts = 0,
             locked_until = NULL,
             password_changed_at = now(),
@@ -434,6 +446,7 @@ async fn reset_initial_admin_password(state: &AppState, password: &str) -> AppRe
         )
         "#,
     )
+    .bind(username)
     .bind(password_hash)
     .execute(&state.db.pool)
     .await?;

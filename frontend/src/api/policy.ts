@@ -77,6 +77,7 @@ export function fetchSetupUpstreamModels(input: {
 }
 
 export function completeSetupWizard(input: {
+  admin_username: string
   admin_password: string
   service_mode: ServiceMode
   credit_required?: boolean

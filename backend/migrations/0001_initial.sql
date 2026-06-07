@@ -461,10 +461,13 @@ CREATE TABLE task_upstream (
 
 CREATE INDEX idx_user_key_user_id ON user_key(user_id);
 CREATE INDEX idx_user_key_key_prefix ON user_key(key_prefix);
+CREATE INDEX idx_user_key_created_id ON user_key(created_at DESC, id DESC);
+CREATE INDEX idx_user_key_user_created_id ON user_key(user_id, created_at DESC, id DESC);
 CREATE INDEX idx_user_key_model_enabled_key
     ON user_key_model(user_key_id)
     WHERE enabled = TRUE;
 CREATE INDEX idx_user_user_group ON "user"(user_group_id);
+CREATE INDEX idx_user_created_id ON "user"(created_at DESC, id DESC);
 CREATE INDEX idx_admin_status ON admin(status);
 CREATE INDEX idx_user_code_email_active
     ON user_code(email, expires_at)
@@ -490,12 +493,20 @@ CREATE INDEX idx_credential_provider_plan
     ON credential(provider, plan_type)
     WHERE enabled = TRUE AND plan_type IS NOT NULL;
 CREATE INDEX idx_usage_created ON usage(created_at DESC);
+CREATE INDEX idx_usage_created_id ON usage(created_at DESC, id DESC);
 CREATE INDEX idx_usage_user_created ON usage(user_id, created_at DESC);
 CREATE INDEX idx_usage_user_billable_created
     ON usage(user_id, created_at DESC)
     WHERE billing_status IN ('billed', 'undercharged')
       AND cost_micro_usd IS NOT NULL;
+CREATE INDEX idx_usage_user_billable_cursor
+    ON usage(user_id, created_at DESC, id DESC)
+    WHERE billing_status IN ('billed', 'undercharged')
+      AND cost_micro_usd IS NOT NULL;
 CREATE INDEX idx_usage_channel_created ON usage(channel_id, created_at DESC);
+CREATE INDEX idx_usage_provider_created ON usage(provider, created_at DESC, id DESC);
+CREATE INDEX idx_usage_model_created ON usage(model, created_at DESC, id DESC)
+    WHERE model IS NOT NULL;
 CREATE INDEX idx_billing_pending_created ON billing(created_at ASC)
     WHERE status = 'pending';
 CREATE INDEX idx_billing_pending_attempts_created ON billing(attempts ASC, created_at ASC)
@@ -537,9 +548,21 @@ CREATE INDEX idx_usage_daily_user_key_day ON usage_daily(user_id, user_key_id, d
 CREATE INDEX idx_usage_daily_provider_model_day ON usage_daily(provider, model, day DESC);
 CREATE INDEX idx_task_upstream_owner
     ON task_upstream(user_key_id, task_type, provider, upstream_task_id);
+CREATE INDEX idx_task_upstream_owner_created
+    ON task_upstream(user_key_id, task_type, created_at DESC, id DESC);
 CREATE INDEX idx_task_upstream_polling
     ON task_upstream(next_poll_at)
     WHERE terminal = FALSE;
+CREATE INDEX idx_task_upstream_expired_terminal
+    ON task_upstream(expires_at ASC, id ASC)
+    WHERE terminal = TRUE
+      AND billing_status IN ('settled', 'released', 'failed')
+      AND expires_at IS NOT NULL;
+CREATE INDEX idx_task_upstream_stale_held
+    ON task_upstream(updated_at ASC, id ASC)
+    WHERE terminal = TRUE
+      AND billing_status = 'held'
+      AND usage_summary = '{}'::JSONB;
 
 INSERT INTO provider_model (provider, model, display_name, source, enabled)
 SELECT provider.code, model, model, 'seed', FALSE

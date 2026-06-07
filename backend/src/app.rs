@@ -29,9 +29,6 @@ use crate::{
     user,
 };
 
-const DEFAULT_ADMIN_USERNAME: &str = "admin";
-const DEFAULT_ADMIN_PASSWORD: &str = "password";
-
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -111,7 +108,6 @@ async fn build_state(
 ) -> anyhow::Result<Arc<AppState>> {
     let db = Db::connect(&config).await?;
     sqlx::migrate!("./migrations").run(&db.pool).await?;
-    bootstrap_admin(&config, &db).await?;
     let secrets = SecretStore::new(&config.upstream_secret_key, config.secret_cache_max_entries);
     let email = EmailService::new(db.clone(), secrets.clone());
 
@@ -239,38 +235,6 @@ async fn build_state(
     task::worker::spawn(Arc::clone(&state));
 
     Ok(state)
-}
-
-async fn bootstrap_admin(config: &Config, db: &Db) -> anyhow::Result<()> {
-    let password_hash =
-        auth::hash_user_password(DEFAULT_ADMIN_PASSWORD, &config.admin_token_secret);
-    let mut tx = db.pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('neogate.bootstrap_admin'))")
-        .execute(&mut *tx)
-        .await?;
-
-    let result = sqlx::query(
-        r#"
-        INSERT INTO admin (username, password_hash, role, password_changed_at)
-        SELECT $1, $2, 'owner', now()
-        WHERE NOT EXISTS (SELECT 1 FROM admin)
-        ON CONFLICT (username) DO NOTHING
-        "#,
-    )
-    .bind(DEFAULT_ADMIN_USERNAME)
-    .bind(&password_hash)
-    .execute(&mut *tx)
-    .await?;
-
-    if result.rows_affected() > 0 {
-        tracing::info!(
-            "bootstrapped initial admin account {}",
-            DEFAULT_ADMIN_USERNAME
-        );
-    }
-
-    tx.commit().await?;
-    Ok(())
 }
 
 fn router(state: Arc<AppState>) -> Router {

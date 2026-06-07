@@ -19,6 +19,7 @@ pub fn router() -> Router<Arc<AppState>> {
 struct ListUsageParams {
     page: Option<i64>,
     limit: Option<i64>,
+    cursor: Option<String>,
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
 }
@@ -29,6 +30,8 @@ struct UsagePage {
     total: i64,
     page: i64,
     limit: i64,
+    next_cursor: Option<String>,
+    has_more: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,21 +72,9 @@ async fn usage(
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(20).clamp(1, 1000);
-    let offset = (page - 1) * limit;
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)
-         FROM usage
-         WHERE user_id = $1
-           AND billing_status IN ('billed', 'undercharged')
-           AND cost_micro_usd IS NOT NULL
-           AND ($2::timestamptz IS NULL OR created_at >= $2)
-           AND ($3::timestamptz IS NULL OR created_at <= $3)",
-    )
-    .bind(auth.user_id)
-    .bind(params.start)
-    .bind(params.end)
-    .fetch_one(&state.db.pool)
-    .await?;
+    let (cursor_created_at, cursor_id) = parse_usage_cursor(params.cursor.as_deref())?
+        .map(|cursor| (Some(cursor.0), Some(cursor.1)))
+        .unwrap_or((None, None));
     let rows = sqlx::query(
         "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
                 status_code, streamed, latency_ms, first_response_ms, output_tokens_per_second,
@@ -98,22 +89,59 @@ async fn usage(
            AND cost_micro_usd IS NOT NULL
            AND ($2::timestamptz IS NULL OR created_at >= $2)
            AND ($3::timestamptz IS NULL OR created_at <= $3)
-         ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+           AND ($4::timestamptz IS NULL OR (created_at, id) < ($4, $5))
+         ORDER BY created_at DESC, id DESC
+         LIMIT $6",
     )
     .bind(auth.user_id)
     .bind(params.start)
     .bind(params.end)
-    .bind(limit)
-    .bind(offset)
+    .bind(cursor_created_at)
+    .bind(cursor_id)
+    .bind(limit + 1)
     .fetch_all(&state.db.pool)
     .await?;
 
+    let has_more = rows.len() > limit as usize;
+    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+    let next_cursor = has_more
+        .then(|| rows.last())
+        .flatten()
+        .map(usage_cursor_from_row)
+        .transpose()?;
+
     Ok(Json(UsagePage {
+        total: rows.len() as i64,
         items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
-        total,
         page,
         limit,
+        next_cursor,
+        has_more,
     }))
+}
+
+fn parse_usage_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
+    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some((created_at, id)) = cursor.rsplit_once('|') else {
+        return Err(crate::error::AppError::BadRequest(
+            "invalid usage cursor".to_string(),
+        ));
+    };
+    let created_at = DateTime::parse_from_rfc3339(created_at)
+        .map_err(|_| crate::error::AppError::BadRequest("invalid usage cursor".to_string()))?
+        .with_timezone(&Utc);
+    let id = id
+        .parse::<DbId>()
+        .map_err(|_| crate::error::AppError::BadRequest("invalid usage cursor".to_string()))?;
+    Ok(Some((created_at, id)))
+}
+
+fn usage_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
+    let created_at: DateTime<Utc> = row.try_get("created_at")?;
+    let id: DbId = row.try_get("id")?;
+    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Error> {

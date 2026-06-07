@@ -1,11 +1,22 @@
 import type { User } from '../types/admin'
 import { adminRequest } from './request'
 
-export function getUsers(filters: { email?: string; apiKey?: string } = {}) {
+export type UserPage = {
+  items: User[]
+  limit: number
+  next_cursor?: string | null
+  has_more?: boolean
+}
+
+export function getUsers(
+  filters: { email?: string; apiKey?: string; limit?: number; cursor?: string } = {}
+) {
   const searchParams = new URLSearchParams()
   if (filters.email) searchParams.set('email', filters.email)
   if (filters.apiKey) searchParams.set('api_key', filters.apiKey)
+  if (filters.limit) searchParams.set('limit', String(filters.limit))
+  if (filters.cursor) searchParams.set('cursor', filters.cursor)
 
   const query = searchParams.toString()
-  return adminRequest<User[]>(`/api/admin/users${query ? `?${query}` : ''}`)
+  return adminRequest<UserPage>(`/api/admin/users${query ? `?${query}` : ''}`)
 }

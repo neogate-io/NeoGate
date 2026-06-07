@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
-import { getUserUsage } from '../../api/monitoring'
+import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import {
@@ -17,6 +17,7 @@ import {
 const { locale, t } = useLocale()
 const currentPage = ref(1)
 const pageSize = ref(20)
+const cursorStack = ref<(string | undefined)[]>([undefined])
 const dateRange = ref<[Date, Date] | null>(null)
 const usageQueryRange = computed(() => {
   if (!dateRange.value) return { start: undefined, end: undefined }
@@ -36,7 +37,8 @@ const {
       currentPage.value,
       pageSize.value,
       usageQueryRange.value.start,
-      usageQueryRange.value.end
+      usageQueryRange.value.end,
+      cursorStack.value[currentPage.value - 1]
     ),
   { items: [], total: 0, page: 1, limit: 20 }
 )
@@ -58,19 +60,29 @@ function statusLabel(statusCode?: number | null) {
   return statusCode && statusCode >= 400 ? String(statusCode) : t('success')
 }
 
-async function handlePageChange(page: number) {
-  currentPage.value = page
+async function nextPage() {
+  if (!usagePage.value.has_more || !usagePage.value.next_cursor) return
+  cursorStack.value[currentPage.value] = usagePage.value.next_cursor
+  currentPage.value += 1
+  await reload()
+}
+
+async function previousPage() {
+  if (currentPage.value <= 1) return
+  currentPage.value -= 1
   await reload()
 }
 
 async function handlePageSizeChange(size: number) {
   pageSize.value = size
   currentPage.value = 1
+  cursorStack.value = [undefined]
   await reload()
 }
 
 async function handleDateRangeChange() {
   currentPage.value = 1
+  cursorStack.value = [undefined]
   await reload()
 }
 
@@ -277,16 +289,23 @@ function escapeCsvCell(value: string | number) {
       </div>
 
       <div class="usage-pagination">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          background
-          layout="total, sizes, prev, pager, next"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="usagePage.total"
-          @current-change="handlePageChange"
-          @size-change="handlePageSizeChange"
-        />
+        <el-select
+          v-model="pageSize"
+          class="usage-page-size"
+          @change="handlePageSizeChange"
+        >
+          <el-option :value="10" label="10" />
+          <el-option :value="20" label="20" />
+          <el-option :value="50" label="50" />
+          <el-option :value="100" label="100" />
+        </el-select>
+        <span class="usage-page-index">{{ currentPage }}</span>
+        <el-button :disabled="currentPage <= 1 || loading" @click="previousPage">
+          {{ t('previousStep') }}
+        </el-button>
+        <el-button :disabled="!usagePage.has_more || loading" @click="nextPage">
+          {{ t('nextStep') }}
+        </el-button>
       </div>
     </div>
   </section>

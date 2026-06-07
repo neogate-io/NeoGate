@@ -255,7 +255,13 @@ async fn complete_setup(
             "at least one model price is required".to_string(),
         ));
     }
-    reset_initial_admin_credentials(&state, admin_username, admin_password).await?;
+    configure_initial_admin_credentials(
+        &mut tx,
+        &state.config.admin_token_secret,
+        admin_username,
+        admin_password,
+    )
+    .await?;
     let channel = if let Some(channel_req) = req.channel {
         Some(create_setup_channel(&state, channel_req).await?)
     } else {
@@ -455,13 +461,14 @@ async fn upsert_stored_policy(
     ))
 }
 
-async fn reset_initial_admin_credentials(
-    state: &AppState,
+async fn configure_initial_admin_credentials(
+    tx: &mut Transaction<'_, Postgres>,
+    admin_token_secret: &str,
     username: &str,
     password: &str,
 ) -> AppResult<()> {
-    let password_hash = crate::auth::hash_user_password(password, &state.config.admin_token_secret);
-    let result = sqlx::query(
+    let password_hash = crate::auth::hash_user_password(password, admin_token_secret);
+    let updated = sqlx::query(
         r#"
         UPDATE admin
         SET username = $1,
@@ -477,16 +484,36 @@ async fn reset_initial_admin_credentials(
             ORDER BY id ASC
             LIMIT 1
         )
+        RETURNING id
         "#,
     )
     .bind(username)
-    .bind(password_hash)
-    .execute(&state.db.pool)
+    .bind(&password_hash)
+    .fetch_optional(&mut **tx)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::BadRequest(
-            "no enabled admin account is available".to_string(),
-        ));
+
+    if updated.is_none() {
+        sqlx::query(
+            r#"
+            INSERT INTO admin (
+                username, password_hash, status, role,
+                failed_login_attempts, locked_until, password_changed_at
+            )
+            VALUES ($1, $2, 'enabled', 'owner', 0, NULL, now())
+            ON CONFLICT (username) DO UPDATE
+            SET password_hash = EXCLUDED.password_hash,
+                status = 'enabled',
+                role = 'owner',
+                failed_login_attempts = 0,
+                locked_until = NULL,
+                password_changed_at = now(),
+                updated_at = now()
+            "#,
+        )
+        .bind(username)
+        .bind(password_hash)
+        .execute(&mut **tx)
+        .await?;
     }
     Ok(())
 }

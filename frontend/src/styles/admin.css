@@ -314,8 +314,13 @@
 }
 
 .usage-filter-bar.el-form .el-date-editor,
+.usage-filter-bar.el-form .el-input,
 .usage-filter-bar.el-form .el-select {
   width: 100%;
+}
+
+.usage-filter-actions.el-form-item {
+  margin-left: 0;
 }
 
 .user-search-actions.el-form-item {

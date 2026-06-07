@@ -1,12 +1,21 @@
 import type { UserGroup, UserKey } from '../types/admin'
 import { adminRequest, publicRequest, userRequest } from './request'
 
-export function getUserKeys(filters: { userId?: number } = {}) {
+export type UserKeyPage = {
+  items: UserKey[]
+  limit: number
+  next_cursor?: string | null
+  has_more?: boolean
+}
+
+export function getUserKeys(filters: { userId?: number; limit?: number; cursor?: string } = {}) {
   const searchParams = new URLSearchParams()
   if (filters.userId != null) searchParams.set('user_id', String(filters.userId))
+  if (filters.limit) searchParams.set('limit', String(filters.limit))
+  if (filters.cursor) searchParams.set('cursor', filters.cursor)
 
   const query = searchParams.toString()
-  return adminRequest<UserKey[]>(`/api/admin/user-keys${query ? `?${query}` : ''}`)
+  return adminRequest<UserKeyPage>(`/api/admin/user-keys${query ? `?${query}` : ''}`)
 }
 
 export function getUserGroups() {

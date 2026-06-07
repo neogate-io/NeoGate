@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DocumentCopy, Search, Refresh, View } from '@element-plus/icons-vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adjustCredit, getUserKeys } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
@@ -26,12 +26,28 @@ const amountUsd = ref(10)
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
-const { data: users, loading, reload } = useAsyncData(loadUsers, [])
+const usersCurrentPage = ref(1)
+const usersPageSize = ref(50)
+const usersCursorStack = ref<(string | undefined)[]>([undefined])
+const userKeysCurrentPage = ref(1)
+const userKeysPageSize = ref(100)
+const userKeysCursorStack = ref<(string | undefined)[]>([undefined])
+const userKeysHasMore = ref(false)
+const userKeysNextCursor = ref<string | null | undefined>(undefined)
+const { data: usersPage, loading, reload } = useAsyncData(loadUsers, {
+  items: [],
+  limit: 50,
+  next_cursor: null,
+  has_more: false
+})
+const users = computed(() => usersPage.value.items)
 
 async function loadUsers() {
   return getUsers({
     email: emailSearch.value.trim(),
-    apiKey: apiKeySearch.value.trim()
+    apiKey: apiKeySearch.value.trim(),
+    limit: usersPageSize.value,
+    cursor: usersCursorStack.value[usersCurrentPage.value - 1]
   })
 }
 
@@ -54,8 +70,10 @@ async function openUserKeysDialog(row: User) {
   userKeysDialogVisible.value = true
   userKeysLoading.value = true
   selectedUserKeys.value = []
+  userKeysCurrentPage.value = 1
+  userKeysCursorStack.value = [undefined]
   try {
-    selectedUserKeys.value = await getUserKeys({ userId: row.id })
+    await loadSelectedUserKeys()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
@@ -88,13 +106,76 @@ async function submitCredit() {
 }
 
 async function searchUsers() {
+  usersCurrentPage.value = 1
+  usersCursorStack.value = [undefined]
   await reload()
 }
 
 async function resetSearch() {
   emailSearch.value = ''
   apiKeySearch.value = ''
+  usersCurrentPage.value = 1
+  usersCursorStack.value = [undefined]
   await reload()
+}
+
+async function nextUsersPage() {
+  if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
+  usersCursorStack.value[usersCurrentPage.value] = usersPage.value.next_cursor
+  usersCurrentPage.value += 1
+  await reload()
+}
+
+async function previousUsersPage() {
+  if (usersCurrentPage.value <= 1) return
+  usersCurrentPage.value -= 1
+  await reload()
+}
+
+async function handleUsersPageSizeChange(size: number) {
+  usersPageSize.value = size
+  usersCurrentPage.value = 1
+  usersCursorStack.value = [undefined]
+  await reload()
+}
+
+async function loadSelectedUserKeys() {
+  if (!selectedUser.value) return
+  const page = await getUserKeys({
+    userId: selectedUser.value.id,
+    limit: userKeysPageSize.value,
+    cursor: userKeysCursorStack.value[userKeysCurrentPage.value - 1]
+  })
+  selectedUserKeys.value = page.items
+  userKeysHasMore.value = Boolean(page.has_more)
+  userKeysNextCursor.value = page.next_cursor
+}
+
+async function nextUserKeysPage() {
+  if (!userKeysHasMore.value || !userKeysNextCursor.value) return
+  userKeysCursorStack.value[userKeysCurrentPage.value] = userKeysNextCursor.value
+  userKeysCurrentPage.value += 1
+  userKeysLoading.value = true
+  try {
+    await loadSelectedUserKeys()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    userKeysLoading.value = false
+  }
+}
+
+async function previousUserKeysPage() {
+  if (userKeysCurrentPage.value <= 1) return
+  userKeysCurrentPage.value -= 1
+  userKeysLoading.value = true
+  try {
+    await loadSelectedUserKeys()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    userKeysLoading.value = false
+  }
 }
 </script>
 
@@ -185,6 +266,22 @@ async function resetSearch() {
       </el-table>
     </div>
 
+    <div class="admin-pagination-bar">
+      <span class="admin-result-count">{{ users.length.toLocaleString(locale) }}</span>
+      <el-select v-model="usersPageSize" class="admin-page-size" @change="handleUsersPageSizeChange">
+        <el-option :value="20" label="20" />
+        <el-option :value="50" label="50" />
+        <el-option :value="100" label="100" />
+      </el-select>
+      <span class="admin-result-count">{{ usersCurrentPage }}</span>
+      <el-button :disabled="usersCurrentPage <= 1 || loading" @click="previousUsersPage">
+        {{ t('previousStep') }}
+      </el-button>
+      <el-button :disabled="!usersPage.has_more || loading" @click="nextUsersPage">
+        {{ t('nextStep') }}
+      </el-button>
+    </div>
+
     <el-dialog v-model="creditDialogVisible" :title="t('recharge')" width="420px">
       <el-form label-position="top">
         <el-form-item :label="t('amountUsd')">
@@ -253,6 +350,19 @@ async function resetSearch() {
           <el-empty :description="t('noApiKeys')" />
         </template>
       </el-table>
+      <div class="admin-pagination-bar">
+        <span class="admin-result-count">{{ selectedUserKeys.length.toLocaleString(locale) }}</span>
+        <span class="admin-result-count">{{ userKeysCurrentPage }}</span>
+        <el-button
+          :disabled="userKeysCurrentPage <= 1 || userKeysLoading"
+          @click="previousUserKeysPage"
+        >
+          {{ t('previousStep') }}
+        </el-button>
+        <el-button :disabled="!userKeysHasMore || userKeysLoading" @click="nextUserKeysPage">
+          {{ t('nextStep') }}
+        </el-button>
+      </div>
     </el-dialog>
   </section>
 </template>

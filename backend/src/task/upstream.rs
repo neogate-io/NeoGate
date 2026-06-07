@@ -129,7 +129,10 @@ pub(crate) async fn claim_due_tasks(
             updated_at = now()
         FROM due
         WHERE task.id = due.id
-        RETURNING task.*
+        RETURNING task.id, task.task_type, task.upstream_task_id, task.user_id, task.user_key_id,
+                  task.provider, task.model, task.channel_id, task.channel_endpoint_id,
+                  task.channel_key_id, task.credential_id, task.upstream_base_url,
+                  task.status, task.terminal, task.upstream_metadata, task.created_at
         "#,
     )
     .bind(limit)
@@ -146,7 +149,9 @@ pub(crate) async fn fetch_stale_terminal_held_tasks(
 ) -> AppResult<Vec<UpstreamTask>> {
     let rows = sqlx::query(
         r#"
-        SELECT *
+        SELECT id, task_type, upstream_task_id, user_id, user_key_id,
+               provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
+               upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE terminal = TRUE
           AND billing_status = 'held'
@@ -173,7 +178,9 @@ pub(crate) async fn list_tasks_for_auth(
 ) -> AppResult<Vec<UpstreamTask>> {
     let rows = sqlx::query(
         r#"
-        SELECT *
+        SELECT id, task_type, upstream_task_id, user_id, user_key_id,
+               provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
+               upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE user_key_id = $1
           AND task_type = $2
@@ -293,7 +300,9 @@ async fn fetch_task(
 ) -> AppResult<UpstreamTask> {
     let row = sqlx::query(
         r#"
-        SELECT *
+        SELECT id, task_type, upstream_task_id, user_id, user_key_id,
+               provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
+               upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE user_key_id = $1
           AND task_type = $2

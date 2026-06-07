@@ -111,6 +111,22 @@ pub struct PublicUserKeyDraftResponse {
     pub masked_api_key: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct UserPage {
+    pub items: Vec<UserRecord>,
+    pub limit: i64,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserKeyPage {
+    pub items: Vec<UserKeyRecord>,
+    pub limit: i64,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ClaimPublicUserKeyRequest {
     pub email: String,
@@ -140,11 +156,15 @@ pub struct UpdateUserKeyRequest {
 pub struct ListUsersQuery {
     pub email: Option<String>,
     pub api_key: Option<String>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ListUserKeysQuery {
     pub user_id: Option<DbId>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 pub fn default_enabled_status() -> String {
@@ -204,7 +224,9 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     get_user(state, user_id).await
 }
 
-pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Vec<UserRecord>> {
+pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<UserPage> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
     let email = query
         .email
         .as_deref()
@@ -223,28 +245,19 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Ve
         None => Vec::new(),
     };
     if api_key.is_some() && matching_user_ids.is_empty() {
-        return Ok(Vec::new());
+        return Ok(UserPage {
+            items: Vec::new(),
+            limit,
+            next_cursor: None,
+            has_more: false,
+        });
     }
 
     let mut query_builder = sqlx::QueryBuilder::new(
-        r#"SELECT u.id, u.email, u.status,
-                  ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
-                  COALESCE(ukw.user_key_count, 0) AS user_key_count,
-                  w.balance_micro_usd + COALESCE(ukw.balance_micro_usd, 0) AS balance_micro_usd,
-                  w.reserved_micro_usd + COALESCE(ukw.reserved_micro_usd, 0) AS reserved_micro_usd,
-                  u.last_active_at, u.created_at, u.updated_at
-           FROM "user" u
-           JOIN user_group ug ON ug.id = u.user_group_id
-           JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
-           LEFT JOIN (
-               SELECT uk.user_id,
-                      count(uk.id) AS user_key_count,
-                      COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
-               FROM user_key uk
-               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
-               GROUP BY uk.user_id
-           ) ukw ON ukw.user_id = u.id"#,
+        r#"WITH page_users AS (
+               SELECT u.id, u.email, u.status, u.user_group_id,
+                      u.last_active_at, u.created_at, u.updated_at
+               FROM "user" u"#,
     );
 
     let mut has_where = false;
@@ -263,10 +276,56 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Ve
             .push(")");
     }
 
-    query_builder.push(" ORDER BY u.created_at DESC");
+    if let Some((created_at, id)) = cursor {
+        query_builder
+            .push(if has_where { " AND " } else { " WHERE " })
+            .push("(u.created_at, u.id) < (")
+            .push_bind(created_at)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+
+    query_builder
+        .push(" ORDER BY u.created_at DESC, u.id DESC LIMIT ")
+        .push_bind(limit + 1)
+        .push(
+            r#"
+           )
+           SELECT u.id, u.email, u.status,
+                  ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
+                  COALESCE(ukw.user_key_count, 0) AS user_key_count,
+                  w.balance_micro_usd + COALESCE(ukw.balance_micro_usd, 0) AS balance_micro_usd,
+                  w.reserved_micro_usd + COALESCE(ukw.reserved_micro_usd, 0) AS reserved_micro_usd,
+                  u.last_active_at, u.created_at, u.updated_at
+           FROM page_users u
+           JOIN user_group ug ON ug.id = u.user_group_id
+           JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
+           LEFT JOIN LATERAL (
+               SELECT count(uk.id) AS user_key_count,
+                      COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
+                      COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+               FROM user_key uk
+               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               WHERE uk.user_id = u.id
+           ) ukw ON TRUE
+           ORDER BY u.created_at DESC, u.id DESC"#,
+        );
 
     let rows = query_builder.build().fetch_all(&state.db.pool).await?;
-    rows.iter().map(user_from_row).collect()
+    let has_more = rows.len() > limit as usize;
+    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+    let next_cursor = has_more
+        .then(|| rows.last())
+        .flatten()
+        .map(created_id_cursor_from_row)
+        .transpose()?;
+    Ok(UserPage {
+        items: rows.iter().map(user_from_row).collect::<Result<_, _>>()?,
+        limit,
+        next_cursor,
+        has_more,
+    })
 }
 
 pub async fn update_user(
@@ -514,10 +573,9 @@ async fn consume_public_user_key_draft(state: &AppState, draft_id: &str) -> AppR
         .ok_or_else(|| AppError::BadRequest("invalid api key draft".to_string()))
 }
 
-pub async fn list_user_keys(
-    state: &AppState,
-    query: ListUserKeysQuery,
-) -> AppResult<Vec<UserKeyRecord>> {
+pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppResult<UserKeyPage> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
     let mut query_builder = sqlx::QueryBuilder::new(
         "SELECT uk.id, uk.user_id, uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
@@ -527,17 +585,66 @@ pub async fn list_user_keys(
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id",
     );
 
+    let mut has_where = false;
     if let Some(user_id) = query.user_id {
         query_builder.push(" WHERE uk.user_id = ");
         query_builder.push_bind(user_id);
+        has_where = true;
     }
 
-    query_builder.push(" ORDER BY uk.created_at DESC");
+    if let Some((created_at, id)) = cursor {
+        query_builder
+            .push(if has_where { " AND " } else { " WHERE " })
+            .push("(uk.created_at, uk.id) < (")
+            .push_bind(created_at)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+
+    query_builder
+        .push(" ORDER BY uk.created_at DESC, uk.id DESC LIMIT ")
+        .push_bind(limit + 1);
 
     let rows = query_builder.build().fetch_all(&state.db.pool).await?;
-    rows.iter()
-        .map(|row| user_key_from_row(state, row))
-        .collect()
+    let has_more = rows.len() > limit as usize;
+    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+    let next_cursor = has_more
+        .then(|| rows.last())
+        .flatten()
+        .map(created_id_cursor_from_row)
+        .transpose()?;
+    Ok(UserKeyPage {
+        items: rows
+            .iter()
+            .map(|row| user_key_from_row(state, row))
+            .collect::<Result<_, _>>()?,
+        limit,
+        next_cursor,
+        has_more,
+    })
+}
+
+fn parse_created_id_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
+    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some((created_at, id)) = cursor.rsplit_once('|') else {
+        return Err(AppError::BadRequest("invalid cursor".to_string()));
+    };
+    let created_at = DateTime::parse_from_rfc3339(created_at)
+        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?
+        .with_timezone(&Utc);
+    let id = id
+        .parse::<DbId>()
+        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?;
+    Ok(Some((created_at, id)))
+}
+
+fn created_id_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
+    let created_at: DateTime<Utc> = row.try_get("created_at")?;
+    let id: DbId = row.try_get("id")?;
+    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 pub async fn update_user_key(

@@ -59,7 +59,8 @@ use self::{
         delete_user_key, list_user_groups, list_user_keys, list_users, update_user,
         update_user_key, CreateUserKeyRequest, CreateUserRequest, CreatedUserKey,
         ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
-        UserGroupRecord, UserKeyModelCreditRecord, UserKeyRecord, UserRecord,
+        UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
+        UserRecord,
     },
 };
 use crate::payment::settings::{
@@ -175,7 +176,7 @@ async fn users(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListUsersQuery>,
     _admin: AdminAuth,
-) -> AppResult<Json<Vec<UserRecord>>> {
+) -> AppResult<Json<UserPage>> {
     Ok(Json(list_users(&state, query).await?))
 }
 
@@ -220,7 +221,7 @@ async fn user_keys(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListUserKeysQuery>,
     _admin: AdminAuth,
-) -> AppResult<Json<Vec<UserKeyRecord>>> {
+) -> AppResult<Json<UserKeyPage>> {
     Ok(Json(list_user_keys(&state, query).await?))
 }
 
@@ -890,7 +891,23 @@ async fn invalidate_cache(state: &AppState, event: InvalidationEvent) {
 
 #[derive(Debug, Deserialize)]
 struct ListUsageParams {
+    page: Option<i64>,
     limit: Option<i64>,
+    cursor: Option<String>,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+    model: Option<String>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UsagePage {
+    items: Vec<UsageRecord>,
+    total: i64,
+    page: i64,
+    limit: i64,
+    next_cursor: Option<String>,
+    has_more: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -928,8 +945,26 @@ async fn usage(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
     Query(params): Query<ListUsageParams>,
-) -> AppResult<Json<Vec<UsageRecord>>> {
-    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+) -> AppResult<Json<UsagePage>> {
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 500);
+    let start = params.start.clone();
+    let end = params.end.clone();
+    let model = params
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let status = match params.status.as_deref() {
+        Some("success") => Some("success"),
+        Some("failed") => Some("failed"),
+        _ => None,
+    };
+    let (cursor_created_at, cursor_id) = parse_usage_cursor(params.cursor.as_deref())?
+        .map(|cursor| (Some(cursor.0), Some(cursor.1)))
+        .unwrap_or((None, None));
+    let model = model.as_deref();
     let rows = sqlx::query(
         "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
                 status_code, streamed, latency_ms, first_response_ms, output_tokens_per_second,
@@ -938,14 +973,65 @@ async fn usage(
                 cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
                 audio_out_tokens,
                 cost_micro_usd, billing_status, error_summary, created_at
-         FROM usage ORDER BY created_at DESC LIMIT $1",
+         FROM usage
+         WHERE ($1::timestamptz IS NULL OR created_at >= $1)
+           AND ($2::timestamptz IS NULL OR created_at <= $2)
+           AND ($3::text IS NULL OR provider = $3 OR model = $3)
+           AND (
+             $4::text IS NULL
+             OR ($4 = 'success' AND status_code >= 200 AND status_code < 400)
+             OR ($4 = 'failed' AND (status_code >= 400 OR error_summary IS NOT NULL))
+           )
+           AND ($5::timestamptz IS NULL OR (created_at, id) < ($5, $6))
+         ORDER BY created_at DESC, id DESC
+         LIMIT $7",
     )
-    .bind(limit)
+    .bind(start)
+    .bind(end)
+    .bind(model)
+    .bind(status)
+    .bind(cursor_created_at)
+    .bind(cursor_id)
+    .bind(limit + 1)
     .fetch_all(&state.db.pool)
     .await?;
-    Ok(Json(
-        rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
-    ))
+    let has_more = rows.len() > limit as usize;
+    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+    let next_cursor = has_more
+        .then(|| rows.last())
+        .flatten()
+        .map(usage_cursor_from_row)
+        .transpose()?;
+    Ok(Json(UsagePage {
+        items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
+        total: rows.len() as i64,
+        page,
+        limit,
+        next_cursor,
+        has_more,
+    }))
+}
+
+fn parse_usage_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
+    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some((created_at, id)) = cursor.rsplit_once('|') else {
+        return Err(AppError::BadRequest("invalid usage cursor".to_string()));
+    };
+    let created_at = DateTime::parse_from_rfc3339(created_at)
+        .map_err(|_| AppError::BadRequest("invalid usage cursor".to_string()))?
+        .with_timezone(&Utc);
+    let id = id
+        .parse::<DbId>()
+        .map_err(|_| AppError::BadRequest("invalid usage cursor".to_string()))?;
+    Ok(Some((created_at, id)))
+}
+
+fn usage_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
+    let created_at: DateTime<Utc> = row.try_get("created_at")?;
+    let id: DbId = row.try_get("id")?;
+    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppResult<Json<Value>> {

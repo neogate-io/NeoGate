@@ -27,7 +27,7 @@ const userGroupByCode = computed(() => {
   return new Map(userGroups.value.map((group) => [group.code, group]))
 })
 
-function rows() {
+const pricingRows = computed(() => {
   return [...policies.value].sort((left, right) => {
     const leftGroup = left.user_group ?? ''
     const rightGroup = right.user_group ?? ''
@@ -36,7 +36,7 @@ function rows() {
       Number(Boolean(userGroupByCode.value.get(leftGroup)?.is_default))
     return defaultCompare || leftGroup.localeCompare(rightGroup)
   })
-}
+})
 
 function multiplierPercent(policy: PricingPolicy) {
   return policy.multiplier_micros / 10_000
@@ -117,7 +117,7 @@ onMounted(load)
   <section class="grid">
     <p class="pricing-policy-note">{{ t('pricingPolicyHint') }}</p>
 
-    <el-table v-loading="loading" class="admin-table" :data="rows()" stripe>
+    <el-table v-loading="loading" class="admin-table" :data="pricingRows" stripe>
       <el-table-column :label="t('userGroup')" min-width="220">
         <template #default="{ row }">
           {{ userGroupName(row.user_group) }}
@@ -186,7 +186,7 @@ onMounted(load)
       </el-form>
 
       <template #footer>
-        <div class="dialog-footer admin-dialog-footer">
+        <div class="admin-dialog-footer">
           <el-button @click="dialogOpen = false">{{ t('cancel') }}</el-button>
           <el-button type="primary" :loading="saving" @click="savePolicy">{{
             t('save')
@@ -204,12 +204,6 @@ onMounted(load)
   font-weight: 560;
   line-height: 1.6;
   margin: 0;
-}
-
-.dialog-footer {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
 }
 
 .settings-form-row {

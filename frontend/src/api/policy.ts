@@ -28,13 +28,6 @@ export function getSetupStatus() {
   return publicRequest<ServicePolicy>('/api/setup/status')
 }
 
-export function completeSetup(serviceMode: ServiceMode) {
-  return publicRequest<ServicePolicy>('/api/setup', {
-    method: 'POST',
-    body: JSON.stringify({ service_mode: serviceMode })
-  })
-}
-
 export function bootstrapSetup(input: {
   database_url?: string | null
   site_name?: string | null
@@ -87,14 +80,14 @@ export function completeSetupWizard(input: {
   admin_password: string
   service_mode: ServiceMode
   credit_required?: boolean
-  channel: {
+  channel?: {
     provider: string
     name: string
     protocol: 'openai' | 'anthropic'
     base_url: string
     models: string[]
     secret: string
-  }
+  } | null
   prices: Array<{
     provider: string
     model: string

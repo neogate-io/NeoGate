@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
@@ -20,6 +21,10 @@ use crate::{
         setting::{upsert_smtp_setting, UpsertSmtpSettingRequest},
     },
     auth::{AdminAuth, UserSessionAuth},
+    bootstrap::{
+        save_runtime_config, test_database, BootstrapConfigInput, BootstrapConfigResult,
+        TestDatabaseInput, TestDatabaseResult,
+    },
     cache::InvalidationEvent,
     config::RuntimeProbe,
     error::{AppError, AppResult},
@@ -118,10 +123,20 @@ struct StoredServicePolicy {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/setup/status", get(setup_status))
-        .route("/api/setup", axum::routing::post(complete_setup))
+        .route(
+            "/api/setup/bootstrap",
+            axum::routing::post(update_runtime_config),
+        )
+        .route(
+            "/api/setup/test-database",
+            axum::routing::post(test_database_connection),
+        )
         .route("/api/setup/complete", axum::routing::post(complete_setup))
         .route("/api/setup/providers", get(setup_providers))
-        .route("/api/setup/upstream-models", axum::routing::post(setup_upstream_models))
+        .route(
+            "/api/setup/upstream-models",
+            axum::routing::post(setup_upstream_models),
+        )
         .route("/api/user/service-policy", get(user_service_policy))
         .route(
             "/api/admin/settings/service-policy",
@@ -156,6 +171,37 @@ async fn setup_status(State(state): State<Arc<AppState>>) -> AppResult<Json<Serv
     Ok(Json(current_service_policy(&state).await?))
 }
 
+async fn update_runtime_config(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BootstrapConfigInput>,
+) -> AppResult<Json<BootstrapConfigResult>> {
+    if current_service_policy(&state).await?.setup_completed {
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
+    }
+    let result = save_runtime_config(req).await?;
+    schedule_runtime_restart(state.runtime_restart_tx.clone());
+    Ok(Json(result))
+}
+
+async fn test_database_connection(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TestDatabaseInput>,
+) -> AppResult<Json<TestDatabaseResult>> {
+    if current_service_policy(&state).await?.setup_completed {
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
+    }
+    let database_url = req.database_url.trim();
+    if database_url.is_empty() {
+        return Err(AppError::BadRequest("DATABASE_URL is required".to_string()));
+    }
+    test_database(database_url).await?;
+    Ok(Json(TestDatabaseResult { ok: true }))
+}
+
 async fn complete_setup(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CompleteSetupRequest>,
@@ -166,7 +212,9 @@ async fn complete_setup(
         .await?;
 
     if stored_policy_for_update(&mut tx).await?.setup_completed {
-        return Err(AppError::Conflict("setup has already been completed".to_string()));
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
     }
 
     let admin_password = req
@@ -176,16 +224,22 @@ async fn complete_setup(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::BadRequest("admin password is required".to_string()))?;
     crate::auth::validate_user_password_input(admin_password)?;
-    let channel_req = req
-        .channel
-        .ok_or_else(|| AppError::BadRequest("upstream channel is required".to_string()))?;
-    if req.prices.is_empty() {
+    if req.channel.is_none() && !req.prices.is_empty() {
+        return Err(AppError::BadRequest(
+            "upstream channel is required when model prices are provided".to_string(),
+        ));
+    }
+    if req.channel.is_some() && req.prices.is_empty() {
         return Err(AppError::BadRequest(
             "at least one model price is required".to_string(),
         ));
     }
     reset_initial_admin_password(&state, admin_password).await?;
-    let channel = create_setup_channel(&state, channel_req).await?;
+    let channel = if let Some(channel_req) = req.channel {
+        Some(create_setup_channel(&state, channel_req).await?)
+    } else {
+        None
+    };
     for price in req.prices {
         upsert_provider_price(
             &state,
@@ -226,10 +280,14 @@ async fn complete_setup(
         .cache_invalidator
         .invalidate(&state, InvalidationEvent::Routing)
         .await;
-    tracing::info!(
-        "first-run setup completed with initial channel {}",
-        channel.id
-    );
+    if let Some(channel) = channel {
+        tracing::info!(
+            "first-run setup completed with initial channel {}",
+            channel.id
+        );
+    } else {
+        tracing::info!("first-run setup completed without an initial upstream channel");
+    }
     Ok(Json(record))
 }
 
@@ -487,7 +545,10 @@ fn record_from_stored(
         .as_ref()
         .map(|probe| probe.runtime_mode.as_str().to_string())
         .unwrap_or_else(|| "standalone".to_string());
-    let redis_configured = probe.as_ref().map(|probe| probe.redis_configured()).unwrap_or(false);
+    let redis_configured = probe
+        .as_ref()
+        .map(|probe| probe.redis_configured())
+        .unwrap_or(false);
     let is_distributed = runtime_mode == "distributed";
     ServicePolicyRecord {
         runtime_mode,
@@ -506,12 +567,21 @@ fn record_from_stored(
             .as_ref()
             .and_then(|probe| probe.site_name.clone())
             .or_else(|| Some("NeoGate".to_string())),
-        public_base_url: probe.as_ref().and_then(|probe| probe.public_base_url.clone()),
+        public_base_url: probe
+            .as_ref()
+            .and_then(|probe| probe.public_base_url.clone()),
         service_mode: stored.service_mode,
         credit_required: stored.credit_required,
         recharge_enabled: stored.service_mode == ServiceMode::Paid,
         updated_at,
     }
+}
+
+fn schedule_runtime_restart(restart_tx: tokio::sync::watch::Sender<bool>) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = restart_tx.send(true);
+    });
 }
 
 #[cfg(test)]

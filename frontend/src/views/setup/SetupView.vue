@@ -2,6 +2,8 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  ArrowLeft,
+  ArrowRight,
   Briefcase,
   Check,
   CreditCard,
@@ -35,6 +37,14 @@ import { splitCommaList } from '../../utils/channel'
 
 type Protocol = 'openai' | 'anthropic'
 type DatabaseInputMode = 'fields' | 'url'
+type BusinessSetupStep = 'admin-password' | 'service-mode' | 'upstream' | 'smtp'
+
+const businessSetupSteps: BusinessSetupStep[] = [
+  'admin-password',
+  'service-mode',
+  'upstream',
+  'smtp'
+]
 
 const router = useRouter()
 const { t } = useLocale()
@@ -43,10 +53,16 @@ const saving = ref(false)
 const fetchingModels = ref(false)
 const generatingTemplate = ref(false)
 const testingDatabase = ref(false)
+const waitingForRestart = ref(false)
+const restartWaitTimedOut = ref(false)
 const status = ref<ServicePolicy | null>(null)
 const providers = ref<ProviderRecord[]>([])
 const envFile = ref('')
 const clusterEnvTemplate = ref('')
+const currentBusinessStep = ref<BusinessSetupStep>('admin-password')
+const includeUpstream = ref(true)
+const reviewingRuntimeConfig = ref(false)
+const runtimeDatabaseChangeEnabled = ref(false)
 
 const bootstrapForm = reactive({
   databaseInputMode: 'fields' as DatabaseInputMode,
@@ -119,19 +135,39 @@ const modeOptions = computed(() => [
 
 const setupSteps = computed(() => [
   {
+    key: 'runtime',
     title: t('setupStepRuntime'),
     description: t('setupStepRuntimeDescription'),
-    done: !status.value?.bootstrap_required
+    done: !status.value?.bootstrap_required && !reviewingRuntimeConfig.value,
+    active: Boolean(status.value?.bootstrap_required) || reviewingRuntimeConfig.value
   },
   {
-    title: t('setupStepAdmin'),
-    description: t('setupStepAdminDescription'),
-    done: false
+    key: 'admin-password',
+    title: t('setupStepAdminPassword'),
+    description: t('setupStepAdminPasswordDescription'),
+    done: isBusinessStepDone('admin-password'),
+    active: isBusinessStepActive('admin-password')
   },
   {
+    key: 'service-mode',
+    title: t('setupStepServiceMode'),
+    description: t('setupStepServiceModeDescription'),
+    done: isBusinessStepDone('service-mode'),
+    active: isBusinessStepActive('service-mode')
+  },
+  {
+    key: 'upstream',
     title: t('setupStepUpstream'),
     description: t('setupStepUpstreamDescription'),
-    done: prices.value.length > 0
+    done: isBusinessStepDone('upstream'),
+    active: isBusinessStepActive('upstream')
+  },
+  {
+    key: 'smtp',
+    title: t('setupStepSmtp'),
+    description: t('setupStepSmtpDescription'),
+    done: isBusinessStepDone('smtp'),
+    active: isBusinessStepActive('smtp')
   }
 ])
 
@@ -158,8 +194,22 @@ const clusterBlocked = computed(
 const canConfigureEnv = computed(
   () => status.value?.bootstrap_required && status.value.env_write_supported
 )
+const canReviewRuntimeConfig = computed(
+  () =>
+    Boolean(status.value) &&
+    !status.value?.bootstrap_required &&
+    !status.value?.setup_completed &&
+    status.value?.env_write_supported
+)
+const showRuntimeConfiguration = computed(
+  () => canConfigureEnv.value || reviewingRuntimeConfig.value
+)
 const showBusinessSetup = computed(
-  () => status.value && !status.value.bootstrap_required && !status.value.setup_completed
+  () =>
+    status.value &&
+    !status.value.bootstrap_required &&
+    !status.value.setup_completed &&
+    !reviewingRuntimeConfig.value
 )
 
 watch(
@@ -202,18 +252,63 @@ async function saveBootstrap() {
   saving.value = true
   try {
     const result = await bootstrapSetup({
-      database_url: bootstrapMissingDatabase.value ? buildDatabaseUrl(false) : null,
+      database_url:
+        bootstrapMissingDatabase.value || runtimeDatabaseChangeEnabled.value
+          ? buildDatabaseUrl(false)
+          : null,
       site_name: bootstrapForm.siteName,
       public_base_url: bootstrapForm.publicBaseUrl
     })
     envFile.value = result.env_file
+    waitingForRestart.value = true
+    restartWaitTimedOut.value = false
     ElMessage.success(t('runtimeConfigSaved'))
-    await load()
+    if (reviewingRuntimeConfig.value) {
+      waitingForRestart.value = false
+      return
+    }
+    await waitForRuntimeRestart()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
     saving.value = false
   }
+}
+
+async function handleRuntimeSubmit() {
+  await saveBootstrap()
+}
+
+async function waitForRuntimeRestart() {
+  waitingForRestart.value = true
+  restartWaitTimedOut.value = false
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    await sleep(1500)
+    try {
+      const nextStatus = await getSetupStatus()
+      if (nextStatus.setup_completed) {
+        await router.replace('/login')
+        return
+      }
+      if (!nextStatus.bootstrap_required) {
+        status.value = nextStatus
+        envFile.value = ''
+        waitingForRestart.value = false
+        restartWaitTimedOut.value = false
+        providers.value = await getSetupProviders()
+        if (providers.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providers.value[0].code
+        }
+        applyProviderDefaults()
+        return
+      }
+    } catch {
+      // The backend is expected to be temporarily unavailable while it restarts.
+    }
+  }
+  waitingForRestart.value = false
+  restartWaitTimedOut.value = true
 }
 
 async function testDatabaseConnection() {
@@ -266,25 +361,30 @@ async function submitSetup() {
   if (!validateSetup()) return
   saving.value = true
   try {
+    const channel = includeUpstream.value
+      ? {
+          provider: setupForm.provider,
+          name: setupForm.channelName.trim(),
+          protocol: setupForm.protocol,
+          base_url: setupForm.baseUrl.trim(),
+          models: splitCommaList(setupForm.models),
+          secret: setupForm.secret
+        }
+      : null
     await completeSetupWizard({
       admin_password: setupForm.adminPassword,
       service_mode: setupForm.serviceMode,
       credit_required: setupForm.serviceMode === 'internal' ? setupForm.creditRequired : true,
-      channel: {
-        provider: setupForm.provider,
-        name: setupForm.channelName.trim(),
-        protocol: setupForm.protocol,
-        base_url: setupForm.baseUrl.trim(),
-        models: splitCommaList(setupForm.models),
-        secret: setupForm.secret
-      },
-      prices: prices.value.map((price) => ({
-        provider: setupForm.provider,
-        model: price.model,
-        input_price_usd_micros: usdToMicroUsd(price.inputUsd),
-        output_price_usd_micros: usdToMicroUsd(price.outputUsd),
-        enabled: price.enabled
-      })),
+      channel,
+      prices: includeUpstream.value
+        ? prices.value.map((price) => ({
+            provider: setupForm.provider,
+            model: price.model,
+            input_price_usd_micros: usdToMicroUsd(price.inputUsd),
+            output_price_usd_micros: usdToMicroUsd(price.outputUsd),
+            enabled: price.enabled
+          }))
+        : [],
       smtp: smtpForm.enabled ? {
         smtp_host: smtpForm.host,
         smtp_port: smtpForm.port,
@@ -318,12 +418,27 @@ async function submitSetup() {
 }
 
 function validateSetup() {
+  if (!validateAdminStep()) return false
+  if (includeUpstream.value && !validateUpstreamStep()) return false
+  if (!validateSmtpStep()) return false
+  return true
+}
+
+function validateAdminStep() {
   if (!setupForm.adminPassword || setupForm.adminPassword.length < 8) {
     ElMessage.error(t('passwordMinLength'))
     return false
   }
   if (setupForm.adminPassword !== setupForm.confirmPassword) {
     ElMessage.error(t('adminPasswordMismatch'))
+    return false
+  }
+  return true
+}
+
+function validateUpstreamStep() {
+  if (!setupForm.provider.trim()) {
+    ElMessage.error(t('providerRequired'))
     return false
   }
   if (!setupForm.channelName.trim()) {
@@ -347,6 +462,73 @@ function validateSetup() {
     return false
   }
   return true
+}
+
+function validateSmtpStep() {
+  if (!smtpForm.enabled) return true
+  if (!smtpForm.host.trim()) {
+    ElMessage.error(t('smtpHostRequired'))
+    return false
+  }
+  if (!smtpForm.fromEmail.trim()) {
+    ElMessage.error(t('smtpFromEmailRequired'))
+    return false
+  }
+  return true
+}
+
+function goToNextBusinessStep() {
+  if (currentBusinessStep.value === 'admin-password' && !validateAdminStep()) return
+  if (currentBusinessStep.value === 'upstream' && !validateUpstreamStep()) return
+  if (currentBusinessStep.value === 'upstream') {
+    includeUpstream.value = true
+  }
+  const nextIndex = businessSetupSteps.indexOf(currentBusinessStep.value) + 1
+  currentBusinessStep.value = businessSetupSteps[nextIndex] ?? currentBusinessStep.value
+}
+
+function goToPreviousBusinessStep() {
+  if (currentBusinessStep.value === 'admin-password' && canReviewRuntimeConfig.value) {
+    reviewingRuntimeConfig.value = true
+    runtimeDatabaseChangeEnabled.value = false
+    bootstrapForm.databaseInputMode = 'url'
+    bootstrapForm.databaseUrl = ''
+    return
+  }
+  const previousIndex = businessSetupSteps.indexOf(currentBusinessStep.value) - 1
+  currentBusinessStep.value = businessSetupSteps[previousIndex] ?? currentBusinessStep.value
+}
+
+function returnToBusinessSetup() {
+  reviewingRuntimeConfig.value = false
+  runtimeDatabaseChangeEnabled.value = false
+}
+
+function skipUpstreamStep() {
+  includeUpstream.value = false
+  currentBusinessStep.value = 'smtp'
+}
+
+async function skipSmtpAndSubmit() {
+  smtpForm.enabled = false
+  await submitSetup()
+}
+
+async function handleBusinessSubmit() {
+  if (currentBusinessStep.value === 'smtp') {
+    await submitSetup()
+    return
+  }
+  goToNextBusinessStep()
+}
+
+function isBusinessStepActive(step: BusinessSetupStep) {
+  return showBusinessSetup.value && currentBusinessStep.value === step
+}
+
+function isBusinessStepDone(step: BusinessSetupStep) {
+  if (!showBusinessSetup.value) return false
+  return businessSetupSteps.indexOf(currentBusinessStep.value) > businessSetupSteps.indexOf(step)
 }
 
 function applyProviderDefaults() {
@@ -391,6 +573,10 @@ function buildDatabaseUrl(maskPassword: boolean) {
   return `postgres://${auth}${normalizedHost}${portPart}/${encodeURIComponent(databaseName)}${query}`
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
 onMounted(load)
 </script>
 
@@ -410,8 +596,8 @@ onMounted(load)
         <ol class="setup-steps">
           <li
             v-for="step in setupSteps"
-            :key="step.title"
-            :class="{ done: step.done }"
+            :key="step.key"
+            :class="{ active: step.active, done: step.done }"
           >
             <span class="setup-step-mark">
               <el-icon><Check /></el-icon>
@@ -430,13 +616,27 @@ onMounted(load)
             <el-icon><Warning /></el-icon>
           </span>
           <div>
-            <h2>{{ t('restartRequired') }}</h2>
-            <p>{{ t('restartRequiredDescription') }}</p>
+            <h2>{{ waitingForRestart ? t('runtimeRestarting') : t('restartRequired') }}</h2>
+            <p>
+              {{
+                waitingForRestart
+                  ? t('runtimeRestartingDescription')
+                  : t('restartRequiredDescription')
+              }}
+            </p>
           </div>
         </div>
         <div class="setup-env-file">
           <span>{{ t('configWrittenTo') }}</span>
           <code>{{ envFile || '.env' }}</code>
+        </div>
+        <p v-if="restartWaitTimedOut" class="setup-warning-text">
+          {{ t('runtimeRestartTimedOut') }}
+        </p>
+        <div v-if="restartWaitTimedOut" class="setup-field-actions">
+          <el-button :loading="waitingForRestart" @click="waitForRuntimeRestart">
+            {{ t('retryRuntimeCheck') }}
+          </el-button>
         </div>
       </section>
 
@@ -469,7 +669,7 @@ onMounted(load)
         />
       </section>
 
-      <section v-else-if="canConfigureEnv" class="setup-panel">
+      <section v-else-if="showRuntimeConfiguration" class="setup-panel">
         <div class="setup-panel-title">
           <span class="setup-title-icon">
             <el-icon><Setting /></el-icon>
@@ -479,16 +679,57 @@ onMounted(load)
             <p>{{ t('runtimeConfigurationDescription') }}</p>
           </div>
         </div>
-        <el-form label-position="top" @submit.prevent="saveBootstrap">
-          <template v-if="bootstrapMissingDatabase">
-            <el-form-item :label="t('databaseConnectionMode')">
+        <el-form label-position="top" @submit.prevent="handleRuntimeSubmit">
+          <div class="setup-section">
+            <div class="setup-section-heading compact-heading">
+              <div>
+                <h2>{{ t('siteConfiguration') }}</h2>
+                <p>{{ t('siteConfigurationDescription') }}</p>
+              </div>
+            </div>
+            <div class="setup-grid two">
+              <el-form-item :label="t('siteNameLabel')">
+                <el-input v-model="bootstrapForm.siteName" />
+              </el-form-item>
+              <el-form-item :label="t('publicBaseUrlLabel')">
+                <el-input v-model="bootstrapForm.publicBaseUrl" />
+              </el-form-item>
+            </div>
+          </div>
+
+          <div v-if="bootstrapMissingDatabase || reviewingRuntimeConfig" class="setup-section">
+            <div class="setup-section-heading compact-heading">
+              <div>
+                <h2>{{ t('databaseConfiguration') }}</h2>
+                <p>{{ t('databaseConfigurationDescription') }}</p>
+              </div>
+            </div>
+            <div
+              v-if="reviewingRuntimeConfig && !bootstrapMissingDatabase"
+              class="setup-inline-control"
+            >
+              <span>
+                <strong>{{ t('changeDatabaseConfiguration') }}</strong>
+                <small>{{ t('changeDatabaseConfigurationHint') }}</small>
+              </span>
+              <el-switch v-model="runtimeDatabaseChangeEnabled" />
+            </div>
+            <el-form-item
+              v-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled"
+              :label="t('databaseConnectionMode')"
+            >
               <el-segmented
                 v-model="bootstrapForm.databaseInputMode"
                 :options="databaseInputModeOptions"
               />
             </el-form-item>
 
-            <template v-if="bootstrapForm.databaseInputMode === 'fields'">
+            <template
+              v-if="
+                (bootstrapMissingDatabase || runtimeDatabaseChangeEnabled) &&
+                bootstrapForm.databaseInputMode === 'fields'
+              "
+            >
               <div class="setup-grid two">
                 <el-form-item :label="t('databaseHostLabel')">
                   <el-input v-model="bootstrapForm.databaseHost" />
@@ -531,25 +772,33 @@ onMounted(load)
               </div>
             </template>
 
-            <el-form-item v-else :label="t('databaseUrlLabel')">
+            <el-form-item
+              v-else-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled"
+              :label="t('databaseUrlLabel')"
+            >
               <el-input v-model="bootstrapForm.databaseUrl" />
             </el-form-item>
-            <div v-if="bootstrapForm.databaseInputMode === 'url'" class="setup-field-actions">
+            <div
+              v-if="
+                (bootstrapMissingDatabase || runtimeDatabaseChangeEnabled) &&
+                bootstrapForm.databaseInputMode === 'url'
+              "
+              class="setup-field-actions"
+            >
               <el-button :loading="testingDatabase" @click="testDatabaseConnection">
                 {{ t('testDatabaseConnection') }}
               </el-button>
             </div>
-          </template>
-
-          <div class="setup-grid two">
-            <el-form-item :label="t('siteNameLabel')">
-              <el-input v-model="bootstrapForm.siteName" />
-            </el-form-item>
-            <el-form-item :label="t('publicBaseUrlLabel')">
-              <el-input v-model="bootstrapForm.publicBaseUrl" />
-            </el-form-item>
           </div>
+
           <div class="setup-actions">
+            <el-button
+              v-if="reviewingRuntimeConfig"
+              :icon="ArrowRight"
+              @click="returnToBusinessSetup"
+            >
+              {{ t('nextStep') }}
+            </el-button>
             <el-button type="primary" :loading="saving" native-type="submit">
               {{ t('saveRuntimeConfiguration') }}
             </el-button>
@@ -558,8 +807,8 @@ onMounted(load)
       </section>
 
       <section v-else-if="showBusinessSetup" class="setup-panel">
-        <el-form label-position="top" @submit.prevent="submitSetup">
-          <div class="setup-section">
+        <el-form label-position="top" @submit.prevent="handleBusinessSubmit">
+          <div v-if="currentBusinessStep === 'admin-password'" class="setup-section">
             <div class="setup-section-heading">
               <span class="setup-title-icon">
                 <el-icon><Key /></el-icon>
@@ -579,7 +828,7 @@ onMounted(load)
             </div>
           </div>
 
-          <div class="setup-section">
+          <div v-else-if="currentBusinessStep === 'service-mode'" class="setup-section">
             <div class="setup-section-heading">
               <span class="setup-title-icon">
                 <el-icon><Briefcase /></el-icon>
@@ -615,9 +864,26 @@ onMounted(load)
               </span>
               <el-switch v-model="setupForm.creditRequired" />
             </div>
+            <template v-if="setupForm.serviceMode === 'paid'">
+              <div class="setup-section compact nested-setup-section">
+                <div class="setup-inline-control">
+                  <span>
+                    <strong>{{ t('paymentSettings') }}</strong>
+                    <small>{{ t('setupPaymentHint') }}</small>
+                  </span>
+                  <el-switch v-model="paymentForm.enabled" />
+                </div>
+                <div v-if="paymentForm.enabled" class="setup-grid two optional-grid">
+                  <el-form-item :label="t('zpayApiUrl')"><el-input v-model="paymentForm.apiUrl" /></el-form-item>
+                  <el-form-item :label="t('zpaySiteName')"><el-input v-model="paymentForm.siteName" /></el-form-item>
+                  <el-form-item :label="t('zpayMerchantId')"><el-input v-model="paymentForm.merchantId" /></el-form-item>
+                  <el-form-item :label="t('zpaySecretKey')"><el-input v-model="paymentForm.secretKey" show-password /></el-form-item>
+                </div>
+              </div>
+            </template>
           </div>
 
-          <div class="setup-section">
+          <div v-else-if="currentBusinessStep === 'upstream'" class="setup-section">
             <div class="setup-section-heading">
               <span class="setup-title-icon">
                 <el-icon><Tickets /></el-icon>
@@ -661,40 +927,49 @@ onMounted(load)
                 </el-button>
               </div>
             </el-form-item>
+
+            <div class="nested-setup-section">
+              <div class="setup-section-heading">
+                <span class="setup-title-icon">
+                  <el-icon><Finished /></el-icon>
+                </span>
+                <div>
+                  <h2>{{ t('modelPrices') }}</h2>
+                  <p>{{ t('setupPricesHint') }}</p>
+                </div>
+              </div>
+              <div class="price-list">
+                <div class="price-row price-header">
+                  <span>{{ t('model') }}</span>
+                  <span>{{ t('inputShort') }}</span>
+                  <span>{{ t('outputShort') }}</span>
+                  <span>{{ t('status') }}</span>
+                </div>
+                <div v-for="price in prices" :key="price.model" class="price-row">
+                  <span class="price-model">{{ price.model }}</span>
+                  <el-input-number v-model="price.inputUsd" :min="0" :precision="6" :step="0.1" />
+                  <el-input-number v-model="price.outputUsd" :min="0" :precision="6" :step="0.1" />
+                  <el-switch v-model="price.enabled" />
+                </div>
+                <el-empty v-if="prices.length === 0" :description="t('modelsFetchRequired')" />
+              </div>
+            </div>
           </div>
 
-          <div class="setup-section">
+          <div v-else-if="currentBusinessStep === 'smtp'" class="setup-section compact">
             <div class="setup-section-heading">
               <span class="setup-title-icon">
-                <el-icon><Finished /></el-icon>
+                <el-icon><Setting /></el-icon>
               </span>
               <div>
-                <h2>{{ t('modelPrices') }}</h2>
-                <p>{{ t('setupPricesHint') }}</p>
+                <h2>{{ t('smtpSettings') }}</h2>
+                <p>{{ t('setupSmtpHint') }}</p>
               </div>
             </div>
-            <div class="price-list">
-              <div class="price-row price-header">
-                <span>{{ t('model') }}</span>
-                <span>{{ t('inputShort') }}</span>
-                <span>{{ t('outputShort') }}</span>
-                <span>{{ t('status') }}</span>
-              </div>
-              <div v-for="price in prices" :key="price.model" class="price-row">
-                <span class="price-model">{{ price.model }}</span>
-                <el-input-number v-model="price.inputUsd" :min="0" :precision="6" :step="0.1" />
-                <el-input-number v-model="price.outputUsd" :min="0" :precision="6" :step="0.1" />
-                <el-switch v-model="price.enabled" />
-              </div>
-              <el-empty v-if="prices.length === 0" :description="t('modelsFetchRequired')" />
-            </div>
-          </div>
-
-          <div class="setup-section compact">
-            <div class="setup-inline-control">
+            <div class="setup-inline-control smtp-enable-control">
               <span>
-                <strong>{{ t('smtpSettings') }}</strong>
-                <small>{{ t('setupSmtpHint') }}</small>
+                <strong>{{ t('setupEnableSmtp') }}</strong>
+                <small>{{ t('setupEnableSmtpDescription') }}</small>
               </span>
               <el-switch v-model="smtpForm.enabled" />
             </div>
@@ -708,26 +983,44 @@ onMounted(load)
             </div>
           </div>
 
-          <template v-if="setupForm.serviceMode === 'paid'">
-            <div class="setup-section compact">
-              <div class="setup-inline-control">
-                <span>
-                  <strong>{{ t('paymentSettings') }}</strong>
-                  <small>{{ t('setupPaymentHint') }}</small>
-                </span>
-                <el-switch v-model="paymentForm.enabled" />
-              </div>
-              <div v-if="paymentForm.enabled" class="setup-grid two optional-grid">
-                <el-form-item :label="t('zpayApiUrl')"><el-input v-model="paymentForm.apiUrl" /></el-form-item>
-                <el-form-item :label="t('zpaySiteName')"><el-input v-model="paymentForm.siteName" /></el-form-item>
-                <el-form-item :label="t('zpayMerchantId')"><el-input v-model="paymentForm.merchantId" /></el-form-item>
-                <el-form-item :label="t('zpaySecretKey')"><el-input v-model="paymentForm.secretKey" show-password /></el-form-item>
-              </div>
-            </div>
-          </template>
-
           <div class="setup-actions sticky">
-            <el-button class="setup-submit" type="primary" :icon="Select" :loading="saving" native-type="submit">
+            <el-button
+              v-if="currentBusinessStep !== 'admin-password' || canReviewRuntimeConfig"
+              :icon="ArrowLeft"
+              @click="goToPreviousBusinessStep"
+            >
+              {{ t('previousStep') }}
+            </el-button>
+            <el-button
+              v-if="currentBusinessStep === 'upstream'"
+              @click="skipUpstreamStep"
+            >
+              {{ t('skipStep') }}
+            </el-button>
+            <el-button
+              v-if="currentBusinessStep !== 'smtp'"
+              type="primary"
+              :icon="ArrowRight"
+              @click="goToNextBusinessStep"
+            >
+              {{ t('nextStep') }}
+            </el-button>
+            <el-button
+              v-if="currentBusinessStep === 'smtp'"
+              :loading="saving && !smtpForm.enabled"
+              :type="smtpForm.enabled ? undefined : 'primary'"
+              @click="skipSmtpAndSubmit"
+            >
+              {{ t('skipStep') }}
+            </el-button>
+            <el-button
+              v-if="currentBusinessStep === 'smtp' && smtpForm.enabled"
+              class="setup-submit"
+              type="primary"
+              :icon="Select"
+              :loading="saving"
+              @click="submitSetup"
+            >
               {{ t('completeSetup') }}
             </el-button>
           </div>
@@ -850,6 +1143,15 @@ onMounted(load)
   color: #059669;
 }
 
+.setup-steps li.active .setup-step-mark {
+  background: #eaf6fd;
+  color: #168bd3;
+}
+
+.setup-steps li.active strong {
+  color: #168bd3;
+}
+
 .setup-steps strong,
 .setup-inline-control strong {
   color: #172033;
@@ -893,6 +1195,10 @@ onMounted(load)
   grid-template-columns: 42px minmax(0, 1fr);
 }
 
+.setup-section-heading.compact-heading {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .setup-title-icon {
   align-items: center;
   background: #eaf6fd;
@@ -931,6 +1237,13 @@ onMounted(load)
 
 .setup-section.compact {
   gap: 12px;
+}
+
+.nested-setup-section {
+  border-top: 1px solid #edf1f5;
+  display: grid;
+  gap: 16px;
+  padding-top: 18px;
 }
 
 .setup-grid {
@@ -1095,10 +1408,16 @@ onMounted(load)
   margin-top: 12px;
 }
 
+.smtp-enable-control {
+  margin-top: 2px;
+}
+
 .setup-actions {
   align-items: center;
   display: flex;
+  gap: 10px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .setup-field-actions {
@@ -1144,6 +1463,14 @@ onMounted(load)
   overflow-wrap: anywhere;
 }
 
+.setup-warning-text {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412 !important;
+  padding: 12px 14px;
+}
+
 @media (max-width: 980px) {
   .setup-stage {
     grid-template-columns: 1fr;
@@ -1157,7 +1484,7 @@ onMounted(load)
   }
 
   .setup-steps {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   }
 
   .setup-steps li {

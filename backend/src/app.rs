@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use reqwest::Client;
+use tokio::sync::watch;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -14,15 +15,13 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
     admin, auth,
-    bootstrap,
     billing::{outbox::BillingOutbox, Billing},
-    cache,
+    bootstrap, cache,
     config::{Config, RuntimeProbe, DEFAULT_RELAY_BODY_LIMIT_BYTES},
     db::Db,
     email::EmailService,
     health::{self, RuntimeHealth},
-    payment,
-    policy,
+    payment, policy,
     relay::{self, selector::Selector},
     secrets::SecretStore,
     task,
@@ -50,6 +49,7 @@ pub struct AppState {
     pub user_auth_cache: auth::UserAuthCache,
     pub auth_rate_limiter: auth::AuthRateLimiter,
     pub cache_invalidator: cache::CacheInvalidator,
+    pub runtime_restart_tx: watch::Sender<bool>,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -63,7 +63,8 @@ pub async fn run() -> anyhow::Result<()> {
 
     let probe = RuntimeProbe::from_env()?;
     if !probe.full_config_ready() {
-        let app = bootstrap::router()
+        let (bootstrap_restart_tx, bootstrap_restart_rx) = watch::channel(false);
+        let app = bootstrap::router(bootstrap_restart_tx)
             .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
             .layer(cors_layer_from_origins(&["*".to_string()])?)
             .layer(TraceLayer::new_for_http());
@@ -73,13 +74,14 @@ pub async fn run() -> anyhow::Result<()> {
             probe.bind_addr
         );
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(runtime_shutdown_signal(bootstrap_restart_rx))
             .await?;
         return Ok(());
     }
 
     let config = Config::from_env()?;
-    let state = build_state(config.clone()).await?;
+    let (runtime_restart_tx, runtime_restart_rx) = watch::channel(false);
+    let state = build_state(config.clone(), runtime_restart_tx).await?;
 
     if !config.process_role.runs_api() {
         tracing::info!(
@@ -98,12 +100,15 @@ pub async fn run() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
         .await?;
     Ok(())
 }
 
-async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
+async fn build_state(
+    config: Config,
+    runtime_restart_tx: watch::Sender<bool>,
+) -> anyhow::Result<Arc<AppState>> {
     let db = Db::connect(&config).await?;
     sqlx::migrate!("./migrations").run(&db.pool).await?;
     bootstrap_admin(&config, &db).await?;
@@ -224,6 +229,7 @@ async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
         ),
         auth_rate_limiter,
         cache_invalidator,
+        runtime_restart_tx,
     });
     if config.process_role.runs_api() {
         if let Some(listener) = invalidation_listener {
@@ -302,10 +308,7 @@ fn cors_layer_from_origins(cors_allowed_origins: &[String]) -> anyhow::Result<Co
         .allow_methods(allowed_methods)
         .allow_headers(allowed_headers);
 
-    if cors_allowed_origins
-        .iter()
-        .any(|origin| origin == "*")
-    {
+    if cors_allowed_origins.iter().any(|origin| origin == "*") {
         return Ok(layer.allow_origin(Any));
     }
 
@@ -344,6 +347,26 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
+async fn runtime_shutdown_signal(mut restart_rx: watch::Receiver<bool>) {
+    let restart_requested = async {
+        loop {
+            if *restart_rx.borrow() {
+                break;
+            }
+            if restart_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = shutdown_signal() => {},
+        _ = restart_requested => {
+            tracing::info!("runtime configuration saved; gracefully shutting down for restart");
+        },
+    }
+}
+
 fn load_dotenv() {
     if let Ok(path) = std::env::var("NEOGATE_ENV_FILE") {
         dotenvy::from_path(path).ok();
@@ -380,6 +403,7 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgres://localhost/neogate")
             .unwrap();
+        let (runtime_restart_tx, _runtime_restart_rx) = watch::channel(false);
         Arc::new(AppState {
             config: Config {
                 database_url: "postgres://localhost/neogate".to_string(),
@@ -453,6 +477,7 @@ mod tests {
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
+            runtime_restart_tx,
         })
     }
 

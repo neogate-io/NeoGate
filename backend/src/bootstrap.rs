@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     fs,
     path::Path,
     sync::{
@@ -12,6 +12,7 @@ use std::{
 use axum::{extract::State, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Row};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
@@ -24,6 +25,7 @@ const SERVICE_POLICY_SETTING_KEY: &str = "service_policy";
 #[derive(Clone)]
 pub struct BootstrapState {
     restart_required: Arc<AtomicBool>,
+    restart_tx: watch::Sender<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,15 +90,19 @@ pub struct ClusterEnvTemplateResult {
     pub required_restart: bool,
 }
 
-pub fn router() -> Router {
+pub fn router(restart_tx: watch::Sender<bool>) -> Router {
     tracing::warn!("neogate bootstrap mode enabled; runtime configuration is incomplete");
     let state = Arc::new(BootstrapState {
         restart_required: Arc::new(AtomicBool::new(false)),
+        restart_tx,
     });
 
     Router::new()
         .route("/api/setup/status", get(setup_status))
-        .route("/api/setup/bootstrap", axum::routing::post(write_bootstrap_config))
+        .route(
+            "/api/setup/bootstrap",
+            axum::routing::post(write_bootstrap_config),
+        )
         .route(
             "/api/setup/test-database",
             axum::routing::post(test_database_connection),
@@ -111,13 +117,22 @@ pub fn router() -> Router {
 pub async fn setup_status(
     State(state): State<Arc<BootstrapState>>,
 ) -> AppResult<Json<SetupRuntimeStatus>> {
-    Ok(Json(runtime_status(state.restart_required.load(Ordering::SeqCst)).await?))
+    Ok(Json(
+        runtime_status(state.restart_required.load(Ordering::SeqCst)).await?,
+    ))
 }
 
 async fn write_bootstrap_config(
     State(state): State<Arc<BootstrapState>>,
     Json(req): Json<BootstrapConfigInput>,
 ) -> AppResult<Json<BootstrapConfigResult>> {
+    let result = save_runtime_config(req).await?;
+    state.restart_required.store(true, Ordering::SeqCst);
+    schedule_bootstrap_restart(state.restart_tx.clone());
+    Ok(Json(result))
+}
+
+pub async fn save_runtime_config(req: BootstrapConfigInput) -> AppResult<BootstrapConfigResult> {
     let probe = RuntimeProbe::from_env()?;
     if probe.runtime_mode.is_distributed() {
         return Err(AppError::BadRequest(
@@ -129,8 +144,8 @@ async fn write_bootstrap_config(
     let public_base_url = optional_trimmed(req.public_base_url).or(probe.public_base_url.clone());
     let site_name = optional_trimmed(req.site_name).or(probe.site_name.clone());
 
-    let database_url = database_url
-        .ok_or_else(|| AppError::BadRequest("DATABASE_URL is required".to_string()))?;
+    let database_url =
+        database_url.ok_or_else(|| AppError::BadRequest("DATABASE_URL is required".to_string()))?;
     let public_base_url = public_base_url
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
     let site_name =
@@ -155,24 +170,31 @@ async fn write_bootstrap_config(
         Some(generate_secret())
     };
 
-    let mut values = BTreeMap::new();
-    values.insert("DATABASE_URL".to_string(), database_url);
-    values.insert("PUBLIC_BASE_URL".to_string(), public_base_url);
-    values.insert("SITE_NAME".to_string(), site_name);
+    let mut values = vec![
+        ("SITE_NAME".to_string(), site_name),
+        ("PUBLIC_BASE_URL".to_string(), public_base_url),
+        ("DATABASE_URL".to_string(), database_url),
+    ];
     if let Some(secret) = admin_token_secret {
-        values.insert("ADMIN_TOKEN_SECRET".to_string(), secret);
+        values.push(("ADMIN_TOKEN_SECRET".to_string(), secret));
     }
     if let Some(secret) = upstream_secret_key {
-        values.insert("UPSTREAM_SECRET_KEY".to_string(), secret);
+        values.push(("UPSTREAM_SECRET_KEY".to_string(), secret));
     }
 
     upsert_env_file(&probe.env_file, &values)?;
-    state.restart_required.store(true, Ordering::SeqCst);
-    Ok(Json(BootstrapConfigResult {
+    Ok(BootstrapConfigResult {
         ok: true,
         env_file: probe.env_file.display().to_string(),
         restart_required: true,
-    }))
+    })
+}
+
+fn schedule_bootstrap_restart(restart_tx: watch::Sender<bool>) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = restart_tx.send(true);
+    });
 }
 
 async fn test_database_connection(
@@ -207,9 +229,15 @@ async fn cluster_env_template() -> AppResult<Json<ClusterEnvTemplateResult>> {
 
     let env_text = format!(
         "RUNTIME_MODE=distributed\nDATABASE_URL={}\nREDIS_URL={}\nPUBLIC_BASE_URL={}\nSITE_NAME={}\nADMIN_TOKEN_SECRET={}\nUPSTREAM_SECRET_KEY={}\n",
-        probe.database_url.unwrap_or_else(|| "postgres://user:password@postgres:5432/neogate".to_string()),
-        probe.redis_url.unwrap_or_else(|| "redis://redis:6379/".to_string()),
-        probe.public_base_url.unwrap_or_else(|| "https://neogate.example.com".to_string()),
+        probe
+            .database_url
+            .unwrap_or_else(|| "postgres://user:password@postgres:5432/neogate".to_string()),
+        probe
+            .redis_url
+            .unwrap_or_else(|| "redis://redis:6379/".to_string()),
+        probe
+            .public_base_url
+            .unwrap_or_else(|| "https://neogate.example.com".to_string()),
         probe.site_name.unwrap_or_else(|| "NeoGate".to_string()),
         generated_admin_token_secret
             .clone()
@@ -278,7 +306,7 @@ async fn runtime_status(restart_required: bool) -> AppResult<SetupRuntimeStatus>
     })
 }
 
-async fn test_database(database_url: &str) -> AppResult<()> {
+pub async fn test_database(database_url: &str) -> AppResult<()> {
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(5))
@@ -375,32 +403,38 @@ async fn setup_completed(database_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn upsert_env_file(path: &Path, values: &BTreeMap<String, String>) -> AppResult<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+fn upsert_env_file(path: &Path, values: &[(String, String)]) -> AppResult<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
     let existing = fs::read_to_string(path).unwrap_or_default();
-    let mut seen = HashSet::new();
-    let mut lines = Vec::new();
+    let managed_keys = values
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<HashSet<_>>();
+    let mut lines = values
+        .iter()
+        .map(|(key, value)| format!("{key}={}", quote_env_value(value)))
+        .collect::<Vec<_>>();
+    let mut other_lines = Vec::new();
 
     for line in existing.lines() {
         let Some((key, _)) = line.split_once('=') else {
-            lines.push(line.to_string());
+            other_lines.push(line.to_string());
             continue;
         };
         let key = key.trim();
-        if let Some(value) = values.get(key) {
-            lines.push(format!("{key}={}", quote_env_value(value)));
-            seen.insert(key.to_string());
-        } else {
-            lines.push(line.to_string());
+        if !managed_keys.contains(key) {
+            other_lines.push(line.to_string());
         }
     }
 
-    for (key, value) in values {
-        if !seen.contains(key) {
-            lines.push(format!("{key}={}", quote_env_value(value)));
-        }
+    if !other_lines.is_empty() {
+        lines.push(String::new());
+        lines.extend(other_lines);
     }
 
     let mut body = lines.join("\n");

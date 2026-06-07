@@ -10,6 +10,14 @@ const route = useRoute()
 const { locale, t } = useLocale()
 const elementLocale = computed(() => (locale.value === 'zh-CN' ? zhCn : en))
 const showPoweredFooter = computed(() => !route.matched.some((record) => record.meta.admin === true || record.meta.user === true))
+const rootShellClass = computed(() => {
+  const routeName = typeof route.name === 'string' ? route.name : ''
+
+  return {
+    'root-shell-without-footer': !showPoweredFooter.value,
+    [`root-shell-route-${routeName}`]: routeName
+  }
+})
 
 watchEffect(() => {
   if (typeof document === 'undefined') return
@@ -25,7 +33,7 @@ watchEffect(() => {
 
 <template>
   <el-config-provider :locale="elementLocale">
-    <div class="root-shell" :class="{ 'root-shell-without-footer': !showPoweredFooter }">
+    <div class="root-shell" :class="rootShellClass">
       <RouterView />
       <footer v-if="showPoweredFooter" class="powered-footer">
         <a href="https://github.com/neogate-io/NeoGate" target="_blank" rel="noopener noreferrer">

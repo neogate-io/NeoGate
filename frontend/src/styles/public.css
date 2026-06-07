@@ -10,6 +10,20 @@
   --public-shadow: 0 14px 35px rgba(15, 23, 42, 0.055);
 }
 
+.root-shell-route-login,
+.root-shell-route-forgotPassword,
+.root-shell-route-resetPassword {
+  --powered-footer-bg: #f6f8fb;
+}
+
+.root-shell-route-home {
+  --powered-footer-bg: #f2f5f9;
+}
+
+.root-shell-route-docs {
+  --powered-footer-bg: #eef3f8;
+}
+
 .login-shell {
   align-items: center;
   background:

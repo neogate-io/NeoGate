@@ -112,12 +112,14 @@ const paymentForm = reactive({
   siteName: 'NeoGate'
 })
 
-const prices = ref<Array<{
-  model: string
-  inputUsd: number
-  outputUsd: number
-  enabled: boolean
-}>>([])
+const prices = ref<
+  Array<{
+    model: string
+    inputUsd: number
+    outputUsd: number
+    enabled: boolean
+  }>
+>([])
 
 const modeOptions = computed(() => [
   {
@@ -250,6 +252,7 @@ async function load() {
 }
 
 async function saveBootstrap() {
+  if (!validateRuntimeConfig()) return
   saving.value = true
   try {
     const result = await bootstrapSetup({
@@ -313,6 +316,7 @@ async function waitForRuntimeRestart() {
 }
 
 async function testDatabaseConnection() {
+  if (!validateDatabaseConfig()) return
   testingDatabase.value = true
   try {
     await testSetupDatabase({ database_url: buildDatabaseUrl(false) })
@@ -387,27 +391,32 @@ async function submitSetup() {
             enabled: price.enabled
           }))
         : [],
-      smtp: smtpForm.enabled ? {
-        smtp_host: smtpForm.host,
-        smtp_port: smtpForm.port,
-        smtp_username: smtpForm.username || null,
-        smtp_password: smtpForm.password || null,
-        clear_smtp_password: false,
-        smtp_tls: smtpForm.tls,
-        from_email: smtpForm.fromEmail,
-        from_name: smtpForm.fromName || null,
-        subject_prefix: smtpForm.subjectPrefix || null
-      } : null,
-      payment: setupForm.serviceMode === 'paid' && paymentForm.enabled ? {
-        payment_enabled: true,
-        return_base_url: status.value?.public_base_url || bootstrapForm.publicBaseUrl,
-        zpay_api_url: paymentForm.apiUrl,
-        zpay_merchant_id: paymentForm.merchantId || null,
-        zpay_secret_key: paymentForm.secretKey || null,
-        clear_zpay_secret_key: false,
-        zpay_default_pay_type: paymentForm.payType,
-        zpay_site_name: paymentForm.siteName
-      } : null
+      smtp: smtpForm.enabled
+        ? {
+            smtp_host: smtpForm.host,
+            smtp_port: smtpForm.port,
+            smtp_username: smtpForm.username || null,
+            smtp_password: smtpForm.password || null,
+            clear_smtp_password: false,
+            smtp_tls: smtpForm.tls,
+            from_email: smtpForm.fromEmail,
+            from_name: smtpForm.fromName || null,
+            subject_prefix: smtpForm.subjectPrefix || null
+          }
+        : null,
+      payment:
+        setupForm.serviceMode === 'paid' && paymentForm.enabled
+          ? {
+              payment_enabled: true,
+              return_base_url: status.value?.public_base_url || bootstrapForm.publicBaseUrl,
+              zpay_api_url: paymentForm.apiUrl,
+              zpay_merchant_id: paymentForm.merchantId || null,
+              zpay_secret_key: paymentForm.secretKey || null,
+              clear_zpay_secret_key: false,
+              zpay_default_pay_type: paymentForm.payType,
+              zpay_site_name: paymentForm.siteName
+            }
+          : null
     })
     ElMessage.success(t('setupCompleted'))
     await router.replace('/login')
@@ -423,6 +432,41 @@ function validateSetup() {
   if (!validateAdminStep()) return false
   if (includeUpstream.value && !validateUpstreamStep()) return false
   if (!validateSmtpStep()) return false
+  return true
+}
+
+function validateRuntimeConfig() {
+  if (!bootstrapForm.siteName.trim()) {
+    ElMessage.error(t('siteNameRequired'))
+    return false
+  }
+  if (!bootstrapForm.publicBaseUrl.trim()) {
+    ElMessage.error(t('publicBaseUrlRequired'))
+    return false
+  }
+  try {
+    const publicUrl = new URL(bootstrapForm.publicBaseUrl.trim())
+    if (!['http:', 'https:'].includes(publicUrl.protocol)) {
+      throw new Error('Invalid protocol')
+    }
+  } catch {
+    ElMessage.error(t('publicBaseUrlInvalid'))
+    return false
+  }
+  return validateDatabaseConfig()
+}
+
+function validateDatabaseConfig() {
+  if (!bootstrapMissingDatabase.value && !runtimeDatabaseChangeEnabled.value) return true
+  const databaseUrl = buildDatabaseUrl(false).trim()
+  if (!databaseUrl) {
+    ElMessage.error(t('databaseUrlRequired'))
+    return false
+  }
+  if (!databaseUrl.startsWith('postgres://') && !databaseUrl.startsWith('postgresql://')) {
+    ElMessage.error(t('databaseUrlInvalid'))
+    return false
+  }
   return true
 }
 
@@ -604,6 +648,7 @@ onMounted(load)
             v-for="step in setupSteps"
             :key="step.key"
             :class="{ active: step.active, done: step.done }"
+            :aria-current="step.active ? 'step' : undefined"
           >
             <span class="setup-step-mark">
               <el-icon><Check /></el-icon>
@@ -659,7 +704,9 @@ onMounted(load)
         <ul class="setup-check-list">
           <li :class="{ ok: status?.database_configured }">DATABASE_URL</li>
           <li :class="{ ok: status?.redis_configured }">REDIS_URL</li>
-          <li :class="{ ok: status?.secrets_configured }">ADMIN_TOKEN_SECRET / UPSTREAM_SECRET_KEY</li>
+          <li :class="{ ok: status?.secrets_configured }">
+            ADMIN_TOKEN_SECRET / UPSTREAM_SECRET_KEY
+          </li>
           <li :class="{ ok: status?.site_configured }">SITE_NAME / PUBLIC_BASE_URL</li>
         </ul>
         <el-button :loading="generatingTemplate" @click="generateClusterTemplate">
@@ -741,11 +788,7 @@ onMounted(load)
                   <el-input v-model="bootstrapForm.databaseHost" />
                 </el-form-item>
                 <el-form-item :label="t('databasePortLabel')">
-                  <el-input-number
-                    v-model="bootstrapForm.databasePort"
-                    :min="1"
-                    :max="65535"
-                  />
+                  <el-input-number v-model="bootstrapForm.databasePort" :min="1" :max="65535" />
                 </el-form-item>
                 <el-form-item :label="t('databaseNameLabel')">
                   <el-input v-model="bootstrapForm.databaseName" />
@@ -772,7 +815,11 @@ onMounted(load)
                 <code>{{ generatedDatabaseUrlPreview }}</code>
               </div>
               <div class="setup-field-actions">
-                <el-button :loading="testingDatabase" @click="testDatabaseConnection">
+                <el-button
+                  :disabled="saving"
+                  :loading="testingDatabase"
+                  @click="testDatabaseConnection"
+                >
                   {{ t('testDatabaseConnection') }}
                 </el-button>
               </div>
@@ -791,7 +838,11 @@ onMounted(load)
               "
               class="setup-field-actions"
             >
-              <el-button :loading="testingDatabase" @click="testDatabaseConnection">
+              <el-button
+                :disabled="saving"
+                :loading="testingDatabase"
+                @click="testDatabaseConnection"
+              >
                 {{ t('testDatabaseConnection') }}
               </el-button>
             </div>
@@ -801,11 +852,17 @@ onMounted(load)
             <el-button
               v-if="reviewingRuntimeConfig"
               :icon="ArrowRight"
+              :disabled="saving"
               @click="returnToBusinessSetup"
             >
               {{ t('nextStep') }}
             </el-button>
-            <el-button type="primary" :loading="saving" native-type="submit">
+            <el-button
+              type="primary"
+              :disabled="testingDatabase || waitingForRestart"
+              :loading="saving"
+              native-type="submit"
+            >
               {{ t('saveRuntimeConfiguration') }}
             </el-button>
           </div>
@@ -853,6 +910,9 @@ onMounted(load)
                 :key="item.value"
                 class="setup-mode-card"
                 :class="{ active: setupForm.serviceMode === item.value }"
+                role="radio"
+                :aria-checked="setupForm.serviceMode === item.value"
+                :disabled="saving"
                 type="button"
                 @click="setupForm.serviceMode = item.value"
               >
@@ -863,7 +923,9 @@ onMounted(load)
                   <strong>{{ item.title }}</strong>
                   <span>{{ item.description }}</span>
                 </span>
-                <el-icon v-if="setupForm.serviceMode === item.value" class="setup-mode-check"><Check /></el-icon>
+                <el-icon v-if="setupForm.serviceMode === item.value" class="setup-mode-check"
+                  ><Check
+                /></el-icon>
               </button>
             </div>
             <div v-if="setupForm.serviceMode === 'internal'" class="setup-inline-control">
@@ -883,10 +945,18 @@ onMounted(load)
                   <el-switch v-model="paymentForm.enabled" />
                 </div>
                 <div v-if="paymentForm.enabled" class="setup-grid two optional-grid">
-                  <el-form-item :label="t('zpayApiUrl')"><el-input v-model="paymentForm.apiUrl" /></el-form-item>
-                  <el-form-item :label="t('zpaySiteName')"><el-input v-model="paymentForm.siteName" /></el-form-item>
-                  <el-form-item :label="t('zpayMerchantId')"><el-input v-model="paymentForm.merchantId" /></el-form-item>
-                  <el-form-item :label="t('zpaySecretKey')"><el-input v-model="paymentForm.secretKey" show-password /></el-form-item>
+                  <el-form-item :label="t('zpayApiUrl')"
+                    ><el-input v-model="paymentForm.apiUrl"
+                  /></el-form-item>
+                  <el-form-item :label="t('zpaySiteName')"
+                    ><el-input v-model="paymentForm.siteName"
+                  /></el-form-item>
+                  <el-form-item :label="t('zpayMerchantId')"
+                    ><el-input v-model="paymentForm.merchantId"
+                  /></el-form-item>
+                  <el-form-item :label="t('zpaySecretKey')"
+                    ><el-input v-model="paymentForm.secretKey" show-password
+                  /></el-form-item>
                 </div>
               </div>
             </template>
@@ -911,7 +981,9 @@ onMounted(load)
                     :label="provider.display_name"
                     :value="provider.code"
                   >
-                    <span class="provider-option"><ProviderIcon :provider="provider.code" />{{ provider.display_name }}</span>
+                    <span class="provider-option"
+                      ><ProviderIcon :provider="provider.code" />{{ provider.display_name }}</span
+                    >
                   </el-option>
                 </el-select>
               </el-form-item>
@@ -919,7 +991,10 @@ onMounted(load)
                 <el-segmented v-model="setupForm.protocol" :options="['openai', 'anthropic']" />
               </el-form-item>
               <el-form-item :label="t('name')">
-                <el-input v-model="setupForm.channelName" :placeholder="t('channelNamePlaceholder')" />
+                <el-input
+                  v-model="setupForm.channelName"
+                  :placeholder="t('channelNamePlaceholder')"
+                />
               </el-form-item>
               <el-form-item :label="t('baseUrl')">
                 <el-input v-model="setupForm.baseUrl" :placeholder="t('baseUrlPlaceholder')" />
@@ -931,7 +1006,12 @@ onMounted(load)
             <el-form-item :label="t('models')">
               <div class="models-row">
                 <el-input v-model="setupForm.models" :placeholder="t('modelsCommaSeparated')" />
-                <el-button :icon="Refresh" :loading="fetchingModels" @click="fetchModels">
+                <el-button
+                  :disabled="saving || !setupForm.baseUrl.trim() || !setupForm.secret.trim()"
+                  :icon="Refresh"
+                  :loading="fetchingModels"
+                  @click="fetchModels"
+                >
                   {{ t('autoFetch') }}
                 </el-button>
               </div>
@@ -955,10 +1035,27 @@ onMounted(load)
                   <span>{{ t('status') }}</span>
                 </div>
                 <div v-for="price in prices" :key="price.model" class="price-row">
-                  <span class="price-model">{{ price.model }}</span>
-                  <el-input-number v-model="price.inputUsd" :min="0" :precision="6" :step="0.1" />
-                  <el-input-number v-model="price.outputUsd" :min="0" :precision="6" :step="0.1" />
-                  <el-switch v-model="price.enabled" />
+                  <div class="price-cell price-model-cell">
+                    <span class="price-mobile-label">{{ t('model') }}</span>
+                    <span class="price-model">{{ price.model }}</span>
+                  </div>
+                  <div class="price-cell">
+                    <span class="price-mobile-label">{{ t('inputShort') }}</span>
+                    <el-input-number v-model="price.inputUsd" :min="0" :precision="6" :step="0.1" />
+                  </div>
+                  <div class="price-cell">
+                    <span class="price-mobile-label">{{ t('outputShort') }}</span>
+                    <el-input-number
+                      v-model="price.outputUsd"
+                      :min="0"
+                      :precision="6"
+                      :step="0.1"
+                    />
+                  </div>
+                  <div class="price-cell">
+                    <span class="price-mobile-label">{{ t('status') }}</span>
+                    <el-switch v-model="price.enabled" />
+                  </div>
                 </div>
                 <el-empty v-if="prices.length === 0" :description="t('modelsFetchRequired')" />
               </div>
@@ -983,12 +1080,24 @@ onMounted(load)
               <el-switch v-model="smtpForm.enabled" />
             </div>
             <div v-if="smtpForm.enabled" class="setup-grid two optional-grid">
-              <el-form-item :label="t('smtpHost')"><el-input v-model="smtpForm.host" /></el-form-item>
-              <el-form-item :label="t('smtpPort')"><el-input-number v-model="smtpForm.port" :min="1" :max="65535" /></el-form-item>
-              <el-form-item :label="t('smtpUsername')"><el-input v-model="smtpForm.username" /></el-form-item>
-              <el-form-item :label="t('smtpPassword')"><el-input v-model="smtpForm.password" show-password /></el-form-item>
-              <el-form-item :label="t('mailFromEmail')"><el-input v-model="smtpForm.fromEmail" /></el-form-item>
-              <el-form-item :label="t('mailFromName')"><el-input v-model="smtpForm.fromName" /></el-form-item>
+              <el-form-item :label="t('smtpHost')"
+                ><el-input v-model="smtpForm.host"
+              /></el-form-item>
+              <el-form-item :label="t('smtpPort')"
+                ><el-input-number v-model="smtpForm.port" :min="1" :max="65535"
+              /></el-form-item>
+              <el-form-item :label="t('smtpUsername')"
+                ><el-input v-model="smtpForm.username"
+              /></el-form-item>
+              <el-form-item :label="t('smtpPassword')"
+                ><el-input v-model="smtpForm.password" show-password
+              /></el-form-item>
+              <el-form-item :label="t('mailFromEmail')"
+                ><el-input v-model="smtpForm.fromEmail"
+              /></el-form-item>
+              <el-form-item :label="t('mailFromName')"
+                ><el-input v-model="smtpForm.fromName"
+              /></el-form-item>
             </div>
           </div>
 
@@ -996,12 +1105,14 @@ onMounted(load)
             <el-button
               v-if="currentBusinessStep !== 'admin-password' || canReviewRuntimeConfig"
               :icon="ArrowLeft"
+              :disabled="saving"
               @click="goToPreviousBusinessStep"
             >
               {{ t('previousStep') }}
             </el-button>
             <el-button
               v-if="currentBusinessStep === 'upstream'"
+              :disabled="saving || fetchingModels"
               @click="skipUpstreamStep"
             >
               {{ t('skipStep') }}
@@ -1010,6 +1121,7 @@ onMounted(load)
               v-if="currentBusinessStep !== 'smtp'"
               type="primary"
               :icon="ArrowRight"
+              :disabled="saving || fetchingModels"
               @click="goToNextBusinessStep"
             >
               {{ t('nextStep') }}
@@ -1018,6 +1130,7 @@ onMounted(load)
               v-if="currentBusinessStep === 'smtp'"
               :loading="saving && !smtpForm.enabled"
               :type="smtpForm.enabled ? undefined : 'primary'"
+              :disabled="saving && smtpForm.enabled"
               @click="skipSmtpAndSubmit"
             >
               {{ t('skipStep') }}
@@ -1028,6 +1141,7 @@ onMounted(load)
               type="primary"
               :icon="Select"
               :loading="saving"
+              :disabled="saving"
               @click="submitSetup"
             >
               {{ t('completeSetup') }}
@@ -1042,10 +1156,11 @@ onMounted(load)
 <style scoped>
 .setup-shell {
   background:
-    linear-gradient(135deg, rgba(22, 139, 211, 0.1), rgba(5, 150, 105, 0.06) 42%, transparent 42%),
-    #f7f8fa;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 252, 0.96)),
+    linear-gradient(135deg, rgba(22, 139, 211, 0.1), rgba(5, 150, 105, 0.05) 46%, transparent 46%),
+    #f6f8fb;
   min-height: 100vh;
-  padding: 28px clamp(18px, 4vw, 44px);
+  padding: 28px clamp(18px, 4vw, 48px);
   position: relative;
 }
 
@@ -1059,19 +1174,21 @@ onMounted(load)
 .setup-stage {
   align-items: start;
   display: grid;
-  gap: clamp(22px, 4vw, 42px);
-  grid-template-columns: minmax(260px, 360px) minmax(0, 760px);
-  min-height: calc(100vh - 56px);
+  gap: clamp(24px, 4vw, 48px);
+  grid-template-columns: minmax(280px, 380px) minmax(0, 820px);
   margin: 0 auto;
-  max-width: 1180px;
+  max-width: 1240px;
+  min-height: calc(100vh - 56px);
   padding-top: 34px;
 }
 
 .setup-brief {
   align-content: start;
   display: grid;
-  gap: 26px;
-  padding: 34px 0 0;
+  gap: 22px;
+  padding: 28px 0 0;
+  position: sticky;
+  top: 24px;
 }
 
 .setup-logo-lockup {
@@ -1097,7 +1214,7 @@ onMounted(load)
 
 .setup-heading {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .setup-heading h1,
@@ -1108,9 +1225,9 @@ onMounted(load)
 }
 
 .setup-heading h1 {
-  font-size: clamp(34px, 5vw, 54px);
+  font-size: 44px;
   font-weight: 840;
-  line-height: 1.02;
+  line-height: 1.08;
 }
 
 .setup-heading p,
@@ -1123,17 +1240,31 @@ onMounted(load)
 
 .setup-steps {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   list-style: none;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
 }
 
 .setup-steps li {
   align-items: start;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid transparent;
+  border-radius: 8px;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   grid-template-columns: 28px minmax(0, 1fr);
+  padding: 10px;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.setup-steps li.active {
+  background: #ffffff;
+  border-color: #c7e5f5;
+  box-shadow: 0 12px 28px rgba(22, 139, 211, 0.08);
 }
 
 .setup-step-mark {
@@ -1147,9 +1278,17 @@ onMounted(load)
   width: 28px;
 }
 
+.setup-step-mark .el-icon {
+  opacity: 0;
+}
+
 .setup-steps li.done .setup-step-mark {
   background: #dcfce7;
   color: #059669;
+}
+
+.setup-steps li.done .setup-step-mark .el-icon {
+  opacity: 1;
 }
 
 .setup-steps li.active .setup-step-mark {
@@ -1188,14 +1327,63 @@ onMounted(load)
   display: grid;
   gap: 22px;
   margin-bottom: 28px;
-  padding: clamp(20px, 3vw, 30px);
+  min-width: 0;
+  padding: clamp(22px, 3vw, 32px);
+  width: min(820px, 100%);
 }
 
 .setup-panel > .el-form {
   display: grid;
-  gap: 20px;
-  max-width: 640px;
+  gap: 22px;
+  max-width: 680px;
   width: 100%;
+}
+
+.setup-panel :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.setup-panel :deep(.el-form-item__label) {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.3;
+  margin-bottom: 7px;
+}
+
+.setup-panel :deep(.el-input__wrapper),
+.setup-panel :deep(.el-select__wrapper),
+.setup-panel :deep(.el-textarea__inner) {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #d9e2ec inset;
+  transition:
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.setup-panel :deep(.el-input__wrapper),
+.setup-panel :deep(.el-select__wrapper) {
+  min-height: 42px;
+}
+
+.setup-panel :deep(.el-input__wrapper.is-focus),
+.setup-panel :deep(.el-select__wrapper.is-focused),
+.setup-panel :deep(.el-textarea__inner:focus) {
+  box-shadow:
+    0 0 0 1px #168bd3 inset,
+    0 0 0 3px rgba(22, 139, 211, 0.11);
+}
+
+.setup-panel :deep(.el-button) {
+  border-radius: 8px;
+  font-weight: 720;
+  min-height: 38px;
+}
+
+.setup-panel :deep(.el-segmented) {
+  --el-segmented-item-selected-bg-color: #168bd3;
+  --el-segmented-item-selected-color: #ffffff;
+  border-radius: 8px;
 }
 
 .setup-panel-title,
@@ -1238,7 +1426,7 @@ onMounted(load)
   border-top: 1px solid #edf1f5;
   display: grid;
   gap: 16px;
-  max-width: 640px;
+  max-width: 680px;
   padding-top: 22px;
 }
 
@@ -1261,6 +1449,7 @@ onMounted(load)
 .setup-grid {
   display: grid;
   gap: 14px;
+  max-width: 640px;
 }
 
 .setup-grid.two {
@@ -1273,6 +1462,7 @@ onMounted(load)
 }
 
 .admin-credentials-grid {
+  grid-template-columns: minmax(0, 420px);
   max-width: 420px;
 }
 
@@ -1300,12 +1490,14 @@ onMounted(load)
   position: relative;
   text-align: left;
   transition:
+    background-color 0.15s ease,
     border-color 0.15s ease,
     box-shadow 0.15s ease,
     transform 0.15s ease;
 }
 
 .setup-mode-card:hover {
+  background: #fbfdff;
   border-color: #b7dcf2;
   transform: translateY(-1px);
 }
@@ -1313,6 +1505,12 @@ onMounted(load)
 .setup-mode-card.active {
   border-color: #168bd3;
   box-shadow: 0 16px 40px rgba(22, 139, 211, 0.16);
+}
+
+.setup-mode-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+  transform: none;
 }
 
 .setup-mode-icon {
@@ -1363,7 +1561,7 @@ onMounted(load)
 .models-row {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 420px) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   max-width: 560px;
   width: 100%;
 }
@@ -1379,8 +1577,8 @@ onMounted(load)
   align-items: center;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(160px, 1fr) 170px 170px 70px;
-  padding: 10px;
+  grid-template-columns: minmax(150px, 1fr) minmax(130px, 150px) minmax(130px, 150px) 76px;
+  padding: 10px 12px;
 }
 
 .price-header {
@@ -1394,6 +1592,20 @@ onMounted(load)
 
 .price-row + .price-row {
   border-top: 1px solid #e2e8f0;
+}
+
+.price-cell {
+  align-items: center;
+  display: flex;
+  min-width: 0;
+}
+
+.price-cell :deep(.el-input-number) {
+  width: 100%;
+}
+
+.price-mobile-label {
+  display: none;
 }
 
 .price-model {
@@ -1417,7 +1629,7 @@ onMounted(load)
 
 .setup-textarea {
   margin-top: 8px;
-  max-width: 560px;
+  max-width: 600px;
 }
 
 .provider-option {
@@ -1450,11 +1662,11 @@ onMounted(load)
 }
 
 .setup-actions.sticky {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), #ffffff);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), #ffffff 40%);
   border-top: 1px solid #edf1f5;
   bottom: 0;
-  margin: 2px -8px -10px;
-  padding: 16px 8px 2px;
+  margin: 2px -10px -12px;
+  padding: 16px 10px 4px;
   position: sticky;
   z-index: 1;
 }
@@ -1483,6 +1695,7 @@ onMounted(load)
   color: #172033;
   font-size: 13px;
   overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .setup-warning-text {
@@ -1503,14 +1716,21 @@ onMounted(load)
   .setup-brief {
     gap: 18px;
     padding-top: 0;
+    position: static;
   }
 
   .setup-steps {
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    grid-template-columns: repeat(5, minmax(120px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .setup-steps li {
-    grid-template-columns: 1fr;
+    min-width: 120px;
+  }
+
+  .setup-heading h1 {
+    font-size: 36px;
   }
 }
 
@@ -1520,13 +1740,13 @@ onMounted(load)
   }
 
   .setup-language {
+    position: absolute;
     right: 18px;
     top: 18px;
   }
 
   .setup-grid.two,
   .setup-mode-grid,
-  .price-row,
   .setup-steps {
     grid-template-columns: 1fr;
   }
@@ -1537,6 +1757,24 @@ onMounted(load)
 
   .price-row {
     align-items: start;
+    gap: 12px;
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .price-cell {
+    align-items: center;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: 76px minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .price-mobile-label {
+    color: #64748b;
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 760;
   }
 
   .models-row {
@@ -1545,8 +1783,10 @@ onMounted(load)
   }
 
   .setup-panel > .el-form,
+  .setup-grid,
   .setup-section,
   .setup-section > .el-form-item,
+  .admin-credentials-grid,
   .setup-textarea {
     max-width: none;
   }
@@ -1557,13 +1797,38 @@ onMounted(load)
     flex-direction: column;
   }
 
+  .setup-env-file code {
+    text-align: left;
+  }
+
   .setup-actions {
     justify-content: stretch;
   }
 
+  .setup-actions.sticky {
+    margin: 4px 0 0;
+    padding: 16px 0 0;
+    position: static;
+  }
+
   .setup-actions .el-button,
   .setup-field-actions .el-button {
+    margin-left: 0;
     width: 100%;
+  }
+
+  .setup-panel {
+    padding: 20px;
+  }
+
+  .setup-panel-title,
+  .setup-section-heading {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .setup-title-icon {
+    height: 38px;
+    width: 38px;
   }
 }
 </style>

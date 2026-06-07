@@ -30,6 +30,7 @@ body {
 }
 
 .root-shell {
+  --powered-footer-bg: #f7f8fa;
   background: #f7f8fa;
   display: flex;
   flex-direction: column;
@@ -51,6 +52,7 @@ body {
 
 .powered-footer {
   align-items: center;
+  background: var(--powered-footer-bg);
   color: #8a95a5;
   display: flex;
   flex: 0 0 auto;

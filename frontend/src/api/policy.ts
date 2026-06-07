@@ -36,7 +36,6 @@ export function completeSetup(serviceMode: ServiceMode) {
 }
 
 export function bootstrapSetup(input: {
-  setup_token: string
   database_url?: string | null
   site_name?: string | null
   public_base_url?: string | null
@@ -48,6 +47,13 @@ export function bootstrapSetup(input: {
       body: JSON.stringify(input)
     }
   )
+}
+
+export function testSetupDatabase(input: { database_url: string }) {
+  return publicRequest<{ ok: boolean }>('/api/setup/test-database', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
 }
 
 export function getClusterEnvTemplate() {

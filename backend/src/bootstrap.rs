@@ -23,7 +23,6 @@ const SERVICE_POLICY_SETTING_KEY: &str = "service_policy";
 
 #[derive(Clone)]
 pub struct BootstrapState {
-    setup_token: String,
     restart_required: Arc<AtomicBool>,
 }
 
@@ -59,10 +58,14 @@ pub struct SetupRuntimeStatus {
 
 #[derive(Debug, Deserialize)]
 pub struct BootstrapConfigInput {
-    pub setup_token: String,
     pub database_url: Option<String>,
     pub site_name: Option<String>,
     pub public_base_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestDatabaseInput {
+    pub database_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,6 +73,11 @@ pub struct BootstrapConfigResult {
     pub ok: bool,
     pub env_file: String,
     pub restart_required: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestDatabaseResult {
+    pub ok: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,19 +89,18 @@ pub struct ClusterEnvTemplateResult {
 }
 
 pub fn router() -> Router {
-    let setup_token = generate_secret();
-    tracing::warn!(
-        "neogate bootstrap mode enabled; use setup token {} to complete first-run configuration",
-        setup_token
-    );
+    tracing::warn!("neogate bootstrap mode enabled; runtime configuration is incomplete");
     let state = Arc::new(BootstrapState {
-        setup_token,
         restart_required: Arc::new(AtomicBool::new(false)),
     });
 
     Router::new()
         .route("/api/setup/status", get(setup_status))
         .route("/api/setup/bootstrap", axum::routing::post(write_bootstrap_config))
+        .route(
+            "/api/setup/test-database",
+            axum::routing::post(test_database_connection),
+        )
         .route(
             "/api/setup/cluster-env-template",
             axum::routing::post(cluster_env_template),
@@ -111,7 +118,6 @@ async fn write_bootstrap_config(
     State(state): State<Arc<BootstrapState>>,
     Json(req): Json<BootstrapConfigInput>,
 ) -> AppResult<Json<BootstrapConfigResult>> {
-    ensure_setup_token(&state, &req.setup_token)?;
     let probe = RuntimeProbe::from_env()?;
     if probe.runtime_mode.is_distributed() {
         return Err(AppError::BadRequest(
@@ -167,6 +173,17 @@ async fn write_bootstrap_config(
         env_file: probe.env_file.display().to_string(),
         restart_required: true,
     }))
+}
+
+async fn test_database_connection(
+    Json(req): Json<TestDatabaseInput>,
+) -> AppResult<Json<TestDatabaseResult>> {
+    let database_url = req.database_url.trim();
+    if database_url.is_empty() {
+        return Err(AppError::BadRequest("DATABASE_URL is required".to_string()));
+    }
+    test_database(database_url).await?;
+    Ok(Json(TestDatabaseResult { ok: true }))
 }
 
 async fn cluster_env_template() -> AppResult<Json<ClusterEnvTemplateResult>> {
@@ -266,10 +283,70 @@ async fn test_database(database_url: &str) -> AppResult<()> {
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(5))
         .connect(database_url)
-        .await?;
-    sqlx::query("SELECT 1").execute(&pool).await?;
+        .await
+        .map_err(database_connection_error)?;
+    sqlx::query("SELECT 1")
+        .execute(&pool)
+        .await
+        .map_err(database_connection_error)?;
     pool.close().await;
     Ok(())
+}
+
+fn database_connection_error(err: sqlx::Error) -> AppError {
+    let message = friendly_database_error(&err);
+    tracing::warn!(
+        error = %err,
+        error_debug = ?err,
+        "database connection test failed"
+    );
+    AppError::BadRequest(message)
+}
+
+fn friendly_database_error(err: &sqlx::Error) -> String {
+    let fallback = "数据库连接失败。请检查主机、端口、数据库名称、用户、密码和 SSL 设置。";
+
+    match err {
+        sqlx::Error::Database(database_error) => {
+            let code = database_error.code().map(|code| code.to_string());
+            let raw_message = database_error.message();
+            let message = raw_message.to_ascii_lowercase();
+
+            let hint = match code.as_deref() {
+                Some("28P01") => "数据库密码不正确。请检查数据库密码。",
+                Some("3D000") => "数据库不存在。请检查数据库名称，或先创建该数据库。",
+                Some("42501") => "数据库用户权限不足。请为该用户授予连接和建表所需权限。",
+                Some("57P03") => "数据库暂时不可用。请稍后重试，或检查数据库是否正在启动。",
+                Some("28000") if message.contains("role") && message.contains("does not exist") => {
+                    "数据库用户不存在。请检查数据库用户是否已创建。"
+                }
+                Some("28000") => "数据库用户认证失败。请检查数据库用户和密码。",
+                Some("08001") | Some("08003") | Some("08004") | Some("08006") | Some("08007") => {
+                    "无法连接到数据库。请检查主机、端口、防火墙和数据库监听地址。"
+                }
+                _ if message.contains("role") && message.contains("does not exist") => {
+                    "数据库用户不存在。请检查数据库用户是否已创建。"
+                }
+                _ if message.contains("database") && message.contains("does not exist") => {
+                    "数据库不存在。请检查数据库名称，或先创建该数据库。"
+                }
+                _ => fallback,
+            };
+
+            format!("{hint}（数据库返回：{raw_message}）")
+        }
+        sqlx::Error::PoolTimedOut => "数据库连接超时。请检查主机、端口和网络连通性。".to_string(),
+        sqlx::Error::Configuration(err) => {
+            format!("数据库连接地址格式不正确。请检查填写内容。（{err}）")
+        }
+        sqlx::Error::Io(err) => {
+            format!("无法连接到数据库网络地址。请检查主机、端口和网络连通性。（{err}）")
+        }
+        sqlx::Error::Tls(err) => {
+            format!("数据库 SSL/TLS 握手失败。请检查 SSL 模式和证书配置。（{err}）")
+        }
+        _ => fallback.to_string(),
+    }
 }
 
 async fn setup_completed(database_url: &str) -> bool {
@@ -296,13 +373,6 @@ async fn setup_completed(database_url: &str) -> bool {
         .get("setup_completed")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
-}
-
-fn ensure_setup_token(state: &BootstrapState, token: &str) -> AppResult<()> {
-    if token.trim().is_empty() || token.trim() != state.setup_token {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
 }
 
 fn upsert_env_file(path: &Path, values: &BTreeMap<String, String>) -> AppResult<()> {

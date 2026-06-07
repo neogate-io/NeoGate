@@ -1,13 +1,8 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Coin, Delete, Edit } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  getPricingTemplates,
-  getProviderPrices,
-  syncPricingTemplates,
-  upsertProviderPrice
-} from '../../api/prices'
+import { ElMessage } from 'element-plus'
+import { getPricingTemplates, getProviderPrices, upsertProviderPrice } from '../../api/prices'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelPriceDialog, {
   type ChannelPriceForm
@@ -17,11 +12,11 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
 import type { Channel, PricingTemplate, ProviderPrice } from '../../types/admin'
-import { ApiError, readError } from '../../utils/errors'
+import { readError } from '../../utils/errors'
 import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { findPricingTemplate, priceKey } from '../../utils/pricing'
 
-const { locale, t } = useLocale()
+const { t } = useLocale()
 
 const {
   channels,
@@ -65,7 +60,6 @@ const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
-const syncingTemplates = ref(false)
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 
 const priceByModel = computed(
@@ -78,40 +72,6 @@ function channelModelList(row: Channel) {
 
 function derivedCacheReadPrice(inputPrice: number) {
   return Math.round(inputPrice / 10)
-}
-
-function formatSyncCount(value: number) {
-  return value.toLocaleString('en-US')
-}
-
-function referencePricesSyncedMessage(result: { saved: number; fetched: number; skipped: number }) {
-  if (locale.value === 'zh-CN') {
-    return `${t('referencePricesSynced')}：已保存 ${formatSyncCount(result.saved)} 条，源数据 ${formatSyncCount(result.fetched)} 个模型，跳过 ${formatSyncCount(result.skipped)} 条`
-  }
-
-  return `${t('referencePricesSynced')}: saved ${formatSyncCount(result.saved)}, source models ${formatSyncCount(result.fetched)}, skipped ${formatSyncCount(result.skipped)}.`
-}
-
-function referenceSyncConfirmContent() {
-  return h('div', { class: 'reference-sync-copy' }, [
-    h('p', { class: 'reference-sync-lead' }, t('syncReferencePricesConfirmIntro')),
-    h('div', { class: 'reference-sync-notes' }, [
-      h('p', t('syncReferencePricesConfirmSafe')),
-      h('p', t('syncReferencePricesConfirmApply'))
-    ])
-  ])
-}
-
-function readReferenceSyncError(err: unknown) {
-  if (
-    err instanceof ApiError &&
-    err.status === 502 &&
-    err.message.includes('pricing reference source')
-  ) {
-    return t('referencePricesSourceUnavailable')
-  }
-
-  return readError(err)
 }
 
 function channelPriceStatus(row: Channel) {
@@ -181,33 +141,6 @@ async function loadPricingData() {
     templates.value = fetchedTemplates
   } catch (err) {
     ElMessage.error(readError(err))
-  }
-}
-
-async function syncReferencePrices() {
-  try {
-    await ElMessageBox.confirm(
-      referenceSyncConfirmContent(),
-      t('syncReferencePricesConfirmTitle'),
-      {
-        confirmButtonText: t('syncReferencePricesConfirmButton'),
-        cancelButtonText: t('cancel'),
-        customClass: 'reference-sync-confirm'
-      }
-    )
-  } catch {
-    return
-  }
-
-  syncingTemplates.value = true
-  try {
-    const result = await syncPricingTemplates()
-    ElMessage.success(referencePricesSyncedMessage(result))
-    await loadPricingData()
-  } catch (err) {
-    ElMessage.error(readReferenceSyncError(err))
-  } finally {
-    syncingTemplates.value = false
   }
 }
 
@@ -385,13 +318,6 @@ onMounted(loadPricingData)
 <template>
   <section class="grid">
     <div class="table-toolbar">
-      <el-button
-        class="admin-action-button"
-        :loading="syncingTemplates"
-        @click="syncReferencePrices"
-      >
-        {{ t('syncReferencePrices') }}
-      </el-button>
       <el-button class="admin-action-button" type="primary" @click="openCreateDialog">
         {{ t('addChannel') }}
       </el-button>
@@ -668,93 +594,6 @@ onMounted(loadPricingData)
 .table-toolbar :deep(.el-button),
 .table-row-actions :deep(.el-button) {
   border-radius: 6px;
-}
-
-:global(.reference-sync-confirm) {
-  border-radius: 12px;
-  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
-  max-width: calc(100vw - 32px);
-  padding: 0;
-  width: 520px;
-}
-
-:global(.reference-sync-confirm .el-message-box__header) {
-  padding: 22px 24px 6px;
-}
-
-:global(.reference-sync-confirm .el-message-box__title) {
-  color: #111827;
-  font-size: 22px;
-  font-weight: 820;
-  line-height: 1.25;
-}
-
-:global(.reference-sync-confirm .el-message-box__headerbtn) {
-  right: 18px;
-  top: 16px;
-}
-
-:global(.reference-sync-confirm .el-message-box__content) {
-  padding: 10px 24px 18px;
-}
-
-:global(.reference-sync-confirm .el-message-box__container) {
-  display: block;
-}
-
-:global(.reference-sync-confirm .el-message-box__status) {
-  display: none;
-}
-
-:global(.reference-sync-confirm .el-message-box__message) {
-  color: #4b5563;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.6;
-  margin: 0;
-  padding: 0;
-}
-
-:global(.reference-sync-confirm .el-message-box__message p) {
-  margin: 0;
-}
-
-:global(.reference-sync-confirm .reference-sync-copy) {
-  display: grid;
-  gap: 12px;
-}
-
-:global(.reference-sync-confirm .reference-sync-lead) {
-  color: #374151;
-  font-size: 15px;
-  line-height: 1.65;
-}
-
-:global(.reference-sync-confirm .reference-sync-notes) {
-  background: #f8fafc;
-  border: 1px solid #e5eaf1;
-  border-radius: 8px;
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-}
-
-:global(.reference-sync-confirm .reference-sync-notes p) {
-  color: #64748b;
-  line-height: 1.55;
-}
-
-:global(.reference-sync-confirm .el-message-box__btns) {
-  gap: 10px;
-  padding: 0 24px 24px;
-}
-
-:global(.reference-sync-confirm .el-message-box__btns .el-button) {
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 760;
-  min-height: 38px;
-  min-width: 86px;
 }
 
 .table-row-actions {

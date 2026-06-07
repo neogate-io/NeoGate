@@ -23,6 +23,7 @@ import {
   getClusterEnvTemplate,
   getSetupProviders,
   getSetupStatus,
+  syncSetupPricingTemplates,
   testSetupDatabase,
   type ServiceMode,
   type ServicePolicy
@@ -31,9 +32,10 @@ import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import type { ProviderRecord } from '../../types/admin'
-import { usdToMicroUsd } from '../../utils/format'
-import { readError } from '../../utils/errors'
+import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
+import { ApiError, readError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
+import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
 type DatabaseInputMode = 'fields' | 'url'
@@ -354,11 +356,31 @@ async function fetchModels() {
     })
     setupForm.models = result.models.join(', ')
     syncPriceRows()
+    await syncAndApplyReferencePrices()
     ElMessage.success(t('modelsFetched'))
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
     fetchingModels.value = false
+  }
+}
+
+async function syncAndApplyReferencePrices() {
+  try {
+    const { templates } = await syncSetupPricingTemplates()
+    let applied = 0
+    for (const price of prices.value) {
+      const template = findPricingTemplate(templates, setupForm.provider, price.model)
+      if (!template) continue
+      price.inputUsd = microUsdToUsd(template.input_price_usd_micros)
+      price.outputUsd = microUsdToUsd(template.output_price_usd_micros)
+      applied += 1
+    }
+    if (applied > 0) {
+      ElMessage.success(t('referencePricesApplied'))
+    }
+  } catch (err) {
+    ElMessage.error(readReferenceSyncError(err))
   }
 }
 
@@ -525,6 +547,18 @@ function validateSmtpStep() {
     return false
   }
   return true
+}
+
+function readReferenceSyncError(err: unknown) {
+  if (
+    err instanceof ApiError &&
+    err.status === 502 &&
+    err.message.includes('pricing reference source')
+  ) {
+    return t('referencePricesSourceUnavailable')
+  }
+
+  return readError(err)
 }
 
 function goToNextBusinessStep() {

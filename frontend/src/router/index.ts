@@ -131,6 +131,12 @@ export const router = createRouter({
           meta: { messageKey: 'paymentSettings' }
         },
         {
+          path: 'settings/other',
+          name: 'otherSettings',
+          component: () => import('../views/admin/OtherSettingsView.vue'),
+          meta: { messageKey: 'otherSettings' }
+        },
+        {
           path: 'settings/admin-password',
           name: 'adminPasswordSettings',
           component: () => import('../views/admin/PasswordSettingsView.vue'),

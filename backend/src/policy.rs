@@ -13,7 +13,11 @@ use crate::{
             CreateChannelRequest, KeySelectionMode,
         },
         fetch_upstream_models,
-        price::{upsert_provider_price, UpsertProviderPriceRequest},
+        price::{
+            list_pricing_templates, sync_pricing_templates, upsert_provider_price,
+            PricingTemplateRecord, PricingTemplateSyncResult, SyncPricingTemplatesRequest,
+            UpsertProviderPriceRequest,
+        },
         provider::{
             ensure_custom_provider, list_providers, provider_default_endpoints,
             record_provider_models, ProviderRecord,
@@ -109,6 +113,12 @@ struct SetupFetchUpstreamModelsResponse {
     models: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct SetupPricingTemplateSyncResponse {
+    result: PricingTemplateSyncResult,
+    templates: Vec<PricingTemplateRecord>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateServicePolicyRequest {
     pub credit_required: bool,
@@ -137,6 +147,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/setup/upstream-models",
             axum::routing::post(setup_upstream_models),
+        )
+        .route(
+            "/api/setup/pricing-templates/sync",
+            axum::routing::post(setup_sync_pricing_templates),
         )
         .route("/api/user/service-policy", get(user_service_policy))
         .route(
@@ -348,6 +362,25 @@ async fn setup_providers(
         ));
     }
     Ok(Json(list_providers(&state).await?))
+}
+
+async fn setup_sync_pricing_templates(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<SetupPricingTemplateSyncResponse>> {
+    if current_service_policy(&state).await?.setup_completed {
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
+    }
+    let result = sync_pricing_templates(
+        &state,
+        SyncPricingTemplatesRequest {
+            source: "models_dev".to_string(),
+        },
+    )
+    .await?;
+    let templates = list_pricing_templates(&state).await?;
+    Ok(Json(SetupPricingTemplateSyncResponse { result, templates }))
 }
 
 async fn user_service_policy(

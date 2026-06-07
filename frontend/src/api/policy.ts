@@ -1,5 +1,11 @@
 import { adminRequest, publicRequest, userRequest } from './request'
-import type { PaymentSetting, ProviderRecord, SmtpSetting } from '../types/admin'
+import type {
+  PaymentSetting,
+  PricingTemplate,
+  PricingTemplateSyncResult,
+  ProviderRecord,
+  SmtpSetting
+} from '../types/admin'
 
 export type ServiceMode = 'internal' | 'paid'
 
@@ -73,6 +79,15 @@ export function fetchSetupUpstreamModels(input: {
   return publicRequest<{ models: string[] }>('/api/setup/upstream-models', {
     method: 'POST',
     body: JSON.stringify(input)
+  })
+}
+
+export function syncSetupPricingTemplates() {
+  return publicRequest<{
+    result: PricingTemplateSyncResult
+    templates: PricingTemplate[]
+  }>('/api/setup/pricing-templates/sync', {
+    method: 'POST'
   })
 }
 

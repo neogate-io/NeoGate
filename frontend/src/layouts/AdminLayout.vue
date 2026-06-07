@@ -25,13 +25,14 @@ const navItems: AdminNavItem[] = [
 
 const settingItems = computed(() => {
   const items: SettingNavItem[] = [
-    { path: '/admin/settings/pricing-policies', key: 'pricingPolicy' },
+    { path: '/admin/settings/admin-password', key: 'adminPasswordSettings' },
     { path: '/admin/settings/smtp', key: 'smtpSettings' }
   ]
   if (servicePolicy.value?.service_mode === 'paid') {
     items.push({ path: '/admin/settings/payment', key: 'paymentSettings' })
   }
-  items.push({ path: '/admin/settings/admin-password', key: 'adminPasswordSettings' })
+  items.push({ path: '/admin/settings/pricing-policies', key: 'pricingPolicy' })
+  items.push({ path: '/admin/settings/other', key: 'otherSettings' })
   return items
 })
 
@@ -47,8 +48,10 @@ const activeRouteLabel = computed(() => {
 <template>
   <el-container class="app-shell admin-shell">
     <el-aside width="248px">
-      <h1>
-        <RouterLink class="admin-shell-title-link" to="/">{{ t('appName') }}</RouterLink>
+      <h1 class="shell-logo">
+        <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
+          <img class="shell-logo-image" src="/logo.svg" :alt="t('appName')" />
+        </RouterLink>
       </h1>
       <el-menu
         :key="settingsOpen ? 'settings-open' : 'settings-closed'"

@@ -146,6 +146,12 @@ const messages = {
     internalServiceMode: '团队内部模式',
     paidServiceMode: '收费服务模式',
     creditRequired: '调用需要额度',
+    creditRequiredEnabledDescription:
+      '开启后，用户和 API Key 必须有可用额度才能调用网关；额度不足的请求会被拒绝。',
+    creditRequiredDisabledDescription:
+      '关闭后，团队内部模式下成员默认不需要预先设置额度即可调用网关；系统仍会正常记录用量、Token 和费用数据。',
+    creditRequiredPaidDescription:
+      '收费服务模式固定要求可用额度，用户需要先充值或获得额度后才能调用网关。',
     creditRequiredInternalHint: '关闭后，用户没有额度也可以调用，但仍记录用量。',
     creditRequiredPaidHint: '收费服务模式固定需要额度。',
     servicePolicySaved: '服务策略已保存。',
@@ -339,6 +345,8 @@ const messages = {
     pricingPolicyMultiplier: '售价比例 %',
     editPricingPolicy: '编辑定价策略',
     pricingPolicySaved: '定价策略已保存。',
+    otherSettings: '其他设置',
+    otherSettingsHint: '管理通用服务选项和参考数据同步。',
     smtpSettings: 'SMTP 邮箱',
     smtpConfigured: '已配置',
     smtpNotConfigured: '未配置',
@@ -406,6 +414,8 @@ const messages = {
     syncReferencePricesConfirmSafe: '这一步只更新参考数据，不会修改已配置的渠道价格。',
     syncReferencePricesConfirmApply: '需要使用参考价时，请在配置价格里点击“一键应用参考价”。',
     syncReferencePricesConfirmButton: '开始同步',
+    referencePricesLastUpdated: '最后更新时间',
+    referencePricesNeverSynced: '尚未同步参考价',
     referencePricesSynced: '参考价已同步',
     referencePricesSourceUnavailable: '暂时无法连接 models.dev，参考价库未更新。请稍后重试，或检查服务器网络/TLS 配置。',
     applyReferencePrices: '一键应用参考价',
@@ -676,6 +686,12 @@ const messages = {
     internalServiceMode: 'Internal team mode',
     paidServiceMode: 'Paid service mode',
     creditRequired: 'Require credit for calls',
+    creditRequiredEnabledDescription:
+      'When enabled, users and API keys must have available credit to call the gateway; requests without enough credit are rejected.',
+    creditRequiredDisabledDescription:
+      'When disabled, members in internal team mode can call the gateway by default without preassigned credit; usage, tokens, and cost are still recorded.',
+    creditRequiredPaidDescription:
+      'Paid service mode always requires available credit, so users must recharge or receive credit before calling the gateway.',
     creditRequiredInternalHint: 'When off, users can call APIs without credit, while usage is still recorded.',
     creditRequiredPaidHint: 'Paid service mode always requires credit.',
     servicePolicySaved: 'Service policy saved.',
@@ -869,6 +885,8 @@ const messages = {
     pricingPolicyMultiplier: 'Sale price %',
     editPricingPolicy: 'Edit pricing policy',
     pricingPolicySaved: 'Pricing policy saved.',
+    otherSettings: 'Other settings',
+    otherSettingsHint: 'Manage general service options and reference data sync.',
     smtpSettings: 'SMTP email',
     smtpConfigured: 'Configured',
     smtpNotConfigured: 'Not configured',
@@ -936,6 +954,8 @@ const messages = {
     syncReferencePricesConfirmSafe: 'This only updates reference data. Configured channel prices will not be changed.',
     syncReferencePricesConfirmApply: 'To use reference prices, open Configure prices and click Apply references.',
     syncReferencePricesConfirmButton: 'Sync',
+    referencePricesLastUpdated: 'Last updated',
+    referencePricesNeverSynced: 'Reference prices have not been synced yet',
     referencePricesSynced: 'Reference prices synced',
     referencePricesSourceUnavailable: 'Could not reach models.dev, so the reference catalog was not updated. Try again later or check the server network/TLS configuration.',
     applyReferencePrices: 'Apply references',

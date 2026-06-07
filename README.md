@@ -26,31 +26,74 @@ NeoGate 首次运行时需要选择团队内部模式或计费模式。两种模
 
 ## 3. 快速开始
 
-### 1. 准备数据库
+### 1. Docker 安装
 
-NeoGate 需要 PostgreSQL 16 或兼容版本。
+Docker 安装分为单机部署和集群部署。两种方式都不需要在宿主机单独安装 Rust、Node.js 或 pnpm。
+
+#### 单机部署
+
+单机部署适合大多数起步场景。Compose 会同时启动前端 Nginx、后端和 PostgreSQL，不需要额外准备 PostgreSQL 或 Redis。
+
+直接启动：
 
 ```bash
-createdb neogate
+docker compose up -d --build
 ```
 
-### 2. 启动后端
+启动后访问 `http://服务器IP:8080`，通过首次运行向导完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
+
+#### 集群部署
+
+集群部署适合已经明确需要多副本和横向扩展的场景。集群版 Compose 只包含前端 Nginx、后端 API 和 worker，不包含 PostgreSQL/Redis，需要先准备外部 PostgreSQL、Redis、公开域名和共享密钥。
 
 ```bash
-cp backend/.env.example backend/.env
+cp deploy/env/cluster.env.example .env.cluster
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --build
 ```
 
-编辑 `backend/.env`，至少确认这些配置：
+生产环境请替换 `.env.cluster` 中的默认密码、域名和共享密钥。单机部署缺失的后端密钥可由首次运行向导自动生成并写入后端配置卷。
 
-```dotenv
-DATABASE_URL=postgres://localhost/neogate
-PUBLIC_BASE_URL=https://neogate.example.com
-SITE_NAME=NeoGate
-ADMIN_TOKEN_SECRET=change-me-admin-token-secret-in-production
-UPSTREAM_SECRET_KEY=change-me-upstream-secret-key-in-production
+### 2. 源码安装
+
+源码安装需要先在服务器上准备这些依赖：
+
+- PostgreSQL 16 或兼容版本
+- Rust 1.85 或更新版本
+- Node.js 20 或兼容版本
+- pnpm
+
+确认这些命令可用：
+
+```bash
+psql --version
+cargo --version
+node --version
+pnpm --version
 ```
 
-首次启动后端时会在 `admin` 表为空时创建默认管理员 `admin` / `password`，后续管理员登录使用数据库中的密码哈希。
+如果 `cargo --version` 显示的是 1.75 等较旧版本，请升级 Rust 工具链后再运行后端；旧版 Cargo 无法编译部分依赖。
+
+建议创建 NeoGate 专用数据库用户和数据库：
+
+```bash
+sudo -u postgres psql
+```
+
+在 `psql` 中执行：
+
+```sql
+CREATE USER neogate WITH PASSWORD 'change-me';
+CREATE DATABASE neogate OWNER neogate;
+\q
+```
+
+首次运行向导里的 PostgreSQL 连接地址填写：
+
+```text
+postgres://neogate:change-me@localhost:5432/neogate
+```
+
+首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `backend/.env`。
 
 启动后端：
 
@@ -65,33 +108,25 @@ cargo run
 http://127.0.0.1:8080
 ```
 
-### 3. 启动前端
+在另一个终端进入项目根目录，启动前端：
 
 ```bash
 cd frontend
 pnpm install
-pnpm dev
+pnpm dev --host 0.0.0.0
 ```
+
+打开 `http://服务器IP:5173`，页面会自动跳转到首次运行向导。按页面提示完成：
+
+- 运行配置：填写 PostgreSQL 连接、站点名称和公开访问地址。保存后如果提示需要重启，请重新运行后端并刷新页面。
+- 管理员账号：创建管理员用户名和密码。
+- 服务模式：选择团队内部模式或计费模式；计费模式可以同时配置支付通道。
+- 初始上游：配置供应商、协议、Base URL、API key、模型和模型价格。
+- SMTP：如需邮箱领取 API key 或密码重置，在向导中启用并填写 SMTP；也可以稍后在管理员后台配置。
+
+向导完成后会进入登录页，使用刚创建的管理员账号登录。
 
 前端开发服务会代理管理后台请求到后端。生产部署时，可以通过 `VITE_NEOGATE_BACKEND_ORIGIN` 指定后端公网地址。
-
-### 4. Docker 启动
-
-单机版 Compose 包含前端 Nginx、后端和 PostgreSQL，启动后访问 `http://localhost:8080` 完成首次运行向导：
-
-```bash
-cp deploy/env/standalone.env.example .env
-docker compose up --build
-```
-
-集群版 Compose 只包含前端 Nginx、后端 API 和 worker，不包含 PostgreSQL/Redis。先准备外部 PostgreSQL、Redis 和共享密钥：
-
-```bash
-cp deploy/env/cluster.env.example .env.cluster
-docker compose --env-file .env.cluster -f docker-compose.cluster.yml up --build
-```
-
-生产环境请替换 `.env` / `.env.cluster` 中的默认密码、域名和密钥。
 
 ## 4. 部署模式
 
@@ -107,13 +142,13 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 上线前至少确认：
 
 - 设置 `APP_ENV=production`。
-- 首次启动后替换默认管理员密码。
-- 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`。
-- 设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接。
-- 设置 `SITE_NAME`，用于页面、邮件和支付网关显示。
+- 在首次运行向导中创建管理员账号，不要使用弱密码。
+- 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`；单机部署可由首次运行向导生成，集群部署需要提前写入所有节点共享的环境配置。
+- 在首次运行向导或环境配置中设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接。
+- 在首次运行向导或环境配置中设置 `SITE_NAME`，用于页面、邮件和支付网关显示。
 - 如果前端与 API 是跨域访问，设置正确的 `CORS_ALLOWED_ORIGINS`；同域反向代理部署通常无需额外配置。
-- 如需公开邮箱领取 API key，在管理员后台的系统设置中配置 SMTP。
-- 如需使用计费模式，在管理员后台配置模型价格、充值套餐和支付通道。
+- 如需公开邮箱领取 API key，在首次运行向导或管理员后台的系统设置中配置 SMTP。
+- 如需使用计费模式，在首次运行向导或管理员后台配置模型价格、充值套餐和支付通道。
 - 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。
 
 ## 6. 开源协议

@@ -6,7 +6,7 @@ import { RouterLink } from 'vue-router'
 import { requestPasswordReset } from '../../api/auth'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
-import { ApiError } from '../../utils/errors'
+import { ApiError, isSmtpConfigError } from '../../utils/errors'
 
 const { locale, t } = useLocale()
 const email = ref('')
@@ -32,6 +32,9 @@ async function sendPasswordReset() {
 }
 
 function readForgotPasswordError(err: unknown) {
+  if (isSmtpConfigError(err)) {
+    return t('smtpEmailUnavailable')
+  }
   if (err instanceof ApiError && err.status === 400) {
     return t('invalidEmail')
   }

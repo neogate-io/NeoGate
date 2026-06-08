@@ -10,9 +10,10 @@ use crate::{
         issue_user_key_draft_token, key_prefix, user_key_draft_parts_from_token, UserAuth,
     },
     billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
-    email::EmailLocale,
+    email::{smtp_config_error_message, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
+    policy::{registration_policy, ServiceMode},
     AppState,
 };
 use axum::{
@@ -204,7 +205,7 @@ async fn verify_user_key_handler(auth: UserAuth) -> Json<UserKeyVerifyResponse> 
 }
 
 pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<UserRecord> {
-    validate_status(&req.status)?;
+    validate_user_status(&req.status)?;
     let email = normalize_email(&req.email)?;
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
@@ -334,7 +335,7 @@ pub async fn update_user(
     req: UpdateUserRequest,
 ) -> AppResult<UserRecord> {
     if let Some(status) = &req.status {
-        validate_status(status)?;
+        validate_user_status(status)?;
     }
     let email = req.email.as_deref().map(normalize_email).transpose()?;
     let disabling = matches!(req.status.as_deref(), Some("disabled"));
@@ -450,7 +451,7 @@ pub async fn create_user_key(
     state: &AppState,
     req: CreateUserKeyRequest,
 ) -> AppResult<CreatedUserKey> {
-    validate_status(&req.status)?;
+    validate_user_key_status(&req.status)?;
     let name = normalize_user_key_name(&req.name)?;
     let key = generate_user_key();
     let secret_ciphertext = state.secrets.encrypt(&key)?;
@@ -487,6 +488,11 @@ pub async fn claim_public_user_key(
     req: ClaimPublicUserKeyRequest,
 ) -> AppResult<()> {
     let email = normalize_email(&req.email)?;
+    let (service_mode, registration_enabled) = registration_policy(state).await?;
+    if !registration_enabled {
+        return Err(AppError::BadRequest("registration is closed".to_string()));
+    }
+
     let api_key = consume_public_user_key_draft(state, &req.draft_id).await?;
     if !is_generated_user_key(&api_key) {
         return Err(AppError::BadRequest("invalid api key".to_string()));
@@ -499,7 +505,32 @@ pub async fn claim_public_user_key(
         return Err(AppError::BadRequest("api key already exists".to_string()));
     }
 
-    let (user_id, created_user) = find_or_create_user_by_email(&mut tx, &email).await?;
+    let existing_user = find_user_by_email(&mut tx, &email).await?;
+    if matches!(
+        existing_user.as_ref().map(|record| record.status.as_str()),
+        Some("pending")
+    ) {
+        return Err(AppError::BadRequest("account pending approval".to_string()));
+    }
+    if matches!(
+        existing_user.as_ref().map(|record| record.status.as_str()),
+        Some("disabled")
+    ) {
+        return Err(AppError::Forbidden);
+    }
+
+    let (user_id, created_user) = if let Some(record) = existing_user {
+        (record.id, false)
+    } else if service_mode == ServiceMode::Internal {
+        create_user_by_email_with_status(&mut tx, &email, "pending").await?;
+        tx.commit().await?;
+        return Err(AppError::BadRequest("account pending approval".to_string()));
+    } else {
+        (
+            create_user_by_email_with_status(&mut tx, &email, "enabled").await?,
+            true,
+        )
+    };
     if created_user {
         let credit_account =
             account::owner_credit_account_for_update(&mut tx, CreditAccountType::User, user_id)
@@ -538,7 +569,8 @@ pub async fn claim_public_user_key(
             &api_key,
             EmailLocale::from_public_locale(req.locale.as_deref()),
         )
-        .await?;
+        .await
+        .map_err(email_error)?;
 
     Ok(())
 }
@@ -546,6 +578,11 @@ pub async fn claim_public_user_key(
 pub async fn create_public_user_key_draft(
     state: &AppState,
 ) -> AppResult<PublicUserKeyDraftResponse> {
+    let (_, registration_enabled) = registration_policy(state).await?;
+    if !registration_enabled {
+        return Err(AppError::BadRequest("registration is closed".to_string()));
+    }
+
     let api_key = generate_user_key();
     let masked_api_key = mask_api_key(&api_key);
     let draft_id = issue_user_key_draft_token(
@@ -647,13 +684,19 @@ fn created_id_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sql
     Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
+fn email_error(err: anyhow::Error) -> AppError {
+    smtp_config_error_message(&err)
+        .map(|message| AppError::BadRequest(message.to_string()))
+        .unwrap_or_else(|| AppError::Anyhow(err))
+}
+
 pub async fn update_user_key(
     state: &AppState,
     id: DbId,
     req: UpdateUserKeyRequest,
 ) -> AppResult<UserKeyRecord> {
     if let Some(status) = &req.status {
-        validate_status(status)?;
+        validate_user_key_status(status)?;
     }
     let disabling = matches!(req.status.as_deref(), Some("disabled"));
     let current = sqlx::query(
@@ -721,7 +764,14 @@ async fn get_user_key(state: &AppState, id: DbId) -> AppResult<UserKeyRecord> {
     user_key_from_row(state, &row)
 }
 
-pub fn validate_status(status: &str) -> AppResult<()> {
+pub fn validate_user_status(status: &str) -> AppResult<()> {
+    match status {
+        "enabled" | "disabled" | "pending" => Ok(()),
+        other => Err(AppError::BadRequest(format!("invalid status: {other}"))),
+    }
+}
+
+pub fn validate_user_key_status(status: &str) -> AppResult<()> {
     match status {
         "enabled" | "disabled" => Ok(()),
         other => Err(AppError::BadRequest(format!("invalid status: {other}"))),
@@ -818,33 +868,51 @@ async fn user_key_exists(
     Ok(false)
 }
 
-async fn find_or_create_user_by_email(
+struct ExistingUser {
+    id: DbId,
+    status: String,
+}
+
+async fn find_user_by_email(
     tx: &mut Transaction<'_, Postgres>,
     email: &str,
-) -> AppResult<(DbId, bool)> {
-    let existing =
-        sqlx::query(r#"SELECT id FROM "user" WHERE email = $1 ORDER BY created_at ASC LIMIT 1"#)
-            .bind(email)
-            .fetch_optional(&mut **tx)
-            .await?;
+) -> AppResult<Option<ExistingUser>> {
+    let existing = sqlx::query(
+        r#"SELECT id, status FROM "user" WHERE email = $1 ORDER BY created_at ASC LIMIT 1"#,
+    )
+    .bind(email)
+    .fetch_optional(&mut **tx)
+    .await?;
 
     if let Some(row) = existing {
-        return Ok((row.try_get("id")?, false));
+        return Ok(Some(ExistingUser {
+            id: row.try_get("id")?,
+            status: row.try_get("status")?,
+        }));
     }
 
+    Ok(None)
+}
+
+async fn create_user_by_email_with_status(
+    tx: &mut Transaction<'_, Postgres>,
+    email: &str,
+    status: &str,
+) -> AppResult<DbId> {
     let row = sqlx::query(
         r#"
         INSERT INTO "user" (email, status, user_group_id)
-        VALUES ($1, 'enabled', (SELECT id FROM user_group WHERE is_default = TRUE))
+        VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE))
         RETURNING id
         "#,
     )
     .bind(email)
+    .bind(status)
     .fetch_one(&mut **tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;
     account::create_credit_account(tx, CreditAccountType::User, user_id).await?;
-    Ok((user_id, true))
+    Ok(user_id)
 }
 
 pub async fn adjust_credit(

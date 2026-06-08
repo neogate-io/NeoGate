@@ -3,7 +3,7 @@ import { DocumentCopy, Search, Refresh, View } from '@element-plus/icons-vue'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adjustCredit, getUserKeys } from '../../api/userKeys'
-import { getUsers } from '../../api/users'
+import { getUsers, updateUserStatus } from '../../api/users'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { User, UserKey } from '../../types/admin'
@@ -21,6 +21,7 @@ const emailSearch = ref('')
 const apiKeySearch = ref('')
 const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
+const approvingUserId = ref<number | null>(null)
 const selectedUser = ref<User | null>(null)
 const amountUsd = ref(10)
 const userKeysDialogVisible = ref(false)
@@ -34,7 +35,11 @@ const userKeysPageSize = ref(100)
 const userKeysCursorStack = ref<(string | undefined)[]>([undefined])
 const userKeysHasMore = ref(false)
 const userKeysNextCursor = ref<string | null | undefined>(undefined)
-const { data: usersPage, loading, reload } = useAsyncData(loadUsers, {
+const {
+  data: usersPage,
+  loading,
+  reload
+} = useAsyncData(loadUsers, {
   items: [],
   limit: 50,
   next_cursor: null,
@@ -57,6 +62,18 @@ function formatAvailableUsd(microUsd?: number | null) {
 
 function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
+}
+
+function userStatusText(status: User['status']) {
+  if (status === 'enabled') return t('enabled')
+  if (status === 'pending') return t('pendingApproval')
+  return t('disabled')
+}
+
+function userStatusTagType(status: User['status']) {
+  if (status === 'enabled') return 'success'
+  if (status === 'pending') return 'warning'
+  return 'info'
 }
 
 function openCreditDialog(row: User) {
@@ -102,6 +119,19 @@ async function submitCredit() {
     ElMessage.error(readError(err))
   } finally {
     creditSaving.value = false
+  }
+}
+
+async function approveUser(row: User) {
+  approvingUserId.value = row.id
+  try {
+    await updateUserStatus(row.id, 'enabled')
+    ElMessage.success(t('userApproved'))
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    approvingUserId.value = null
   }
 }
 
@@ -237,8 +267,8 @@ async function previousUserKeysPage() {
         </el-table-column>
         <el-table-column :label="t('status')" width="96" align="center" header-align="center">
           <template #default="{ row }">
-            <el-tag class="static-state-tag" :type="row.status === 'enabled' ? 'success' : 'info'">
-              {{ row.status === 'enabled' ? t('enabled') : t('disabled') }}
+            <el-tag class="static-state-tag" :type="userStatusTagType(row.status)">
+              {{ userStatusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -248,9 +278,18 @@ async function previousUserKeysPage() {
         <el-table-column :label="t('lastActiveAt')" min-width="160">
           <template #default="{ row }">{{ formatLastActiveAt(row.last_active_at) }}</template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="190" align="center" header-align="center">
+        <el-table-column :label="t('actions')" width="220" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
+              <el-button
+                v-if="row.status === 'pending'"
+                class="admin-action-button"
+                type="primary"
+                :loading="approvingUserId === row.id"
+                @click="approveUser(row)"
+              >
+                {{ t('approve') }}
+              </el-button>
               <el-button class="admin-action-button" :icon="View" @click="openUserKeysDialog(row)">
                 {{ t('viewApiKeys') }}
               </el-button>

@@ -45,6 +45,7 @@ pub struct AppState {
     pub selector: Selector,
     pub user_auth_cache: auth::UserAuthCache,
     pub auth_rate_limiter: auth::AuthRateLimiter,
+    pub service_policy_cache: policy::ServicePolicyCache,
     pub cache_invalidator: cache::CacheInvalidator,
     pub runtime_restart_tx: watch::Sender<bool>,
 }
@@ -224,6 +225,7 @@ async fn build_state(
             config.user_auth_cache_max_entries,
         ),
         auth_rate_limiter,
+        service_policy_cache: policy::ServicePolicyCache::default(),
         cache_invalidator,
         runtime_restart_tx,
     });
@@ -439,6 +441,7 @@ mod tests {
             selector: Selector::new(),
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
+            service_policy_cache: policy::ServicePolicyCache::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
             runtime_restart_tx,
         })

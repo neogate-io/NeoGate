@@ -252,6 +252,20 @@ fn validate_email_config(config: &EmailConfig) -> Result<()> {
     Ok(())
 }
 
+pub fn smtp_config_error_message(err: &anyhow::Error) -> Option<&'static str> {
+    err.chain()
+        .map(ToString::to_string)
+        .find_map(|message| match message.as_str() {
+            "SMTP settings are not configured" => Some("smtp settings are not configured"),
+            "SMTP settings are invalid" => Some("smtp settings are invalid"),
+            "SMTP host is not configured" => Some("smtp host is not configured"),
+            "SMTP port is invalid" => Some("smtp port is invalid"),
+            "SMTP sender email is not configured" => Some("smtp sender email is not configured"),
+            "SMTP sender email is invalid" => Some("smtp sender email is invalid"),
+            _ => None,
+        })
+}
+
 fn sender_mailbox(config: &EmailConfig, locale: EmailLocale) -> Result<Mailbox> {
     Ok(Mailbox::new(
         Some(

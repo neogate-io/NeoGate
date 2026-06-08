@@ -54,6 +54,7 @@ pub struct SetupRuntimeStatus {
     pub public_base_url: Option<String>,
     pub service_mode: String,
     pub credit_required: bool,
+    pub registration_enabled: bool,
     pub recharge_enabled: bool,
     pub updated_at: Option<String>,
 }
@@ -309,6 +310,7 @@ async fn runtime_status(
         public_base_url: probe.public_base_url.clone().or(inferred_public_base_url),
         service_mode: "internal".to_string(),
         credit_required: false,
+        registration_enabled: false,
         recharge_enabled: false,
         updated_at: None,
     })

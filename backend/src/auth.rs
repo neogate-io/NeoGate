@@ -18,9 +18,10 @@ use sqlx::{Postgres, Row, Transaction};
 pub use crate::core::auth::*;
 use crate::{
     billing::{account, CreditAccountType},
-    email::EmailLocale,
+    email::{smtp_config_error_message, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
+    policy::{registration_policy, ServiceMode},
     AppState,
 };
 
@@ -465,6 +466,10 @@ async fn request_login_verification_code(
         .check_login_verification_request(&email, &client_key)
         .await?;
     if login_email_needs_verification(&state, &email).await? {
+        let (_, registration_enabled) = registration_policy(&state).await?;
+        if !registration_enabled {
+            return Err(AppError::BadRequest("registration is closed".to_string()));
+        }
         let code = generate_login_verification_code();
         let code_hash =
             hash_email_verification_code(&email, &code, &state.config.admin_token_secret);
@@ -487,7 +492,8 @@ async fn request_login_verification_code(
                 &code,
                 EmailLocale::from_public_locale(req.locale.as_deref()),
             )
-            .await?;
+            .await
+            .map_err(email_error)?;
     }
 
     Ok(Json(OkResponse { ok: true }))
@@ -518,7 +524,8 @@ async fn request_password_reset(
                 &reset_url,
                 EmailLocale::from_public_locale(req.locale.as_deref()),
             )
-            .await?;
+            .await
+            .map_err(email_error)?;
     }
 
     Ok(Json(OkResponse { ok: true }))
@@ -589,6 +596,9 @@ async fn login_or_create_user(
         let status: String = row.try_get("status")?;
         let stored_hash: Option<String> = row.try_get("password_hash")?;
         if status != "enabled" {
+            if status == "pending" {
+                return Err(AppError::BadRequest("account pending approval".to_string()));
+            }
             return Err(AppError::Unauthorized);
         }
 
@@ -607,6 +617,11 @@ async fn login_or_create_user(
         }
         user_id
     } else {
+        let (service_mode, registration_enabled) = registration_policy(state).await?;
+        if !registration_enabled {
+            return Err(AppError::BadRequest("registration is closed".to_string()));
+        }
+
         let Some(verification_code) = verification_code
             .map(str::trim)
             .filter(|code| !code.is_empty())
@@ -624,16 +639,24 @@ async fn login_or_create_user(
         let row = sqlx::query(
             r#"
             INSERT INTO "user" (email, status, user_group_id, password_hash)
-            VALUES ($1, 'enabled', (SELECT id FROM user_group WHERE is_default = TRUE), $2)
+            VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE), $3)
             RETURNING id
             "#,
         )
         .bind(&email)
+        .bind(match service_mode {
+            ServiceMode::Internal => "pending",
+            ServiceMode::Paid => "enabled",
+        })
         .bind(&password_hash)
         .fetch_one(&mut *tx)
         .await?;
         let user_id: DbId = row.try_get("id")?;
         account::create_credit_account(&mut tx, CreditAccountType::User, user_id).await?;
+        if service_mode == ServiceMode::Internal {
+            tx.commit().await?;
+            return Err(AppError::BadRequest("account pending approval".to_string()));
+        }
         user_id
     };
 
@@ -759,6 +782,12 @@ fn client_rate_key(headers: &HeaderMap) -> String {
     forwarded_client_ip(headers)
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn email_error(err: anyhow::Error) -> AppError {
+    smtp_config_error_message(&err)
+        .map(|message| AppError::BadRequest(message.to_string()))
+        .unwrap_or_else(|| AppError::Anyhow(err))
 }
 
 fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {

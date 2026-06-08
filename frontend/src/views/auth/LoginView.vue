@@ -8,7 +8,7 @@ import type { LoginRole } from '../../api/auth'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { useAuthStore } from '../../stores/auth'
-import { ApiError, readError } from '../../utils/errors'
+import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -74,7 +74,7 @@ async function sendVerificationCode() {
     showVerificationCode.value = true
     ElMessage.success(t('loginVerificationCodeSent'))
   } catch (err) {
-    ElMessage.error(readError(err))
+    ElMessage.error(readLoginVerificationCodeError(err))
   } finally {
     sendingVerificationCode.value = false
   }
@@ -91,6 +91,18 @@ function readLoginError(err: unknown) {
   if (err instanceof ApiError && err.message.includes('invalid verification code')) {
     return t('loginVerificationInvalid')
   }
+  if (err instanceof ApiError && err.message.includes('registration is closed')) {
+    return t('registrationClosed')
+  }
+  if (err instanceof ApiError && err.message.includes('account pending approval')) {
+    return t('accountPendingApproval')
+  }
+  if (isSmtpConfigError(err)) {
+    return t('smtpEmailUnavailable')
+  }
+  if (isLoginVerificationRateLimitedError(err)) {
+    return t('loginVerificationRateLimited')
+  }
   if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
     return t('passwordMinLength')
   }
@@ -98,6 +110,24 @@ function readLoginError(err: unknown) {
     return t('loginFailed')
   }
   return err instanceof Error ? err.message : String(err)
+}
+
+function readLoginVerificationCodeError(err: unknown) {
+  if (isSmtpConfigError(err)) {
+    return t('smtpEmailUnavailable')
+  }
+  if (isLoginVerificationRateLimitedError(err)) {
+    return t('loginVerificationRateLimited')
+  }
+  return readError(err)
+}
+
+function isLoginVerificationRateLimitedError(err: unknown) {
+  return (
+    err instanceof ApiError &&
+    (err.message.includes('too many login verification code requests') ||
+      err.message.includes('too many login verification attempts'))
+  )
 }
 
 function readRedirectPath(role: LoginRole) {

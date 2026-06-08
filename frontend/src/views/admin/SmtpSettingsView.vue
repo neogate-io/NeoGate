@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Connection, Lock, Message, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getSmtpSetting, saveSmtpSetting, testSmtpSetting } from '../../api/settings'
@@ -29,13 +29,25 @@ const passwordStateLabel = computed(() =>
   passwordSet.value ? t('smtpPasswordSet') : t('smtpPasswordNotSet')
 )
 
+const smtpPortInput = computed({
+  get: () => (form.smtpPort > 0 ? String(form.smtpPort) : ''),
+  set: (value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 5)
+    if (!digits) {
+      form.smtpPort = 0
+      return
+    }
+    form.smtpPort = Math.min(Number(digits), 65535)
+  }
+})
+
 function applySetting(setting: Awaited<ReturnType<typeof getSmtpSetting>>) {
   configured.value = setting.configured
   form.smtpHost = setting.smtp_host
-  form.smtpPort = setting.smtp_port || 587
   form.smtpUsername = setting.smtp_username ?? ''
   form.smtpPassword = ''
   form.smtpTls = setting.smtp_tls
+  form.smtpPort = setting.smtp_port || 587
   form.fromEmail = setting.from_email
   form.fromName = setting.from_name ?? ''
   form.subjectPrefix = setting.subject_prefix ?? ''
@@ -92,6 +104,14 @@ function smtpPayload() {
   }
 }
 
+watch(
+  () => form.smtpTls,
+  (tls) => {
+    form.smtpPort = tls ? 587 : 25
+  },
+  { flush: 'sync' }
+)
+
 onMounted(load)
 </script>
 
@@ -119,7 +139,12 @@ onMounted(load)
             </el-form-item>
 
             <el-form-item :label="t('smtpPort')">
-              <el-input-number v-model="form.smtpPort" :min="1" :max="65535" :step="1" />
+              <el-input
+                v-model="smtpPortInput"
+                autocomplete="off"
+                inputmode="numeric"
+                placeholder="587"
+              />
             </el-form-item>
 
             <el-form-item class="admin-settings-switch" :label="t('smtpTls')">

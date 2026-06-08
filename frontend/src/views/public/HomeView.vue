@@ -3,17 +3,20 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import type { InputInstance } from 'element-plus/es/components/input/index'
 import { DocumentCopy, Key, UserFilled } from '@element-plus/icons-vue'
 import { computed, nextTick, ref } from 'vue'
+import { getSetupStatus, type ServicePolicy } from '../../api/policy'
 import { createUserKey, createUserKeyDraft } from '../../api/userKeys'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
+import { useAsyncData } from '../../composables/useAsyncData'
 import { useInstallScript } from '../../composables/useInstallScript'
 import { useLocale } from '../../composables/useLocale'
 import { useAuthStore } from '../../stores/auth'
-import { readError } from '../../utils/errors'
+import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
 const githubUrl = 'https://github.com/neogate-io/NeoGate'
 const auth = useAuthStore()
 const { locale, t } = useLocale()
 const { installScript, copyInstallScript } = useInstallScript(t)
+const { data: servicePolicy } = useAsyncData<ServicePolicy | null>(() => getSetupStatus(), null)
 const apiKeyDialogOpen = ref(false)
 const emailInput = ref<InputInstance>()
 const homeEmail = ref('')
@@ -23,9 +26,11 @@ const homeKeyLoading = ref(false)
 const homeKeySubmitting = ref(false)
 const homeKeySent = ref(false)
 const dashboardLink = computed(() => (auth.isAdmin ? '/admin' : '/home/overview'))
+const registrationEnabled = computed(() => servicePolicy.value?.registration_enabled === true)
 let draftRequestId = 0
 
 function openApiKeyDialog() {
+  if (!registrationEnabled.value) return
   resetHomeApiKey()
   apiKeyDialogOpen.value = true
   void prepareHomeApiKey()
@@ -55,6 +60,15 @@ async function createHomeApiKey() {
     homeKeySent.value = true
     ElMessage.success(t('apiKeySentToast'))
   } catch (err) {
+    if (err instanceof ApiError && err.message.includes('account pending approval')) {
+      ElMessage.warning(t('accountPendingApproval'))
+      apiKeyDialogOpen.value = false
+      return
+    }
+    if (isSmtpConfigError(err)) {
+      ElMessage.error(t('smtpEmailUnavailable'))
+      return
+    }
     ElMessage.error(readError(err))
   } finally {
     homeKeySubmitting.value = false
@@ -135,7 +149,7 @@ function resetHomeApiKey() {
         <h1>{{ t('tagline') }}</h1>
       </div>
 
-      <div class="home-actions">
+      <div v-if="registrationEnabled" class="home-actions">
         <el-button :icon="Key" size="large" type="primary" @click="openApiKeyDialog">
           {{ t('createApiKey') }}
         </el-button>
@@ -143,6 +157,7 @@ function resetHomeApiKey() {
       </div>
 
       <el-dialog
+        v-if="registrationEnabled"
         v-model="apiKeyDialogOpen"
         class="api-key-dialog"
         :title="t('apiKeyDialogTitle')"

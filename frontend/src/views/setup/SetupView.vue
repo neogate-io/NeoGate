@@ -87,6 +87,7 @@ const setupForm = reactive({
   confirmPassword: '',
   serviceMode: 'internal' as ServiceMode,
   creditRequired: false,
+  registrationEnabled: false,
   provider: 'openai',
   protocol: 'openai' as Protocol,
   channelName: '',
@@ -157,6 +158,12 @@ const setupCreditRequiredDescription = computed(() =>
     ? t('creditRequiredEnabledDescription')
     : t('creditRequiredDisabledDescription')
 )
+const setupRegistrationDescription = computed(() => {
+  if (!setupForm.registrationEnabled) return t('registrationDisabledDescription')
+  return setupForm.serviceMode === 'paid'
+    ? t('registrationPaidEnabledDescription')
+    : t('registrationInternalEnabledDescription')
+})
 
 const setupSteps = computed(() => [
   {
@@ -262,6 +269,13 @@ watch(
 watch(
   () => setupForm.models,
   () => syncPriceRows()
+)
+
+watch(
+  () => setupForm.serviceMode,
+  (serviceMode) => {
+    setupForm.registrationEnabled = serviceMode === 'paid'
+  }
 )
 
 watch(
@@ -463,6 +477,7 @@ async function submitSetup() {
       admin_password: setupForm.adminPassword,
       service_mode: setupForm.serviceMode,
       credit_required: setupForm.serviceMode === 'internal' ? setupForm.creditRequired : true,
+      registration_enabled: setupForm.registrationEnabled,
       channel,
       prices: includeUpstream.value
         ? prices.value.map((price) => ({
@@ -1038,6 +1053,13 @@ onMounted(load)
                 /></el-icon>
               </button>
             </div>
+            <div class="setup-inline-control registration-enable-control">
+              <span>
+                <strong>{{ t('registrationEnabled') }}</strong>
+                <small>{{ setupRegistrationDescription }}</small>
+              </span>
+              <el-switch v-model="setupForm.registrationEnabled" />
+            </div>
             <div
               v-if="setupForm.serviceMode === 'internal'"
               class="setup-inline-control credit-required-control"
@@ -1075,7 +1097,10 @@ onMounted(load)
             </template>
           </div>
 
-          <div v-else-if="currentBusinessStep === 'upstream'" class="setup-section upstream-setup-section">
+          <div
+            v-else-if="currentBusinessStep === 'upstream'"
+            class="setup-section upstream-setup-section"
+          >
             <div class="setup-section-heading">
               <span class="setup-title-icon">
                 <el-icon><Tickets /></el-icon>
@@ -1763,6 +1788,7 @@ onMounted(load)
 }
 
 .credit-required-control,
+.registration-enable-control,
 .payment-enable-control {
   background: transparent;
 }

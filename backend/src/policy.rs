@@ -1,5 +1,7 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
@@ -40,6 +42,7 @@ use crate::{
 };
 
 pub const SERVICE_POLICY_SETTING_KEY: &str = "service_policy";
+const SERVICE_POLICY_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,8 +69,48 @@ pub struct ServicePolicyRecord {
     pub public_base_url: Option<String>,
     pub service_mode: ServiceMode,
     pub credit_required: bool,
+    pub registration_enabled: bool,
     pub recharge_enabled: bool,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Default)]
+pub struct ServicePolicyCache {
+    inner: Arc<Mutex<Option<CachedServicePolicy>>>,
+}
+
+struct CachedServicePolicy {
+    record: ServicePolicyRecord,
+    expires_at: Instant,
+}
+
+impl ServicePolicyCache {
+    pub fn get(&self) -> Option<ServicePolicyRecord> {
+        let now = Instant::now();
+        let mut cached = self.inner.lock().expect("service policy cache poisoned");
+        let Some(entry) = cached.as_ref() else {
+            return None;
+        };
+        if entry.expires_at > now {
+            return Some(entry.record.clone());
+        }
+        *cached = None;
+        None
+    }
+
+    pub fn store(&self, record: ServicePolicyRecord) {
+        let mut cached = self.inner.lock().expect("service policy cache poisoned");
+        *cached = Some(CachedServicePolicy {
+            record,
+            expires_at: Instant::now() + SERVICE_POLICY_CACHE_TTL,
+        });
+    }
+
+    #[cfg(test)]
+    pub fn invalidate(&self) {
+        let mut cached = self.inner.lock().expect("service policy cache poisoned");
+        *cached = None;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +119,7 @@ pub struct CompleteSetupRequest {
     pub admin_username: Option<String>,
     pub admin_password: Option<String>,
     pub credit_required: Option<bool>,
+    pub registration_enabled: Option<bool>,
     pub channel: Option<SetupChannelRequest>,
     #[serde(default)]
     pub prices: Vec<SetupProviderPriceRequest>,
@@ -124,7 +168,8 @@ struct SetupPricingTemplateSyncResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateServicePolicyRequest {
-    pub credit_required: bool,
+    pub credit_required: Option<bool>,
+    pub registration_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +177,8 @@ struct StoredServicePolicy {
     setup_completed: bool,
     service_mode: ServiceMode,
     credit_required: bool,
+    #[serde(default)]
+    registration_enabled: Option<bool>,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -167,18 +214,26 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 pub async fn current_service_policy(state: &AppState) -> AppResult<ServicePolicyRecord> {
+    if let Some(record) = state.service_policy_cache.get() {
+        return Ok(record);
+    }
+
     let Some(row) = sqlx::query("SELECT value, updated_at FROM setting WHERE key = $1")
         .bind(SERVICE_POLICY_SETTING_KEY)
         .fetch_optional(&state.db.pool)
         .await?
     else {
-        return Ok(record_from_stored(default_stored_policy(), None));
+        let record = record_from_stored(default_stored_policy(), None);
+        state.service_policy_cache.store(record.clone());
+        return Ok(record);
     };
 
     let value: serde_json::Value = row.try_get("value")?;
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let stored = normalize_stored_policy(serde_json::from_value(value)?);
-    Ok(record_from_stored(stored, Some(updated_at)))
+    let record = record_from_stored(stored, Some(updated_at));
+    state.service_policy_cache.store(record.clone());
+    Ok(record)
 }
 
 pub async fn credit_required(state: &AppState) -> AppResult<bool> {
@@ -187,6 +242,11 @@ pub async fn credit_required(state: &AppState) -> AppResult<bool> {
 
 pub async fn service_mode(state: &AppState) -> AppResult<ServiceMode> {
     Ok(current_service_policy(state).await?.service_mode)
+}
+
+pub async fn registration_policy(state: &AppState) -> AppResult<(ServiceMode, bool)> {
+    let policy = current_service_policy(state).await?;
+    Ok((policy.service_mode, policy.registration_enabled))
 }
 
 async fn setup_status(State(state): State<Arc<AppState>>) -> AppResult<Json<ServicePolicyRecord>> {
@@ -306,9 +366,14 @@ async fn complete_setup(
         service_mode: req.service_mode,
         credit_required: req.service_mode == ServiceMode::Paid
             || req.credit_required.unwrap_or(false),
+        registration_enabled: Some(
+            req.registration_enabled
+                .unwrap_or(req.service_mode == ServiceMode::Paid),
+        ),
     };
     let record = upsert_stored_policy(&mut tx, stored).await?;
     tx.commit().await?;
+    state.service_policy_cache.store(record.clone());
     state.billing.invalidate_all_prices();
     state
         .cache_invalidator
@@ -433,12 +498,18 @@ async fn update_admin_service_policy(
     if !stored.setup_completed {
         return Err(AppError::BadRequest("setup is not completed".to_string()));
     }
-    stored.credit_required = match stored.service_mode {
-        ServiceMode::Internal => req.credit_required,
-        ServiceMode::Paid => true,
-    };
+    if let Some(credit_required) = req.credit_required {
+        stored.credit_required = match stored.service_mode {
+            ServiceMode::Internal => credit_required,
+            ServiceMode::Paid => true,
+        };
+    }
+    if let Some(registration_enabled) = req.registration_enabled {
+        stored.registration_enabled = Some(registration_enabled);
+    }
     let record = upsert_stored_policy(&mut tx, stored).await?;
     tx.commit().await?;
+    state.service_policy_cache.store(record.clone());
     Ok(Json(record))
 }
 
@@ -618,12 +689,16 @@ fn default_stored_policy() -> StoredServicePolicy {
         setup_completed: false,
         service_mode: ServiceMode::Internal,
         credit_required: false,
+        registration_enabled: Some(false),
     }
 }
 
 fn normalize_stored_policy(mut stored: StoredServicePolicy) -> StoredServicePolicy {
     if stored.service_mode == ServiceMode::Paid {
         stored.credit_required = true;
+    }
+    if stored.registration_enabled.is_none() {
+        stored.registration_enabled = Some(stored.service_mode == ServiceMode::Paid);
     }
     stored
 }
@@ -665,6 +740,7 @@ fn record_from_stored(
             .and_then(|probe| probe.public_base_url.clone()),
         service_mode: stored.service_mode,
         credit_required: stored.credit_required,
+        registration_enabled: stored.registration_enabled.unwrap_or(false),
         recharge_enabled: stored.service_mode == ServiceMode::Paid,
         updated_at,
     }
@@ -698,6 +774,7 @@ mod tests {
                 setup_completed: true,
                 service_mode: ServiceMode::Paid,
                 credit_required: false,
+                registration_enabled: None,
             },
             None,
         );
@@ -705,6 +782,7 @@ mod tests {
         assert!(record.setup_completed);
         assert_eq!(record.service_mode, ServiceMode::Paid);
         assert!(record.credit_required);
+        assert!(record.registration_enabled);
         assert!(record.recharge_enabled);
     }
 }

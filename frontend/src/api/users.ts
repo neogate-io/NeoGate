@@ -20,3 +20,10 @@ export function getUsers(
   const query = searchParams.toString()
   return adminRequest<UserPage>(`/api/admin/users${query ? `?${query}` : ''}`)
 }
+
+export function updateUserStatus(id: number, status: User['status']) {
+  return adminRequest<User>(`/api/admin/users/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status })
+  })
+}

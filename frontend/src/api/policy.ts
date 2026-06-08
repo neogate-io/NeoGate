@@ -20,12 +20,17 @@ export type ServicePolicy = {
   site_configured: boolean
   setup_completed: boolean
   bootstrap_required: boolean
-  bootstrap_blocked_reason?: 'cluster_requires_external_config' | 'missing_database' | 'missing_redis' | null
+  bootstrap_blocked_reason?:
+    | 'cluster_requires_external_config'
+    | 'missing_database'
+    | 'missing_redis'
+    | null
   restart_required: boolean
   site_name?: string | null
   public_base_url?: string | null
   service_mode: ServiceMode
   credit_required: boolean
+  registration_enabled: boolean
   recharge_enabled: boolean
   updated_at?: string | null
 }
@@ -113,6 +118,7 @@ export function completeSetupWizard(input: {
   admin_password: string
   service_mode: ServiceMode
   credit_required?: boolean
+  registration_enabled?: boolean
   channel?: {
     provider: string
     name: string
@@ -128,14 +134,18 @@ export function completeSetupWizard(input: {
     output_price_usd_micros: number
     enabled: boolean
   }>
-  smtp?: Partial<SmtpSetting> & {
-    smtp_password?: string | null
-    clear_smtp_password?: boolean
-  } | null
-  payment?: Partial<PaymentSetting> & {
-    zpay_secret_key?: string | null
-    clear_zpay_secret_key?: boolean
-  } | null
+  smtp?:
+    | (Partial<SmtpSetting> & {
+        smtp_password?: string | null
+        clear_smtp_password?: boolean
+      })
+    | null
+  payment?:
+    | (Partial<PaymentSetting> & {
+        zpay_secret_key?: string | null
+        clear_zpay_secret_key?: boolean
+      })
+    | null
 }) {
   return publicRequest<ServicePolicy>('/api/setup/complete', {
     method: 'POST',
@@ -151,7 +161,10 @@ export function getAdminServicePolicy() {
   return adminRequest<ServicePolicy>('/api/admin/settings/service-policy')
 }
 
-export function saveAdminServicePolicy(input: { credit_required: boolean }) {
+export function saveAdminServicePolicy(input: {
+  credit_required?: boolean
+  registration_enabled?: boolean
+}) {
   return adminRequest<ServicePolicy>('/api/admin/settings/service-policy', {
     method: 'POST',
     body: JSON.stringify(input)

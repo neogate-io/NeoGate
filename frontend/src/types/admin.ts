@@ -33,7 +33,7 @@ export type UserGroup = {
 export type User = {
   id: number
   email: string
-  status: 'enabled' | 'disabled'
+  status: 'enabled' | 'disabled' | 'pending'
   user_group_id: number
   user_group_code: string
   user_group_name: string

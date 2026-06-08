@@ -53,6 +53,13 @@ const creditRequiredDescription = computed(() => {
     ? t('creditRequiredEnabledDescription')
     : t('creditRequiredDisabledDescription')
 })
+const registrationDescription = computed(() => {
+  if (!servicePolicy.value) return ''
+  if (!servicePolicy.value.registration_enabled) return t('registrationDisabledDescription')
+  return servicePolicy.value.service_mode === 'paid'
+    ? t('registrationPaidEnabledDescription')
+    : t('registrationInternalEnabledDescription')
+})
 
 function formatSyncCount(value: number) {
   return value.toLocaleString('en-US')
@@ -108,12 +115,13 @@ async function load() {
 }
 
 async function saveServicePolicy() {
-  if (!servicePolicy.value || !servicePolicyEditable.value) return
+  if (!servicePolicy.value) return
 
   servicePolicySaving.value = true
   try {
     servicePolicy.value = await saveAdminServicePolicy({
-      credit_required: servicePolicy.value.credit_required
+      credit_required: servicePolicy.value.credit_required,
+      registration_enabled: servicePolicy.value.registration_enabled
     })
     ElMessage.success(t('servicePolicySaved'))
   } catch (err) {
@@ -169,6 +177,23 @@ onMounted(load)
             />
           </div>
           <p>{{ creditRequiredDescription }}</p>
+        </div>
+      </div>
+    </div>
+
+    <div v-loading="loading" class="admin-settings-panel">
+      <div class="settings-panel-header">
+        <div>
+          <div class="settings-title-row">
+            <h3>{{ t('registrationEnabled') }}</h3>
+            <el-switch
+              v-if="servicePolicy"
+              v-model="servicePolicy.registration_enabled"
+              :disabled="!servicePolicy || servicePolicySaving"
+              @change="saveServicePolicy"
+            />
+          </div>
+          <p>{{ registrationDescription }}</p>
         </div>
       </div>
     </div>

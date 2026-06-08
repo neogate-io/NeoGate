@@ -147,7 +147,7 @@ const messages = {
     creditRequiredEnabledDescription:
       '已开启额度校验。用户和 API Key 需要有可用额度；额度不足时，请求会被拒绝。',
     creditRequiredDisabledDescription:
-      '已关闭额度校验。团队成员无需预设额度即可调用；系统仍会记录用量、Token 和费用。',
+      '已关闭额度校验。团队成员无需预设额度即可调用；系统仍会记录Token的使用量。',
     creditRequiredPaidDescription:
       '收费服务模式始终需要额度。用户需先充值或获赠额度，然后才能调用网关。',
     creditRequiredInternalHint: '关闭后，用户没有额度也可以调用，但仍记录用量。',
@@ -168,6 +168,12 @@ const messages = {
     noData: '暂无数据',
     to: '至',
     filteredResults: '筛选结果',
+    currentPageItems: '本页',
+    itemsUnit: '条',
+    pageSize: '每页',
+    currentPage: '当前页',
+    previousPage: '上一页',
+    nextPage: '下一页',
     userEmailSearchPlaceholder: '按邮箱搜索用户',
     apiKeySearchPlaceholder: '按 API 密钥搜索用户',
     apiKeyDialogTitle: '创建 API 密钥',
@@ -701,7 +707,7 @@ const messages = {
     creditRequiredEnabledDescription:
       'Credit checks are enabled. Users and API keys need available credit; requests without enough credit are rejected.',
     creditRequiredDisabledDescription:
-      'Credit checks are disabled. Team members can call without preassigned credit; usage, tokens, and cost are still recorded.',
+      'Credit checks are disabled. Team members can call without preassigned credit; token usage is still recorded.',
     creditRequiredPaidDescription:
       'Paid service mode always requires credit. Users must recharge or receive credit before calling the gateway.',
     creditRequiredInternalHint: 'When off, users can call APIs without credit, while usage is still recorded.',
@@ -722,6 +728,12 @@ const messages = {
     noData: 'No data',
     to: 'to',
     filteredResults: 'Filtered',
+    currentPageItems: 'This page',
+    itemsUnit: 'items',
+    pageSize: 'Per page',
+    currentPage: 'Page',
+    previousPage: 'Previous page',
+    nextPage: 'Next page',
     userEmailSearchPlaceholder: 'Search users by email',
     apiKeySearchPlaceholder: 'Search users by API key',
     apiKeyDialogTitle: 'Create API key',

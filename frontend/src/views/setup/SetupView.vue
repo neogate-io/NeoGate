@@ -152,6 +152,12 @@ const modeOptions = computed(() => [
   }
 ])
 
+const setupCreditRequiredDescription = computed(() =>
+  setupForm.creditRequired
+    ? t('creditRequiredEnabledDescription')
+    : t('creditRequiredDisabledDescription')
+)
+
 const setupSteps = computed(() => [
   {
     key: 'runtime',
@@ -1038,7 +1044,7 @@ onMounted(load)
             >
               <span>
                 <strong>{{ t('creditRequired') }}</strong>
-                <small>{{ t('creditRequiredInternalHint') }}</small>
+                <small>{{ setupCreditRequiredDescription }}</small>
               </span>
               <el-switch v-model="setupForm.creditRequired" />
             </div>

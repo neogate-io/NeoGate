@@ -488,7 +488,7 @@ onMounted(loadPricingData)
 .channel-name-text {
   color: #111827;
   font-size: 14px;
-  font-weight: 720;
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -547,7 +547,7 @@ onMounted(loadPricingData)
 .channel-price-model {
   color: #334155;
   font-size: 13px;
-  font-weight: 720;
+  font-weight: 400;
   letter-spacing: 0;
   max-width: 220px;
   overflow: hidden;
@@ -562,7 +562,7 @@ onMounted(loadPricingData)
   color: #0f172a;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  font-weight: 800;
+  font-weight: 400;
   min-width: 108px;
   padding: 2px 9px;
   text-align: center;
@@ -584,7 +584,7 @@ onMounted(loadPricingData)
   display: inline-flex;
   font-size: 14px;
   font-variant-numeric: tabular-nums;
-  font-weight: 760;
+  font-weight: 400;
   justify-content: center;
   min-width: 22px;
 }

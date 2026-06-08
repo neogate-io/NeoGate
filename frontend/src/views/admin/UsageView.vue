@@ -207,21 +207,31 @@ async function resetFilters() {
     </div>
 
     <div class="admin-pagination-bar">
-      <span class="admin-result-count">
-        {{ t('filteredResults') }} {{ usageItems.length.toLocaleString(locale) }}
-      </span>
-      <el-select v-model="pageSize" class="admin-page-size" @change="handlePageSizeChange">
-        <el-option :value="20" label="20" />
-        <el-option :value="50" label="50" />
-        <el-option :value="100" label="100" />
-      </el-select>
-      <span class="admin-result-count">{{ currentPage }}</span>
-      <el-button :disabled="currentPage <= 1 || loading" @click="previousPage">
-        {{ t('previousStep') }}
-      </el-button>
-      <el-button :disabled="!usagePage.has_more || loading" @click="nextPage">
-        {{ t('nextStep') }}
-      </el-button>
+      <div class="admin-pagination-summary">
+        <span class="admin-result-count">
+          {{ t('currentPageItems') }} {{ usageItems.length.toLocaleString(locale) }}
+          {{ t('itemsUnit') }}
+        </span>
+      </div>
+      <div class="admin-pagination-controls">
+        <div class="admin-page-size-control">
+          <span class="admin-page-label">{{ t('pageSize') }}</span>
+          <el-select v-model="pageSize" class="admin-page-size" @change="handlePageSizeChange">
+            <el-option :value="20" label="20" />
+            <el-option :value="50" label="50" />
+            <el-option :value="100" label="100" />
+          </el-select>
+        </div>
+        <span class="admin-result-count">{{ t('currentPage') }} {{ currentPage }}</span>
+        <div class="admin-page-buttons">
+          <el-button :disabled="currentPage <= 1 || loading" @click="previousPage">
+            {{ t('previousPage') }}
+          </el-button>
+          <el-button :disabled="!usagePage.has_more || loading" @click="nextPage">
+            {{ t('nextPage') }}
+          </el-button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
@@ -248,6 +258,6 @@ async function resetFilters() {
 
 .usage-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-weight: 600;
+  font-weight: 400;
 }
 </style>

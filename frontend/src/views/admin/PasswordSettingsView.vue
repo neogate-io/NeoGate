@@ -73,7 +73,11 @@ async function save() {
 
 <template>
   <section class="admin-settings-view">
-    <el-form class="admin-settings-form is-narrow" label-position="top" @submit.prevent="save">
+    <el-form
+      class="admin-settings-form is-narrow admin-password-form"
+      label-position="top"
+      @submit.prevent="save"
+    >
       <div class="admin-settings-body">
         <section class="admin-settings-section">
           <header class="admin-settings-section-header">
@@ -131,16 +135,32 @@ async function save() {
 </template>
 
 <style scoped>
+.admin-password-form {
+  width: min(520px, 100%);
+}
+
+.admin-password-form :deep(.admin-settings-body) {
+  padding: 6px 22px 22px;
+}
+
+.admin-password-form :deep(.admin-settings-section) {
+  border-bottom: 1px solid var(--admin-border-soft);
+  gap: 18px;
+  padding: 20px 0 16px;
+}
+
 .admin-password-grid {
-  grid-template-columns: minmax(260px, 420px);
+  gap: 14px;
+  grid-template-columns: minmax(260px, 360px);
 }
 
 .admin-password-actions {
   border-top: 0;
   justify-content: flex-start;
   margin-left: 0;
+  margin-top: 0;
   min-width: 0;
-  padding-top: 18px;
+  padding-top: 12px;
 }
 
 @media (max-width: 640px) {

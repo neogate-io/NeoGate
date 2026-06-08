@@ -267,19 +267,35 @@ async function previousUserKeysPage() {
     </div>
 
     <div class="admin-pagination-bar">
-      <span class="admin-result-count">{{ users.length.toLocaleString(locale) }}</span>
-      <el-select v-model="usersPageSize" class="admin-page-size" @change="handleUsersPageSizeChange">
-        <el-option :value="20" label="20" />
-        <el-option :value="50" label="50" />
-        <el-option :value="100" label="100" />
-      </el-select>
-      <span class="admin-result-count">{{ usersCurrentPage }}</span>
-      <el-button :disabled="usersCurrentPage <= 1 || loading" @click="previousUsersPage">
-        {{ t('previousStep') }}
-      </el-button>
-      <el-button :disabled="!usersPage.has_more || loading" @click="nextUsersPage">
-        {{ t('nextStep') }}
-      </el-button>
+      <div class="admin-pagination-summary">
+        <span class="admin-result-count">
+          {{ t('currentPageItems') }} {{ users.length.toLocaleString(locale) }}
+          {{ t('itemsUnit') }}
+        </span>
+      </div>
+      <div class="admin-pagination-controls">
+        <div class="admin-page-size-control">
+          <span class="admin-page-label">{{ t('pageSize') }}</span>
+          <el-select
+            v-model="usersPageSize"
+            class="admin-page-size"
+            @change="handleUsersPageSizeChange"
+          >
+            <el-option :value="20" label="20" />
+            <el-option :value="50" label="50" />
+            <el-option :value="100" label="100" />
+          </el-select>
+        </div>
+        <span class="admin-result-count">{{ t('currentPage') }} {{ usersCurrentPage }}</span>
+        <div class="admin-page-buttons">
+          <el-button :disabled="usersCurrentPage <= 1 || loading" @click="previousUsersPage">
+            {{ t('previousPage') }}
+          </el-button>
+          <el-button :disabled="!usersPage.has_more || loading" @click="nextUsersPage">
+            {{ t('nextPage') }}
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <el-dialog v-model="creditDialogVisible" :title="t('recharge')" width="420px">
@@ -351,17 +367,26 @@ async function previousUserKeysPage() {
         </template>
       </el-table>
       <div class="admin-pagination-bar">
-        <span class="admin-result-count">{{ selectedUserKeys.length.toLocaleString(locale) }}</span>
-        <span class="admin-result-count">{{ userKeysCurrentPage }}</span>
-        <el-button
-          :disabled="userKeysCurrentPage <= 1 || userKeysLoading"
-          @click="previousUserKeysPage"
-        >
-          {{ t('previousStep') }}
-        </el-button>
-        <el-button :disabled="!userKeysHasMore || userKeysLoading" @click="nextUserKeysPage">
-          {{ t('nextStep') }}
-        </el-button>
+        <div class="admin-pagination-summary">
+          <span class="admin-result-count">
+            {{ t('currentPageItems') }} {{ selectedUserKeys.length.toLocaleString(locale) }}
+            {{ t('itemsUnit') }}
+          </span>
+        </div>
+        <div class="admin-pagination-controls">
+          <span class="admin-result-count">{{ t('currentPage') }} {{ userKeysCurrentPage }}</span>
+          <div class="admin-page-buttons">
+            <el-button
+              :disabled="userKeysCurrentPage <= 1 || userKeysLoading"
+              @click="previousUserKeysPage"
+            >
+              {{ t('previousPage') }}
+            </el-button>
+            <el-button :disabled="!userKeysHasMore || userKeysLoading" @click="nextUserKeysPage">
+              {{ t('nextPage') }}
+            </el-button>
+          </div>
+        </div>
       </div>
     </el-dialog>
   </section>

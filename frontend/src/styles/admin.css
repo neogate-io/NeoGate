@@ -109,6 +109,42 @@
   width: 100%;
 }
 
+.admin-pagination-summary,
+.admin-pagination-controls,
+.admin-page-size-control,
+.admin-page-buttons {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.admin-pagination-summary {
+  gap: 8px;
+}
+
+.admin-pagination-controls {
+  gap: 12px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.admin-page-size-control {
+  gap: 8px;
+}
+
+.admin-page-size {
+  width: 86px;
+}
+
+.admin-page-buttons {
+  gap: 8px;
+}
+
+.admin-page-buttons .el-button + .el-button {
+  margin-left: 0;
+}
+
+.admin-page-label,
 .admin-result-count {
   color: #697586;
   font-size: 13px;
@@ -345,7 +381,6 @@
   box-shadow: none;
   min-width: 0;
   overflow-x: auto;
-  scrollbar-gutter: stable;
   width: 100%;
 }
 

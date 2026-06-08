@@ -97,7 +97,11 @@ onMounted(load)
 
 <template>
   <section v-loading="loading" class="admin-settings-view">
-    <el-form class="admin-settings-form" label-position="top" @submit.prevent="save">
+    <el-form
+      class="admin-settings-form smtp-settings-form"
+      label-position="top"
+      @submit.prevent="save"
+    >
       <div class="admin-settings-body">
         <section class="admin-settings-section">
           <header class="admin-settings-section-header">
@@ -188,7 +192,7 @@ onMounted(load)
           </div>
         </section>
 
-        <div class="admin-settings-actions">
+        <div class="admin-settings-actions smtp-settings-actions">
           <el-button
             class="admin-action-button"
             :icon="Message"
@@ -213,28 +217,53 @@ onMounted(load)
 </template>
 
 <style scoped>
+.smtp-settings-form {
+  width: min(780px, 100%);
+}
+
+.smtp-settings-form :deep(.admin-settings-body) {
+  padding: 6px 22px 22px;
+}
+
+.smtp-settings-form :deep(.admin-settings-section) {
+  gap: 16px;
+  padding: 20px 0 22px;
+}
+
 .smtp-connection-grid {
   align-items: end;
-  grid-template-columns: minmax(280px, 420px) 132px 108px;
+  column-gap: 18px;
+  grid-template-columns: minmax(240px, 320px) 116px 84px;
+  row-gap: 14px;
 }
 
 .smtp-auth-grid {
   align-items: start;
-  grid-template-columns: minmax(240px, 340px) minmax(260px, 360px);
+  column-gap: 32px;
+  grid-template-columns: minmax(220px, 300px) minmax(160px, 200px);
+  row-gap: 14px;
 }
 
 .smtp-sender-grid {
-  grid-template-columns: minmax(240px, 340px) minmax(180px, 220px);
+  column-gap: 32px;
+  grid-template-columns: minmax(220px, 300px) minmax(160px, 200px);
+  row-gap: 14px;
 }
 
 .smtp-subject-field {
-  max-width: 340px;
+  max-width: 300px;
 }
 
 .smtp-password-stack {
   display: grid;
   gap: 10px;
   width: 100%;
+}
+
+.smtp-settings-actions {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 10px;
 }
 
 @media (max-width: 980px) {

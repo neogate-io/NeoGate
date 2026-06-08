@@ -142,40 +142,40 @@ const { t } = useLocale()
 }
 
 :global(.model-picker-dialog) {
-  border-radius: 10px;
+  border-radius: 8px;
   max-width: calc(100vw - 32px);
 }
 
 :global(.model-picker-dialog .el-dialog__header) {
   margin: 0;
-  padding: 22px 24px 10px;
+  padding: 18px 22px 14px;
 }
 
 :global(.model-picker-dialog .el-dialog__title) {
   color: #111827;
-  font-size: 21px;
-  font-weight: 800;
+  font-size: 18px;
+  font-weight: 760;
   line-height: 1.2;
 }
 
 :global(.model-picker-dialog .el-dialog__headerbtn) {
-  right: 18px;
-  top: 14px;
+  right: 12px;
+  top: 10px;
 }
 
 :global(.model-picker-dialog .el-dialog__body) {
-  padding: 14px 24px 8px;
+  padding: 18px 22px;
 }
 
 :global(.model-picker-dialog .el-dialog__footer) {
   border-top: 1px solid #edf1f6;
-  padding: 14px 24px 20px;
+  padding: 14px 22px 18px;
 }
 
 .dialog-footer :deep(.el-button) {
-  border-radius: 8px;
-  font-weight: 740;
-  min-height: 40px;
+  border-radius: 7px;
+  font-weight: 680;
+  min-height: 34px;
   min-width: 86px;
 }
 

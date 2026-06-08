@@ -12,7 +12,13 @@ import {
 } from '../api/channels'
 import { getProviders } from '../api/providers'
 import type { MessageKey } from '../i18n'
-import type { Channel, ChannelEndpoint, ChannelKey, ChannelProvider, EndpointProtocol } from '../types/admin'
+import type {
+  Channel,
+  ChannelEndpoint,
+  ChannelKey,
+  ChannelProvider,
+  EndpointProtocol
+} from '../types/admin'
 import {
   customProviderOption,
   findProviderOption,
@@ -165,13 +171,17 @@ export function useChannels(t: Translate) {
   const hasFetchedModels = computed(() => fetchedModels.value.length > 0)
 
   const allFetchedModelsSelected = computed(() => {
-    return hasFetchedModels.value && selectedFetchedModels.value.length === fetchedModels.value.length
+    return (
+      hasFetchedModels.value && selectedFetchedModels.value.length === fetchedModels.value.length
+    )
   })
 
   watch(selectedFetchedModels, syncSelectedModelsToInput, { deep: true })
 
   function openCreateDialog() {
-    const provider = findProviderOption(customProviderOption.value, providerOptions.value) ?? providerOptions.value[0]
+    const provider =
+      findProviderOption(customProviderOption.value, providerOptions.value) ??
+      providerOptions.value[0]
     Object.assign(createForm, defaultCreateForm(provider))
     resetFetchedModels()
     createDialogOpen.value = true
@@ -179,7 +189,9 @@ export function useChannels(t: Translate) {
 
   function openEditDialog(row: Channel) {
     editingChannel.value = row
-    const endpointByProtocol = new Map(row.endpoints.map((endpoint) => [endpoint.protocol, endpoint]))
+    const endpointByProtocol = new Map(
+      row.endpoints.map((endpoint) => [endpoint.protocol, endpoint])
+    )
     const provider = row.provider
     Object.assign(editForm, {
       provider,
@@ -187,7 +199,10 @@ export function useChannels(t: Translate) {
       models: endpointModels(row.endpoints),
       endpoints: {
         openai: endpointFormFromRecord('openai', endpointByProtocol.get('openai')),
-        openai_oauth: endpointFormFromRecord('openai_oauth', endpointByProtocol.get('openai_oauth')),
+        openai_oauth: endpointFormFromRecord(
+          'openai_oauth',
+          endpointByProtocol.get('openai_oauth')
+        ),
         anthropic: endpointFormFromRecord('anthropic', endpointByProtocol.get('anthropic'))
       },
       enabled: row.enabled,
@@ -198,7 +213,10 @@ export function useChannels(t: Translate) {
     editDialogOpen.value = true
   }
 
-  function endpointFormFromRecord(protocol: EndpointProtocol, endpoint?: ChannelEndpoint): ChannelEndpointForm {
+  function endpointFormFromRecord(
+    protocol: EndpointProtocol,
+    endpoint?: ChannelEndpoint
+  ): ChannelEndpointForm {
     return {
       protocol,
       base_url: endpoint?.base_url ?? '',
@@ -284,7 +302,8 @@ export function useChannels(t: Translate) {
 
     const endpoint = modelFetchEndpoint(form)
     const baseUrl = visibleBaseUrl(form).trim()
-    const secret = formTarget === 'create' ? (splitSecretLines(createForm.secret)[0] ?? '') : undefined
+    const secret =
+      formTarget === 'create' ? (splitSecretLines(createForm.secret)[0] ?? '') : undefined
     if (!validateModelFetchInput(form, baseUrl, secret)) return
 
     modelPickerTarget.value = { form: formTarget }
@@ -307,9 +326,10 @@ export function useChannels(t: Translate) {
       }
 
       fetchedModels.value = models
-      selectedFetchedModels.value = shouldKeepAllSelected || (formTarget === 'create' && existingModels.length === 0)
-        ? models
-        : models.filter((model) => existingModels.includes(model))
+      selectedFetchedModels.value =
+        shouldKeepAllSelected || (formTarget === 'create' && existingModels.length === 0)
+          ? models
+          : models.filter((model) => existingModels.includes(model))
       syncSelectedModelsToInput()
       modelPickerDialogOpen.value = true
       ElMessage.success(t('modelsFetched'))
@@ -440,12 +460,14 @@ export function useChannels(t: Translate) {
         return null
       }
 
-      return [{
-        protocol: 'openai_oauth' as const,
-        base_url: baseUrl,
-        models,
-        enabled: true
-      }]
+      return [
+        {
+          protocol: 'openai_oauth' as const,
+          base_url: baseUrl,
+          models,
+          enabled: true
+        }
+      ]
     }
 
     if (isCustomProvider(form.provider)) {
@@ -460,12 +482,14 @@ export function useChannels(t: Translate) {
         return null
       }
 
-      return [{
-        protocol: 'openai' as const,
-        base_url: baseUrl,
-        models,
-        enabled: true
-      }]
+      return [
+        {
+          protocol: 'openai' as const,
+          base_url: baseUrl,
+          models,
+          enabled: true
+        }
+      ]
     }
 
     const endpoints: Array<{
@@ -539,9 +563,11 @@ export function useChannels(t: Translate) {
       return form.endpoints.openai
     }
 
-    return protocols
-      .map((protocol) => form.endpoints[protocol])
-      .find((endpoint) => endpoint.base_url.trim()) ?? form.endpoints.openai
+    return (
+      protocols
+        .map((protocol) => form.endpoints[protocol])
+        .find((endpoint) => endpoint.base_url.trim()) ?? form.endpoints.openai
+    )
   }
 
   function supportsCredentialFiles(form: ChannelForm) {
@@ -621,6 +647,7 @@ export function useChannels(t: Translate) {
 
   return {
     channels,
+    channelKeys,
     providerOptions,
     protocols,
     keyCounts,

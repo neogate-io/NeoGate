@@ -291,17 +291,17 @@ onMounted(load)
 
 .admin-settings-panel {
   background: #ffffff;
-  border: 1px solid #e5edf5;
+  border: 1px solid var(--admin-border);
   border-radius: 8px;
   display: grid;
   gap: 14px;
-  padding: 18px;
+  padding: 16px 18px;
 }
 
 .settings-panel-header h3 {
-  color: #111827;
-  font-size: 18px;
-  font-weight: 800;
+  color: var(--admin-text);
+  font-size: 15px;
+  font-weight: 760;
   margin: 0;
 }
 
@@ -313,7 +313,7 @@ onMounted(load)
 }
 
 .settings-panel-header p {
-  color: #697586;
+  color: var(--admin-text-muted);
   font-size: 13px;
   font-weight: 560;
   line-height: 1.6;
@@ -329,12 +329,12 @@ onMounted(load)
 }
 
 .reference-sync-meta span {
-  color: #697586;
+  color: var(--admin-text-muted);
 }
 
 .reference-sync-meta strong {
-  color: #111827;
-  font-weight: 780;
+  color: var(--admin-text);
+  font-weight: 720;
 }
 
 .reference-actions {
@@ -344,21 +344,22 @@ onMounted(load)
 }
 
 :global(.reference-sync-confirm) {
-  border-radius: 12px;
-  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.14);
   max-width: calc(100vw - 32px);
   padding: 0;
   width: 520px;
 }
 
 :global(.reference-sync-confirm .el-message-box__header) {
-  padding: 22px 24px 6px;
+  border-bottom: 1px solid var(--admin-border-soft);
+  padding: 18px 22px 14px;
 }
 
 :global(.reference-sync-confirm .el-message-box__title) {
-  color: #111827;
-  font-size: 22px;
-  font-weight: 820;
+  color: var(--admin-text);
+  font-size: 18px;
+  font-weight: 760;
   line-height: 1.25;
 }
 
@@ -368,7 +369,7 @@ onMounted(load)
 }
 
 :global(.reference-sync-confirm .el-message-box__content) {
-  padding: 10px 24px 18px;
+  padding: 16px 22px 18px;
 }
 
 :global(.reference-sync-confirm .el-message-box__container) {
@@ -405,7 +406,7 @@ onMounted(load)
 
 :global(.reference-sync-confirm .reference-sync-notes) {
   background: #f8fafc;
-  border: 1px solid #e5eaf1;
+  border: 1px solid var(--admin-border-soft);
   border-radius: 8px;
   display: grid;
   gap: 8px;
@@ -419,14 +420,14 @@ onMounted(load)
 
 :global(.reference-sync-confirm .el-message-box__btns) {
   gap: 10px;
-  padding: 0 24px 24px;
+  padding: 0 22px 20px;
 }
 
 :global(.reference-sync-confirm .el-message-box__btns .el-button) {
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 760;
-  min-height: 38px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 680;
+  min-height: 34px;
   min-width: 86px;
 }
 

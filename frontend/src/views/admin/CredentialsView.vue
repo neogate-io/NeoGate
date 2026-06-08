@@ -431,7 +431,7 @@ void bootstrap()
 
 <style scoped>
 .credential-page {
-  gap: 14px;
+  gap: 16px;
 }
 
 .table-toolbar {
@@ -458,17 +458,17 @@ void bootstrap()
 
 .credential-grid {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 306px));
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   justify-content: start;
 }
 
 .credential-empty {
   align-items: center;
   background: #fff;
-  border: 1px dashed #d7e0ea;
+  border: 1px dashed var(--admin-border);
   border-radius: 8px;
-  color: #718198;
+  color: var(--admin-text-muted);
   display: grid;
   gap: 10px;
   justify-items: center;
@@ -482,23 +482,24 @@ void bootstrap()
 
 .credential-card {
   background: #ffffff;
-  border: 1px solid #d7e0ea;
+  border: 1px solid var(--admin-border);
   border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.045);
+  box-shadow: none;
   display: grid;
-  gap: 11px;
+  gap: 12px;
   min-height: 0;
   overflow: hidden;
   padding: 12px;
   position: relative;
   transition:
+    background-color 160ms ease,
     border-color 160ms ease,
     box-shadow 160ms ease;
   width: 100%;
 }
 
 .credential-card::before {
-  background: linear-gradient(180deg, #22c55e, var(--brand-blue));
+  background: var(--brand-blue);
   content: '';
   inset: 0 auto 0 0;
   opacity: 0;
@@ -508,13 +509,13 @@ void bootstrap()
 }
 
 .credential-card:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
+  background: #fbfdff;
+  border-color: #c8d4e2;
 }
 
 .credential-card.is-selected {
   border-color: var(--brand-blue);
-  box-shadow: 0 12px 28px rgba(22, 139, 211, 0.14);
+  box-shadow: var(--admin-focus-ring);
 }
 
 .credential-card.is-selected::before {
@@ -522,7 +523,7 @@ void bootstrap()
 }
 
 .credential-card.is-disabled {
-  background: #fbfcfe;
+  background: #f8fafc;
   opacity: 0.78;
 }
 
@@ -641,9 +642,9 @@ void bootstrap()
 }
 
 .credential-plan-tag.el-tag {
-  --el-tag-bg-color: #10b981;
-  --el-tag-border-color: rgba(5, 150, 105, 0.28);
-  --el-tag-text-color: #ffffff;
+  --el-tag-bg-color: var(--brand-blue-soft);
+  --el-tag-border-color: var(--brand-blue-border);
+  --el-tag-text-color: var(--brand-blue);
   animation: none;
   font-size: 12px;
   font-weight: 500;
@@ -659,8 +660,9 @@ void bootstrap()
 }
 
 .credential-plan-tag.is-disabled.el-tag {
-  --el-tag-bg-color: #94a3b8;
-  --el-tag-border-color: #94a3b8;
+  --el-tag-bg-color: #eef2f7;
+  --el-tag-border-color: #d8e0ea;
+  --el-tag-text-color: #64748b;
 }
 
 .credential-actions {
@@ -672,7 +674,7 @@ void bootstrap()
 
 .credential-icon-button.el-button {
   --el-button-bg-color: #f8fafc;
-  --el-button-border-color: #e2e8f0;
+  --el-button-border-color: var(--admin-border);
   --el-button-hover-bg-color: var(--brand-blue-soft);
   --el-button-hover-border-color: #cbd5e1;
   --el-button-hover-text-color: var(--brand-blue-hover);
@@ -706,7 +708,7 @@ void bootstrap()
 
 .quota-label-main {
   align-items: center;
-  color: #122033;
+  color: #334155;
   display: inline-flex;
   font-size: 12px;
   font-weight: 500;
@@ -725,26 +727,26 @@ void bootstrap()
 }
 
 .quota-value.is-primary {
-  color: #22c55e;
+  color: #16a34a;
 }
 
 .quota-value.is-secondary {
-  color: #ef4444;
+  color: #dc2626;
 }
 
 .quota-track {
-  background: #eef3f9;
+  background: #eef3f8;
   border-radius: 999px;
   height: 6px;
   overflow: hidden;
 }
 
 .quota-track-secondary .quota-track-fill {
-  background: #ef4444;
+  background: #dc2626;
 }
 
 .quota-track-fill {
-  background: #22c55e;
+  background: #16a34a;
   border-radius: inherit;
   display: block;
   height: 100%;
@@ -761,7 +763,7 @@ void bootstrap()
 
 .credential-footer {
   align-items: center;
-  border-top: 1px solid #eef2f7;
+  border-top: 1px solid var(--admin-border-soft);
   display: grid;
   gap: 9px;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -769,7 +771,7 @@ void bootstrap()
 }
 
 .credential-updated-at {
-  color: #b0bac9;
+  color: #94a3b8;
   font-size: 12px;
   font-weight: 500;
 }

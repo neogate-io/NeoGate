@@ -339,19 +339,19 @@ const { t } = useLocale()
 }
 
 :global(.channel-dialog) {
-  border-radius: 10px;
+  border-radius: 8px;
   max-width: calc(100vw - 32px);
 }
 
 :global(.price-dialog .el-dialog__header) {
   margin: 0;
-  padding: 15px 18px 5px;
+  padding: 18px 22px 14px;
 }
 
 :global(.price-dialog .el-dialog__title) {
   color: #111827;
   font-size: 18px;
-  font-weight: 620;
+  font-weight: 760;
   line-height: 1.2;
 }
 
@@ -361,18 +361,18 @@ const { t } = useLocale()
 }
 
 :global(.price-dialog .el-dialog__body) {
-  padding: 8px 18px 10px;
+  padding: 18px 22px;
 }
 
 :global(.price-dialog .el-dialog__footer) {
   border-top: 1px solid #edf1f6;
-  padding: 10px 18px 14px;
+  padding: 14px 22px 18px;
 }
 
 :global(.price-dialog .dialog-footer .el-button) {
-  border-radius: 6px;
-  font-weight: 600;
-  min-height: 32px;
+  border-radius: 7px;
+  font-weight: 680;
+  min-height: 34px;
   min-width: 70px;
 }
 

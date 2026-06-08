@@ -327,34 +327,34 @@ const { t } = useLocale()
 }
 
 :global(.channel-dialog) {
-  border-radius: 10px;
+  border-radius: 8px;
   max-width: calc(100vw - 32px);
 }
 
 :global(.channel-dialog .el-dialog__header) {
   margin: 0;
-  padding: 28px 32px 8px;
+  padding: 18px 22px 14px;
 }
 
 :global(.channel-dialog .el-dialog__title) {
   color: #111827;
-  font-size: 25px;
-  font-weight: 820;
+  font-size: 18px;
+  font-weight: 760;
   line-height: 1.2;
 }
 
 :global(.channel-dialog .el-dialog__headerbtn) {
-  right: 22px;
-  top: 20px;
+  right: 12px;
+  top: 10px;
 }
 
 :global(.channel-dialog .el-dialog__body) {
-  padding: 14px 32px 18px;
+  padding: 18px 22px;
 }
 
 :global(.channel-dialog .el-dialog__footer) {
   border-top: 1px solid #edf1f6;
-  padding: 18px 32px 24px;
+  padding: 14px 22px 18px;
 }
 
 .channel-form :deep(.el-form-item) {
@@ -363,33 +363,33 @@ const { t } = useLocale()
 
 .channel-form :deep(.el-form-item__label) {
   color: #475569;
-  font-size: 14px;
-  font-weight: 740;
+  font-size: 13px;
+  font-weight: 680;
   line-height: 1.25;
   margin-bottom: 7px;
 }
 
 .channel-form :deep(.el-input__wrapper),
 .channel-form :deep(.el-select__wrapper) {
-  border-radius: 8px;
-  min-height: 42px;
+  border-radius: 7px;
+  min-height: 38px;
 }
 
 .channel-form :deep(.el-input__inner) {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .channel-form :deep(.el-textarea__inner) {
-  border-radius: 8px;
-  font-size: 15px;
-  min-height: 128px;
+  border-radius: 7px;
+  font-size: 14px;
+  min-height: 108px;
   padding: 12px 14px;
 }
 
 .dialog-footer :deep(.el-button) {
-  border-radius: 8px;
-  font-weight: 740;
-  min-height: 40px;
+  border-radius: 7px;
+  font-weight: 680;
+  min-height: 34px;
   min-width: 86px;
 }
 

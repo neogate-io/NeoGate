@@ -2,9 +2,19 @@
   --brand-blue: #168bd3;
   --brand-blue-hover: #0f76b8;
   --brand-blue-soft: #eaf6fd;
-  --brand-blue-softer: #f4fbff;
-  --brand-blue-border: #b7dcf2;
-  --brand-blue-border-strong: #82c4e8;
+  --brand-blue-softer: #f5fbff;
+  --brand-blue-border: #b9dff4;
+  --brand-blue-border-strong: #7fc1e6;
+  --admin-bg: #f4f7fb;
+  --admin-surface: #ffffff;
+  --admin-surface-muted: #f8fafc;
+  --admin-border: #dce4ee;
+  --admin-border-soft: #edf2f7;
+  --admin-text: #111827;
+  --admin-text-muted: #64748b;
+  --admin-text-soft: #8a98aa;
+  --admin-radius: 8px;
+  --admin-focus-ring: 0 0 0 3px rgba(22, 139, 211, 0.16);
   --el-color-primary: var(--brand-blue);
   --el-color-primary-dark-2: #0c669f;
   --el-color-primary-light-3: #5ab1df;
@@ -186,12 +196,12 @@ body {
 .content {
   align-content: start;
   display: grid;
-  gap: 14px;
+  gap: 12px;
   height: calc(100dvh - 38px);
   justify-items: center;
   min-width: 0;
   overflow-y: auto;
-  padding: 34px clamp(22px, 4vw, 48px) 32px;
+  padding: 30px clamp(28px, 3vw, 48px) 34px;
   scrollbar-gutter: stable;
 }
 
@@ -304,24 +314,26 @@ h2 {
 
 .grid {
   display: grid;
-  gap: 18px;
+  gap: 14px;
 }
 
 .admin-table.el-table {
   --el-table-bg-color: #ffffff;
-  --el-table-border-color: #e5eaf1;
-  --el-table-current-row-bg-color: #edf5ff;
+  --el-table-border-color: #e6edf5;
+  --el-table-current-row-bg-color: #eef7ff;
   --el-table-expanded-cell-bg-color: #ffffff;
   --el-table-fixed-box-shadow: none;
-  --el-table-header-bg-color: #fafbfc;
-  --el-table-header-text-color: #3c4656;
-  --el-table-row-hover-bg-color: #f5f9ff;
-  --el-table-text-color: #202936;
+  --el-table-header-bg-color: #f9fbfd;
+  --el-table-header-text-color: #344256;
+  --el-table-row-hover-bg-color: #f6fbff;
+  --el-table-text-color: #1d2939;
   background: #ffffff;
-  border: 1px solid #e2e7ef;
+  border: 1px solid #dfe8f2;
   border-radius: 8px;
-  box-shadow: none;
-  font-size: 15px;
+  box-shadow:
+    0 10px 28px rgba(15, 23, 42, 0.045),
+    0 1px 2px rgba(15, 23, 42, 0.035);
+  font-size: 14px;
   overflow: hidden;
   width: 100%;
 }
@@ -351,12 +363,12 @@ h2 {
 
 .admin-table.el-table .el-table__header-wrapper th,
 .admin-table.el-table .el-table__fixed-header-wrapper th {
-  background: #fafbfc;
-  border-bottom: 1px solid #e5eaf1;
-  color: #3c4656;
-  font-size: 14px;
-  font-weight: 780;
-  height: 52px;
+  background: #f9fbfd;
+  border-bottom: 1px solid #dfe8f2;
+  color: #4e5969;
+  font-size: 13px;
+  font-weight: 760;
+  height: 48px;
   letter-spacing: 0;
 }
 
@@ -370,9 +382,9 @@ h2 {
 
 .admin-table.el-table .el-table__body td,
 .admin-table.el-table .el-table__fixed-body-wrapper td {
-  border-bottom: 1px solid #edf1f6;
+  border-bottom: 1px solid #edf3f8;
   font-weight: 400;
-  height: 62px;
+  height: 58px;
 }
 
 .admin-table.el-table .el-table__body tr:last-child td {
@@ -380,7 +392,7 @@ h2 {
 }
 
 .admin-table.el-table .cell {
-  line-height: 1.45;
+  line-height: 1.38;
   min-height: 28px;
   overflow-wrap: anywhere;
   padding: 0 14px;
@@ -394,18 +406,45 @@ h2 {
 }
 
 .admin-table.el-table .el-table__row--striped td.el-table__cell {
-  background: #ffffff;
+  background: #fcfdff;
 }
 
 .admin-table.el-table .el-table__row:hover > td.el-table__cell {
-  background: #f5f9ff;
+  background: #f7fbff;
 }
 
 .admin-table.el-table .el-tag {
   border-radius: 999px;
+  font-size: 12px;
   font-weight: 400;
-  min-width: 58px;
+  height: 26px;
   justify-content: center;
+  min-width: 58px;
+  padding: 0 11px;
+}
+
+.admin-table.el-table .el-tag.el-tag--success {
+  --el-tag-bg-color: #22c55e;
+  --el-tag-border-color: #22c55e;
+  --el-tag-text-color: #ffffff;
+}
+
+.admin-table.el-table .el-tag.el-tag--warning {
+  --el-tag-bg-color: #f59e0b;
+  --el-tag-border-color: #f59e0b;
+  --el-tag-text-color: #ffffff;
+}
+
+.admin-table.el-table .el-tag.el-tag--danger {
+  --el-tag-bg-color: #ef4444;
+  --el-tag-border-color: #ef4444;
+  --el-tag-text-color: #ffffff;
+}
+
+.admin-table.el-table .el-tag.el-tag--info {
+  --el-tag-bg-color: #f2f5f9;
+  --el-tag-border-color: #dce5ef;
+  --el-tag-text-color: #5b6b7f;
 }
 
 .static-state-tag,
@@ -421,7 +460,7 @@ h2 {
 
 .service-table.admin-table.el-table .el-table__body td,
 .service-table.admin-table.el-table .el-table__fixed-body-wrapper td {
-  height: 72px;
+  height: 62px;
 }
 
 .service-table.admin-table.el-table .el-table__header-wrapper .cell,
@@ -466,7 +505,7 @@ h2 {
   align-items: center;
   display: flex;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 6px;
   justify-content: center;
   width: 100%;
 }

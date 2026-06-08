@@ -535,6 +535,88 @@
   width: 100%;
 }
 
+.admin-settings-panel {
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius);
+  box-shadow: var(--admin-shadow);
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  width: 100%;
+}
+
+.admin-settings-panel-header {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 28px minmax(0, 1fr);
+}
+
+.admin-settings-panel-icon {
+  align-items: center;
+  background: var(--brand-blue-soft);
+  border: 1px solid var(--brand-blue-border);
+  border-radius: 7px;
+  color: var(--brand-blue);
+  display: inline-flex;
+  font-size: 16px;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.admin-settings-panel-header h3 {
+  color: var(--admin-text);
+  font-size: 15px;
+  font-weight: 760;
+  margin: 0;
+}
+
+.admin-settings-panel-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.admin-settings-panel-header p,
+.admin-note {
+  color: var(--admin-text-muted);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.admin-settings-panel-header p {
+  margin-top: 6px;
+}
+
+.admin-settings-panel-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.admin-settings-panel-meta span {
+  color: var(--admin-text-muted);
+}
+
+.admin-settings-panel-meta strong {
+  color: var(--admin-text);
+  font-weight: 720;
+}
+
+.admin-settings-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .admin-settings-form {
   background: var(--admin-surface);
   border: 1px solid var(--admin-border);
@@ -650,6 +732,52 @@
   gap: 14px;
   grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
   padding: 16px;
+}
+
+.admin-page-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  min-height: 42px;
+  width: 100%;
+}
+
+.admin-page-toolbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.admin-page-view {
+  align-content: start;
+  width: 100%;
+}
+
+.price-editor-form.inline-admin-form {
+  grid-template-columns:
+    minmax(150px, 0.9fr) minmax(190px, 1.15fr) repeat(4, minmax(136px, 0.85fr))
+    minmax(86px, 0.55fr) auto;
+}
+
+.price-editor-form .el-input-number,
+.price-editor-form .el-select {
+  width: 100%;
+}
+
+.price-editor-form .el-tag {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 620;
+  height: 34px;
+  justify-content: center;
+  min-width: 100%;
+}
+
+.price-save-action.el-button {
+  align-self: end;
 }
 
 .inline-admin-form .el-form-item {
@@ -798,6 +926,14 @@
   min-width: 1180px;
 }
 
+.price-table.admin-table.el-table {
+  min-width: 1180px;
+}
+
+.pricing-policy-table.admin-table.el-table {
+  min-width: 700px;
+}
+
 .channel-dialog,
 .model-picker-dialog,
 .settings-dialog,
@@ -940,6 +1076,14 @@
     width: 100%;
   }
 
+  .price-editor-form.inline-admin-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .price-save-action.el-button {
+    width: 100%;
+  }
+
   .admin-filter-bar.el-form {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -952,7 +1096,8 @@
 
   .channel-toolbar,
   .user-toolbar,
-  .usage-toolbar {
+  .usage-toolbar,
+  .admin-page-toolbar {
     align-items: stretch;
     display: grid;
     grid-template-columns: 1fr;
@@ -962,7 +1107,8 @@
   .user-toolbar-filters,
   .user-toolbar-actions,
   .usage-toolbar-filters,
-  .usage-toolbar-actions {
+  .usage-toolbar-actions,
+  .admin-page-toolbar-actions {
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -973,7 +1119,8 @@
   .user-search-input.is-key-search,
   .channel-toolbar .el-button,
   .user-toolbar .el-button,
-  .usage-toolbar .el-button {
+  .usage-toolbar .el-button,
+  .admin-page-toolbar .el-button {
     width: 100%;
   }
 
@@ -1017,6 +1164,10 @@
   .inline-admin-form {
     grid-template-columns: 1fr;
     padding: 14px;
+  }
+
+  .price-editor-form.inline-admin-form {
+    grid-template-columns: 1fr;
   }
 
   .admin-filter-bar.el-form {

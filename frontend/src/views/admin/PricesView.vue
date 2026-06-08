@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { Edit, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   getPricingTemplates,
@@ -247,8 +248,8 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="grid">
-    <el-form class="inline-admin-form" :model="form" label-position="top">
+  <section class="grid admin-page-view">
+    <el-form class="inline-admin-form price-editor-form" :model="form" label-position="top">
       <el-form-item :label="t('provider')">
         <el-select v-model="form.provider" filterable @change="handleProviderChange">
           <el-option
@@ -295,47 +296,64 @@ onMounted(load)
       <el-form-item :label="t('enabled')">
         <el-switch v-model="form.enabled" />
       </el-form-item>
-      <el-button type="primary" :loading="saving" @click="savePrice">{{ t('save') }}</el-button>
+      <el-button
+        class="admin-action-button price-save-action"
+        type="primary"
+        :icon="Select"
+        :loading="saving"
+        @click="savePrice"
+      >
+        {{ t('save') }}
+      </el-button>
     </el-form>
 
-    <el-table v-loading="loading" class="admin-table" :data="rows" stripe>
-      <el-table-column prop="providerLabel" :label="t('provider')" min-width="150" />
-      <el-table-column prop="model" :label="t('model')" min-width="220" />
-      <el-table-column :label="t('inputPrice')" min-width="150">
-        <template #default="{ row }">
-          {{ formatMicrosPerMillion(row.price?.input_price_usd_micros) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('outputPrice')" min-width="150">
-        <template #default="{ row }">
-          {{ formatMicrosPerMillion(row.price?.output_price_usd_micros) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('cacheReadPrice')" min-width="160">
-        <template #default="{ row }">
-          {{ formatMicrosPerMillion(row.price?.cache_read_price_usd_micros) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('cacheWritePrice')" min-width="160">
-        <template #default="{ row }">
-          {{ formatCacheWritePrice(row) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('status')" min-width="120">
-        <template #default="{ row }">
-          <el-tag v-if="!row.price" type="warning">{{ t('priceMissing') }}</el-tag>
-          <el-tag v-else :type="row.price.enabled ? 'success' : 'info'">
-            {{ row.price.enabled ? t('enabled') : t('disabled') }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('actions')" width="120" align="center" header-align="center">
-        <template #default="{ row }">
-          <el-button text type="primary" @click="selectRow(row)">
-            {{ row.price ? t('edit') : t('configure') }}
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <div class="service-table-panel">
+      <el-table
+        v-loading="loading"
+        class="admin-table service-table price-table"
+        :data="rows"
+        stripe
+      >
+        <el-table-column prop="providerLabel" :label="t('provider')" min-width="150" />
+        <el-table-column prop="model" :label="t('model')" min-width="220" />
+        <el-table-column :label="t('inputPrice')" min-width="150">
+          <template #default="{ row }">
+            {{ formatMicrosPerMillion(row.price?.input_price_usd_micros) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('outputPrice')" min-width="150">
+          <template #default="{ row }">
+            {{ formatMicrosPerMillion(row.price?.output_price_usd_micros) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('cacheReadPrice')" min-width="160">
+          <template #default="{ row }">
+            {{ formatMicrosPerMillion(row.price?.cache_read_price_usd_micros) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('cacheWritePrice')" min-width="160">
+          <template #default="{ row }">
+            {{ formatCacheWritePrice(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('status')" min-width="120">
+          <template #default="{ row }">
+            <el-tag v-if="!row.price" type="warning">{{ t('priceMissing') }}</el-tag>
+            <el-tag v-else :type="row.price.enabled ? 'success' : 'info'">
+              {{ row.price.enabled ? t('enabled') : t('disabled') }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('actions')" width="132" align="center" header-align="center">
+          <template #default="{ row }">
+            <div class="table-row-actions">
+              <el-button class="admin-action-button" :icon="Edit" @click="selectRow(row)">
+                {{ row.price ? t('edit') : t('configure') }}
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
   </section>
 </template>

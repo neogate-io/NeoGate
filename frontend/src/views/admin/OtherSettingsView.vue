@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
-import { Search, View } from '@element-plus/icons-vue'
+import { Coin, PriceTag, Search, UserFilled, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getPricingTemplates, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
@@ -163,11 +163,12 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="grid other-settings-view">
+  <section class="grid admin-page-view">
     <div v-loading="loading" class="admin-settings-panel">
-      <div class="settings-panel-header">
+      <div class="admin-settings-panel-header">
+        <el-icon class="admin-settings-panel-icon"><Coin /></el-icon>
         <div>
-          <div class="settings-title-row">
+          <div class="admin-settings-panel-title">
             <h3>{{ t('creditRequired') }}</h3>
             <el-switch
               v-if="servicePolicy"
@@ -182,9 +183,10 @@ onMounted(load)
     </div>
 
     <div v-loading="loading" class="admin-settings-panel">
-      <div class="settings-panel-header">
+      <div class="admin-settings-panel-header">
+        <el-icon class="admin-settings-panel-icon"><UserFilled /></el-icon>
         <div>
-          <div class="settings-title-row">
+          <div class="admin-settings-panel-title">
             <h3>{{ t('registrationEnabled') }}</h3>
             <el-switch
               v-if="servicePolicy"
@@ -199,17 +201,18 @@ onMounted(load)
     </div>
 
     <div class="admin-settings-panel">
-      <div class="settings-panel-header">
+      <div class="admin-settings-panel-header">
+        <el-icon class="admin-settings-panel-icon"><PriceTag /></el-icon>
         <div>
           <h3>{{ t('modelReferencePrices') }}</h3>
           <p>{{ t('syncReferencePricesConfirmIntro') }}</p>
-          <p class="reference-sync-meta">
+          <p class="admin-settings-panel-meta">
             <span>{{ t('referencePricesLastUpdated') }}</span>
             <strong>{{ referencePricesLastUpdated }}</strong>
           </p>
         </div>
       </div>
-      <div class="reference-actions">
+      <div class="admin-settings-panel-actions">
         <el-button
           class="admin-action-button"
           :icon="View"
@@ -232,7 +235,7 @@ onMounted(load)
       v-model="referencePricesDialogOpen"
       class="reference-prices-dialog"
       :title="t('modelReferencePrices')"
-      width="960px"
+      width="1120px"
     >
       <div class="reference-prices-toolbar">
         <el-input
@@ -285,64 +288,6 @@ onMounted(load)
 </template>
 
 <style scoped>
-.other-settings-view {
-  align-content: start;
-}
-
-.admin-settings-panel {
-  background: #ffffff;
-  border: 1px solid var(--admin-border);
-  border-radius: 8px;
-  display: grid;
-  gap: 14px;
-  padding: 16px 18px;
-}
-
-.settings-panel-header h3 {
-  color: var(--admin-text);
-  font-size: 15px;
-  font-weight: 760;
-  margin: 0;
-}
-
-.settings-title-row {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.settings-panel-header p {
-  color: var(--admin-text-muted);
-  font-size: 13px;
-  font-weight: 560;
-  line-height: 1.6;
-  margin: 6px 0 0;
-}
-
-.settings-panel-header .reference-sync-meta {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.reference-sync-meta span {
-  color: var(--admin-text-muted);
-}
-
-.reference-sync-meta strong {
-  color: var(--admin-text);
-  font-weight: 720;
-}
-
-.reference-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
 :global(.reference-sync-confirm) {
   border-radius: 8px;
   box-shadow: 0 18px 46px rgba(15, 23, 42, 0.14);

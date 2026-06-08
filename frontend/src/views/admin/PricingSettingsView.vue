@@ -114,49 +114,60 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="grid">
-    <p class="pricing-policy-note">{{ t('pricingPolicyHint') }}</p>
+  <section class="grid admin-page-view">
+    <div class="admin-settings-panel">
+      <p class="admin-note">{{ t('pricingPolicyHint') }}</p>
+    </div>
 
-    <el-table v-loading="loading" class="admin-table" :data="pricingRows" stripe>
-      <el-table-column :label="t('userGroup')" min-width="220">
-        <template #default="{ row }">
-          {{ userGroupName(row.user_group) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('userCount')" min-width="120">
-        <template #default="{ row }">
-          {{ userGroupUserCount(row.user_group) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('pricingPolicyMultiplier')" min-width="160">
-        <template #default="{ row }">
-          {{ formatPercent(multiplierPercent(row)) }}
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('status')" width="120">
-        <template #default="{ row }">
-          <el-tag class="static-state-tag" :type="row.enabled ? 'success' : 'info'">
-            {{ row.enabled ? t('enabled') : t('disabled') }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        :label="t('actions')"
-        width="120"
-        fixed="right"
-        align="center"
-        header-align="center"
+    <div class="service-table-panel">
+      <el-table
+        v-loading="loading"
+        class="admin-table service-table pricing-policy-table"
+        :data="pricingRows"
+        stripe
       >
-        <template #default="{ row }">
-          <el-button class="admin-action-button" :icon="Edit" @click="openEditDialog(row)">
-            {{ t('edit') }}
-          </el-button>
+        <el-table-column :label="t('userGroup')" min-width="220">
+          <template #default="{ row }">
+            {{ userGroupName(row.user_group) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('userCount')" min-width="120">
+          <template #default="{ row }">
+            {{ userGroupUserCount(row.user_group) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('pricingPolicyMultiplier')" min-width="160">
+          <template #default="{ row }">
+            {{ formatPercent(multiplierPercent(row)) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('status')" width="120">
+          <template #default="{ row }">
+            <el-tag class="static-state-tag" :type="row.enabled ? 'success' : 'info'">
+              {{ row.enabled ? t('enabled') : t('disabled') }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('actions')"
+          width="120"
+          fixed="right"
+          align="center"
+          header-align="center"
+        >
+          <template #default="{ row }">
+            <div class="table-row-actions">
+              <el-button class="admin-action-button" :icon="Edit" @click="openEditDialog(row)">
+                {{ t('edit') }}
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty :description="t('noData')" />
         </template>
-      </el-table-column>
-      <template #empty>
-        <el-empty :description="t('noData')" />
-      </template>
-    </el-table>
+      </el-table>
+    </div>
 
     <el-dialog
       v-model="dialogOpen"
@@ -198,14 +209,6 @@ onMounted(load)
 </template>
 
 <style scoped>
-.pricing-policy-note {
-  color: #697586;
-  font-size: 13px;
-  font-weight: 560;
-  line-height: 1.6;
-  margin: 0;
-}
-
 .settings-form-row {
   display: grid;
   gap: 12px;

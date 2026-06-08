@@ -272,7 +272,7 @@ void bootstrap()
 
 <template>
   <section class="grid credential-page">
-    <div class="table-toolbar">
+    <div class="table-toolbar admin-page-toolbar">
       <span v-if="selectedCount > 0" class="credential-selection-count">
         {{ t('credentialSelectedCount') }} {{ selectedCount }}
       </span>
@@ -283,22 +283,24 @@ void bootstrap()
         type="file"
         @change="uploadCredential"
       />
-      <el-button
-        class="admin-action-button"
-        :icon="Upload"
-        :loading="uploading"
-        @click="openCredentialUpload"
-      >
-        {{ t('upload') }}
-      </el-button>
-      <el-button
-        class="admin-action-button"
-        :icon="Refresh"
-        :loading="refreshingAll || loading"
-        @click="refreshEnabledCredentials"
-      >
-        {{ t('refreshAll') }}
-      </el-button>
+      <div class="admin-page-toolbar-actions">
+        <el-button
+          class="admin-action-button"
+          :icon="Upload"
+          :loading="uploading"
+          @click="openCredentialUpload"
+        >
+          {{ t('upload') }}
+        </el-button>
+        <el-button
+          class="admin-action-button"
+          :icon="Refresh"
+          :loading="refreshingAll || loading"
+          @click="refreshEnabledCredentials"
+        >
+          {{ t('refreshAll') }}
+        </el-button>
+      </div>
     </div>
 
     <div v-loading="loading" class="credential-grid">
@@ -434,17 +436,6 @@ void bootstrap()
   gap: 16px;
 }
 
-.table-toolbar {
-  align-items: center;
-  display: flex;
-  gap: 12px;
-  justify-content: flex-end;
-}
-
-.table-toolbar :deep(.el-button) {
-  border-radius: 6px;
-}
-
 .credential-upload-input {
   display: none;
 }
@@ -452,13 +443,12 @@ void bootstrap()
 .credential-selection-count {
   color: #64748b;
   font-size: 13px;
-  font-weight: 500;
-  margin-right: auto;
+  font-weight: 620;
 }
 
 .credential-grid {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   justify-content: start;
 }
@@ -484,7 +474,7 @@ void bootstrap()
   background: #ffffff;
   border: 1px solid var(--admin-border);
   border-radius: 8px;
-  box-shadow: none;
+  box-shadow: var(--admin-shadow);
   display: grid;
   gap: 12px;
   min-height: 0;
@@ -511,6 +501,7 @@ void bootstrap()
 .credential-card:hover {
   background: #fbfdff;
   border-color: #c8d4e2;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
 }
 
 .credential-card.is-selected {

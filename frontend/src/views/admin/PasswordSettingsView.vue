@@ -156,10 +156,7 @@ async function save() {
 
 .admin-password-actions {
   border-top: 0;
-  justify-content: flex-start;
-  margin-left: 0;
   margin-top: 0;
-  min-width: 0;
   padding-top: 12px;
 }
 

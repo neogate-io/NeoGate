@@ -55,9 +55,11 @@ Before production use, replace default passwords, domains, and shared secrets in
 
 ### 2. Local Source Run
 
-Running from source is intended for development, debugging, or trying the first-run flow from source. For production deployment, prefer the Docker Compose path above; Compose builds the frontend and serves the static files with Nginx.
+Running from source is split into development deployment and production deployment. Development deployment is for debugging or trying the first-run flow; production deployment is for users who want to build from source and manage the backend process and Nginx themselves. For production environments, the Docker Compose path above is still recommended first.
 
-Running from source requires these dependencies on the server:
+#### Shared Preparation
+
+Prepare these dependencies on the server first:
 
 - PostgreSQL 16 or a compatible version
 - Rust 1.85 or newer
@@ -97,6 +99,10 @@ postgres://neogate:change-me@localhost:5432/neogate
 
 On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The first-run page writes the database connection, site identity, and generated secrets for you. In the usual standalone flow, you do not need to edit `backend/.env` before starting.
 
+#### Development Deployment
+
+Development deployment uses the Rust debug build and the Vite dev server. Use it for local development, debugging, and trying the first-run flow.
+
 Start the backend:
 
 ```bash
@@ -118,19 +124,50 @@ pnpm install
 pnpm dev --host 0.0.0.0
 ```
 
-Open `http://SERVER_IP:5173`; the app redirects to the first-run wizard automatically. Follow the page to complete:
+Open `http://SERVER_IP:5173`; the app redirects to the first-run wizard automatically. Complete the runtime configuration, admin account, service mode, initial upstream, and optional SMTP settings. If the page asks for a restart after saving runtime configuration, restart the backend and refresh the page.
 
-- Runtime configuration: enter the PostgreSQL connection, site name, and public base URL. If the page asks for a restart after saving, restart the backend and refresh the page.
-- Admin account: create the admin username and password.
-- Service mode: choose internal team mode or billing mode; billing mode can also configure a payment gateway.
-- Initial upstream: configure provider, protocol, Base URL, API key, models, and model prices.
-- SMTP: enable SMTP for email-based API key claims or password resets if needed; you can also configure it later in the admin console.
+#### Production Deployment
 
-After the wizard is complete, NeoGate opens the login page. Sign in with the admin account you just created.
+For production deployment, build the backend in release mode and serve the frontend static files with Nginx. Use systemd, supervisord, or another process manager to keep the backend running.
 
-The local frontend dev server proxies admin requests to the backend. Note: `pnpm dev` starts the Vite development server. Use it for local development and debugging only; do not use it as the production frontend service.
+Build the backend:
 
-To deploy the frontend from source for production, run:
+```bash
+cd backend
+cargo build --release
+```
+
+Run the backend:
+
+```bash
+BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
+```
+
+You can also run the backend with systemd. This example assumes the project is located at `/opt/neogate`:
+
+```ini
+[Unit]
+Description=NeoGate backend
+
+[Service]
+WorkingDirectory=/opt/neogate/backend
+Environment=BIND_ADDR=127.0.0.1:8080
+ExecStart=/opt/neogate/backend/target/release/neogate
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Save it as `/etc/systemd/system/neogate.service`, then start it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now neogate
+sudo systemctl status neogate
+```
+
+Build the frontend:
 
 ```bash
 cd frontend
@@ -139,6 +176,22 @@ pnpm build
 ```
 
 Then serve `frontend/dist` with Nginx or another static web server, and reverse proxy `/api/`, `/v1/`, `/anthropic/`, `/readyz`, and `/livez` to the backend. The frontend build does not need a public backend origin.
+
+The repository includes an example Nginx config:
+
+```text
+deploy/nginx/neogate.conf.example
+```
+
+The example uses `/usr/share/nginx/html` as the static file root and proxies `/api/`, `/v1/`, `/anthropic/`, `/readyz`, and `/livez` to the local backend at `http://127.0.0.1:8080`. For source deployments, you can use it like this:
+
+```bash
+sudo install -d /usr/share/nginx/html
+sudo cp -r frontend/dist/. /usr/share/nginx/html/
+sudo cp deploy/nginx/neogate.conf.example /etc/nginx/conf.d/neogate.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
 ## 4. Deployment Modes
 
@@ -153,7 +206,6 @@ If you do not clearly need multiple backend replicas, prefer single-node deploym
 
 Before going live:
 
-- Set `APP_ENV=production`.
 - Create the admin account in the first-run wizard and avoid weak passwords.
 - Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node.
 - Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links.

@@ -55,9 +55,11 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --bui
 
 ### 2. 源码本地运行
 
-源码本地运行适合开发、调试或从源码体验首次运行流程。正式部署建议优先使用上面的 Docker Compose；Compose 会先构建前端，再由 Nginx 托管静态文件。
+源码本地运行分为开发部署和正式部署。开发部署适合调试或体验首次运行流程；正式部署适合希望从源码构建后自行托管进程和 Nginx 的场景。生产环境仍建议优先使用上面的 Docker Compose。
 
-源码本地运行需要先在服务器上准备这些依赖：
+#### 公共准备
+
+先在服务器上准备这些依赖：
 
 - PostgreSQL 16 或兼容版本
 - Rust 1.85 或更新版本
@@ -97,6 +99,10 @@ postgres://neogate:change-me@localhost:5432/neogate
 
 首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `backend/.env`。
 
+#### 开发部署
+
+开发部署使用 Rust 调试构建和 Vite 开发服务，适合本地开发、调试和体验首次运行流程。
+
 启动后端：
 
 ```bash
@@ -118,19 +124,50 @@ pnpm install
 pnpm dev --host 0.0.0.0
 ```
 
-打开 `http://服务器IP:5173`，页面会自动跳转到首次运行向导。按页面提示完成：
+打开 `http://服务器IP:5173`，页面会自动跳转到首次运行向导。按提示完成运行配置、管理员账号、服务模式、初始上游和可选 SMTP；如果保存运行配置后提示需要重启，请重新运行后端并刷新页面。
 
-- 运行配置：填写 PostgreSQL 连接、站点名称和公开访问地址。保存后如果提示需要重启，请重新运行后端并刷新页面。
-- 管理员账号：创建管理员用户名和密码。
-- 服务模式：选择团队内部模式或计费模式；计费模式可以同时配置支付通道。
-- 初始上游：配置供应商、协议、Base URL、API key、模型和模型价格。
-- SMTP：如需邮箱领取 API key 或密码重置，在向导中启用并填写 SMTP；也可以稍后在管理员后台配置。
+#### 正式部署
 
-向导完成后会进入登录页，使用刚创建的管理员账号登录。
+正式部署时建议使用 release 构建运行后端，并用 Nginx 托管前端静态文件。后端可交给 systemd、supervisord 或其他进程管理工具保持常驻。
 
-前端开发服务会代理管理后台请求到后端。注意：`pnpm dev` 启动的是 Vite 开发服务，只适合本地开发和调试，不应作为生产服务。
+构建后端：
 
-正式从源码部署前端时，请执行：
+```bash
+cd backend
+cargo build --release
+```
+
+运行后端：
+
+```bash
+BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
+```
+
+也可以使用 systemd 托管后端进程。下面示例假设项目放在 `/opt/neogate`：
+
+```ini
+[Unit]
+Description=NeoGate backend
+
+[Service]
+WorkingDirectory=/opt/neogate/backend
+Environment=BIND_ADDR=127.0.0.1:8080
+ExecStart=/opt/neogate/backend/target/release/neogate
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+保存为 `/etc/systemd/system/neogate.service` 后启动：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now neogate
+sudo systemctl status neogate
+```
+
+构建前端：
 
 ```bash
 cd frontend
@@ -139,6 +176,22 @@ pnpm build
 ```
 
 然后将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管，并将 `/api/`、`/v1/`、`/anthropic/`、`/readyz` 和 `/livez` 反向代理到后端。前端构建不需要指定后端公网地址。
+
+仓库提供了 Nginx 示例配置：
+
+```text
+deploy/nginx/neogate.conf.example
+```
+
+示例配置默认将静态文件目录设为 `/usr/share/nginx/html`，并将 `/api/`、`/v1/`、`/anthropic/`、`/readyz` 和 `/livez` 转发到本机后端 `http://127.0.0.1:8080`。源码部署时可以按下面方式使用：
+
+```bash
+sudo install -d /usr/share/nginx/html
+sudo cp -r frontend/dist/. /usr/share/nginx/html/
+sudo cp deploy/nginx/neogate.conf.example /etc/nginx/conf.d/neogate.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
 ## 4. 部署模式
 
@@ -153,7 +206,6 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 
 上线前至少确认：
 
-- 设置 `APP_ENV=production`。
 - 在首次运行向导中创建管理员账号，不要使用弱密码。
 - 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`；单机部署可由首次运行向导生成，集群部署需要提前写入所有节点共享的环境配置。
 - 在首次运行向导或环境配置中设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接。

@@ -22,7 +22,6 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      APP_ENV: ${APP_ENV:-production}
       BIND_ADDR: 0.0.0.0:8080
       DATABASE_URL: postgres://${POSTGRES_USER:-neogate}:${POSTGRES_PASSWORD:-neogate-change-me}@postgres:5432/${POSTGRES_DB:-neogate}
       NEOGATE_ENV_FILE: /app-config/.env

@@ -14,7 +14,6 @@ pub struct Config {
     pub bind_addr: SocketAddr,
     pub public_base_url: Option<String>,
     pub site_name: String,
-    pub production: bool,
     pub runtime_mode: RuntimeMode,
     pub process_role: ProcessRole,
     pub admin_token_secret: String,
@@ -137,10 +136,6 @@ pub struct DbPoolConfig {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let production = env::var("APP_ENV")
-            .ok()
-            .map(|value| value.eq_ignore_ascii_case("production"))
-            .unwrap_or(false);
         let runtime_mode = RuntimeMode::from_env_value(
             &env::var("RUNTIME_MODE").unwrap_or_else(|_| "standalone".to_string()),
         )?;
@@ -161,7 +156,6 @@ impl Config {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "NeoGate".to_string()),
-            production,
             runtime_mode,
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
@@ -301,24 +295,6 @@ impl Config {
         }
         if self.usage_queue_size > 1_000_000 {
             anyhow::bail!("USAGE_QUEUE_SIZE must be <= 1000000");
-        }
-        if self.production && self.public_base_url.is_none() {
-            anyhow::bail!("PUBLIC_BASE_URL is required in production");
-        }
-
-        if self.production {
-            reject_default(
-                "ADMIN_TOKEN_SECRET",
-                &self.admin_token_secret,
-                DEFAULT_ADMIN_TOKEN_SECRET,
-            )?;
-            require_secret_len("ADMIN_TOKEN_SECRET", &self.admin_token_secret, 32)?;
-            reject_default(
-                "UPSTREAM_SECRET_KEY",
-                &self.upstream_secret_key,
-                DEFAULT_UPSTREAM_SECRET_KEY,
-            )?;
-            require_secret_len("UPSTREAM_SECRET_KEY", &self.upstream_secret_key, 32)?;
         }
 
         Ok(())
@@ -516,20 +492,6 @@ fn normalize_public_base_url(value: String) -> Result<String> {
         anyhow::bail!("PUBLIC_BASE_URL must start with http:// or https://");
     }
     Ok(value)
-}
-
-fn reject_default(name: &str, value: &str, default: &str) -> Result<()> {
-    if value == default {
-        anyhow::bail!("{name} must be changed in production");
-    }
-    Ok(())
-}
-
-fn require_secret_len(name: &str, value: &str, min_len: usize) -> Result<()> {
-    if value.len() < min_len {
-        anyhow::bail!("{name} must be at least {min_len} characters in production");
-    }
-    Ok(())
 }
 
 fn configured_secret(value: Option<&str>, default: &str) -> bool {

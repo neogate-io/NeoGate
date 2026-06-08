@@ -46,6 +46,7 @@ const userKeysNextCursor = ref<string | null | undefined>(undefined)
 const {
   data: usersPage,
   loading,
+  loaded: usersLoaded,
   reload
 } = useAsyncData(loadUsers, {
   items: [],
@@ -284,7 +285,20 @@ onMounted(loadUserGroups)
       </el-form-item>
     </el-form>
 
-    <div class="service-table-panel">
+    <div v-if="!usersLoaded" v-loading="true" class="service-table-panel user-table-loading">
+      <div class="user-table-loading-head">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="user-table-loading-row"></div>
+      <div class="user-table-loading-row"></div>
+      <div class="user-table-loading-row"></div>
+    </div>
+
+    <div v-else class="service-table-panel">
       <el-table
         v-loading="loading"
         class="admin-table service-table user-table"
@@ -347,7 +361,7 @@ onMounted(loadUserGroups)
       </el-table>
     </div>
 
-    <div class="admin-pagination-bar">
+    <div v-if="usersLoaded" class="admin-pagination-bar">
       <div class="admin-pagination-summary">
         <span class="admin-result-count">
           {{ t('currentPageItems') }} {{ users.length.toLocaleString(locale) }}
@@ -540,6 +554,77 @@ onMounted(loadUserGroups)
 </template>
 
 <style scoped>
+.user-table-loading {
+  min-height: 236px;
+  overflow: hidden;
+}
+
+.user-table-loading-head {
+  align-items: center;
+  background: #f9fbfd;
+  border-bottom: 1px solid #dfe8f2;
+  display: grid;
+  gap: 28px;
+  grid-template-columns: 54px minmax(180px, 1fr) 86px 104px 96px;
+  height: 48px;
+  min-width: 980px;
+  padding: 0 300px 0 14px;
+}
+
+.user-table-loading-head span,
+.user-table-loading-row::before,
+.user-table-loading-row::after,
+.user-table-loading-row span {
+  background: #e8eef6;
+  border-radius: 999px;
+  content: '';
+  display: block;
+  height: 12px;
+}
+
+.user-table-loading-head span:nth-child(1) {
+  width: 20px;
+}
+
+.user-table-loading-head span:nth-child(2) {
+  width: 48px;
+}
+
+.user-table-loading-head span:nth-child(3) {
+  width: 52px;
+}
+
+.user-table-loading-head span:nth-child(4) {
+  width: 72px;
+}
+
+.user-table-loading-head span:nth-child(5) {
+  width: 48px;
+}
+
+.user-table-loading-row {
+  align-items: center;
+  border-bottom: 1px solid #edf3f8;
+  display: grid;
+  gap: 28px;
+  grid-template-columns: 54px minmax(180px, 1fr) 86px 104px 96px;
+  height: 62px;
+  min-width: 980px;
+  padding: 0 300px 0 14px;
+}
+
+.user-table-loading-row::before {
+  width: 28px;
+}
+
+.user-table-loading-row::after {
+  width: min(240px, 100%);
+}
+
+.user-table-loading-row span {
+  width: 64px;
+}
+
 .user-dialog-body {
   display: grid;
   gap: 16px;

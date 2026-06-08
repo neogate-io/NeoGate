@@ -4,7 +4,8 @@ import { readError } from '../utils/errors'
 
 export function useAsyncData<T>(loader: () => Promise<T>, initialValue: T) {
   const data = ref(initialValue) as Ref<T>
-  const loading = ref(false)
+  const loading = ref(true)
+  const loaded = ref(false)
   const error = ref('')
   let requestId = 0
   let disposed = false
@@ -25,6 +26,7 @@ export function useAsyncData<T>(loader: () => Promise<T>, initialValue: T) {
       ElMessage.error(error.value)
     } finally {
       if (!disposed && currentRequest === requestId) {
+        loaded.value = true
         loading.value = false
       }
     }
@@ -39,6 +41,7 @@ export function useAsyncData<T>(loader: () => Promise<T>, initialValue: T) {
   return {
     data,
     loading,
+    loaded,
     error,
     reload
   }

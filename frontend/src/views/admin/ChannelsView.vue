@@ -75,6 +75,8 @@ const {
 
 const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
+const pricingLoading = ref(true)
+const initialTableReady = ref(false)
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
 const channelSearch = ref('')
@@ -100,6 +102,8 @@ const filteredChannels = computed(() => {
   })
 })
 
+const tableLoading = computed(() => loading.value)
+
 function channelModelList(row: Channel) {
   const models = row.endpoints.flatMap((endpoint) => endpoint.models)
   return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
@@ -113,6 +117,10 @@ function channelPriceStatus(row: Channel) {
   const models = channelModelList(row)
   if (models.length === 0) {
     return { missing: 0, total: 0, type: 'info' as const, label: '-' }
+  }
+
+  if (pricingLoading.value && prices.value.length === 0) {
+    return { missing: 0, total: models.length, type: 'info' as const, label: '-' }
   }
 
   const missing = models.filter(
@@ -137,6 +145,19 @@ function channelPriceStatus(row: Channel) {
 function channelPriceRows(row: Channel) {
   return channelModelList(row).map((model) => {
     const price = priceByModel.value.get(priceKey(row.provider, model))
+    if (pricingLoading.value && prices.value.length === 0) {
+      return {
+        model,
+        disabled: false,
+        missing: false,
+        inputPrice: '-',
+        outputPrice: '-',
+        cacheReadPrice: '-',
+        cacheWritePrice: '-',
+        price: '-'
+      }
+    }
+
     const inputPrice = price
       ? formatUsdPerMillion(microUsdToUsd(price.input_price_usd_micros))
       : t('priceMissing')
@@ -278,6 +299,7 @@ function keyStatusTooltip(
 }
 
 async function loadPricingData() {
+  pricingLoading.value = true
   try {
     const [fetchedPrices, fetchedTemplates] = await Promise.all([
       getProviderPrices(),
@@ -287,6 +309,8 @@ async function loadPricingData() {
     templates.value = fetchedTemplates
   } catch (err) {
     ElMessage.error(readError(err))
+  } finally {
+    pricingLoading.value = false
   }
 }
 
@@ -488,7 +512,15 @@ async function submitEditChannel() {
   }
 }
 
-onMounted(loadPricingData)
+async function loadInitialData() {
+  try {
+    await Promise.all([loadChannels(), loadPricingData()])
+  } finally {
+    initialTableReady.value = true
+  }
+}
+
+onMounted(loadInitialData)
 </script>
 
 <template>
@@ -519,8 +551,24 @@ onMounted(loadPricingData)
       </el-button>
     </div>
 
+    <div
+      v-if="!initialTableReady"
+      v-loading="true"
+      class="admin-table service-table channel-table-loading"
+    >
+      <div class="channel-table-loading-head">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="channel-table-loading-row"></div>
+      <div class="channel-table-loading-row"></div>
+    </div>
+
     <el-table
-      v-loading="loading"
+      v-else
+      v-loading="tableLoading"
       class="admin-table service-table channel-table"
       :data="filteredChannels"
       row-key="id"
@@ -593,9 +641,8 @@ onMounted(loadPricingData)
       <el-table-column :label="t('modelPrices')" min-width="360">
         <template #default="{ row }">
           <div class="channel-price-summary">
-            <div class="channel-price-summary-head">
+            <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
               <el-tag
-                v-if="channelPriceStatus(row).missing > 0"
                 class="price-status-tag"
                 :class="`is-${channelPriceStatus(row).type}`"
                 round
@@ -893,6 +940,66 @@ onMounted(loadPricingData)
   background: #94a3b8;
 }
 
+.channel-table-loading {
+  min-height: 214px;
+  overflow: hidden;
+}
+
+.channel-table-loading-head {
+  align-items: center;
+  background: #f6f9fc;
+  border-bottom: 1px solid #dfe8f2;
+  display: grid;
+  gap: 36px;
+  grid-template-columns: 180px minmax(260px, 1fr) 140px 160px;
+  height: 48px;
+  padding: 0 72px 0 82px;
+}
+
+.channel-table-loading-head span,
+.channel-table-loading-row::before,
+.channel-table-loading-row::after {
+  background: #e8eef6;
+  border-radius: 999px;
+  content: '';
+  display: block;
+  height: 12px;
+}
+
+.channel-table-loading-head span:nth-child(1) {
+  width: 52px;
+}
+
+.channel-table-loading-head span:nth-child(2) {
+  width: 220px;
+}
+
+.channel-table-loading-head span:nth-child(3) {
+  width: 82px;
+}
+
+.channel-table-loading-head span:nth-child(4) {
+  width: 48px;
+}
+
+.channel-table-loading-row {
+  align-items: center;
+  border-bottom: 1px solid #edf3f8;
+  display: grid;
+  gap: 36px;
+  grid-template-columns: 180px minmax(260px, 1fr);
+  height: 82px;
+  padding: 0 72px 0 82px;
+}
+
+.channel-table-loading-row::before {
+  width: 136px;
+}
+
+.channel-table-loading-row::after {
+  width: min(420px, 100%);
+}
+
 .channel-table :deep(.el-table__body td) {
   height: 82px;
   padding: 12px 0;
@@ -1162,6 +1269,7 @@ onMounted(loadPricingData)
   font-size: 14px;
   font-weight: 760;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 .channel-expand-head span {
@@ -1194,7 +1302,8 @@ onMounted(loadPricingData)
   background: #ffffff;
   border: 1px solid #e3ebf4;
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .channel-expand-price-row {
@@ -1203,13 +1312,14 @@ onMounted(loadPricingData)
   display: grid;
   gap: 10px;
   grid-template-columns:
-    minmax(160px, 1fr)
-    minmax(112px, 0.42fr)
-    minmax(112px, 0.42fr)
-    minmax(112px, 0.42fr)
-    minmax(112px, 0.42fr)
-    104px;
+    minmax(128px, 0.72fr)
+    minmax(112px, 0.52fr)
+    minmax(112px, 0.52fr)
+    minmax(112px, 0.52fr)
+    minmax(112px, 0.52fr)
+    96px;
   min-height: 46px;
+  min-width: 700px;
   padding: 0 14px;
 }
 
@@ -1223,6 +1333,10 @@ onMounted(loadPricingData)
   font-size: 12px;
   font-weight: 760;
   min-height: 38px;
+}
+
+.channel-expand-price-row.is-head span {
+  white-space: nowrap;
 }
 
 .channel-head-label {
@@ -1260,9 +1374,12 @@ onMounted(loadPricingData)
   color: #1d2129;
   display: inline-block;
   font-size: 13px;
-  font-weight: 680;
+  font-weight: 400;
   max-width: 100%;
+  overflow: hidden;
   padding: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .channel-detail-price {
@@ -1272,7 +1389,7 @@ onMounted(loadPricingData)
   font-size: 13px;
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
-  font-weight: 720;
+  font-weight: 400;
   justify-content: flex-end;
   white-space: nowrap;
 }

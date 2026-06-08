@@ -1,4 +1,4 @@
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import {
@@ -104,7 +104,7 @@ export function useChannels(t: Translate) {
   const channels = ref<Channel[]>([])
   const channelKeys = ref<ChannelKey[]>([])
   const providers = ref<ChannelProviderOption[]>([])
-  const loading = ref(false)
+  const loading = ref(true)
   const createDialogOpen = ref(false)
   const editDialogOpen = ref(false)
   const modelPickerDialogOpen = ref(false)
@@ -642,8 +642,6 @@ export function useChannels(t: Translate) {
       deletingId.value = null
     }
   }
-
-  onMounted(loadChannels)
 
   return {
     channels,

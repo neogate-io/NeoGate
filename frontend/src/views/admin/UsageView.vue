@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
 import { getAdminUsage, type AdminUsageStatus } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
@@ -35,6 +35,7 @@ const usageQueryRange = computed(() => {
 const {
   data: usagePage,
   loading,
+  loaded: usageLoaded,
   reload
 } = useAsyncData(
   () =>
@@ -51,10 +52,43 @@ const {
 )
 
 const usageItems = computed(() => usagePage.value.items)
+const usageInitialLoading = computed(() => !usageLoaded.value)
+const hasUsagePagination = computed(
+  () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
+)
 
-async function handleSearch() {
+function resetUsagePagination() {
   currentPage.value = 1
   cursorStack.value = [undefined]
+}
+
+function usageStatusTone(statusCode?: number | null) {
+  if (statusCode == null) return 'neutral'
+  if (statusCode >= 200 && statusCode < 400) return 'success'
+  return 'danger'
+}
+
+function usageStatusIcon(statusCode?: number | null) {
+  return statusCode != null && statusCode >= 200 && statusCode < 400
+    ? CircleCheckFilled
+    : WarningFilled
+}
+
+function billingTone(status: string) {
+  const normalized = status.toLowerCase()
+  if (
+    normalized.includes('success') ||
+    normalized.includes('paid') ||
+    normalized.includes('billed')
+  ) {
+    return 'is-success'
+  }
+  if (normalized.includes('fail') || normalized.includes('error')) return 'is-danger'
+  return 'is-neutral'
+}
+
+async function handleSearch() {
+  resetUsagePagination()
   await reload()
 }
 
@@ -73,62 +107,71 @@ async function previousPage() {
 
 async function handlePageSizeChange(size: number) {
   pageSize.value = size
-  currentPage.value = 1
-  cursorStack.value = [undefined]
-  await reload()
-}
-
-async function resetFilters() {
-  filters.dateRange = []
-  filters.model = ''
-  filters.status = 'all'
-  currentPage.value = 1
-  cursorStack.value = [undefined]
+  resetUsagePagination()
   await reload()
 }
 </script>
 
 <template>
   <section class="grid usage-view">
-    <el-form
-      class="admin-filter-bar user-filter-bar usage-filter-bar"
-      @submit.prevent="handleSearch"
-    >
-      <el-form-item :label="t('timeRange')">
+    <el-form class="usage-toolbar" @submit.prevent="handleSearch">
+      <div class="usage-toolbar-filters">
         <el-date-picker
           v-model="filters.dateRange"
+          class="usage-date-range"
           type="daterange"
           value-format="YYYY-MM-DD"
           :range-separator="t('to')"
           :start-placeholder="t('startTime')"
           :end-placeholder="t('endTime')"
         />
-      </el-form-item>
-      <el-form-item :label="t('model')">
         <el-input
           v-model="filters.model"
+          class="usage-search-input"
           clearable
           :prefix-icon="Search"
           :placeholder="t('usageModelSearchPlaceholder')"
         />
-      </el-form-item>
-      <el-form-item :label="t('status')">
-        <el-select v-model="filters.status">
+        <el-select v-model="filters.status" class="usage-status-filter">
           <el-option :label="t('usageStatusAll')" value="all" />
           <el-option :label="t('usageStatusSuccess')" value="success" />
           <el-option :label="t('usageStatusFailed')" value="failed" />
         </el-select>
-      </el-form-item>
-      <el-form-item class="user-search-actions usage-filter-actions">
-        <el-button type="primary" native-type="submit" :icon="Search" :loading="loading">
+        <el-button
+          class="admin-action-button"
+          type="primary"
+          native-type="submit"
+          :icon="Search"
+          :loading="loading"
+        >
           {{ t('search') }}
         </el-button>
-        <el-button :icon="Refresh" :loading="loading" @click="reload">{{ t('refresh') }}</el-button>
-        <el-button @click="resetFilters">{{ t('reset') }}</el-button>
-      </el-form-item>
+      </div>
+      <div class="usage-toolbar-actions">
+        <el-button class="admin-action-button" :icon="Refresh" :loading="loading" @click="reload">
+          {{ t('refresh') }}
+        </el-button>
+      </div>
     </el-form>
 
-    <div class="service-table-panel">
+    <div
+      v-if="usageInitialLoading"
+      v-loading="true"
+      class="service-table-panel usage-table-loading"
+    >
+      <div class="usage-table-loading-head">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="usage-table-loading-row"></div>
+      <div class="usage-table-loading-row"></div>
+      <div class="usage-table-loading-row"></div>
+    </div>
+
+    <div v-else class="service-table-panel">
       <el-table
         v-loading="loading"
         class="admin-table service-table usage-table"
@@ -136,7 +179,9 @@ async function resetFilters() {
         stripe
       >
         <el-table-column :label="t('time')" min-width="180">
-          <template #default="{ row }">{{ formatDateTime(row.created_at, locale) }}</template>
+          <template #default="{ row }">
+            <span class="usage-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
+          </template>
         </el-table-column>
         <el-table-column :label="t('model')" min-width="190">
           <template #default="{ row }">
@@ -190,23 +235,49 @@ async function resetFilters() {
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('cost')">
-          <template #default="{ row }">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</template>
+        <el-table-column :label="t('cost')" min-width="130" align="right" header-align="right">
+          <template #default="{ row }">
+            <span class="usage-cost-cell">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
+          </template>
         </el-table-column>
-        <el-table-column prop="billing_status" :label="t('billing')" />
-        <el-table-column :label="t('status')" min-width="100">
-          <template #default="{ row }">{{ row.status_code || '-' }}</template>
+        <el-table-column prop="billing_status" :label="t('billing')" min-width="130">
+          <template #default="{ row }">
+            <span class="usage-billing-tag" :class="billingTone(row.billing_status)">
+              {{ row.billing_status || '-' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('status')" min-width="120" align="center" header-align="center">
+          <template #default="{ row }">
+            <span
+              class="channel-runtime-status usage-status-tag"
+              :class="`is-${usageStatusTone(row.status_code)}`"
+            >
+              <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
+              {{ row.status_code || '-' }}
+            </span>
+          </template>
         </el-table-column>
         <el-table-column prop="error_summary" :label="t('error')" min-width="180">
-          <template #default="{ row }">{{ row.error_summary || '-' }}</template>
+          <template #default="{ row }">
+            <el-tooltip v-if="row.error_summary" :content="row.error_summary" placement="top">
+              <span class="usage-error-cell">{{ row.error_summary }}</span>
+            </el-tooltip>
+            <span v-else class="usage-muted">-</span>
+          </template>
         </el-table-column>
         <template #empty>
-          <el-empty :description="t('noData')" />
+          <div class="usage-empty-state">
+            <el-empty :description="t('noData')" />
+          </div>
         </template>
       </el-table>
     </div>
 
-    <div class="admin-pagination-bar">
+    <div
+      v-if="!usageInitialLoading && (hasUsagePagination || usageItems.length > 1)"
+      class="admin-pagination-bar"
+    >
       <div class="admin-pagination-summary">
         <span class="admin-result-count">
           {{ t('currentPageItems') }} {{ usageItems.length.toLocaleString(locale) }}
@@ -237,6 +308,77 @@ async function resetFilters() {
 </template>
 
 <style scoped>
+.usage-table-loading {
+  min-height: 236px;
+  overflow: hidden;
+}
+
+.usage-table-loading-head {
+  align-items: center;
+  background: #f6f9fc;
+  border-bottom: 1px solid #dfe8f2;
+  display: grid;
+  gap: 30px;
+  grid-template-columns: 150px 180px 160px 150px 120px;
+  height: 48px;
+  min-width: 1180px;
+  padding: 0 160px 0 14px;
+}
+
+.usage-table-loading-head span,
+.usage-table-loading-row::before,
+.usage-table-loading-row::after,
+.usage-table-loading-row span {
+  background: #e8eef6;
+  border-radius: 999px;
+  content: '';
+  display: block;
+  height: 12px;
+}
+
+.usage-table-loading-head span:nth-child(1) {
+  width: 54px;
+}
+
+.usage-table-loading-head span:nth-child(2) {
+  width: 72px;
+}
+
+.usage-table-loading-head span:nth-child(3) {
+  width: 58px;
+}
+
+.usage-table-loading-head span:nth-child(4) {
+  width: 48px;
+}
+
+.usage-table-loading-head span:nth-child(5) {
+  width: 56px;
+}
+
+.usage-table-loading-row {
+  align-items: center;
+  border-bottom: 1px solid #edf3f8;
+  display: grid;
+  gap: 30px;
+  grid-template-columns: 150px 180px 160px 150px 120px;
+  height: 62px;
+  min-width: 1180px;
+  padding: 0 160px 0 14px;
+}
+
+.usage-table-loading-row::before {
+  width: 126px;
+}
+
+.usage-table-loading-row::after {
+  width: min(240px, 100%);
+}
+
+.usage-table-loading-row span {
+  width: 78px;
+}
+
 .usage-model,
 .usage-stack {
   display: flex;
@@ -246,8 +388,18 @@ async function resetFilters() {
 
 .usage-provider,
 .usage-muted {
-  color: var(--el-text-color-secondary);
+  color: #86909c;
   font-size: 12px;
+  font-weight: 560;
+}
+
+.usage-model > span:last-child {
+  color: #1d2129;
+  font-size: 14px;
+  font-weight: 680;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .usage-tags {
@@ -257,7 +409,69 @@ async function resetFilters() {
 }
 
 .usage-mono {
+  color: #1d2939;
+  font-feature-settings: 'tnum';
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   font-weight: 400;
+}
+
+.usage-time-cell {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.usage-cost-cell {
+  color: #1d2939;
+  font-feature-settings: 'tnum';
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+}
+
+.usage-billing-tag {
+  align-items: center;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 720;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.usage-billing-tag.is-success {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.usage-billing-tag.is-danger {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.usage-billing-tag.is-neutral {
+  background: #eef2f6;
+  border-color: #dbe4ef;
+  color: #64748b;
+}
+
+.usage-error-cell {
+  color: #b91c1c;
+  display: block;
+  font-size: 13px;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-empty-state {
+  padding: 30px 0 34px;
 }
 </style>

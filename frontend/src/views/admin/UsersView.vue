@@ -8,7 +8,6 @@ import {
   Key,
   Money,
   Plus,
-  Refresh,
   Search,
   UserFilled,
   WarningFilled
@@ -372,13 +371,6 @@ async function searchUsers() {
   await reload()
 }
 
-async function resetSearch() {
-  emailSearch.value = ''
-  apiKeySearch.value = ''
-  resetUsersPagination()
-  await reload()
-}
-
 async function nextUsersPage() {
   if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
   usersCursorStack.value[usersCurrentPage.value] = usersPage.value.next_cursor
@@ -541,13 +533,6 @@ onMounted(() => {
           :loading="loading"
         >
           {{ t('search') }}
-        </el-button>
-        <el-button
-          class="admin-action-button user-reset-button"
-          :icon="Refresh"
-          @click="resetSearch"
-        >
-          {{ t('reset') }}
         </el-button>
       </div>
       <div class="user-toolbar-actions">

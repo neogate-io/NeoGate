@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { DocumentCopy, Search, Refresh, View } from '@element-plus/icons-vue'
-import { computed, ref } from 'vue'
+import { DocumentCopy, Edit, Search, Refresh, View } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { adjustCredit, getUserKeys } from '../../api/userKeys'
-import { getUsers, updateUserStatus } from '../../api/users'
+import { adjustCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
+import { getUsers, updateUser, updateUserStatus } from '../../api/users'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
-import type { User, UserKey } from '../../types/admin'
+import type { User, UserGroup, UserKey } from '../../types/admin'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -21,9 +21,17 @@ const emailSearch = ref('')
 const apiKeySearch = ref('')
 const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
+const editDialogVisible = ref(false)
+const editSaving = ref(false)
 const approvingUserId = ref<number | null>(null)
 const selectedUser = ref<User | null>(null)
+const userGroups = ref<UserGroup[]>([])
 const amountUsd = ref(10)
+const editForm = reactive({
+  email: '',
+  status: 'enabled' as User['status'],
+  userGroupId: 0
+})
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
@@ -82,6 +90,16 @@ function openCreditDialog(row: User) {
   creditDialogVisible.value = true
 }
 
+function openEditDialog(row: User) {
+  selectedUser.value = row
+  Object.assign(editForm, {
+    email: row.email,
+    status: row.status,
+    userGroupId: row.user_group_id
+  })
+  editDialogVisible.value = true
+}
+
 async function openUserKeysDialog(row: User) {
   selectedUser.value = row
   userKeysDialogVisible.value = true
@@ -119,6 +137,25 @@ async function submitCredit() {
     ElMessage.error(readError(err))
   } finally {
     creditSaving.value = false
+  }
+}
+
+async function submitEditUser() {
+  if (!selectedUser.value) return
+  editSaving.value = true
+  try {
+    await updateUser(selectedUser.value.id, {
+      email: editForm.email.trim(),
+      status: editForm.status,
+      user_group_id: editForm.userGroupId
+    })
+    ElMessage.success(t('userUpdated'))
+    editDialogVisible.value = false
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    editSaving.value = false
   }
 }
 
@@ -207,6 +244,16 @@ async function previousUserKeysPage() {
     userKeysLoading.value = false
   }
 }
+
+async function loadUserGroups() {
+  try {
+    userGroups.value = await getUserGroups()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
+}
+
+onMounted(loadUserGroups)
 </script>
 
 <template>
@@ -278,7 +325,7 @@ async function previousUserKeysPage() {
         <el-table-column :label="t('lastActiveAt')" min-width="160">
           <template #default="{ row }">{{ formatLastActiveAt(row.last_active_at) }}</template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="220" align="center" header-align="center">
+        <el-table-column :label="t('actions')" width="300" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -292,6 +339,9 @@ async function previousUserKeysPage() {
               </el-button>
               <el-button class="admin-action-button" :icon="View" @click="openUserKeysDialog(row)">
                 {{ t('viewApiKeys') }}
+              </el-button>
+              <el-button class="admin-action-button" :icon="Edit" @click="openEditDialog(row)">
+                {{ t('edit') }}
               </el-button>
               <el-button class="admin-action-button" @click="openCreditDialog(row)">{{
                 t('recharge')
@@ -336,6 +386,39 @@ async function previousUserKeysPage() {
         </div>
       </div>
     </div>
+
+    <el-dialog v-model="editDialogVisible" :title="t('editUser')" width="460px">
+      <el-form label-position="top" @submit.prevent="submitEditUser">
+        <el-form-item :label="t('email')">
+          <el-input v-model="editForm.email" />
+        </el-form-item>
+        <el-form-item :label="t('status')">
+          <el-select v-model="editForm.status" class="user-edit-select">
+            <el-option :label="t('enabled')" value="enabled" />
+            <el-option :label="t('disabled')" value="disabled" />
+            <el-option :label="t('pendingApproval')" value="pending" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="t('userGroup')">
+          <el-select v-model="editForm.userGroupId" class="user-edit-select">
+            <el-option
+              v-for="group in userGroups"
+              :key="group.id"
+              :label="`${group.name} (${group.code})`"
+              :value="group.id"
+              :disabled="!group.enabled"
+            />
+          </el-select>
+        </el-form-item>
+        <button class="hidden-submit" type="submit" />
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="editSaving" @click="submitEditUser">{{
+          t('save')
+        }}</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="creditDialogVisible" :title="t('recharge')" width="420px">
       <el-form label-position="top">
@@ -430,3 +513,13 @@ async function previousUserKeysPage() {
     </el-dialog>
   </section>
 </template>
+
+<style scoped>
+.user-edit-select {
+  width: 100%;
+}
+
+.hidden-submit {
+  display: none;
+}
+</style>

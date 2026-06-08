@@ -21,9 +21,17 @@ export function getUsers(
   return adminRequest<UserPage>(`/api/admin/users${query ? `?${query}` : ''}`)
 }
 
-export function updateUserStatus(id: number, status: User['status']) {
+export function updateUser(id: number, payload: {
+  email?: string
+  status?: User['status']
+  user_group_id?: number
+}) {
   return adminRequest<User>(`/api/admin/users/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ status })
+    body: JSON.stringify(payload)
   })
+}
+
+export function updateUserStatus(id: number, status: User['status']) {
+  return updateUser(id, { status })
 }

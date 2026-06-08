@@ -108,6 +108,28 @@ const { t } = useLocale()
         />
       </el-form-item>
 
+      <div v-if="form.provider === 'openai'" class="credential-source">
+        <label class="credential-source-toggle">
+          <span>{{ t('useCredentialFiles') }}</span>
+          <el-switch v-model="form.use_credentials" />
+        </label>
+        <p class="credential-source-hint">
+          {{
+            form.use_credentials ? t('credentialFilesEnabledHint') : t('credentialFilesDisabledHint')
+          }}
+        </p>
+      </div>
+
+      <el-form-item v-if="!form.use_credentials" class="api-key-field" :label="t('apiKeyOrJson')">
+        <el-input
+          v-model="secret"
+          class="secret-input"
+          :rows="2"
+          type="textarea"
+          :placeholder="secretPlaceholder"
+        />
+      </el-form-item>
+
       <el-form-item :label="t('models')">
         <div class="models-row">
           <el-input
@@ -125,25 +147,6 @@ const { t } = useLocale()
             {{ fetchingModels ? t('fetchingModels') : t('autoFetch') }}
           </button>
         </div>
-      </el-form-item>
-
-      <div class="dialog-section-title">
-        <span>{{ form.use_credentials ? t('credentialFiles') : t('upstreamApiKey') }}</span>
-      </div>
-
-      <label class="credential-source-toggle">
-        <span>{{ t('useCredentialFiles') }}</span>
-        <el-switch v-model="form.use_credentials" />
-      </label>
-
-      <el-form-item v-if="!form.use_credentials" class="api-key-field" :label="t('apiKeyOrJson')">
-        <el-input
-          v-model="secret"
-          class="secret-input"
-          :rows="5"
-          type="textarea"
-          :placeholder="secretPlaceholder"
-        />
       </el-form-item>
 
       <button class="hidden-submit" type="submit" />
@@ -286,31 +289,25 @@ const { t } = useLocale()
   }
 }
 
-.dialog-section-title {
-  align-items: center;
-  color: #334155;
+.credential-source {
   display: grid;
-  font-size: 14px;
-  font-weight: 760;
-  gap: 14px;
-  grid-template-columns: 1fr auto 1fr;
-  margin: 6px 0 -1px;
-}
-
-.dialog-section-title::before,
-.dialog-section-title::after {
-  background: #dfe4ec;
-  content: '';
-  height: 1px;
+  gap: 2px;
 }
 
 .credential-source-toggle {
   align-items: center;
   color: #334155;
   display: flex;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   justify-content: space-between;
+}
+
+.credential-source-hint {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
 }
 
 .api-key-field {

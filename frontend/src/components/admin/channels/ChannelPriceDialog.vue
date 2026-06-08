@@ -38,7 +38,7 @@ const { t } = useLocale()
     v-model="open"
     class="channel-dialog price-dialog"
     :title="t('configurePrice')"
-    width="min(720px, calc(100vw - 32px))"
+    width="min(860px, calc(100vw - 32px))"
   >
     <div class="price-editor">
       <div class="price-editor-head">

@@ -5,21 +5,21 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
+    AppState,
     auth::{
-        generate_user_key, generate_user_key_from_parts_and_seed, is_generated_user_key,
-        issue_user_key_draft_token, key_prefix, user_key_draft_parts_from_token, UserAuth,
+        UserAuth, generate_user_key, generate_user_key_from_parts_and_seed, is_generated_user_key,
+        issue_user_key_draft_token, key_prefix, user_key_draft_parts_from_token,
     },
-    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
-    email::{smtp_config_error_message, EmailLocale},
+    billing::{CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD, account},
+    email::{EmailLocale, smtp_config_error_message},
     error::{AppError, AppResult},
     id::DbId,
-    policy::{registration_policy, ServiceMode},
-    AppState,
+    policy::{ServiceMode, registration_policy},
 };
 use axum::{
+    Json, Router,
     extract::State,
     routing::{get, post},
-    Json, Router,
 };
 
 #[derive(Debug, Serialize)]
@@ -62,6 +62,7 @@ pub struct CreateUserRequest {
 pub struct UpdateUserRequest {
     pub email: Option<String>,
     pub status: Option<String>,
+    pub user_group_id: Option<DbId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -337,6 +338,9 @@ pub async fn update_user(
     if let Some(status) = &req.status {
         validate_user_status(status)?;
     }
+    if let Some(user_group_id) = req.user_group_id {
+        ensure_user_group_exists(state, user_group_id).await?;
+    }
     let email = req.email.as_deref().map(normalize_email).transpose()?;
     let disabling = matches!(req.status.as_deref(), Some("disabled"));
     let row = sqlx::query(
@@ -344,6 +348,7 @@ pub async fn update_user(
         UPDATE "user"
         SET email = COALESCE($2, email),
             status = COALESCE($3, status),
+            user_group_id = COALESCE($4, user_group_id),
             updated_at = now()
         WHERE id = $1
         RETURNING id
@@ -352,6 +357,7 @@ pub async fn update_user(
     .bind(id)
     .bind(email)
     .bind(req.status)
+    .bind(req.user_group_id)
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -360,6 +366,17 @@ pub async fn update_user(
         recover_user_hot_credit_accounts(state, id).await?;
     }
     get_user(state, user_id).await
+}
+
+async fn ensure_user_group_exists(state: &AppState, id: DbId) -> AppResult<()> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_group WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&state.db.pool)
+        .await?;
+    if !exists {
+        return Err(AppError::BadRequest("invalid user group".to_string()));
+    }
+    Ok(())
 }
 
 pub async fn list_user_groups(state: &AppState) -> AppResult<Vec<UserGroupRecord>> {

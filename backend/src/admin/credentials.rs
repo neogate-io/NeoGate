@@ -9,17 +9,17 @@ use sqlx::Row;
 use zip::ZipArchive;
 
 use crate::{
+    AppState,
     error::{AppError, AppResult},
     id::DbId,
-    AppState,
 };
 
 use super::openai::{
-    credential_refresh_token, detect_openai_credential, refresh_openai_quota, refresh_openai_token,
-    update_token_value, OPENAI_PROVIDER,
+    OPENAI_PROVIDER, credential_refresh_token, detect_openai_credential, refresh_openai_quota,
+    refresh_openai_token, update_token_value,
 };
 pub use super::openai::{
-    openai_runtime_credential, openai_runtime_secret, OpenAiRuntimeCredential,
+    OpenAiRuntimeCredential, openai_runtime_credential, openai_runtime_secret,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,9 +235,9 @@ pub async fn runtime_secret_from_enabled_credential(
     provider: &str,
 ) -> AppResult<String> {
     if provider != OPENAI_PROVIDER {
-        return Err(AppError::BadRequest(format!(
-            "unsupported credential provider: {provider}"
-        )));
+        return Err(AppError::BadRequest(
+            "凭证文件目前仅支持 OpenAI；当前服务商请使用上游 API Key".to_string(),
+        ));
     }
 
     let row = sqlx::query(

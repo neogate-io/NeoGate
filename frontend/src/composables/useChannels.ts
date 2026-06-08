@@ -180,8 +180,9 @@ export function useChannels(t: Translate) {
   function openEditDialog(row: Channel) {
     editingChannel.value = row
     const endpointByProtocol = new Map(row.endpoints.map((endpoint) => [endpoint.protocol, endpoint]))
+    const provider = row.provider
     Object.assign(editForm, {
-      provider: row.provider,
+      provider,
       name: row.name,
       models: endpointModels(row.endpoints),
       endpoints: {
@@ -190,7 +191,7 @@ export function useChannels(t: Translate) {
         anthropic: endpointFormFromRecord('anthropic', endpointByProtocol.get('anthropic'))
       },
       enabled: row.enabled,
-      use_credentials: row.use_credentials,
+      use_credentials: provider === 'openai' && row.use_credentials,
       secret: ''
     })
     resetFetchedModels()
@@ -210,6 +211,7 @@ export function useChannels(t: Translate) {
     if (!option) return
 
     Object.assign(createForm, defaultCreateForm(option))
+    createForm.use_credentials = false
     resetFetchedModels()
   }
 
@@ -234,12 +236,16 @@ export function useChannels(t: Translate) {
     }
   }
 
-  async function submitChannel() {
+  async function submitChannel(beforeCreate?: () => Promise<boolean>) {
     const parsed = validateChannelForm(createForm)
     if (!parsed) return null
+    const secrets = createForm.use_credentials ? [] : splitSecretLines(createForm.secret)
 
     creating.value = true
     try {
+      if (beforeCreate && !(await beforeCreate())) {
+        return null
+      }
       const channel = await createChannel({
         provider: createForm.provider,
         name: parsed.name,
@@ -248,10 +254,9 @@ export function useChannels(t: Translate) {
         priority: 0,
         weight: 1,
         key_selection_mode: 'polling',
-        use_credentials: createForm.use_credentials,
-        key_name: parsed.name,
-        secret: createForm.use_credentials ? '' : stripWordJoiners(createForm.secret)
+        use_credentials: createForm.use_credentials
       })
+      await createKeysFromSecrets(channel.id, parsed.name, secrets)
       ElMessage.success(t('channelCreated'))
       await loadChannels()
       createDialogOpen.value = false
@@ -279,7 +284,7 @@ export function useChannels(t: Translate) {
 
     const endpoint = modelFetchEndpoint(form)
     const baseUrl = visibleBaseUrl(form).trim()
-    const secret = formTarget === 'create' ? stripWordJoiners(createForm.secret).trim() : undefined
+    const secret = formTarget === 'create' ? (splitSecretLines(createForm.secret)[0] ?? '') : undefined
     if (!validateModelFetchInput(form, baseUrl, secret)) return
 
     modelPickerTarget.value = { form: formTarget }
@@ -316,6 +321,11 @@ export function useChannels(t: Translate) {
   }
 
   function validateModelFetchInput(form: ChannelForm, baseUrl: string, secret?: string) {
+    if (form.use_credentials && !supportsCredentialFiles(form)) {
+      ElMessage.warning(t('credentialFilesUnsupportedProvider'))
+      return false
+    }
+
     if (!form.use_credentials && secret === '') {
       ElMessage.warning(t('upstreamKeyRequired'))
       return false
@@ -351,14 +361,8 @@ export function useChannels(t: Translate) {
         key_selection_mode: editingChannel.value.key_selection_mode,
         use_credentials: editForm.use_credentials
       })
-      const secret = stripWordJoiners(editForm.secret).trim()
-      if (!editForm.use_credentials && secret) {
-        await createChannelKey(editingChannel.value.id, {
-          name: parsed.name,
-          secret,
-          enabled: true
-        })
-      }
+      const secrets = editForm.use_credentials ? [] : splitSecretLines(editForm.secret)
+      await createKeysFromSecrets(editingChannel.value.id, parsed.name, secrets)
       ElMessage.success(t('channelUpdated'))
       await loadChannels()
       editDialogOpen.value = false
@@ -403,6 +407,11 @@ export function useChannels(t: Translate) {
     const name = form.name.trim()
     if (!name) {
       ElMessage.warning(t('channelNameRequired'))
+      return null
+    }
+
+    if (form.use_credentials && !supportsCredentialFiles(form)) {
+      ElMessage.warning(t('credentialFilesUnsupportedProvider'))
       return null
     }
 
@@ -496,6 +505,23 @@ export function useChannels(t: Translate) {
     return value.replace(/\u2060/g, '')
   }
 
+  function splitSecretLines(value: string) {
+    return stripWordJoiners(value)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  }
+
+  async function createKeysFromSecrets(channelId: number, name: string, secrets: string[]) {
+    for (const [index, secret] of secrets.entries()) {
+      await createChannelKey(channelId, {
+        name: secrets.length > 1 ? `${name} ${index + 1}` : name,
+        secret,
+        enabled: true
+      })
+    }
+  }
+
   function keepHyphenWithNextChar(value: string) {
     return stripWordJoiners(value).replace(/-/g, `-${wordJoiner}`)
   }
@@ -516,6 +542,10 @@ export function useChannels(t: Translate) {
     return protocols
       .map((protocol) => form.endpoints[protocol])
       .find((endpoint) => endpoint.base_url.trim()) ?? form.endpoints.openai
+  }
+
+  function supportsCredentialFiles(form: ChannelForm) {
+    return form.provider === 'openai'
   }
 
   function visibleBaseUrl(form: ChannelForm) {

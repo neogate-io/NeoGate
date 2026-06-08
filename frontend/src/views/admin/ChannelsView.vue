@@ -2,7 +2,12 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Coin, Delete, Edit } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getPricingTemplates, getProviderPrices, upsertProviderPrice } from '../../api/prices'
+import {
+  getPricingTemplates,
+  getProviderPrices,
+  syncPricingTemplates,
+  upsertProviderPrice
+} from '../../api/prices'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelPriceDialog, {
   type ChannelPriceForm
@@ -12,8 +17,9 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
 import type { Channel, PricingTemplate, ProviderPrice } from '../../types/admin'
-import { readError } from '../../utils/errors'
+import { ApiError, readError } from '../../utils/errors'
 import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
+import { splitCommaList } from '../../utils/channel'
 import { findPricingTemplate, priceKey } from '../../utils/pricing'
 
 const { t } = useLocale()
@@ -237,6 +243,36 @@ function cacheWritePricePayload(form: (typeof priceForms)[string]) {
   return form.cacheWriteUsdPerMillion === null ? null : usdToMicroUsd(form.cacheWriteUsdPerMillion)
 }
 
+function readReferenceSyncError(err: unknown) {
+  if (
+    err instanceof ApiError &&
+    err.status === 502 &&
+    err.message.includes('pricing reference source')
+  ) {
+    return t('referencePricesSourceUnavailable')
+  }
+
+  return readError(err)
+}
+
+function createFormMissingReferencePrices() {
+  const models = splitCommaList(createForm.models)
+  return models.some((model) => !findPricingTemplate(templates.value, createForm.provider, model))
+}
+
+async function syncCreateReferencePricesIfNeeded() {
+  if (!createFormMissingReferencePrices()) return true
+
+  try {
+    await syncPricingTemplates()
+    templates.value = await getPricingTemplates()
+    return true
+  } catch (err) {
+    ElMessage.error(readReferenceSyncError(err))
+    return false
+  }
+}
+
 async function saveChannelPrices() {
   savingPrices.value = true
   try {
@@ -295,7 +331,7 @@ async function applyReferencePrices() {
 }
 
 async function submitChannel() {
-  const channel = await submitChannelBase()
+  const channel = await submitChannelBase(syncCreateReferencePricesIfNeeded)
   if (!channel) return
   await loadPricingData()
   if (channelPriceStatus(channel).missing > 0) {
@@ -337,7 +373,7 @@ onMounted(loadPricingData)
           </span>
         </template>
       </el-table-column>
-      <el-table-column :label="t('modelPrices')" min-width="270">
+      <el-table-column :label="t('modelPrices')" width="340">
         <template #default="{ row }">
           <div class="channel-price-list">
             <span
@@ -353,7 +389,13 @@ onMounted(loadPricingData)
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('channelKeyCountShort')" width="90" align="center">
+      <el-table-column
+        :label="t('channelKeyCountShort')"
+        width="112"
+        align="center"
+        class-name="channel-key-count-column"
+        label-class-name="channel-key-count-header"
+      >
         <template #default="{ row }">
           <span class="channel-key-count">{{
             row.use_credentials ? t('credentialFiles') : (keyCounts.get(row.id) ?? 0)
@@ -378,7 +420,7 @@ onMounted(loadPricingData)
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column :label="t('actions')" width="260" align="center" header-align="center">
+      <el-table-column :label="t('actions')" min-width="260" align="center" header-align="center">
         <template #default="{ row }">
           <div class="table-row-actions">
             <el-button
@@ -512,6 +554,10 @@ onMounted(loadPricingData)
 .channel-table :deep(.el-table__header-wrapper .cell) {
   overflow-wrap: normal;
   word-break: normal;
+}
+
+.channel-table :deep(.channel-key-count-header .cell) {
+  white-space: nowrap;
 }
 
 .channel-table :deep(.el-table__body .cell) {

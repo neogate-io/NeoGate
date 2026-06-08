@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Row};
 use tokio::sync::watch;
@@ -116,9 +116,14 @@ pub fn router(restart_tx: watch::Sender<bool>) -> Router {
 
 pub async fn setup_status(
     State(state): State<Arc<BootstrapState>>,
+    headers: HeaderMap,
 ) -> AppResult<Json<SetupRuntimeStatus>> {
     Ok(Json(
-        runtime_status(state.restart_required.load(Ordering::SeqCst)).await?,
+        runtime_status(
+            state.restart_required.load(Ordering::SeqCst),
+            inferred_public_base_url(&headers),
+        )
+        .await?,
     ))
 }
 
@@ -257,7 +262,10 @@ async fn cluster_env_template() -> AppResult<Json<ClusterEnvTemplateResult>> {
     }))
 }
 
-async fn runtime_status(restart_required: bool) -> AppResult<SetupRuntimeStatus> {
+async fn runtime_status(
+    restart_required: bool,
+    inferred_public_base_url: Option<String>,
+) -> AppResult<SetupRuntimeStatus> {
     let probe = RuntimeProbe::from_env()?;
     let database_connected = match &probe.database_url {
         Some(database_url) => test_database(database_url).await.is_ok(),
@@ -298,12 +306,42 @@ async fn runtime_status(restart_required: bool) -> AppResult<SetupRuntimeStatus>
         bootstrap_blocked_reason,
         restart_required,
         site_name: probe.site_name.clone(),
-        public_base_url: probe.public_base_url.clone(),
+        public_base_url: probe.public_base_url.clone().or(inferred_public_base_url),
         service_mode: "internal".to_string(),
         credit_required: false,
         recharge_enabled: false,
         updated_at: None,
     })
+}
+
+fn inferred_public_base_url(headers: &HeaderMap) -> Option<String> {
+    let host = header_first_value(headers, "x-forwarded-host")
+        .or_else(|| header_first_value(headers, "host"))?;
+    let proto = header_first_value(headers, "x-forwarded-proto")
+        .or_else(|| header_first_value(headers, "x-forwarded-scheme"))
+        .unwrap_or_else(|| "http".to_string());
+    let proto = proto.to_ascii_lowercase();
+
+    if proto != "http" && proto != "https" {
+        return None;
+    }
+    if host.contains('/') || host.contains('\\') || host.trim().is_empty() {
+        return None;
+    }
+
+    Some(format!("{proto}://{}", host.trim().trim_end_matches('/')))
+}
+
+fn header_first_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 pub async fn test_database(database_url: &str) -> AppResult<()> {
@@ -494,4 +532,43 @@ fn generate_secret() -> String {
         Uuid::new_v4().simple(),
         Uuid::new_v4().simple()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::HeaderMap;
+
+    use super::inferred_public_base_url;
+
+    #[test]
+    fn infers_public_base_url_from_forwarded_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("x-forwarded-host", "dev.moligate.com".parse().unwrap());
+
+        assert_eq!(
+            inferred_public_base_url(&headers).as_deref(),
+            Some("https://dev.moligate.com")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_host_when_forwarded_host_is_missing() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "localhost:8080".parse().unwrap());
+
+        assert_eq!(
+            inferred_public_base_url(&headers).as_deref(),
+            Some("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_forwarded_proto() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "javascript".parse().unwrap());
+        headers.insert("x-forwarded-host", "dev.moligate.com".parse().unwrap());
+
+        assert_eq!(inferred_public_base_url(&headers), None);
+    }
 }

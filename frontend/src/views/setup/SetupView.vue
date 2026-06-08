@@ -38,7 +38,6 @@ import { splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
-type DatabaseInputMode = 'fields' | 'url'
 type BusinessSetupStep = 'admin-password' | 'service-mode' | 'upstream' | 'smtp'
 
 const businessSetupSteps: BusinessSetupStep[] = [
@@ -67,8 +66,6 @@ const reviewingRuntimeConfig = ref(false)
 const runtimeDatabaseChangeEnabled = ref(false)
 
 const bootstrapForm = reactive({
-  databaseInputMode: 'fields' as DatabaseInputMode,
-  databaseUrl: 'postgres://localhost/neogate',
   databaseHost: 'localhost',
   databasePort: 5432,
   databaseName: 'neogate',
@@ -76,7 +73,7 @@ const bootstrapForm = reactive({
   databasePassword: '',
   databaseSslMode: 'auto',
   siteName: 'NeoGate',
-  publicBaseUrl: 'http://127.0.0.1:8080'
+  publicBaseUrl: defaultPublicBaseUrl()
 })
 
 const setupForm = reactive({
@@ -174,11 +171,6 @@ const setupSteps = computed(() => [
     done: isBusinessStepDone('smtp'),
     active: isBusinessStepActive('smtp')
   }
-])
-
-const databaseInputModeOptions = computed(() => [
-  { label: t('databaseModeFields'), value: 'fields' },
-  { label: t('databaseModeUrl'), value: 'url' }
 ])
 
 const databaseSslModeOptions = computed(() => [
@@ -575,8 +567,6 @@ function goToPreviousBusinessStep() {
   if (currentBusinessStep.value === 'admin-password' && canReviewRuntimeConfig.value) {
     reviewingRuntimeConfig.value = true
     runtimeDatabaseChangeEnabled.value = false
-    bootstrapForm.databaseInputMode = 'url'
-    bootstrapForm.databaseUrl = ''
     return
   }
   const previousIndex = businessSetupSteps.indexOf(currentBusinessStep.value) - 1
@@ -636,10 +626,6 @@ function syncPriceRows() {
 }
 
 function buildDatabaseUrl(maskPassword: boolean) {
-  if (bootstrapForm.databaseInputMode === 'url') {
-    return bootstrapForm.databaseUrl.trim()
-  }
-
   const host = bootstrapForm.databaseHost.trim() || 'localhost'
   const databaseName = bootstrapForm.databaseName.trim() || 'neogate'
   const user = bootstrapForm.databaseUser.trim()
@@ -655,6 +641,11 @@ function buildDatabaseUrl(maskPassword: boolean) {
   const query = sslMode ? `?sslmode=${encodeURIComponent(sslMode)}` : ''
 
   return `postgres://${auth}${normalizedHost}${portPart}/${encodeURIComponent(databaseName)}${query}`
+}
+
+function defaultPublicBaseUrl() {
+  if (typeof window === 'undefined') return 'http://127.0.0.1:8080'
+  return window.location.origin
 }
 
 function sleep(ms: number) {
@@ -801,22 +792,7 @@ onMounted(load)
               </span>
               <el-switch v-model="runtimeDatabaseChangeEnabled" />
             </div>
-            <el-form-item
-              v-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled"
-              :label="t('databaseConnectionMode')"
-            >
-              <el-segmented
-                v-model="bootstrapForm.databaseInputMode"
-                :options="databaseInputModeOptions"
-              />
-            </el-form-item>
-
-            <template
-              v-if="
-                (bootstrapMissingDatabase || runtimeDatabaseChangeEnabled) &&
-                bootstrapForm.databaseInputMode === 'fields'
-              "
-            >
+            <template v-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled">
               <div class="setup-grid two">
                 <el-form-item :label="t('databaseHostLabel')">
                   <el-input v-model="bootstrapForm.databaseHost" />
@@ -858,28 +834,6 @@ onMounted(load)
                 </el-button>
               </div>
             </template>
-
-            <el-form-item
-              v-else-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled"
-              :label="t('databaseUrlLabel')"
-            >
-              <el-input v-model="bootstrapForm.databaseUrl" />
-            </el-form-item>
-            <div
-              v-if="
-                (bootstrapMissingDatabase || runtimeDatabaseChangeEnabled) &&
-                bootstrapForm.databaseInputMode === 'url'
-              "
-              class="setup-field-actions"
-            >
-              <el-button
-                :disabled="saving"
-                :loading="testingDatabase"
-                @click="testDatabaseConnection"
-              >
-                {{ t('testDatabaseConnection') }}
-              </el-button>
-            </div>
           </div>
 
           <div class="setup-actions">
@@ -1717,7 +1671,9 @@ onMounted(load)
   display: flex;
   gap: 10px;
   justify-content: space-between;
+  max-width: 614px;
   padding: 14px 16px;
+  width: 100%;
 }
 
 .setup-env-file span {

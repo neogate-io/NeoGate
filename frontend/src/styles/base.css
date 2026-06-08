@@ -37,7 +37,14 @@ body {
   min-height: 100vh;
 }
 
-.root-shell > :not(.powered-footer) {
+.root-view {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.root-view > * {
   flex: 1 1 auto;
 }
 

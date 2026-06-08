@@ -53,9 +53,11 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --bui
 
 生产环境请替换 `.env.cluster` 中的默认密码、域名和共享密钥。单机部署缺失的后端密钥可由首次运行向导自动生成并写入后端配置卷。
 
-### 2. 源码安装
+### 2. 源码本地运行
 
-源码安装需要先在服务器上准备这些依赖：
+源码本地运行适合开发、调试或从源码体验首次运行流程。正式部署建议优先使用上面的 Docker Compose；Compose 会先构建前端，再由 Nginx 托管静态文件。
+
+源码本地运行需要先在服务器上准备这些依赖：
 
 - PostgreSQL 16 或兼容版本
 - Rust 1.85 或更新版本
@@ -126,7 +128,17 @@ pnpm dev --host 0.0.0.0
 
 向导完成后会进入登录页，使用刚创建的管理员账号登录。
 
-前端开发服务会代理管理后台请求到后端。生产部署时，可以通过 `VITE_NEOGATE_BACKEND_ORIGIN` 指定后端公网地址。
+前端开发服务会代理管理后台请求到后端。注意：`pnpm dev` 启动的是 Vite 开发服务，只适合本地开发和调试，不应作为生产服务。
+
+正式从源码部署前端时，请执行：
+
+```bash
+cd frontend
+pnpm install
+pnpm build
+```
+
+然后将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管，并将 `/api/`、`/v1/`、`/anthropic/`、`/readyz` 和 `/livez` 反向代理到后端。前端构建不需要指定后端公网地址。
 
 ## 4. 部署模式
 

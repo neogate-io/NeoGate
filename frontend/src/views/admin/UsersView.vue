@@ -26,7 +26,7 @@ const editSaving = ref(false)
 const approvingUserId = ref<number | null>(null)
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
-const amountUsd = ref(10)
+const amountUsd = ref(100)
 const editForm = reactive({
   email: '',
   status: 'enabled' as User['status'],
@@ -86,7 +86,7 @@ function userStatusTagType(status: User['status']) {
 
 function openCreditDialog(row: User) {
   selectedUser.value = row
-  amountUsd.value = 10
+  amountUsd.value = 100
   creditDialogVisible.value = true
 }
 
@@ -293,20 +293,12 @@ onMounted(loadUserGroups)
       >
         <el-table-column prop="id" label="ID" width="72" />
         <el-table-column prop="email" :label="t('email')" min-width="200" />
-        <el-table-column :label="t('userGroup')" min-width="120">
+        <el-table-column :label="t('userGroup')" width="96">
           <template #default="{ row }">{{ row.user_group_name }}</template>
         </el-table-column>
         <el-table-column
-          :label="t('userApiKeyCount')"
-          width="112"
-          align="center"
-          header-align="center"
-        >
-          <template #default="{ row }">{{ row.user_key_count ?? '-' }}</template>
-        </el-table-column>
-        <el-table-column
           :label="t('availableCredit')"
-          min-width="118"
+          width="104"
           align="right"
           header-align="right"
         >
@@ -387,126 +379,159 @@ onMounted(loadUserGroups)
       </div>
     </div>
 
-    <el-dialog v-model="editDialogVisible" :title="t('editUser')" width="460px">
-      <el-form label-position="top" @submit.prevent="submitEditUser">
-        <el-form-item :label="t('email')">
-          <el-input v-model="editForm.email" />
-        </el-form-item>
-        <el-form-item :label="t('status')">
-          <el-select v-model="editForm.status" class="user-edit-select">
-            <el-option :label="t('enabled')" value="enabled" />
-            <el-option :label="t('disabled')" value="disabled" />
-            <el-option :label="t('pendingApproval')" value="pending" />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="t('userGroup')">
-          <el-select v-model="editForm.userGroupId" class="user-edit-select">
-            <el-option
-              v-for="group in userGroups"
-              :key="group.id"
-              :label="`${group.name} (${group.code})`"
-              :value="group.id"
-              :disabled="!group.enabled"
-            />
-          </el-select>
-        </el-form-item>
-        <button class="hidden-submit" type="submit" />
-      </el-form>
+    <el-dialog
+      v-model="editDialogVisible"
+      class="user-admin-dialog user-edit-dialog"
+      :title="t('editUser')"
+      width="520px"
+    >
+      <div class="user-dialog-body">
+        <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitEditUser">
+          <el-form-item class="user-dialog-field is-wide" :label="t('email')">
+            <el-input v-model="editForm.email" />
+          </el-form-item>
+          <el-form-item class="user-dialog-field" :label="t('status')">
+            <el-select v-model="editForm.status" class="user-edit-select">
+              <el-option :label="t('enabled')" value="enabled" />
+              <el-option :label="t('disabled')" value="disabled" />
+              <el-option :label="t('pendingApproval')" value="pending" />
+            </el-select>
+          </el-form-item>
+          <el-form-item class="user-dialog-field" :label="t('userGroup')">
+            <el-select v-model="editForm.userGroupId" class="user-edit-select">
+              <el-option
+                v-for="group in userGroups"
+                :key="group.id"
+                :label="`${group.name} (${group.code})`"
+                :value="group.id"
+                :disabled="!group.enabled"
+              />
+            </el-select>
+          </el-form-item>
+          <button class="hidden-submit" type="submit" />
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="editDialogVisible = false">{{ t('cancel') }}</el-button>
-        <el-button type="primary" :loading="editSaving" @click="submitEditUser">{{
-          t('save')
-        }}</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="creditDialogVisible" :title="t('recharge')" width="420px">
-      <el-form label-position="top">
-        <el-form-item :label="t('amountUsd')">
-          <el-input-number v-model="amountUsd" :min="-100000" :precision="2" :step="1" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="creditDialogVisible = false">{{ t('cancel') }}</el-button>
-        <el-button type="primary" :loading="creditSaving" @click="submitCredit">{{
-          t('save')
-        }}</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="userKeysDialogVisible" :title="t('apiKeyDetails')" width="680px">
-      <el-table
-        v-loading="userKeysLoading"
-        class="admin-table service-table user-key-detail-table"
-        :data="selectedUserKeys"
-        stripe
-      >
-        <el-table-column :label="t('name')" min-width="120">
-          <template #default="{ row }">{{ row.name }}</template>
-        </el-table-column>
-        <el-table-column :label="t('apiKey')" min-width="240">
-          <template #default="{ row }">
-            <div class="user-key-cell">
-              <code class="user-key-value">{{ maskApiKey(row.key) }}</code>
-              <el-tooltip :content="t('copy')" placement="top">
-                <el-button
-                  class="user-key-copy-button"
-                  :aria-label="t('copy')"
-                  :icon="DocumentCopy"
-                  @click="copyApiKey(row)"
-                />
-              </el-tooltip>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column
-          :label="t('availableCredit')"
-          width="84"
-          align="right"
-          header-align="right"
-        >
-          <template #default="{ row }">{{ formatAvailableUsd(row.available_micro_usd) }}</template>
-        </el-table-column>
-        <el-table-column :label="t('status')" width="80" align="center" header-align="center">
-          <template #default="{ row }">
-            <el-tag class="static-state-tag" :type="row.status === 'enabled' ? 'success' : 'info'">
-              {{ row.status === 'enabled' ? t('enabled') : t('disabled') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('createdAt')" min-width="120">
-          <template #default="{ row }">
-            <span class="user-key-meta-time">{{ formatCompactDateTime(row.created_at) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('lastUsed')" min-width="116">
-          <template #default="{ row }">
-            <span class="user-key-meta-time">{{ formatLastActiveAt(row.last_active_at) }}</span>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <el-empty :description="t('noApiKeys')" />
-        </template>
-      </el-table>
-      <div class="admin-pagination-bar">
-        <div class="admin-pagination-summary">
-          <span class="admin-result-count">
-            {{ t('currentPageItems') }} {{ selectedUserKeys.length.toLocaleString(locale) }}
-            {{ t('itemsUnit') }}
-          </span>
+        <div class="admin-dialog-footer user-dialog-footer">
+          <el-button @click="editDialogVisible = false">{{ t('cancel') }}</el-button>
+          <el-button type="primary" :loading="editSaving" @click="submitEditUser">{{
+            t('save')
+          }}</el-button>
         </div>
-        <div class="admin-pagination-controls">
-          <span class="admin-result-count">{{ t('currentPage') }} {{ userKeysCurrentPage }}</span>
-          <div class="admin-page-buttons">
-            <el-button
-              :disabled="userKeysCurrentPage <= 1 || userKeysLoading"
-              @click="previousUserKeysPage"
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="creditDialogVisible"
+      class="user-admin-dialog user-credit-dialog"
+      :title="t('recharge')"
+      width="460px"
+    >
+      <div class="user-dialog-body">
+        <el-form class="user-dialog-form is-single" label-position="top">
+          <el-form-item class="user-dialog-field user-credit-amount-field" :label="t('amountUsd')">
+            <el-input-number v-model="amountUsd" :min="-100000" :precision="2" :step="1" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <div class="admin-dialog-footer user-dialog-footer">
+          <el-button @click="creditDialogVisible = false">{{ t('cancel') }}</el-button>
+          <el-button type="primary" :loading="creditSaving" @click="submitCredit">{{
+            t('save')
+          }}</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="userKeysDialogVisible"
+      class="user-admin-dialog user-keys-dialog"
+      :title="t('apiKeyDetails')"
+      width="860px"
+    >
+      <div class="user-dialog-body user-keys-dialog-body">
+        <div class="service-table-panel user-key-detail-panel">
+          <el-table
+            v-loading="userKeysLoading"
+            class="admin-table service-table user-key-detail-table"
+            :data="selectedUserKeys"
+            stripe
+          >
+            <el-table-column :label="t('name')" min-width="112">
+              <template #default="{ row }">{{ row.name }}</template>
+            </el-table-column>
+            <el-table-column :label="t('apiKey')" min-width="220">
+              <template #default="{ row }">
+                <div class="user-key-cell">
+                  <code class="user-key-value">{{ maskApiKey(row.key) }}</code>
+                  <el-tooltip :content="t('copy')" placement="top">
+                    <el-button
+                      class="user-key-copy-button"
+                      :aria-label="t('copy')"
+                      :icon="DocumentCopy"
+                      @click="copyApiKey(row)"
+                    />
+                  </el-tooltip>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column
+              :label="t('availableCredit')"
+              width="96"
+              align="right"
+              header-align="right"
             >
-              {{ t('previousPage') }}
-            </el-button>
-            <el-button :disabled="!userKeysHasMore || userKeysLoading" @click="nextUserKeysPage">
-              {{ t('nextPage') }}
-            </el-button>
+              <template #default="{ row }">{{
+                formatAvailableUsd(row.available_micro_usd)
+              }}</template>
+            </el-table-column>
+            <el-table-column :label="t('status')" width="84" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-tag
+                  class="static-state-tag"
+                  :type="row.status === 'enabled' ? 'success' : 'info'"
+                >
+                  {{ row.status === 'enabled' ? t('enabled') : t('disabled') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('createdAt')" min-width="116">
+              <template #default="{ row }">
+                <span class="user-key-meta-time">{{ formatCompactDateTime(row.created_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('lastUsed')" min-width="108">
+              <template #default="{ row }">
+                <span class="user-key-meta-time">{{ formatLastActiveAt(row.last_active_at) }}</span>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty :description="t('noApiKeys')" />
+            </template>
+          </el-table>
+        </div>
+
+        <div class="admin-pagination-bar user-key-pagination">
+          <div class="admin-pagination-summary">
+            <span class="admin-result-count">
+              {{ t('currentPageItems') }} {{ selectedUserKeys.length.toLocaleString(locale) }}
+              {{ t('itemsUnit') }}
+            </span>
+          </div>
+          <div class="admin-pagination-controls">
+            <span class="admin-result-count">{{ t('currentPage') }} {{ userKeysCurrentPage }}</span>
+            <div class="admin-page-buttons">
+              <el-button
+                :disabled="userKeysCurrentPage <= 1 || userKeysLoading"
+                @click="previousUserKeysPage"
+              >
+                {{ t('previousPage') }}
+              </el-button>
+              <el-button :disabled="!userKeysHasMore || userKeysLoading" @click="nextUserKeysPage">
+                {{ t('nextPage') }}
+              </el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -515,11 +540,185 @@ onMounted(loadUserGroups)
 </template>
 
 <style scoped>
+.user-dialog-body {
+  display: grid;
+  gap: 16px;
+}
+
+.user-dialog-form {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.user-dialog-form.is-single {
+  grid-template-columns: 1fr;
+}
+
+.user-dialog-field {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.user-dialog-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.user-dialog-field :deep(.el-form-item__label) {
+  color: #3f4a5c;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.2;
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.user-dialog-field :deep(.el-input),
+.user-dialog-field :deep(.el-input-number),
+.user-dialog-field :deep(.el-select) {
+  width: 100%;
+}
+
+.user-dialog-field :deep(.el-input__wrapper),
+.user-dialog-field :deep(.el-input-number),
+.user-dialog-field :deep(.el-select__wrapper) {
+  border-radius: 7px;
+  min-height: 36px;
+}
+
+.user-credit-amount-field :deep(.el-input-number) {
+  width: 180px;
+}
+
+.user-dialog-footer {
+  margin: 0;
+}
+
+.user-keys-dialog-body {
+  gap: 12px;
+}
+
+.user-key-detail-panel {
+  max-height: min(58dvh, 520px);
+}
+
+.user-key-detail-table {
+  min-width: 100%;
+}
+
+.user-key-pagination {
+  padding-top: 2px;
+}
+
 .user-edit-select {
   width: 100%;
 }
 
 .hidden-submit {
   display: none;
+}
+
+:global(.user-admin-dialog) {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+:global(.user-admin-dialog .el-dialog__header) {
+  border-bottom: 1px solid var(--admin-border-soft);
+  margin: 0;
+  padding: 18px 20px 16px;
+}
+
+:global(.user-admin-dialog .el-dialog__title) {
+  color: var(--admin-text);
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+:global(.user-admin-dialog .el-dialog__headerbtn) {
+  height: 52px;
+  top: 0;
+  width: 52px;
+}
+
+:global(.user-admin-dialog .el-dialog__body) {
+  padding: 18px 20px;
+}
+
+:global(.user-admin-dialog .el-dialog__footer) {
+  border-top: 1px solid var(--admin-border-soft);
+  padding: 14px 20px 16px;
+}
+
+:global(.user-admin-dialog .el-dialog__footer .admin-dialog-footer) {
+  border-top: 0;
+  padding-top: 0;
+}
+
+:global(.user-admin-dialog .el-button) {
+  border-radius: 7px;
+}
+
+:global(.user-credit-dialog .el-dialog__body) {
+  padding-bottom: 20px;
+}
+
+:global(.user-keys-dialog .el-dialog__body) {
+  padding: 16px 18px 18px;
+}
+
+:global(.user-keys-dialog .el-dialog__footer) {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .user-dialog-form {
+    grid-template-columns: 1fr;
+  }
+
+  .user-dialog-footer {
+    justify-content: stretch;
+  }
+
+  .user-dialog-footer .el-button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .user-credit-amount-field :deep(.el-input-number) {
+    width: 100%;
+  }
+
+  .user-key-detail-panel {
+    max-height: 54dvh;
+  }
+
+  .user-key-pagination {
+    align-items: stretch;
+  }
+
+  .user-key-pagination .admin-pagination-controls,
+  .user-key-pagination .admin-page-buttons {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .user-key-pagination .admin-page-buttons .el-button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  :global(.user-admin-dialog .el-dialog__header) {
+    padding: 16px 18px 14px;
+  }
+
+  :global(.user-admin-dialog .el-dialog__body) {
+    padding: 16px 18px;
+  }
+
+  :global(.user-admin-dialog .el-dialog__footer) {
+    padding: 14px 18px 16px;
+  }
 }
 </style>

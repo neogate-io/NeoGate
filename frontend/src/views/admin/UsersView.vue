@@ -1,9 +1,23 @@
 <script setup lang="ts">
-import { DocumentCopy, Edit, Search, Refresh, View } from '@element-plus/icons-vue'
+import {
+  CircleCheckFilled,
+  Delete,
+  DocumentCopy,
+  Download,
+  Edit,
+  Key,
+  Money,
+  Plus,
+  Refresh,
+  Search,
+  UserFilled,
+  WarningFilled
+} from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { adjustCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
-import { getUsers, updateUser, updateUserStatus } from '../../api/users'
+import { createUser, deleteUser, getUsers, updateUser, updateUserStatus } from '../../api/users'
+import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { User, UserGroup, UserKey } from '../../types/admin'
@@ -17,16 +31,36 @@ import {
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+
+defineOptions({
+  name: 'UsersView'
+})
+
+type CreditLike = Pick<
+  User | UserKey,
+  'balance_micro_usd' | 'reserved_micro_usd' | 'available_micro_usd'
+>
+
 const emailSearch = ref('')
 const apiKeySearch = ref('')
 const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
+const createDialogVisible = ref(false)
+const createSaving = ref(false)
 const editDialogVisible = ref(false)
 const editSaving = ref(false)
+const deletingUserId = ref<number | null>(null)
 const approvingUserId = ref<number | null>(null)
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
+const servicePolicy = ref<ServicePolicy | null>(null)
 const amountUsd = ref(100)
+const jumpTargetPage = ref(1)
+const createForm = reactive({
+  email: '',
+  status: 'enabled' as User['status'],
+  userGroupId: 0
+})
 const editForm = reactive({
   email: '',
   status: 'enabled' as User['status'],
@@ -55,6 +89,14 @@ const {
   has_more: false
 })
 const users = computed(() => usersPage.value.items)
+const usersInitialLoading = computed(() => !usersLoaded.value)
+const hasUserPagination = computed(
+  () => usersCurrentPage.value > 1 || Boolean(usersPage.value.has_more)
+)
+const rechargePreviewMicroUsd = computed(() => {
+  if (!selectedUser.value) return usdToMicroUsd(amountUsd.value)
+  return selectedUser.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
+})
 
 async function loadUsers() {
   return getUsers({
@@ -65,12 +107,59 @@ async function loadUsers() {
   })
 }
 
-function formatAvailableUsd(microUsd?: number | null) {
-  return (microUsd ?? 0) === 0 ? '-' : formatMicroUsd(microUsd, 4)
+function resetUsersPagination(page = 1) {
+  usersCurrentPage.value = page
+  usersCursorStack.value = [undefined]
+  jumpTargetPage.value = page
+}
+
+function creditRequired() {
+  return servicePolicy.value?.credit_required ?? true
+}
+
+function formatAvailableUsd(row: Pick<CreditLike, 'available_micro_usd'>) {
+  if (!creditRequired()) return t('unlimitedCredit')
+  if (row.available_micro_usd <= 0) return t('creditDepleted')
+  return formatMicroUsd(row.available_micro_usd, 2)
+}
+
+function creditCellClass(row: Pick<CreditLike, 'available_micro_usd'>) {
+  if (!creditRequired()) return 'is-unlimited'
+  return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
+}
+
+function creditTooltip(row: CreditLike) {
+  if (!creditRequired()) return t('creditUnlimitedTooltip')
+  return [
+    `${t('totalCredit')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
+    `${t('reservedCredit')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
+    `${t('remainingCredit')}: ${formatMicroUsd(row.available_micro_usd, 2)}`
+  ].join('\n')
 }
 
 function formatLastActiveAt(value?: string | null) {
-  return value ? formatCompactDateTime(value) : t('neverUsed')
+  return value ? `${formatCompactDateTime(value)} · ${formatRelativeTime(value)}` : t('neverActive')
+}
+
+function formatRelativeTime(value?: string | null) {
+  if (!value) return t('neverActive')
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) return '-'
+  const diffSeconds = Math.round((timestamp - Date.now()) / 1000)
+  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ['year', 60 * 60 * 24 * 365],
+    ['month', 60 * 60 * 24 * 30],
+    ['day', 60 * 60 * 24],
+    ['hour', 60 * 60],
+    ['minute', 60]
+  ]
+  const formatter = new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
+  for (const [unit, seconds] of units) {
+    if (Math.abs(diffSeconds) >= seconds) {
+      return formatter.format(Math.round(diffSeconds / seconds), unit)
+    }
+  }
+  return formatter.format(diffSeconds, 'second')
 }
 
 function userStatusText(status: User['status']) {
@@ -79,10 +168,34 @@ function userStatusText(status: User['status']) {
   return t('disabled')
 }
 
-function userStatusTagType(status: User['status']) {
+function userStatusIcon(status: User['status']) {
+  if (status === 'enabled') return CircleCheckFilled
+  if (status === 'pending') return WarningFilled
+  return WarningFilled
+}
+
+function userStatusTone(status: User['status']) {
   if (status === 'enabled') return 'success'
   if (status === 'pending') return 'warning'
-  return 'info'
+  return 'neutral'
+}
+
+function userGroupTone(row: User) {
+  if (row.user_group_code === 'default') return 'default'
+  if (/pro|premium|vip|advanced|高级/i.test(`${row.user_group_code} ${row.user_group_name}`)) {
+    return 'premium'
+  }
+  return 'standard'
+}
+
+function openCreateDialog() {
+  Object.assign(createForm, {
+    email: '',
+    status: 'enabled',
+    userGroupId:
+      userGroups.value.find((group) => group.is_default)?.id ?? userGroups.value[0]?.id ?? 0
+  })
+  createDialogVisible.value = true
 }
 
 function openCreditDialog(row: User) {
@@ -101,20 +214,70 @@ function openEditDialog(row: User) {
   editDialogVisible.value = true
 }
 
-async function openUserKeysDialog(row: User) {
-  selectedUser.value = row
-  userKeysDialogVisible.value = true
-  userKeysLoading.value = true
-  selectedUserKeys.value = []
-  userKeysCurrentPage.value = 1
-  userKeysCursorStack.value = [undefined]
+async function confirmDialog(
+  message: string,
+  title: string,
+  confirmButtonText: string,
+  type: 'info' | 'warning'
+) {
   try {
-    await loadSelectedUserKeys()
+    await ElMessageBox.confirm(message, title, {
+      confirmButtonText,
+      cancelButtonText: t('cancel'),
+      type
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function userStatusConfirmMessage(email: string, status: User['status']) {
+  return t('changeUserStatusConfirm')
+    .replace('{email}', email)
+    .replace('{status}', userStatusText(status))
+}
+
+function userStatusConfirmType(status: User['status']) {
+  return status === 'disabled' ? 'warning' : 'info'
+}
+
+function confirmStatusChange(email: string, status: User['status']) {
+  return confirmDialog(
+    userStatusConfirmMessage(email, status),
+    t('confirmAction'),
+    t('save'),
+    userStatusConfirmType(status)
+  )
+}
+
+async function submitCreateUser() {
+  createSaving.value = true
+  try {
+    const created = await createUser({
+      email: createForm.email.trim(),
+      status: createForm.status
+    })
+    if (createForm.userGroupId && createForm.userGroupId !== created.user_group_id) {
+      await updateUser(created.id, { user_group_id: createForm.userGroupId })
+    }
+    ElMessage.success(t('userCreated'))
+    createDialogVisible.value = false
+    await searchUsers()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    userKeysLoading.value = false
+    createSaving.value = false
   }
+}
+
+async function openUserKeysDialog(row: User) {
+  selectedUser.value = row
+  userKeysDialogVisible.value = true
+  selectedUserKeys.value = []
+  userKeysCurrentPage.value = 1
+  userKeysCursorStack.value = [undefined]
+  await withUserKeysLoading(loadSelectedUserKeys)
 }
 
 async function copyApiKey(row: UserKey) {
@@ -143,6 +306,10 @@ async function submitCredit() {
 
 async function submitEditUser() {
   if (!selectedUser.value) return
+  if (selectedUser.value.status !== editForm.status) {
+    const confirmed = await confirmStatusChange(selectedUser.value.email, editForm.status)
+    if (!confirmed) return
+  }
   editSaving.value = true
   try {
     await updateUser(selectedUser.value.id, {
@@ -161,10 +328,17 @@ async function submitEditUser() {
 }
 
 async function approveUser(row: User) {
+  await confirmUserStatusChange(row, 'enabled')
+}
+
+async function confirmUserStatusChange(row: User, status: User['status']) {
+  if (row.status === status) return
+  const confirmed = await confirmStatusChange(row.email, status)
+  if (!confirmed) return
   approvingUserId.value = row.id
   try {
-    await updateUserStatus(row.id, 'enabled')
-    ElMessage.success(t('userApproved'))
+    await updateUserStatus(row.id, status)
+    ElMessage.success(status === 'enabled' ? t('userApproved') : t('userUpdated'))
     await reload()
   } catch (err) {
     ElMessage.error(readError(err))
@@ -173,17 +347,35 @@ async function approveUser(row: User) {
   }
 }
 
+async function confirmDeleteUser(row: User) {
+  const confirmed = await confirmDialog(
+    t('deleteUserConfirm').replace('{email}', row.email),
+    t('confirmDelete'),
+    t('delete'),
+    'warning'
+  )
+  if (!confirmed) return
+  deletingUserId.value = row.id
+  try {
+    await deleteUser(row.id)
+    ElMessage.success(t('userDeleted'))
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    deletingUserId.value = null
+  }
+}
+
 async function searchUsers() {
-  usersCurrentPage.value = 1
-  usersCursorStack.value = [undefined]
+  resetUsersPagination()
   await reload()
 }
 
 async function resetSearch() {
   emailSearch.value = ''
   apiKeySearch.value = ''
-  usersCurrentPage.value = 1
-  usersCursorStack.value = [undefined]
+  resetUsersPagination()
   await reload()
 }
 
@@ -191,20 +383,76 @@ async function nextUsersPage() {
   if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
   usersCursorStack.value[usersCurrentPage.value] = usersPage.value.next_cursor
   usersCurrentPage.value += 1
+  jumpTargetPage.value = usersCurrentPage.value
   await reload()
 }
 
 async function previousUsersPage() {
   if (usersCurrentPage.value <= 1) return
   usersCurrentPage.value -= 1
+  jumpTargetPage.value = usersCurrentPage.value
   await reload()
 }
 
 async function handleUsersPageSizeChange(size: number) {
   usersPageSize.value = size
-  usersCurrentPage.value = 1
-  usersCursorStack.value = [undefined]
+  resetUsersPagination()
   await reload()
+}
+
+async function jumpUsersPage() {
+  const target = Math.max(1, Math.floor(jumpTargetPage.value || 1))
+  jumpTargetPage.value = target
+  if (target === usersCurrentPage.value) return
+  if (target < usersCurrentPage.value) {
+    usersCurrentPage.value = target
+    await reload()
+    return
+  }
+
+  while (usersCurrentPage.value < target) {
+    if (!usersPage.value.has_more || !usersPage.value.next_cursor) {
+      jumpTargetPage.value = usersCurrentPage.value
+      ElMessage.warning(t('targetPageUnavailable'))
+      return
+    }
+    await nextUsersPage()
+  }
+}
+
+function exportUsers() {
+  const header = [
+    'id',
+    'email',
+    'group',
+    'status',
+    'balance_micro_usd',
+    'reserved_micro_usd',
+    'available_micro_usd',
+    'created_at',
+    'last_active_at'
+  ]
+  const rows = users.value.map((user) => [
+    user.id,
+    user.email,
+    user.user_group_name,
+    user.status,
+    user.balance_micro_usd,
+    user.reserved_micro_usd,
+    user.available_micro_usd,
+    user.created_at,
+    user.last_active_at ?? ''
+  ])
+  const csv = [header, ...rows]
+    .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
+    .join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `users-page-${usersCurrentPage.value}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 async function loadSelectedUserKeys() {
@@ -219,13 +467,10 @@ async function loadSelectedUserKeys() {
   userKeysNextCursor.value = page.next_cursor
 }
 
-async function nextUserKeysPage() {
-  if (!userKeysHasMore.value || !userKeysNextCursor.value) return
-  userKeysCursorStack.value[userKeysCurrentPage.value] = userKeysNextCursor.value
-  userKeysCurrentPage.value += 1
+async function withUserKeysLoading(task: () => Promise<void>) {
   userKeysLoading.value = true
   try {
-    await loadSelectedUserKeys()
+    await task()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
@@ -233,17 +478,17 @@ async function nextUserKeysPage() {
   }
 }
 
+async function nextUserKeysPage() {
+  if (!userKeysHasMore.value || !userKeysNextCursor.value) return
+  userKeysCursorStack.value[userKeysCurrentPage.value] = userKeysNextCursor.value
+  userKeysCurrentPage.value += 1
+  await withUserKeysLoading(loadSelectedUserKeys)
+}
+
 async function previousUserKeysPage() {
   if (userKeysCurrentPage.value <= 1) return
   userKeysCurrentPage.value -= 1
-  userKeysLoading.value = true
-  try {
-    await loadSelectedUserKeys()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userKeysLoading.value = false
-  }
+  await withUserKeysLoading(loadSelectedUserKeys)
 }
 
 async function loadUserGroups() {
@@ -254,38 +499,73 @@ async function loadUserGroups() {
   }
 }
 
-onMounted(loadUserGroups)
+async function loadServicePolicy() {
+  try {
+    servicePolicy.value = await getAdminServicePolicy()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
+}
+
+onMounted(() => {
+  void Promise.all([loadUserGroups(), loadServicePolicy()])
+})
 </script>
 
 <template>
   <section class="grid user-management-view">
-    <el-form class="admin-filter-bar user-filter-bar" @submit.prevent="searchUsers">
-      <el-form-item class="user-search-field" :label="t('email')">
+    <el-form class="user-toolbar" @submit.prevent="searchUsers">
+      <div class="user-toolbar-filters">
         <el-input
           v-model="emailSearch"
+          class="user-search-input"
           clearable
+          :prefix-icon="Search"
           :placeholder="t('userEmailSearchPlaceholder')"
           @clear="searchUsers"
         />
-      </el-form-item>
-      <el-form-item class="user-search-field" :label="t('apiKey')">
         <el-input
           v-model="apiKeySearch"
+          class="user-search-input is-key-search"
           clearable
           show-password
+          :prefix-icon="Key"
           :placeholder="t('apiKeySearchPlaceholder')"
           @clear="searchUsers"
         />
-      </el-form-item>
-      <el-form-item class="user-search-actions">
-        <el-button type="primary" native-type="submit" :icon="Search" :loading="loading">
+        <el-button
+          class="admin-action-button user-search-button"
+          type="primary"
+          native-type="submit"
+          :icon="Search"
+          :loading="loading"
+        >
           {{ t('search') }}
         </el-button>
-        <el-button :icon="Refresh" @click="resetSearch">{{ t('reset') }}</el-button>
-      </el-form-item>
+        <el-button
+          class="admin-action-button user-reset-button"
+          :icon="Refresh"
+          @click="resetSearch"
+        >
+          {{ t('reset') }}
+        </el-button>
+      </div>
+      <div class="user-toolbar-actions">
+        <el-button class="admin-action-button" :icon="Download" @click="exportUsers">
+          {{ t('exportUsers') }}
+        </el-button>
+        <el-button
+          class="admin-action-button add-user-action"
+          type="primary"
+          :icon="Plus"
+          @click="openCreateDialog"
+        >
+          {{ t('addUser') }}
+        </el-button>
+      </div>
     </el-form>
 
-    <div v-if="!usersLoaded" v-loading="true" class="service-table-panel user-table-loading">
+    <div v-if="usersInitialLoading" v-loading="true" class="service-table-panel user-table-loading">
       <div class="user-table-loading-head">
         <span></span>
         <span></span>
@@ -305,63 +585,132 @@ onMounted(loadUserGroups)
         :data="users"
         stripe
       >
-        <el-table-column prop="id" label="ID" width="72" />
-        <el-table-column prop="email" :label="t('email')" min-width="200" />
-        <el-table-column :label="t('userGroup')" width="96">
-          <template #default="{ row }">{{ row.user_group_name }}</template>
+        <el-table-column prop="id" label="ID" width="76" align="right" header-align="right" />
+        <el-table-column prop="email" :label="t('email')" min-width="220">
+          <template #default="{ row }">
+            <span class="user-email-cell">
+              <span class="user-avatar">
+                <el-icon><UserFilled /></el-icon>
+              </span>
+              <span class="user-email-stack">
+                <span class="user-email-text">{{ row.email }}</span>
+                <span class="user-key-count-text">
+                  {{ row.user_key_count.toLocaleString(locale) }} {{ t('apiKey') }}
+                </span>
+              </span>
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('userGroup')" min-width="130">
+          <template #default="{ row }">
+            <span class="user-group-tag" :class="`is-${userGroupTone(row)}`">
+              {{ row.user_group_name }}
+            </span>
+          </template>
         </el-table-column>
         <el-table-column
           :label="t('availableCredit')"
-          width="104"
+          min-width="132"
           align="right"
           header-align="right"
         >
-          <template #default="{ row }">{{ formatAvailableUsd(row.available_micro_usd) }}</template>
-        </el-table-column>
-        <el-table-column :label="t('status')" width="96" align="center" header-align="center">
           <template #default="{ row }">
-            <el-tag class="static-state-tag" :type="userStatusTagType(row.status)">
+            <el-tooltip :content="creditTooltip(row)" placement="top">
+              <span class="user-credit-cell" :class="creditCellClass(row)">
+                {{ formatAvailableUsd(row) }}
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('status')" min-width="128" align="center" header-align="center">
+          <template #default="{ row }">
+            <span
+              class="channel-runtime-status user-status-tag"
+              :class="`is-${userStatusTone(row.status)}`"
+            >
+              <el-icon><component :is="userStatusIcon(row.status)" /></el-icon>
               {{ userStatusText(row.status) }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column :label="t('createdAt')" min-width="160">
-          <template #default="{ row }">{{ formatDateTime(row.created_at, locale) }}</template>
+          <template #default="{ row }">
+            <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
+          </template>
         </el-table-column>
-        <el-table-column :label="t('lastActiveAt')" min-width="160">
-          <template #default="{ row }">{{ formatLastActiveAt(row.last_active_at) }}</template>
+        <el-table-column :label="t('lastActiveAt')" min-width="190">
+          <template #default="{ row }">
+            <span class="user-time-cell" :class="{ 'is-empty': !row.last_active_at }">
+              {{ formatLastActiveAt(row.last_active_at) }}
+            </span>
+          </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="300" align="center" header-align="center">
+        <el-table-column :label="t('actions')" width="204" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
                 v-if="row.status === 'pending'"
-                class="admin-action-button"
-                type="primary"
+                class="admin-action-button icon-only-action user-status-action"
+                :aria-label="t('approve')"
+                :icon="CircleCheckFilled"
                 :loading="approvingUserId === row.id"
                 @click="approveUser(row)"
-              >
-                {{ t('approve') }}
-              </el-button>
-              <el-button class="admin-action-button" :icon="View" @click="openUserKeysDialog(row)">
-                {{ t('viewApiKeys') }}
-              </el-button>
-              <el-button class="admin-action-button" :icon="Edit" @click="openEditDialog(row)">
-                {{ t('edit') }}
-              </el-button>
-              <el-button class="admin-action-button" @click="openCreditDialog(row)">{{
-                t('recharge')
-              }}</el-button>
+              />
+              <el-tooltip :content="t('viewApiKeys')" placement="top">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  :aria-label="t('viewApiKeys')"
+                  :icon="Key"
+                  @click="openUserKeysDialog(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  :aria-label="t('edit')"
+                  :icon="Edit"
+                  @click="openEditDialog(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="t('recharge')" placement="top">
+                <el-button
+                  class="admin-action-button icon-only-action user-recharge-action"
+                  :aria-label="t('recharge')"
+                  :icon="Money"
+                  @click="openCreditDialog(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="t('delete')" placement="top">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  type="danger"
+                  :aria-label="t('delete')"
+                  :icon="Delete"
+                  :loading="deletingUserId === row.id"
+                  @click="confirmDeleteUser(row)"
+                />
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty :description="t('noData')" />
+          <div class="channel-empty-state user-empty-state">
+            <el-empty
+              :description="emailSearch || apiKeySearch ? t('noMatchingUsers') : t('noUsers')"
+            >
+              <el-button type="primary" :icon="Plus" @click="openCreateDialog">
+                {{ t('addUser') }}
+              </el-button>
+            </el-empty>
+          </div>
         </template>
       </el-table>
     </div>
 
-    <div v-if="usersLoaded" class="admin-pagination-bar">
+    <div
+      v-if="!usersInitialLoading && (hasUserPagination || users.length > 1)"
+      class="admin-pagination-bar"
+    >
       <div class="admin-pagination-summary">
         <span class="admin-result-count">
           {{ t('currentPageItems') }} {{ users.length.toLocaleString(locale) }}
@@ -390,8 +739,62 @@ onMounted(loadUserGroups)
             {{ t('nextPage') }}
           </el-button>
         </div>
+        <div class="admin-page-jump-control">
+          <span class="admin-page-label">{{ t('jumpToPage') }}</span>
+          <el-input-number
+            v-model="jumpTargetPage"
+            :min="1"
+            :precision="0"
+            :controls="false"
+            class="admin-page-jump"
+            @keyup.enter="jumpUsersPage"
+          />
+          <el-button :disabled="loading" @click="jumpUsersPage">{{ t('go') }}</el-button>
+        </div>
       </div>
     </div>
+
+    <el-dialog
+      v-model="createDialogVisible"
+      class="user-admin-dialog user-edit-dialog"
+      :title="t('addUser')"
+      width="520px"
+    >
+      <div class="user-dialog-body">
+        <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitCreateUser">
+          <el-form-item class="user-dialog-field is-wide" :label="t('email')">
+            <el-input v-model="createForm.email" type="email" />
+          </el-form-item>
+          <el-form-item class="user-dialog-field" :label="t('status')">
+            <el-select v-model="createForm.status" class="user-edit-select">
+              <el-option :label="t('enabled')" value="enabled" />
+              <el-option :label="t('disabled')" value="disabled" />
+              <el-option :label="t('pendingApproval')" value="pending" />
+            </el-select>
+          </el-form-item>
+          <el-form-item class="user-dialog-field" :label="t('userGroup')">
+            <el-select v-model="createForm.userGroupId" class="user-edit-select">
+              <el-option
+                v-for="group in userGroups"
+                :key="group.id"
+                :label="`${group.name} (${group.code})`"
+                :value="group.id"
+                :disabled="!group.enabled"
+              />
+            </el-select>
+          </el-form-item>
+          <button class="hidden-submit" type="submit" />
+        </el-form>
+      </div>
+      <template #footer>
+        <div class="admin-dialog-footer user-dialog-footer">
+          <el-button @click="createDialogVisible = false">{{ t('cancel') }}</el-button>
+          <el-button type="primary" :loading="createSaving" @click="submitCreateUser">
+            {{ t('create') }}
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="editDialogVisible"
@@ -442,6 +845,20 @@ onMounted(loadUserGroups)
       width="460px"
     >
       <div class="user-dialog-body">
+        <div v-if="selectedUser" class="user-credit-summary">
+          <div>
+            <span>{{ t('currentBalance') }}</span>
+            <strong>{{ formatMicroUsd(selectedUser.balance_micro_usd, 2) }}</strong>
+          </div>
+          <div>
+            <span>{{ t('reservedCredit') }}</span>
+            <strong>{{ formatMicroUsd(selectedUser.reserved_micro_usd, 2) }}</strong>
+          </div>
+          <div>
+            <span>{{ t('afterRecharge') }}</span>
+            <strong>{{ formatMicroUsd(rechargePreviewMicroUsd, 2) }}</strong>
+          </div>
+        </div>
         <el-form class="user-dialog-form is-single" label-position="top">
           <el-form-item class="user-dialog-field user-credit-amount-field" :label="t('amountUsd')">
             <el-input-number v-model="amountUsd" :min="-100000" :precision="2" :step="1" />
@@ -496,9 +913,7 @@ onMounted(loadUserGroups)
               align="right"
               header-align="right"
             >
-              <template #default="{ row }">{{
-                formatAvailableUsd(row.available_micro_usd)
-              }}</template>
+              <template #default="{ row }">{{ formatAvailableUsd(row) }}</template>
             </el-table-column>
             <el-table-column :label="t('status')" width="84" align="center" header-align="center">
               <template #default="{ row }">
@@ -554,6 +969,14 @@ onMounted(loadUserGroups)
 </template>
 
 <style scoped>
+.user-search-input {
+  width: min(240px, 100%);
+}
+
+.user-search-input.is-key-search {
+  width: min(280px, 100%);
+}
+
 .user-table-loading {
   min-height: 236px;
   overflow: hidden;
@@ -699,6 +1122,161 @@ onMounted(loadUserGroups)
   width: 100%;
 }
 
+.user-email-cell {
+  align-items: center;
+  display: inline-flex;
+  gap: 11px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.user-avatar {
+  align-items: center;
+  background: #eef7fd;
+  border: 1px solid #cde9f8;
+  border-radius: 8px;
+  color: var(--brand-blue);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.user-email-stack {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.user-email-text {
+  color: #1d2129;
+  font-size: 14px;
+  font-weight: 680;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-key-count-text {
+  color: #86909c;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.15;
+}
+
+.user-group-tag {
+  align-items: center;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 720;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.user-group-tag.is-default {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.user-group-tag.is-standard {
+  background: #eef7fd;
+  border-color: #cde9f8;
+  color: #0f76b8;
+}
+
+.user-group-tag.is-premium {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.user-credit-cell {
+  align-items: center;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  display: inline-flex;
+  font-feature-settings: 'tnum';
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+  justify-content: flex-end;
+  min-height: 28px;
+  min-width: 86px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.user-credit-cell.is-available {
+  background: #f8fafc;
+  color: #1d2939;
+}
+
+.user-credit-cell.is-unlimited {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+  justify-content: center;
+}
+
+.user-credit-cell.is-depleted {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #c2410c;
+  justify-content: center;
+}
+
+.user-time-cell {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.user-time-cell.is-empty {
+  color: #98a2b3;
+}
+
+.user-empty-state {
+  padding: 30px 0 34px;
+}
+
+.user-credit-summary {
+  background: #f8fafc;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.user-credit-summary div {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.user-credit-summary div + div {
+  border-left: 1px solid #e3ebf4;
+}
+
+.user-credit-summary span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.user-credit-summary strong {
+  color: #1d2939;
+  font-feature-settings: 'tnum';
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+}
+
 .hidden-submit {
   display: none;
 }
@@ -773,6 +1351,15 @@ onMounted(loadUserGroups)
 
   .user-credit-amount-field :deep(.el-input-number) {
     width: 100%;
+  }
+
+  .user-credit-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .user-credit-summary div + div {
+    border-left: 0;
+    border-top: 1px solid #e3ebf4;
   }
 
   .user-key-detail-panel {

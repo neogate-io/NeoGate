@@ -21,11 +21,21 @@ export function getUsers(
   return adminRequest<UserPage>(`/api/admin/users${query ? `?${query}` : ''}`)
 }
 
-export function updateUser(id: number, payload: {
-  email?: string
-  status?: User['status']
-  user_group_id?: number
-}) {
+export function createUser(payload: { email: string; status?: User['status'] }) {
+  return adminRequest<User>('/api/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function updateUser(
+  id: number,
+  payload: {
+    email?: string
+    status?: User['status']
+    user_group_id?: number
+  }
+) {
   return adminRequest<User>(`/api/admin/users/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload)
@@ -34,4 +44,10 @@ export function updateUser(id: number, payload: {
 
 export function updateUserStatus(id: number, status: User['status']) {
   return updateUser(id, { status })
+}
+
+export function deleteUser(id: number) {
+  return adminRequest<{ ok: boolean }>(`/api/admin/users/${id}`, {
+    method: 'DELETE'
+  })
 }

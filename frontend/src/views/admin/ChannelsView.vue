@@ -34,6 +34,10 @@ import { findPricingTemplate, priceKey } from '../../utils/pricing'
 
 const { t } = useLocale()
 
+defineOptions({
+  name: 'ChannelsView'
+})
+
 const {
   channels,
   channelKeys,
@@ -76,7 +80,7 @@ const {
 const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
 const pricingLoading = ref(true)
-const initialTableReady = ref(false)
+const channelsLoaded = ref(false)
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
 const channelSearch = ref('')
@@ -101,8 +105,6 @@ const filteredChannels = computed(() => {
     return matchesStatus && matchesKeyword
   })
 })
-
-const tableLoading = computed(() => loading.value)
 
 function channelModelList(row: Channel) {
   const models = row.endpoints.flatMap((endpoint) => endpoint.models)
@@ -516,7 +518,7 @@ async function loadInitialData() {
   try {
     await Promise.all([loadChannels(), loadPricingData()])
   } finally {
-    initialTableReady.value = true
+    channelsLoaded.value = true
   }
 }
 
@@ -551,184 +553,189 @@ onMounted(loadInitialData)
       </el-button>
     </div>
 
-    <div
-      v-if="!initialTableReady"
-      v-loading="true"
-      class="admin-table service-table channel-table-loading"
-    >
-      <div class="channel-table-loading-head">
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
+    <div v-if="!channelsLoaded" class="service-table-panel">
+      <div v-loading="true" class="admin-table service-table channel-table-loading">
+        <div class="channel-table-loading-head">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div class="channel-table-loading-row"></div>
+        <div class="channel-table-loading-row"></div>
       </div>
-      <div class="channel-table-loading-row"></div>
-      <div class="channel-table-loading-row"></div>
     </div>
 
-    <el-table
-      v-else
-      v-loading="tableLoading"
-      class="admin-table service-table channel-table"
-      :data="filteredChannels"
-      row-key="id"
-      stripe
-    >
-      <el-table-column type="expand" width="44">
-        <template #default="{ row }">
-          <div class="channel-expand-panel">
-            <div class="channel-expand-head">
-              <div>
-                <strong>{{ t('modelPriceDetails') }}</strong>
-                <span>{{ t('inputOutputPriceHint') }}</span>
+    <div v-else class="service-table-panel">
+      <el-table
+        v-loading="loading"
+        class="admin-table service-table channel-table"
+        :data="filteredChannels"
+        row-key="id"
+        stripe
+      >
+        <el-table-column type="expand" width="44">
+          <template #default="{ row }">
+            <div class="channel-expand-panel">
+              <div class="channel-expand-head">
+                <div>
+                  <strong>{{ t('modelPriceDetails') }}</strong>
+                  <span>{{ t('inputOutputPriceHint') }}</span>
+                </div>
+                <el-button
+                  class="admin-action-button expand-price-action"
+                  :icon="PriceTag"
+                  @click="openPriceDialog(row)"
+                >
+                  {{ t('configurePrice') }}
+                </el-button>
               </div>
-              <el-button
-                class="admin-action-button expand-price-action"
-                :icon="PriceTag"
-                @click="openPriceDialog(row)"
-              >
-                {{ t('configurePrice') }}
-              </el-button>
+              <div class="channel-expand-price-table">
+                <div class="channel-expand-price-row is-head">
+                  <span>{{ t('modelName') }}</span>
+                  <span class="channel-head-label">{{ t('inputPrice') }}</span>
+                  <span class="channel-head-label">{{ t('outputPrice') }}</span>
+                  <span class="channel-head-label">{{ t('cacheReadPrice') }}</span>
+                  <span class="channel-head-label">{{ t('cacheWritePrice') }}</span>
+                  <span>{{ t('priceStatus') }}</span>
+                </div>
+                <div
+                  v-for="item in channelPriceRows(row)"
+                  :key="item.model"
+                  class="channel-expand-price-row"
+                  :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
+                >
+                  <span class="channel-price-model">{{ item.model }}</span>
+                  <span class="channel-detail-price">{{ item.inputPrice }}</span>
+                  <span class="channel-detail-price">{{ item.outputPrice }}</span>
+                  <span class="channel-detail-price">{{ item.cacheReadPrice }}</span>
+                  <span class="channel-detail-price" :aria-label="item.cacheWritePrice">
+                    {{ item.cacheWritePrice }}
+                  </span>
+                  <span
+                    class="channel-detail-status"
+                    :class="{ 'is-missing': item.missing }"
+                    :aria-label="item.missing ? t('priceMissing') : t('priceReady')"
+                  >
+                    <el-icon>
+                      <WarningFilled v-if="item.missing" />
+                      <CircleCheckFilled v-else />
+                    </el-icon>
+                  </span>
+                </div>
+              </div>
             </div>
-            <div class="channel-expand-price-table">
-              <div class="channel-expand-price-row is-head">
-                <span>{{ t('modelName') }}</span>
-                <span class="channel-head-label">{{ t('inputPrice') }}</span>
-                <span class="channel-head-label">{{ t('outputPrice') }}</span>
-                <span class="channel-head-label">{{ t('cacheReadPrice') }}</span>
-                <span class="channel-head-label">{{ t('cacheWritePrice') }}</span>
-                <span>{{ t('priceStatus') }}</span>
-              </div>
-              <div
-                v-for="item in channelPriceRows(row)"
-                :key="item.model"
-                class="channel-expand-price-row"
-                :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
-              >
-                <span class="channel-price-model">{{ item.model }}</span>
-                <span class="channel-detail-price">{{ item.inputPrice }}</span>
-                <span class="channel-detail-price">{{ item.outputPrice }}</span>
-                <span class="channel-detail-price">{{ item.cacheReadPrice }}</span>
-                <span class="channel-detail-price" :aria-label="item.cacheWritePrice">
-                  {{ item.cacheWritePrice }}
-                </span>
-                <span
-                  class="channel-detail-status"
-                  :class="{ 'is-missing': item.missing }"
-                  :aria-label="item.missing ? t('priceMissing') : t('priceReady')"
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" :label="t('name')" min-width="250">
+          <template #default="{ row }">
+            <span class="channel-name-cell">
+              <ProviderIcon :provider="row.provider" />
+              <span class="channel-name-stack">
+                <span class="channel-name-text">{{ row.name }}</span>
+                <span class="channel-provider-text">{{ row.provider }}</span>
+              </span>
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('modelPrices')" min-width="360">
+          <template #default="{ row }">
+            <div class="channel-price-summary">
+              <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
+                <el-tag
+                  class="price-status-tag"
+                  :class="`is-${channelPriceStatus(row).type}`"
+                  round
                 >
                   <el-icon>
-                    <WarningFilled v-if="item.missing" />
-                    <CircleCheckFilled v-else />
+                    <WarningFilled />
                   </el-icon>
+                  {{ channelPriceStatus(row).label }}
+                </el-tag>
+              </div>
+              <div class="channel-price-list">
+                <span
+                  v-for="item in channelPricePreviewRows(row)"
+                  :key="item.model"
+                  class="channel-price-item"
+                  :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
+                >
+                  <span class="channel-price-model">{{ item.model }}</span>
+                  <span class="channel-price-value">{{ item.price }}</span>
+                </span>
+                <span v-if="channelPriceOverflowCount(row) > 0" class="channel-price-more">
+                  +{{ channelPriceOverflowCount(row) }}
                 </span>
               </div>
             </div>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column prop="name" :label="t('name')" min-width="250">
-        <template #default="{ row }">
-          <span class="channel-name-cell">
-            <ProviderIcon :provider="row.provider" />
-            <span class="channel-name-stack">
-              <span class="channel-name-text">{{ row.name }}</span>
-              <span class="channel-provider-text">{{ row.provider }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('channelKeyCountShort')"
+          min-width="150"
+          class-name="channel-key-count-column"
+          label-class-name="channel-key-count-header"
+        >
+          <template #default="{ row }">
+            <span class="channel-key-count">{{ channelCredentialSummary(row).label }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('channelStatus')"
+          min-width="150"
+          align="center"
+          header-align="center"
+        >
+          <template #default="{ row }">
+            <span class="channel-runtime-status" :class="`is-${channelRuntimeSummary(row).tone}`">
+              <el-icon><component :is="channelRuntimeSummary(row).icon" /></el-icon>
+              {{ channelRuntimeSummary(row).label }}
             </span>
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('modelPrices')" min-width="360">
-        <template #default="{ row }">
-          <div class="channel-price-summary">
-            <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
-              <el-tag
-                class="price-status-tag"
-                :class="`is-${channelPriceStatus(row).type}`"
-                round
-              >
-                <el-icon>
-                  <WarningFilled />
-                </el-icon>
-                {{ channelPriceStatus(row).label }}
-              </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('actions')" width="164" align="center" header-align="center">
+          <template #default="{ row }">
+            <div class="table-row-actions">
+              <el-tooltip :content="t('configurePrice')" placement="top">
+                <el-button
+                  class="admin-action-button icon-only-action price-config-action"
+                  :aria-label="t('configurePrice')"
+                  :icon="Coin"
+                  @click="openPriceDialog(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  :aria-label="t('edit')"
+                  :icon="Edit"
+                  @click="openEditDialog(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="t('delete')" placement="top">
+                <el-button
+                  :icon="Delete"
+                  class="admin-action-button icon-only-action"
+                  type="danger"
+                  :aria-label="t('delete')"
+                  :loading="deletingId === row.id"
+                  @click="confirmDeleteChannel(row)"
+                />
+              </el-tooltip>
             </div>
-            <div class="channel-price-list">
-              <span
-                v-for="item in channelPricePreviewRows(row)"
-                :key="item.model"
-                class="channel-price-item"
-                :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
-              >
-                <span class="channel-price-model">{{ item.model }}</span>
-                <span class="channel-price-value">{{ item.price }}</span>
-              </span>
-              <span v-if="channelPriceOverflowCount(row) > 0" class="channel-price-more">
-                +{{ channelPriceOverflowCount(row) }}
-              </span>
-            </div>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <div class="channel-empty-state">
+            <el-empty :description="channelSearch ? t('noMatchingChannels') : t('noChannels')">
+              <el-button type="primary" :icon="Plus" @click="openCreateDialog">
+                {{ t('addChannel') }}
+              </el-button>
+            </el-empty>
           </div>
         </template>
-      </el-table-column>
-      <el-table-column
-        :label="t('channelKeyCountShort')"
-        min-width="150"
-        class-name="channel-key-count-column"
-        label-class-name="channel-key-count-header"
-      >
-        <template #default="{ row }">
-          <span class="channel-key-count">{{ channelCredentialSummary(row).label }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        :label="t('channelStatus')"
-        min-width="150"
-        align="center"
-        header-align="center"
-      >
-        <template #default="{ row }">
-          <span class="channel-runtime-status" :class="`is-${channelRuntimeSummary(row).tone}`">
-            <el-icon><component :is="channelRuntimeSummary(row).icon" /></el-icon>
-            {{ channelRuntimeSummary(row).label }}
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('actions')" width="164" align="center" header-align="center">
-        <template #default="{ row }">
-          <div class="table-row-actions">
-            <el-button
-              class="admin-action-button icon-only-action price-config-action"
-              :aria-label="t('configurePrice')"
-              :icon="Coin"
-              @click="openPriceDialog(row)"
-            />
-            <el-button
-              class="admin-action-button icon-only-action"
-              :aria-label="t('edit')"
-              :icon="Edit"
-              @click="openEditDialog(row)"
-            />
-            <el-button
-              :icon="Delete"
-              class="admin-action-button icon-only-action"
-              type="danger"
-              :aria-label="t('delete')"
-              :loading="deletingId === row.id"
-              @click="confirmDeleteChannel(row)"
-            />
-          </div>
-        </template>
-      </el-table-column>
-      <template #empty>
-        <div class="channel-empty-state">
-          <el-empty :description="channelSearch ? t('noMatchingChannels') : t('noChannels')">
-            <el-button type="primary" :icon="Plus" @click="openCreateDialog">
-              {{ t('addChannel') }}
-            </el-button>
-          </el-empty>
-        </div>
-      </template>
-    </el-table>
+      </el-table>
+    </div>
 
     <ChannelFormDialog
       v-model:open="createDialogOpen"
@@ -790,48 +797,12 @@ onMounted(loadInitialData)
 </template>
 
 <style scoped>
-.channel-management-view {
-  gap: 14px;
-}
-
-.channel-toolbar {
-  align-items: center;
-  display: flex;
-  gap: 14px;
-  justify-content: space-between;
-  min-height: 42px;
-  width: 100%;
-}
-
-.channel-toolbar-filters {
-  align-items: center;
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: 10px;
-  min-width: 0;
-}
-
 .channel-search-input {
-  width: min(340px, 100%);
+  width: min(280px, 100%);
 }
 
 .channel-status-filter {
   width: 150px;
-}
-
-.add-channel-action.el-button {
-  box-shadow: 0 8px 18px rgba(22, 139, 211, 0.18);
-  flex: 0 0 auto;
-}
-
-.add-channel-action.el-button:not(.is-disabled):hover {
-  box-shadow: 0 10px 24px rgba(22, 139, 211, 0.24);
-  transform: translateY(-1px);
-}
-
-.add-channel-action.el-button:not(.is-disabled):active {
-  transform: translateY(0);
 }
 
 .channel-name-cell {
@@ -874,72 +845,6 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
-.channel-runtime-status {
-  align-items: center;
-  background: #f8fafc;
-  border: 1px solid #dbe4ef;
-  border-radius: 8px;
-  color: #4e5969;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 720;
-  gap: 7px;
-  min-height: 34px;
-  padding: 0 13px 0 8px;
-  white-space: nowrap;
-}
-
-.channel-runtime-status .el-icon {
-  align-items: center;
-  border-radius: 999px;
-  color: #ffffff;
-  display: inline-flex;
-  font-size: 13px;
-  height: 22px;
-  justify-content: center;
-  width: 22px;
-}
-
-.channel-runtime-status.is-success {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  color: #15803d;
-}
-
-.channel-runtime-status.is-success .el-icon {
-  background: #22c55e;
-}
-
-.channel-runtime-status.is-warning {
-  background: #fffbeb;
-  border-color: #fde68a;
-  color: #b45309;
-}
-
-.channel-runtime-status.is-warning .el-icon {
-  background: #f59e0b;
-}
-
-.channel-runtime-status.is-danger {
-  background: #fef2f2;
-  border-color: #fecaca;
-  color: #b91c1c;
-}
-
-.channel-runtime-status.is-danger .el-icon {
-  background: #ef4444;
-}
-
-.channel-runtime-status.is-neutral {
-  background: #eef2f6;
-  border-color: #dbe4ef;
-  color: #64748b;
-}
-
-.channel-runtime-status.is-neutral .el-icon {
-  background: #94a3b8;
-}
-
 .channel-table-loading {
   min-height: 214px;
   overflow: hidden;
@@ -953,6 +858,7 @@ onMounted(loadInitialData)
   gap: 36px;
   grid-template-columns: 180px minmax(260px, 1fr) 140px 160px;
   height: 48px;
+  min-width: 1118px;
   padding: 0 72px 0 82px;
 }
 
@@ -989,6 +895,7 @@ onMounted(loadInitialData)
   gap: 36px;
   grid-template-columns: 180px minmax(260px, 1fr);
   height: 82px;
+  min-width: 1118px;
   padding: 0 72px 0 82px;
 }
 
@@ -1003,18 +910,6 @@ onMounted(loadInitialData)
 .channel-table :deep(.el-table__body td) {
   height: 82px;
   padding: 12px 0;
-}
-
-.channel-table :deep(.el-table__header-wrapper th) {
-  background: #f6f9fc;
-  color: #4e5969;
-  font-size: 12px;
-  font-weight: 760;
-  height: 48px;
-}
-
-.channel-table :deep(.el-table__row:hover > td.el-table__cell) {
-  background: #f7fbff;
 }
 
 .channel-table :deep(.el-table__expanded-cell) {
@@ -1049,11 +944,6 @@ onMounted(loadInitialData)
 
 .channel-table :deep(.el-table__expand-icon--expanded .el-icon) {
   transform: rotate(90deg);
-}
-
-.channel-table :deep(.el-table__header-wrapper .cell) {
-  overflow-wrap: normal;
-  word-break: normal;
 }
 
 .channel-table :deep(.channel-key-count-header .cell) {
@@ -1291,11 +1181,6 @@ onMounted(loadInitialData)
 
 .expand-price-action.el-button:not(.is-disabled):hover {
   box-shadow: 0 10px 24px rgba(22, 139, 211, 0.22);
-  transform: translateY(-1px);
-}
-
-.expand-price-action.el-button:not(.is-disabled):active {
-  transform: translateY(0);
 }
 
 .channel-expand-price-table {
@@ -1426,67 +1311,6 @@ onMounted(loadInitialData)
   opacity: 0.56;
 }
 
-.table-row-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  white-space: nowrap;
-}
-
-.table-row-actions .el-button {
-  margin-left: 0;
-}
-
-.table-row-actions .icon-only-action {
-  min-width: 36px;
-  padding-left: 0;
-  padding-right: 0;
-  width: 36px;
-}
-
-.table-row-actions :deep(.el-button:not(.el-button--danger)) {
-  --el-button-bg-color: #fbfdff;
-  --el-button-border-color: #d5e0ec;
-  --el-button-hover-bg-color: var(--brand-blue-soft);
-  --el-button-hover-border-color: var(--brand-blue-border);
-  --el-button-hover-text-color: var(--brand-blue);
-}
-
-.table-row-actions :deep(.price-config-action) {
-  --el-button-bg-color: var(--brand-blue-soft);
-  --el-button-border-color: var(--brand-blue-border);
-  --el-button-text-color: var(--brand-blue);
-}
-
-.table-row-actions :deep(.el-button--danger) {
-  --el-button-bg-color: #fff1f2;
-  --el-button-border-color: #fecdd3;
-  --el-button-text-color: #dc2626;
-  --el-button-hover-bg-color: #fee2e2;
-  --el-button-hover-border-color: #fda4af;
-  --el-button-hover-text-color: #be123c;
-}
-
-.table-row-actions :deep(.el-button--danger:not(.is-disabled):hover) {
-  --el-button-bg-color: #ef4444;
-  --el-button-border-color: #ef4444;
-  --el-button-hover-bg-color: #ef4444;
-  --el-button-hover-border-color: #ef4444;
-  --el-button-hover-text-color: #ffffff;
-  color: #ffffff;
-  transform: translateY(-1px) scale(1.04);
-}
-
-.table-row-actions :deep(.el-button:not(.is-disabled):hover) {
-  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
-  color: var(--brand-blue);
-  transform: translateY(-1px);
-}
-
-.table-row-actions :deep(.el-button:not(.is-disabled):active) {
-  transform: translateY(0);
-}
-
 .channel-empty-state {
   padding: 30px 0 34px;
 }
@@ -1504,26 +1328,6 @@ onMounted(loadInitialData)
 }
 
 @media (max-width: 760px) {
-  .channel-toolbar {
-    align-items: stretch;
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .channel-toolbar-filters {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .channel-search-input,
-  .channel-status-filter {
-    width: 100%;
-  }
-
-  .add-channel-action.el-button {
-    width: 100%;
-  }
-
   .channel-expand-panel {
     margin-left: 0;
   }

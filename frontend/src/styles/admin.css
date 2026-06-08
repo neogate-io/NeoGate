@@ -181,6 +181,11 @@
     transform 140ms ease;
 }
 
+.admin-shell .el-button:not(.is-disabled):hover,
+.admin-shell .el-button:not(.is-disabled):active {
+  transform: none !important;
+}
+
 .admin-shell .el-button:not(.is-disabled):focus-visible,
 .admin-shell button:focus-visible,
 .admin-shell a:focus-visible {
@@ -231,6 +236,191 @@
   --el-button-hover-bg-color: var(--brand-blue-hover);
   --el-button-hover-border-color: var(--brand-blue-hover);
   box-shadow: 0 1px 2px rgba(22, 139, 211, 0.18);
+}
+
+.channel-toolbar,
+.user-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  min-height: 42px;
+  width: 100%;
+}
+
+.channel-toolbar-filters,
+.user-toolbar-filters,
+.user-toolbar-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.channel-toolbar-filters,
+.user-toolbar-filters {
+  flex: 1 1 auto;
+}
+
+.user-toolbar-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.channel-toolbar .el-input__wrapper,
+.channel-toolbar .el-select__wrapper,
+.user-toolbar .el-input__wrapper {
+  border-radius: 6px;
+  height: 34px;
+  min-height: 34px;
+}
+
+.channel-toolbar .el-input__inner,
+.user-toolbar .el-input__inner {
+  height: 34px;
+  line-height: 34px;
+}
+
+.channel-toolbar .el-select__placeholder,
+.channel-toolbar .el-select__selected-item {
+  line-height: 34px;
+}
+
+.add-channel-action.el-button,
+.add-user-action.el-button {
+  box-shadow: 0 8px 18px rgba(22, 139, 211, 0.18);
+}
+
+.add-channel-action.el-button {
+  flex: 0 0 auto;
+}
+
+.add-channel-action.el-button:not(.is-disabled):hover,
+.add-user-action.el-button:not(.is-disabled):hover {
+  box-shadow: 0 10px 24px rgba(22, 139, 211, 0.24);
+}
+
+.channel-runtime-status,
+.user-status-tag {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  color: #4e5969;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 720;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 13px 0 8px;
+  white-space: nowrap;
+}
+
+.channel-runtime-status .el-icon,
+.user-status-tag .el-icon {
+  align-items: center;
+  background: #94a3b8;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 13px;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.channel-runtime-status.is-success,
+.user-status-tag.is-success {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.channel-runtime-status.is-success .el-icon,
+.user-status-tag.is-success .el-icon {
+  background: #22c55e;
+}
+
+.channel-runtime-status.is-warning,
+.user-status-tag.is-warning {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+
+.channel-runtime-status.is-warning .el-icon,
+.user-status-tag.is-warning .el-icon {
+  background: #f59e0b;
+}
+
+.channel-runtime-status.is-danger {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.channel-runtime-status.is-danger .el-icon {
+  background: #ef4444;
+}
+
+.channel-runtime-status.is-neutral,
+.user-status-tag.is-neutral {
+  background: #eef2f6;
+  border-color: #dbe4ef;
+  color: #64748b;
+}
+
+.channel-runtime-status.is-neutral .el-icon,
+.user-status-tag.is-neutral .el-icon {
+  background: #94a3b8;
+}
+
+.admin-shell .table-row-actions .el-button:not(.el-button--danger) {
+  --el-button-bg-color: #fbfdff;
+  --el-button-border-color: #d5e0ec;
+  --el-button-hover-bg-color: var(--brand-blue-soft);
+  --el-button-hover-border-color: var(--brand-blue-border);
+  --el-button-hover-text-color: var(--brand-blue);
+}
+
+.admin-shell .table-row-actions .price-config-action,
+.admin-shell .table-row-actions .user-recharge-action {
+  --el-button-bg-color: var(--brand-blue-soft);
+  --el-button-border-color: var(--brand-blue-border);
+  --el-button-text-color: var(--brand-blue);
+}
+
+.admin-shell .table-row-actions .user-status-action {
+  --el-button-bg-color: #f0fdf4;
+  --el-button-border-color: #bbf7d0;
+  --el-button-text-color: #15803d;
+  --el-button-hover-bg-color: #dcfce7;
+  --el-button-hover-border-color: #86efac;
+  --el-button-hover-text-color: #15803d;
+}
+
+.admin-shell .table-row-actions .el-button--danger {
+  --el-button-bg-color: #fff1f2;
+  --el-button-border-color: #fecdd3;
+  --el-button-text-color: #dc2626;
+  --el-button-hover-bg-color: #fee2e2;
+  --el-button-hover-border-color: #fda4af;
+  --el-button-hover-text-color: #be123c;
+}
+
+.admin-shell .table-row-actions .el-button--danger:not(.is-disabled):hover {
+  --el-button-bg-color: #ef4444;
+  --el-button-border-color: #ef4444;
+  --el-button-hover-bg-color: #ef4444;
+  --el-button-hover-border-color: #ef4444;
+  --el-button-hover-text-color: #ffffff;
+  color: #ffffff;
+}
+
+.admin-shell .table-row-actions .el-button:not(.is-disabled):hover {
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+  color: var(--brand-blue);
 }
 
 .admin-pagination-bar {
@@ -529,14 +719,40 @@
   width: 100%;
 }
 
+.service-table.admin-table.el-table .el-table__header-wrapper th,
+.service-table.admin-table.el-table .el-table__fixed-header-wrapper th {
+  background: #f6f9fc;
+  font-size: 12px;
+  height: 48px;
+}
+
+.service-table.admin-table.el-table .el-table__row:hover > td.el-table__cell {
+  background: #f7fbff;
+}
+
 .inline-admin-form:focus-within,
 .admin-filter-bar.el-form:focus-within {
   border-color: var(--brand-blue-border);
   box-shadow: var(--admin-focus-ring);
 }
 
+.channel-table.admin-table.el-table {
+  min-width: 1118px;
+}
+
 .user-table.admin-table.el-table {
   min-width: 980px;
+}
+
+.admin-page-jump-control {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-page-jump {
+  width: 72px;
 }
 
 .user-key-detail-table.admin-table.el-table {
@@ -702,6 +918,29 @@
   }
 
   .admin-filter-bar.el-form .el-input {
+    width: 100%;
+  }
+
+  .channel-toolbar,
+  .user-toolbar {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .channel-toolbar-filters,
+  .user-toolbar-filters,
+  .user-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .channel-search-input,
+  .channel-status-filter,
+  .user-search-input,
+  .user-search-input.is-key-search,
+  .channel-toolbar .el-button,
+  .user-toolbar .el-button {
     width: 100%;
   }
 

@@ -91,6 +91,23 @@ export function syncSetupPricingTemplates() {
   })
 }
 
+export function testSetupSmtpSetting(input: {
+  smtp_host: string
+  smtp_port: number
+  smtp_username?: string | null
+  smtp_password?: string | null
+  clear_smtp_password: boolean
+  smtp_tls: boolean
+  from_email: string
+  from_name?: string | null
+  subject_prefix?: string | null
+}) {
+  return publicRequest<{ ok: boolean }>('/api/setup/smtp/test', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
 export function completeSetupWizard(input: {
   admin_username: string
   admin_password: string

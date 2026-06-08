@@ -22,7 +22,10 @@ use crate::{
             ensure_custom_provider, list_providers, provider_default_endpoints,
             record_provider_models, ProviderRecord,
         },
-        setting::{upsert_smtp_setting, UpsertSmtpSettingRequest},
+        setting::{
+            test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,
+            UpsertSmtpSettingRequest,
+        },
     },
     auth::{AdminAuth, UserSessionAuth},
     bootstrap::{
@@ -151,6 +154,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/setup/pricing-templates/sync",
             axum::routing::post(setup_sync_pricing_templates),
+        )
+        .route(
+            "/api/setup/smtp/test",
+            axum::routing::post(setup_test_smtp_setting),
         )
         .route("/api/user/service-policy", get(user_service_policy))
         .route(
@@ -387,6 +394,19 @@ async fn setup_sync_pricing_templates(
     .await?;
     let templates = list_pricing_templates(&state).await?;
     Ok(Json(SetupPricingTemplateSyncResponse { result, templates }))
+}
+
+async fn setup_test_smtp_setting(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpsertSmtpSettingRequest>,
+) -> AppResult<Json<TestSmtpSettingResponse>> {
+    if current_service_policy(&state).await?.setup_completed {
+        return Err(AppError::Conflict(
+            "setup has already been completed".to_string(),
+        ));
+    }
+
+    Ok(Json(test_smtp_setting(&state, req).await?))
 }
 
 async fn user_service_policy(

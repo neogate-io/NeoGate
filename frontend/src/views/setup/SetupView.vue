@@ -6,9 +6,11 @@ import {
   ArrowRight,
   Briefcase,
   Check,
+  Connection,
   CreditCard,
-  Finished,
   Key,
+  Lock,
+  Message,
   Refresh,
   Select,
   Setting,
@@ -25,6 +27,7 @@ import {
   getSetupStatus,
   syncSetupPricingTemplates,
   testSetupDatabase,
+  testSetupSmtpSetting,
   type ServiceMode,
   type ServicePolicy
 } from '../../api/policy'
@@ -52,6 +55,8 @@ const { t } = useLocale()
 const loading = ref(false)
 const saving = ref(false)
 const fetchingModels = ref(false)
+const configuringPrices = ref(false)
+const testingSmtp = ref(false)
 const generatingTemplate = ref(false)
 const testingDatabase = ref(false)
 const waitingForRestart = ref(false)
@@ -91,7 +96,7 @@ const setupForm = reactive({
 })
 
 const smtpForm = reactive({
-  enabled: false,
+  enabled: true,
   host: '',
   port: 587,
   tls: true,
@@ -100,6 +105,18 @@ const smtpForm = reactive({
   fromEmail: '',
   fromName: '',
   subjectPrefix: ''
+})
+
+const smtpPortInput = computed({
+  get: () => (smtpForm.port > 0 ? String(smtpForm.port) : ''),
+  set: (value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 5)
+    if (!digits) {
+      smtpForm.port = 0
+      return
+    }
+    smtpForm.port = Math.min(Number(digits), 65535)
+  }
 })
 
 const paymentForm = reactive({
@@ -180,6 +197,12 @@ const databaseSslModeOptions = computed(() => [
 ])
 
 const generatedDatabaseUrlPreview = computed(() => buildDatabaseUrl(true))
+const completedStepCount = computed(() => setupSteps.value.filter((step) => step.done).length)
+const setupProgressPercent = computed(() => {
+  if (setupSteps.value.length === 0) return 0
+
+  return Math.round((completedStepCount.value / setupSteps.value.length) * 100)
+})
 
 const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
@@ -208,15 +231,38 @@ const showBusinessSetup = computed(
     !status.value.setup_completed &&
     !reviewingRuntimeConfig.value
 )
+const passwordChecks = computed(() => [
+  {
+    key: 'length',
+    label: t('passwordLengthCheck'),
+    passed: setupForm.adminPassword.length >= 8
+  },
+  {
+    key: 'match',
+    label: t('passwordMatchCheck'),
+    passed:
+      setupForm.adminPassword.length > 0 &&
+      setupForm.confirmPassword.length > 0 &&
+      setupForm.adminPassword === setupForm.confirmPassword
+  }
+])
+const passwordReady = computed(() => passwordChecks.value.every((item) => item.passed))
 
 watch(
-  () => [setupForm.provider, setupForm.protocol],
+  () => setupForm.provider,
   () => applyProviderDefaults()
 )
 
 watch(
   () => setupForm.models,
   () => syncPriceRows()
+)
+
+watch(
+  () => smtpForm.tls,
+  (tls) => {
+    smtpForm.port = tls ? 587 : 25
+  }
 )
 
 async function load() {
@@ -348,7 +394,6 @@ async function fetchModels() {
     })
     setupForm.models = result.models.join(', ')
     syncPriceRows()
-    await syncAndApplyReferencePrices()
     ElMessage.success(t('modelsFetched'))
   } catch (err) {
     ElMessage.error(readError(err))
@@ -371,8 +416,25 @@ async function syncAndApplyReferencePrices() {
     if (applied > 0) {
       ElMessage.success(t('referencePricesApplied'))
     }
+    return true
   } catch (err) {
     ElMessage.error(readReferenceSyncError(err))
+    return false
+  }
+}
+
+async function prepareUpstreamPrices() {
+  syncPriceRows()
+  if (prices.value.length === 0) {
+    ElMessage.error(t('priceModelRequired'))
+    return false
+  }
+
+  configuringPrices.value = true
+  try {
+    return await syncAndApplyReferencePrices()
+  } finally {
+    configuringPrices.value = false
   }
 }
 
@@ -405,19 +467,7 @@ async function submitSetup() {
             enabled: price.enabled
           }))
         : [],
-      smtp: smtpForm.enabled
-        ? {
-            smtp_host: smtpForm.host,
-            smtp_port: smtpForm.port,
-            smtp_username: smtpForm.username || null,
-            smtp_password: smtpForm.password || null,
-            clear_smtp_password: false,
-            smtp_tls: smtpForm.tls,
-            from_email: smtpForm.fromEmail,
-            from_name: smtpForm.fromName || null,
-            subject_prefix: smtpForm.subjectPrefix || null
-          }
-        : null,
+      smtp: smtpForm.enabled ? smtpPayload() : null,
       payment:
         setupForm.serviceMode === 'paid' && paymentForm.enabled
           ? {
@@ -521,10 +571,6 @@ function validateUpstreamStep() {
     ElMessage.error(t('modelsFetchRequired'))
     return false
   }
-  if (prices.value.length === 0) {
-    ElMessage.error(t('priceModelRequired'))
-    return false
-  }
   return true
 }
 
@@ -534,11 +580,43 @@ function validateSmtpStep() {
     ElMessage.error(t('smtpHostRequired'))
     return false
   }
+  if (!Number.isInteger(smtpForm.port) || smtpForm.port < 1 || smtpForm.port > 65535) {
+    ElMessage.error(t('smtpPortInvalid'))
+    return false
+  }
   if (!smtpForm.fromEmail.trim()) {
     ElMessage.error(t('smtpFromEmailRequired'))
     return false
   }
   return true
+}
+
+function smtpPayload() {
+  return {
+    smtp_host: smtpForm.host,
+    smtp_port: smtpForm.port,
+    smtp_username: smtpForm.username || null,
+    smtp_password: smtpForm.password || null,
+    clear_smtp_password: false,
+    smtp_tls: smtpForm.tls,
+    from_email: smtpForm.fromEmail,
+    from_name: smtpForm.fromName || null,
+    subject_prefix: smtpForm.subjectPrefix || null
+  }
+}
+
+async function sendSmtpTestEmail() {
+  smtpForm.enabled = true
+  if (!validateSmtpStep()) return
+  testingSmtp.value = true
+  try {
+    await testSetupSmtpSetting(smtpPayload())
+    ElMessage.success(t('smtpTestEmailSent'))
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    testingSmtp.value = false
+  }
 }
 
 function readReferenceSyncError(err: unknown) {
@@ -553,10 +631,11 @@ function readReferenceSyncError(err: unknown) {
   return readError(err)
 }
 
-function goToNextBusinessStep() {
+async function goToNextBusinessStep() {
   if (currentBusinessStep.value === 'admin-password' && !validateAdminStep()) return
   if (currentBusinessStep.value === 'upstream' && !validateUpstreamStep()) return
   if (currentBusinessStep.value === 'upstream') {
+    if (!(await prepareUpstreamPrices())) return
     includeUpstream.value = true
   }
   const nextIndex = businessSetupSteps.indexOf(currentBusinessStep.value) + 1
@@ -593,7 +672,7 @@ async function handleBusinessSubmit() {
     await submitSetup()
     return
   }
-  goToNextBusinessStep()
+  await goToNextBusinessStep()
 }
 
 function isBusinessStepActive(step: BusinessSetupStep) {
@@ -608,11 +687,21 @@ function isBusinessStepDone(step: BusinessSetupStep) {
 function applyProviderDefaults() {
   const provider = selectedProvider.value
   if (!provider) return
-  setupForm.channelName = setupForm.channelName || provider.display_name
-  const endpoint = provider.default_endpoints.find(
-    (endpoint) => endpoint.protocol === setupForm.protocol
-  )
-  setupForm.baseUrl = endpoint?.base_url || setupForm.baseUrl
+  if (provider.code === 'custom') {
+    setupForm.channelName = ''
+    setupForm.baseUrl = ''
+    setupForm.protocol = 'openai'
+    return
+  }
+
+  setupForm.channelName = provider.display_name
+  const endpoint =
+    provider.default_endpoints.find((item) => item.protocol === 'openai' && item.base_url) ??
+    provider.default_endpoints.find((item) => item.protocol === 'anthropic' && item.base_url)
+  if (endpoint?.protocol === 'openai' || endpoint?.protocol === 'anthropic') {
+    setupForm.protocol = endpoint.protocol
+  }
+  setupForm.baseUrl = endpoint?.base_url || ''
 }
 
 function syncPriceRows() {
@@ -668,15 +757,31 @@ onMounted(load)
           <h1>{{ t('setupTitle') }}</h1>
           <p>{{ t('setupSubtitle') }}</p>
         </div>
+        <div class="setup-progress-card" :aria-label="t('setupProgress')">
+          <div>
+            <span>{{ t('setupProgress') }}</span>
+            <strong>{{ completedStepCount }} / {{ setupSteps.length }}</strong>
+          </div>
+          <span
+            class="setup-progress-track"
+            role="progressbar"
+            :aria-valuenow="setupProgressPercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <span class="setup-progress-fill" :style="{ width: `${setupProgressPercent}%` }" />
+          </span>
+        </div>
         <ol class="setup-steps">
           <li
-            v-for="step in setupSteps"
+            v-for="(step, index) in setupSteps"
             :key="step.key"
             :class="{ active: step.active, done: step.done }"
             :aria-current="step.active ? 'step' : undefined"
           >
             <span class="setup-step-mark">
               <el-icon><Check /></el-icon>
+              <span class="setup-step-index">{{ index + 1 }}</span>
             </span>
             <span>
               <strong>{{ step.title }}</strong>
@@ -836,7 +941,7 @@ onMounted(load)
             </template>
           </div>
 
-          <div class="setup-actions">
+          <div class="setup-actions runtime-actions">
             <el-button
               v-if="reviewingRuntimeConfig"
               :icon="ArrowRight"
@@ -880,6 +985,17 @@ onMounted(load)
                 <el-input v-model="setupForm.confirmPassword" show-password type="password" />
               </el-form-item>
             </div>
+            <div class="setup-password-checks" :class="{ ready: passwordReady }">
+              <span
+                v-for="item in passwordChecks"
+                :key="item.key"
+                class="setup-check-pill"
+                :class="{ ok: item.passed }"
+              >
+                <el-icon><Check /></el-icon>
+                {{ item.label }}
+              </span>
+            </div>
           </div>
 
           <div v-else-if="currentBusinessStep === 'service-mode'" class="setup-section">
@@ -916,7 +1032,10 @@ onMounted(load)
                 /></el-icon>
               </button>
             </div>
-            <div v-if="setupForm.serviceMode === 'internal'" class="setup-inline-control">
+            <div
+              v-if="setupForm.serviceMode === 'internal'"
+              class="setup-inline-control credit-required-control"
+            >
               <span>
                 <strong>{{ t('creditRequired') }}</strong>
                 <small>{{ t('creditRequiredInternalHint') }}</small>
@@ -925,7 +1044,7 @@ onMounted(load)
             </div>
             <template v-if="setupForm.serviceMode === 'paid'">
               <div class="setup-section compact nested-setup-section">
-                <div class="setup-inline-control">
+                <div class="setup-inline-control payment-enable-control">
                   <span>
                     <strong>{{ t('paymentSettings') }}</strong>
                     <small>{{ t('setupPaymentHint') }}</small>
@@ -950,7 +1069,7 @@ onMounted(load)
             </template>
           </div>
 
-          <div v-else-if="currentBusinessStep === 'upstream'" class="setup-section">
+          <div v-else-if="currentBusinessStep === 'upstream'" class="setup-section upstream-setup-section">
             <div class="setup-section-heading">
               <span class="setup-title-icon">
                 <el-icon><Tickets /></el-icon>
@@ -960,7 +1079,7 @@ onMounted(load)
                 <p>{{ t('setupUpstreamHint') }}</p>
               </div>
             </div>
-            <div class="setup-grid two">
+            <div class="setup-grid upstream-basic-grid">
               <el-form-item :label="t('provider')">
                 <el-select v-model="setupForm.provider" filterable>
                   <el-option
@@ -974,9 +1093,6 @@ onMounted(load)
                     >
                   </el-option>
                 </el-select>
-              </el-form-item>
-              <el-form-item :label="t('protocol')">
-                <el-segmented v-model="setupForm.protocol" :options="['openai', 'anthropic']" />
               </el-form-item>
               <el-form-item :label="t('name')">
                 <el-input
@@ -995,7 +1111,12 @@ onMounted(load)
               <div class="models-row">
                 <el-input v-model="setupForm.models" :placeholder="t('modelsCommaSeparated')" />
                 <el-button
-                  :disabled="saving || !setupForm.baseUrl.trim() || !setupForm.secret.trim()"
+                  :disabled="
+                    saving ||
+                    configuringPrices ||
+                    !setupForm.baseUrl.trim() ||
+                    !setupForm.secret.trim()
+                  "
                   :icon="Refresh"
                   :loading="fetchingModels"
                   @click="fetchModels"
@@ -1004,88 +1125,113 @@ onMounted(load)
                 </el-button>
               </div>
             </el-form-item>
-
-            <div class="nested-setup-section">
-              <div class="setup-section-heading">
-                <span class="setup-title-icon">
-                  <el-icon><Finished /></el-icon>
-                </span>
-                <div>
-                  <h2>{{ t('modelPrices') }}</h2>
-                  <p>{{ t('setupPricesHint') }}</p>
-                </div>
-              </div>
-              <div class="price-list">
-                <div class="price-row price-header">
-                  <span>{{ t('model') }}</span>
-                  <span>{{ t('inputShort') }}</span>
-                  <span>{{ t('outputShort') }}</span>
-                  <span>{{ t('status') }}</span>
-                </div>
-                <div v-for="price in prices" :key="price.model" class="price-row">
-                  <div class="price-cell price-model-cell">
-                    <span class="price-mobile-label">{{ t('model') }}</span>
-                    <span class="price-model">{{ price.model }}</span>
-                  </div>
-                  <div class="price-cell">
-                    <span class="price-mobile-label">{{ t('inputShort') }}</span>
-                    <el-input-number v-model="price.inputUsd" :min="0" :precision="6" :step="0.1" />
-                  </div>
-                  <div class="price-cell">
-                    <span class="price-mobile-label">{{ t('outputShort') }}</span>
-                    <el-input-number
-                      v-model="price.outputUsd"
-                      :min="0"
-                      :precision="6"
-                      :step="0.1"
-                    />
-                  </div>
-                  <div class="price-cell">
-                    <span class="price-mobile-label">{{ t('status') }}</span>
-                    <el-switch v-model="price.enabled" />
-                  </div>
-                </div>
-                <el-empty v-if="prices.length === 0" :description="t('modelsFetchRequired')" />
-              </div>
-            </div>
           </div>
 
           <div v-else-if="currentBusinessStep === 'smtp'" class="setup-section compact">
             <div class="setup-section-heading">
               <span class="setup-title-icon">
-                <el-icon><Setting /></el-icon>
+                <el-icon><Message /></el-icon>
               </span>
               <div>
                 <h2>{{ t('smtpSettings') }}</h2>
                 <p>{{ t('setupSmtpHint') }}</p>
               </div>
             </div>
-            <div class="setup-inline-control smtp-enable-control">
-              <span>
-                <strong>{{ t('setupEnableSmtp') }}</strong>
-                <small>{{ t('setupEnableSmtpDescription') }}</small>
-              </span>
-              <el-switch v-model="smtpForm.enabled" />
+
+            <div class="setup-smtp-groups">
+              <section class="setup-mini-section">
+                <header class="setup-mini-section-header">
+                  <el-icon><Connection /></el-icon>
+                  <h3>{{ t('smtpConnectionSettings') }}</h3>
+                </header>
+                <div class="setup-grid smtp-connection-grid">
+                  <el-form-item class="smtp-standard-field" :label="t('smtpHost')">
+                    <el-input
+                      v-model="smtpForm.host"
+                      autocomplete="off"
+                      :placeholder="t('smtpHostPlaceholder')"
+                    />
+                  </el-form-item>
+                  <el-form-item class="smtp-standard-field" :label="t('smtpPort')">
+                    <el-input
+                      v-model="smtpPortInput"
+                      autocomplete="off"
+                      inputmode="numeric"
+                      placeholder="587"
+                    />
+                  </el-form-item>
+                  <el-form-item class="smtp-switch-field" :label="t('smtpTls')">
+                    <el-switch v-model="smtpForm.tls" />
+                  </el-form-item>
+                </div>
+              </section>
+
+              <section class="setup-mini-section">
+                <header class="setup-mini-section-header">
+                  <el-icon><Lock /></el-icon>
+                  <h3>{{ t('smtpAuthSettings') }}</h3>
+                </header>
+                <div class="setup-grid smtp-auth-grid">
+                  <el-form-item class="smtp-standard-field" :label="t('smtpUsername')">
+                    <el-input
+                      v-model="smtpForm.username"
+                      autocomplete="off"
+                      :placeholder="t('smtpUsernamePlaceholder')"
+                    />
+                  </el-form-item>
+                  <el-form-item class="smtp-standard-field" :label="t('smtpPassword')">
+                    <el-input
+                      v-model="smtpForm.password"
+                      autocomplete="new-password"
+                      :placeholder="t('smtpPasswordPlaceholder')"
+                      show-password
+                      type="password"
+                    />
+                  </el-form-item>
+                </div>
+              </section>
+
+              <section class="setup-mini-section">
+                <header class="setup-mini-section-header">
+                  <el-icon><Message /></el-icon>
+                  <h3>{{ t('smtpSenderSettings') }}</h3>
+                </header>
+                <div class="setup-grid smtp-sender-grid">
+                  <el-form-item class="smtp-standard-field" :label="t('mailFromEmail')">
+                    <el-input
+                      v-model="smtpForm.fromEmail"
+                      autocomplete="off"
+                      :placeholder="t('mailFromEmailPlaceholder')"
+                      type="email"
+                    />
+                  </el-form-item>
+                  <el-form-item class="smtp-standard-field" :label="t('mailFromName')">
+                    <el-input
+                      v-model="smtpForm.fromName"
+                      autocomplete="off"
+                      :placeholder="t('mailFromNamePlaceholder')"
+                    />
+                  </el-form-item>
+                  <el-form-item class="smtp-standard-field" :label="t('mailSubjectPrefix')">
+                    <el-input
+                      v-model="smtpForm.subjectPrefix"
+                      autocomplete="off"
+                      :placeholder="t('mailSubjectPrefixPlaceholder')"
+                    />
+                  </el-form-item>
+                </div>
+              </section>
             </div>
-            <div v-if="smtpForm.enabled" class="setup-grid two optional-grid">
-              <el-form-item :label="t('smtpHost')"
-                ><el-input v-model="smtpForm.host"
-              /></el-form-item>
-              <el-form-item :label="t('smtpPort')"
-                ><el-input-number v-model="smtpForm.port" :min="1" :max="65535"
-              /></el-form-item>
-              <el-form-item :label="t('smtpUsername')"
-                ><el-input v-model="smtpForm.username"
-              /></el-form-item>
-              <el-form-item :label="t('smtpPassword')"
-                ><el-input v-model="smtpForm.password" show-password
-              /></el-form-item>
-              <el-form-item :label="t('mailFromEmail')"
-                ><el-input v-model="smtpForm.fromEmail"
-              /></el-form-item>
-              <el-form-item :label="t('mailFromName')"
-                ><el-input v-model="smtpForm.fromName"
-              /></el-form-item>
+
+            <div class="setup-field-actions smtp-test-actions">
+              <el-button
+                :icon="Message"
+                :loading="testingSmtp"
+                :disabled="saving"
+                @click="sendSmtpTestEmail"
+              >
+                {{ t('sendSmtpTestEmail') }}
+              </el-button>
             </div>
           </div>
 
@@ -1100,7 +1246,7 @@ onMounted(load)
             </el-button>
             <el-button
               v-if="currentBusinessStep === 'upstream'"
-              :disabled="saving || fetchingModels"
+              :disabled="saving || fetchingModels || configuringPrices"
               @click="skipUpstreamStep"
             >
               {{ t('skipStep') }}
@@ -1109,7 +1255,8 @@ onMounted(load)
               v-if="currentBusinessStep !== 'smtp'"
               type="primary"
               :icon="ArrowRight"
-              :disabled="saving || fetchingModels"
+              :loading="currentBusinessStep === 'upstream' && configuringPrices"
+              :disabled="saving || fetchingModels || configuringPrices"
               @click="goToNextBusinessStep"
             >
               {{ t('nextStep') }}
@@ -1143,40 +1290,42 @@ onMounted(load)
 
 <style scoped>
 .setup-shell {
+  --setup-footer-height: 38px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 252, 0.96)),
     linear-gradient(135deg, rgba(22, 139, 211, 0.1), rgba(5, 150, 105, 0.05) 46%, transparent 46%),
     #f6f8fb;
-  min-height: 100vh;
-  padding: 28px clamp(18px, 4vw, 48px);
+  min-height: calc(100dvh - var(--setup-footer-height));
+  overflow: hidden;
+  padding: 22px clamp(18px, 3vw, 34px);
   position: relative;
 }
 
 .setup-language {
   position: fixed;
-  right: clamp(18px, 4vw, 44px);
-  top: 22px;
+  right: clamp(18px, 3vw, 34px);
+  top: 18px;
   z-index: 2;
 }
 
 .setup-stage {
   align-items: start;
   display: grid;
-  gap: clamp(24px, 4vw, 48px);
-  grid-template-columns: minmax(280px, 380px) minmax(0, 820px);
+  gap: clamp(20px, 3vw, 34px);
+  grid-template-columns: 300px minmax(0, 680px);
   margin: 0 auto;
-  max-width: 1240px;
-  min-height: calc(100vh - 56px);
-  padding-top: 34px;
+  max-width: 1040px;
+  min-height: calc(100dvh - var(--setup-footer-height) - 44px);
+  padding-top: 24px;
 }
 
 .setup-brief {
   align-content: start;
   display: grid;
-  gap: 22px;
-  padding: 28px 0 0;
+  gap: 16px;
+  padding: 18px 0 0;
   position: sticky;
-  top: 24px;
+  top: 18px;
 }
 
 .setup-logo-lockup {
@@ -1186,9 +1335,9 @@ onMounted(load)
 }
 
 .setup-logo-lockup img {
-  height: 42px;
+  height: 34px;
   object-fit: contain;
-  width: 144px;
+  width: 124px;
 }
 
 .setup-logo-lockup span {
@@ -1202,7 +1351,7 @@ onMounted(load)
 
 .setup-heading {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .setup-heading h1,
@@ -1213,22 +1362,65 @@ onMounted(load)
 }
 
 .setup-heading h1 {
-  font-size: 44px;
+  font-size: 36px;
   font-weight: 840;
-  line-height: 1.08;
+  line-height: 1.12;
 }
 
 .setup-heading p,
 .setup-panel p {
   color: #64748b;
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.6;
   margin: 0;
+}
+
+.setup-progress-card {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid #dfe7f1;
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.setup-progress-card > div {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.setup-progress-card span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.setup-progress-card strong {
+  color: #172033;
+  font-size: 14px;
+  font-weight: 820;
+}
+
+.setup-progress-track {
+  background: #e6edf5;
+  border-radius: 999px;
+  display: block;
+  height: 8px;
+  overflow: hidden;
+}
+
+.setup-progress-fill {
+  background: #168bd3;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width 0.18s ease;
 }
 
 .setup-steps {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1240,9 +1432,9 @@ onMounted(load)
   border: 1px solid transparent;
   border-radius: 8px;
   display: grid;
-  gap: 10px;
-  grid-template-columns: 28px minmax(0, 1fr);
-  padding: 10px;
+  gap: 9px;
+  grid-template-columns: 26px minmax(0, 1fr);
+  padding: 9px;
   transition:
     background-color 0.15s ease,
     border-color 0.15s ease,
@@ -1261,13 +1453,21 @@ onMounted(load)
   border-radius: 50%;
   color: #7a8798;
   display: inline-flex;
-  height: 28px;
+  font-size: 13px;
+  font-weight: 800;
+  height: 26px;
   justify-content: center;
-  width: 28px;
+  position: relative;
+  width: 26px;
 }
 
 .setup-step-mark .el-icon {
   opacity: 0;
+  position: absolute;
+}
+
+.setup-step-index {
+  line-height: 1;
 }
 
 .setup-steps li.done .setup-step-mark {
@@ -1277,6 +1477,10 @@ onMounted(load)
 
 .setup-steps li.done .setup-step-mark .el-icon {
   opacity: 1;
+}
+
+.setup-steps li.done .setup-step-index {
+  opacity: 0;
 }
 
 .setup-steps li.active .setup-step-mark {
@@ -1301,8 +1505,8 @@ onMounted(load)
 .setup-inline-control small {
   color: #738093;
   display: block;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.46;
   margin-top: 3px;
 }
 
@@ -1311,19 +1515,19 @@ onMounted(load)
   background: #ffffff;
   border: 1px solid #dfe7f1;
   border-radius: 8px;
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
   display: grid;
-  gap: 22px;
-  margin-bottom: 28px;
+  gap: 16px;
+  margin-bottom: 0;
   min-width: 0;
-  padding: clamp(22px, 3vw, 32px);
-  width: min(820px, 100%);
+  padding: 22px;
+  width: min(680px, 100%);
 }
 
 .setup-panel > .el-form {
   display: grid;
-  gap: 22px;
-  max-width: 680px;
+  gap: 16px;
+  max-width: none;
   width: 100%;
 }
 
@@ -1336,7 +1540,7 @@ onMounted(load)
   font-size: 13px;
   font-weight: 760;
   line-height: 1.3;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
 }
 
 .setup-panel :deep(.el-input__wrapper),
@@ -1351,35 +1555,28 @@ onMounted(load)
 
 .setup-panel :deep(.el-input__wrapper),
 .setup-panel :deep(.el-select__wrapper) {
-  min-height: 42px;
+  min-height: 38px;
 }
 
 .setup-panel :deep(.el-input__wrapper.is-focus),
 .setup-panel :deep(.el-select__wrapper.is-focused),
 .setup-panel :deep(.el-textarea__inner:focus) {
-  box-shadow:
-    0 0 0 1px #168bd3 inset,
-    0 0 0 3px rgba(22, 139, 211, 0.11);
+  box-shadow: 0 0 0 1px #168bd3 inset;
 }
 
 .setup-panel :deep(.el-button) {
   border-radius: 8px;
+  font-size: 14px;
   font-weight: 720;
-  min-height: 38px;
-}
-
-.setup-panel :deep(.el-segmented) {
-  --el-segmented-item-selected-bg-color: #168bd3;
-  --el-segmented-item-selected-color: #ffffff;
-  border-radius: 8px;
+  min-height: 36px;
 }
 
 .setup-panel-title,
 .setup-section-heading {
   align-items: start;
   display: grid;
-  gap: 12px;
-  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  grid-template-columns: 38px minmax(0, 1fr);
 }
 
 .setup-section-heading.compact-heading {
@@ -1393,9 +1590,9 @@ onMounted(load)
   border-radius: 8px;
   color: #168bd3;
   display: inline-flex;
-  height: 42px;
+  height: 38px;
   justify-content: center;
-  width: 42px;
+  width: 38px;
 }
 
 .setup-title-icon.warning {
@@ -1405,7 +1602,7 @@ onMounted(load)
 }
 
 .setup-panel h2 {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 820;
   margin: 0;
 }
@@ -1413,9 +1610,9 @@ onMounted(load)
 .setup-section {
   border-top: 1px solid #edf1f5;
   display: grid;
-  gap: 16px;
-  max-width: 680px;
-  padding-top: 22px;
+  gap: 12px;
+  max-width: none;
+  padding-top: 16px;
 }
 
 .setup-section:first-child {
@@ -1424,24 +1621,24 @@ onMounted(load)
 }
 
 .setup-section.compact {
-  gap: 12px;
+  gap: 10px;
 }
 
 .nested-setup-section {
   border-top: 1px solid #edf1f5;
   display: grid;
-  gap: 16px;
-  padding-top: 18px;
+  gap: 12px;
+  padding-top: 14px;
 }
 
 .setup-grid {
   display: grid;
-  gap: 14px;
-  max-width: 640px;
+  gap: 12px;
+  max-width: none;
 }
 
 .setup-grid.two {
-  grid-template-columns: repeat(2, minmax(220px, 300px));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .setup-grid .el-input-number,
@@ -1455,12 +1652,29 @@ onMounted(load)
 }
 
 .setup-section > .el-form-item {
+  max-width: none;
+}
+
+.upstream-setup-section {
+  max-width: 560px;
+}
+
+.upstream-basic-grid {
+  grid-template-columns: minmax(0, 460px);
+  max-width: 460px;
+}
+
+.upstream-setup-section > .el-form-item {
+  max-width: 560px;
+}
+
+.upstream-setup-section .models-row {
   max-width: 560px;
 }
 
 .setup-mode-grid {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -1472,33 +1686,29 @@ onMounted(load)
   color: #111827;
   cursor: pointer;
   display: grid;
-  gap: 12px;
-  min-height: 150px;
-  padding: 16px;
+  gap: 10px;
+  min-height: 134px;
+  padding: 14px;
   position: relative;
   text-align: left;
   transition:
     background-color 0.15s ease,
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
+    border-color 0.15s ease;
 }
 
 .setup-mode-card:hover {
   background: #fbfdff;
   border-color: #b7dcf2;
-  transform: translateY(-1px);
 }
 
 .setup-mode-card.active {
   border-color: #168bd3;
-  box-shadow: 0 16px 40px rgba(22, 139, 211, 0.16);
+  background: #f4fbff;
 }
 
 .setup-mode-card:disabled {
   cursor: not-allowed;
   opacity: 0.72;
-  transform: none;
 }
 
 .setup-mode-icon {
@@ -1507,32 +1717,32 @@ onMounted(load)
   border-radius: 8px;
   color: #168bd3;
   display: inline-flex;
-  height: 40px;
+  height: 36px;
   justify-content: center;
-  width: 40px;
+  width: 36px;
 }
 
 .setup-mode-copy {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .setup-mode-copy strong {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 820;
 }
 
 .setup-mode-copy span {
   color: #64748b;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .setup-mode-check {
   color: #168bd3;
   position: absolute;
-  right: 16px;
-  top: 16px;
+  right: 14px;
+  top: 14px;
 }
 
 .setup-inline-control {
@@ -1541,66 +1751,60 @@ onMounted(load)
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   display: flex;
-  gap: 16px;
+  gap: 12px;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 12px 14px;
+}
+
+.credit-required-control,
+.payment-enable-control {
+  background: transparent;
+}
+
+.setup-password-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.setup-check-pill {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  color: #64748b;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 740;
+  gap: 5px;
+  min-height: 28px;
+  padding: 5px 10px;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.setup-check-pill .el-icon {
+  opacity: 0.36;
+}
+
+.setup-check-pill.ok {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #047857;
+}
+
+.setup-check-pill.ok .el-icon {
+  opacity: 1;
 }
 
 .models-row {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
-  max-width: 560px;
+  max-width: none;
   width: 100%;
-}
-
-.price-list {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  display: grid;
-  overflow: hidden;
-}
-
-.price-row {
-  align-items: center;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(150px, 1fr) minmax(130px, 150px) minmax(130px, 150px) 76px;
-  padding: 10px 12px;
-}
-
-.price-header {
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 800;
-  padding-bottom: 8px;
-  padding-top: 8px;
-}
-
-.price-row + .price-row {
-  border-top: 1px solid #e2e8f0;
-}
-
-.price-cell {
-  align-items: center;
-  display: flex;
-  min-width: 0;
-}
-
-.price-cell :deep(.el-input-number) {
-  width: 100%;
-}
-
-.price-mobile-label {
-  display: none;
-}
-
-.price-model {
-  color: #172033;
-  font-size: 13px;
-  font-weight: 700;
-  overflow-wrap: anywhere;
 }
 
 .setup-check-list {
@@ -1627,34 +1831,103 @@ onMounted(load)
 }
 
 .optional-grid {
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
-.smtp-enable-control {
-  margin-top: 2px;
+.setup-smtp-groups {
+  --smtp-field-width: 300px;
+  display: grid;
+  gap: 12px;
+  max-width: calc(var(--smtp-field-width) * 2 + 12px + 30px);
+}
+
+.setup-mini-section {
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.setup-mini-section-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.setup-mini-section-header .el-icon {
+  align-items: center;
+  background: #eaf6fd;
+  border: 1px solid #d3edf9;
+  border-radius: 8px;
+  color: #168bd3;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.setup-mini-section-header h3 {
+  color: #172033;
+  font-size: 14px;
+  font-weight: 820;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.smtp-connection-grid {
+  align-items: end;
+  grid-template-columns: minmax(0, var(--smtp-field-width)) 132px 96px;
+}
+
+.smtp-auth-grid,
+.smtp-sender-grid {
+  grid-template-columns: repeat(2, minmax(0, var(--smtp-field-width)));
+}
+
+.smtp-standard-field {
+  width: 100%;
+}
+
+.smtp-switch-field :deep(.el-form-item__content) {
+  min-height: 38px;
+}
+
+.smtp-switch-field {
+  width: var(--smtp-field-width);
+}
+
+.smtp-test-actions {
+  margin-top: 0;
 }
 
 .setup-actions {
   align-items: center;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+.runtime-actions {
+  max-width: none;
+  width: 100%;
 }
 
 .setup-field-actions {
   align-items: center;
   display: flex;
   justify-content: flex-start;
-  margin-top: -6px;
+  margin-top: -4px;
 }
 
 .setup-actions.sticky {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), #ffffff 40%);
   border-top: 1px solid #edf1f5;
   bottom: 0;
-  margin: 2px -10px -12px;
-  padding: 16px 10px 4px;
+  margin: 0 -6px -8px;
+  padding: 12px 6px 0;
   position: sticky;
   z-index: 1;
 }
@@ -1669,16 +1942,18 @@ onMounted(load)
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: space-between;
-  max-width: 614px;
-  padding: 14px 16px;
+  max-width: none;
+  padding: 11px 12px;
   width: 100%;
 }
 
 .setup-env-file span {
   color: #64748b;
   font-size: 13px;
+  flex: 0 0 auto;
+  font-weight: 760;
 }
 
 .setup-env-file code {
@@ -1693,18 +1968,23 @@ onMounted(load)
   border: 1px solid #fed7aa;
   border-radius: 8px;
   color: #9a3412 !important;
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 @media (max-width: 980px) {
+  .setup-shell {
+    overflow: visible;
+  }
+
   .setup-stage {
     grid-template-columns: 1fr;
     min-height: auto;
+    max-width: 760px;
     padding-top: 54px;
   }
 
   .setup-brief {
-    gap: 18px;
+    gap: 16px;
     padding-top: 0;
     position: static;
   }
@@ -1720,7 +2000,20 @@ onMounted(load)
   }
 
   .setup-heading h1 {
-    font-size: 36px;
+    font-size: 32px;
+  }
+
+  .setup-panel {
+    width: 100%;
+  }
+
+  .smtp-auth-grid,
+  .smtp-sender-grid {
+    grid-template-columns: repeat(2, minmax(0, var(--smtp-field-width)));
+  }
+
+  .smtp-connection-grid {
+    grid-template-columns: minmax(0, var(--smtp-field-width)) 132px 96px;
   }
 }
 
@@ -1741,30 +2034,22 @@ onMounted(load)
     grid-template-columns: 1fr;
   }
 
-  .price-header {
-    display: none;
-  }
-
-  .price-row {
-    align-items: start;
-    gap: 12px;
+  .smtp-connection-grid,
+  .smtp-auth-grid,
+  .smtp-sender-grid {
     grid-template-columns: 1fr;
-    padding: 14px;
   }
 
-  .price-cell {
-    align-items: center;
-    display: grid;
-    gap: 10px;
-    grid-template-columns: 76px minmax(0, 1fr);
+  .smtp-standard-field {
     width: 100%;
   }
 
-  .price-mobile-label {
-    color: #64748b;
-    display: inline-flex;
-    font-size: 12px;
-    font-weight: 760;
+  .smtp-switch-field {
+    width: 100%;
+  }
+
+  .setup-progress-card {
+    padding: 11px;
   }
 
   .models-row {
@@ -1776,6 +2061,8 @@ onMounted(load)
   .setup-grid,
   .setup-section,
   .setup-section > .el-form-item,
+  .upstream-setup-section,
+  .upstream-basic-grid,
   .admin-credentials-grid,
   .setup-textarea {
     max-width: none;

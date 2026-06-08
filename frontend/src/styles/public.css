@@ -24,6 +24,11 @@
   --powered-footer-bg: #eef3f8;
 }
 
+.root-shell-route-setup {
+  --powered-footer-bg: #f6f8fb;
+  background: #f6f8fb;
+}
+
 .login-shell {
   align-items: center;
   background:

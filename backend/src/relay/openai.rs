@@ -175,7 +175,22 @@ async fn relay_openai(
                 let failure = describe_upstream_http_failure(status, &body);
                 if should_retry_after_model_unavailable(&ctx, &failure) {
                     log_upstream_http_failure(&ctx, status, &failure);
-                    mark_credential_model_unavailable(&ctx, status, &failure).await;
+                    let blocked = mark_credential_model_unavailable(&ctx, status, &failure).await?;
+                    if !blocked {
+                        tracing::info!(
+                            provider = %ctx.upstream.provider,
+                            channel_id = ctx.upstream.channel_id,
+                            channel_name = %ctx.upstream.channel_name,
+                            channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                            channel_key_id = ?ctx.upstream.channel_key_id,
+                            credential_id = ?ctx.upstream.credential_id,
+                            protocol = ctx.protocol.as_str(),
+                            model = %ctx.model,
+                            path = ctx.path,
+                            "skipping upstream model cooldown because this model has no alternate channel"
+                        );
+                        return respond_upstream_http_failure(ctx, status, failure).await;
+                    }
                     if model_unavailable_reroutes >= MODEL_UNAVAILABLE_MAX_REROUTES {
                         tracing::warn!(
                             provider = %ctx.upstream.provider,
@@ -540,18 +555,23 @@ async fn mark_credential_model_unavailable(
     ctx: &RelayContext,
     status: StatusCode,
     failure: &super::error::UpstreamHttpFailure,
-) {
+) -> AppResult<bool> {
     let unavailable_until =
         chrono::Utc::now() + chrono::Duration::hours(MODEL_UNAVAILABLE_BLOCK_HOURS);
-    ctx.state
+    let blocked = ctx
+        .state
         .selector
         .mark_credential_model_unavailable(
+            &ctx.state.db.pool,
             &ctx.upstream,
             ctx.protocol,
             &ctx.model,
             unavailable_until,
         )
-        .await;
+        .await?;
+    if !blocked {
+        return Ok(false);
+    }
     if let Some(credential_id) = ctx.upstream.credential_id {
         ctx.state
             .credential_models
@@ -565,6 +585,7 @@ async fn mark_credential_model_unavailable(
             )
             .await;
     }
+    Ok(true)
 }
 
 fn mark_credential_model_available(ctx: &RelayContext) {

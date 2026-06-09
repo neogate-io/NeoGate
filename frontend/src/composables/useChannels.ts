@@ -471,25 +471,14 @@ export function useChannels(t: Translate) {
     }
 
     if (isCustomProvider(form.provider)) {
-      const baseUrl = visibleBaseUrl(form).trim()
-      if (!baseUrl) {
+      const endpoints = customProviderEndpointsForSubmit(form, models)
+      if (!endpoints) return null
+      if (endpoints.length === 0) {
         ElMessage.warning(t('baseUrlRequired'))
         return null
       }
 
-      if (!isValidHttpUrl(baseUrl)) {
-        ElMessage.warning(t('baseUrlInvalid'))
-        return null
-      }
-
-      return [
-        {
-          protocol: 'openai' as const,
-          base_url: baseUrl,
-          models,
-          enabled: true
-        }
-      ]
+      return endpoints
     }
 
     const endpoints: Array<{
@@ -556,7 +545,9 @@ export function useChannels(t: Translate) {
     }
 
     if (isCustomProvider(form.provider)) {
-      return form.endpoints.openai
+      return form.endpoints.openai.base_url.trim()
+        ? form.endpoints.openai
+        : form.endpoints.anthropic
     }
 
     if (form.endpoints.openai.base_url.trim()) {
@@ -586,6 +577,34 @@ export function useChannels(t: Translate) {
     form.endpoints.openai.base_url = value
     form.endpoints.openai_oauth.base_url = ''
     form.endpoints.anthropic.base_url = ''
+  }
+
+  function customProviderEndpointsForSubmit(form: ChannelForm, models: string[]) {
+    const endpoints: Array<{
+      protocol: EndpointProtocol
+      base_url: string
+      models: string[]
+      enabled: boolean
+    }> = []
+
+    for (const protocol of ['openai', 'anthropic'] as const) {
+      const baseUrl = form.endpoints[protocol].base_url.trim()
+      if (!baseUrl) continue
+
+      if (!isValidHttpUrl(baseUrl)) {
+        ElMessage.warning(t('baseUrlInvalid'))
+        return null
+      }
+
+      endpoints.push({
+        protocol,
+        base_url: baseUrl,
+        models,
+        enabled: true
+      })
+    }
+
+    return endpoints
   }
 
   watch(

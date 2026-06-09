@@ -94,21 +94,11 @@ const { t } = useLocale()
               />
               <span class="price-pair-separator">/</span>
               <el-input-number
-                v-if="row.cacheWriteUsdPerMillion !== null"
                 v-model="row.cacheWriteUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
                 :min="0"
                 :step="0.01"
-              />
-              <el-input-number
-                v-else
-                class="price-number-input is-cache-write-free"
-                :model-value="0"
-                :controls="false"
-                :min="0"
-                :step="0.01"
-                disabled
               />
             </div>
           </div>
@@ -284,16 +274,6 @@ const { t } = useLocale()
   font-size: 13px;
   font-weight: 500;
   text-align: center;
-}
-
-.price-number-input.is-cache-write-free :deep(.el-input__wrapper) {
-  background: transparent;
-  cursor: default;
-}
-
-.price-number-input.is-cache-write-free :deep(.el-input__inner) {
-  color: #94a3b8;
-  -webkit-text-fill-color: #94a3b8;
 }
 
 .reference-price-cell {

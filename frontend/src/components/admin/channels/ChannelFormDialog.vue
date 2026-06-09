@@ -98,7 +98,22 @@ const { t } = useLocale()
         <el-input v-model="form.name" :placeholder="t('channelNamePlaceholder')" />
       </el-form-item>
 
-      <el-form-item :label="t('baseUrl')">
+      <div v-if="form.provider === 'custom'" class="custom-base-url-grid">
+        <el-form-item :label="t('openAiBaseUrl')">
+          <el-input
+            v-model="form.endpoints.openai.base_url"
+            :placeholder="t('baseUrlPlaceholder')"
+          />
+        </el-form-item>
+        <el-form-item :label="t('anthropicBaseUrl')">
+          <el-input
+            v-model="form.endpoints.anthropic.base_url"
+            :placeholder="t('anthropicBaseUrlPlaceholder')"
+          />
+        </el-form-item>
+      </div>
+
+      <el-form-item v-else :label="t('baseUrl')">
         <el-input
           v-model="baseUrl"
           class="base-url-input"
@@ -239,6 +254,12 @@ const { t } = useLocale()
 .base-url-input.is-readonly :deep(.el-input__inner) {
   color: #667085;
   -webkit-text-fill-color: #667085;
+}
+
+.custom-base-url-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .models-row {

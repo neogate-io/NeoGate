@@ -235,7 +235,7 @@ pub(in crate::relay) async fn finish_relay(
             let summary = err.to_string();
             log_relay_upstream_failure(&ctx, &err);
             let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
-            let failure = key_failure_from_context(&ctx, summary);
+            let failure = key_failure_from_context(&ctx, summary).await;
             release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
             enqueue_relay_usage(&ctx.state, usage, failure).await;
             Err(err)
@@ -328,7 +328,7 @@ pub(in crate::relay) async fn record_upstream_http_failure(
         None,
         None,
     );
-    let key_failure = key_failure_from_context(ctx, failure.summary.clone());
+    let key_failure = key_failure_from_context(ctx, failure.summary.clone()).await;
     release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
     enqueue_relay_usage(&ctx.state, usage, key_failure).await;
 }
@@ -406,17 +406,54 @@ pub(in crate::relay) fn usage_from_context(
     }
 }
 
-pub(in crate::relay) fn key_failure_from_context(
+pub(in crate::relay) async fn key_failure_from_context(
     ctx: &RelayContext,
     error: String,
 ) -> Option<KeyFailure> {
-    ctx.upstream
-        .channel_key_id
-        .map(|channel_key_id| KeyFailure {
+    let channel_key_id = ctx.upstream.channel_key_id?;
+    match ctx
+        .state
+        .selector
+        .has_alternate_channel_for_model(&ctx.state.db.pool, ctx.protocol, &ctx.model)
+        .await
+    {
+        Ok(true) => Some(KeyFailure {
             channel_key_id,
             cooldown_until: key_cooldown_until(&ctx.state),
             error,
-        })
+        }),
+        Ok(false) => {
+            tracing::info!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                "skipping upstream key cooldown because this model has no alternate channel"
+            );
+            None
+        }
+        Err(err) => {
+            tracing::warn!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                error = %err,
+                "failed to check alternate upstream channel; applying key cooldown"
+            );
+            Some(KeyFailure {
+                channel_key_id,
+                cooldown_until: key_cooldown_until(&ctx.state),
+                error,
+            })
+        }
+    }
 }
 
 pub(in crate::relay) async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {

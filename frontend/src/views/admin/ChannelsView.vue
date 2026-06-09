@@ -340,9 +340,7 @@ function openPriceDialog(row: Channel) {
       ),
       cacheWriteUsdPerMillion:
         cacheWritePrice === undefined || cacheWritePrice === null
-          ? template
-            ? null
-            : microUsdToUsd(inputPrice)
+          ? 0
           : microUsdToUsd(cacheWritePrice),
       enabled: price?.enabled ?? true,
       hasPrice: Boolean(price),
@@ -398,7 +396,7 @@ function fillReferencePrice(form: (typeof priceForms)[string]) {
   form.cacheWriteUsdPerMillion =
     template.cache_write_price_usd_micros === undefined ||
     template.cache_write_price_usd_micros === null
-      ? null
+      ? 0
       : microUsdToUsd(template.cache_write_price_usd_micros)
 }
 

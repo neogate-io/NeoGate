@@ -98,6 +98,8 @@ const setupForm = reactive({
   protocol: 'openai' as Protocol,
   channelName: '',
   baseUrl: '',
+  openAiBaseUrl: '',
+  anthropicBaseUrl: '',
   secret: '',
   models: ''
 })
@@ -226,6 +228,7 @@ const setupProgressPercent = computed(() => {
 const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
+const isCustomProviderSelected = computed(() => selectedProvider.value?.code === 'custom')
 const bootstrapMissingDatabase = computed(() => !status.value?.database_configured)
 const clusterBlocked = computed(
   () => status.value?.bootstrap_required && status.value.runtime_mode === 'distributed'
@@ -406,7 +409,12 @@ async function generateClusterTemplate() {
 }
 
 async function fetchModels() {
-  if (!setupForm.baseUrl.trim() || !setupForm.secret.trim()) {
+  const endpoint = setupModelFetchEndpoint()
+  if (!endpoint) {
+    ElMessage.error(t('baseUrlRequired'))
+    return
+  }
+  if (!setupForm.secret.trim()) {
     ElMessage.error(t('upstreamKeyRequired'))
     return
   }
@@ -414,8 +422,8 @@ async function fetchModels() {
   try {
     const result = await fetchSetupUpstreamModels({
       provider: setupForm.provider,
-      protocol: setupForm.protocol,
-      base_url: setupForm.baseUrl,
+      protocol: endpoint.protocol,
+      base_url: endpoint.base_url,
       secret: setupForm.secret
     })
     setupForm.models = result.models.join(', ')
@@ -722,11 +730,15 @@ function applyProviderDefaults() {
   if (provider.code === 'custom') {
     setupForm.channelName = ''
     setupForm.baseUrl = ''
+    setupForm.openAiBaseUrl = ''
+    setupForm.anthropicBaseUrl = ''
     setupForm.protocol = 'openai'
     return
   }
 
   setupForm.channelName = provider.display_name
+  setupForm.openAiBaseUrl = ''
+  setupForm.anthropicBaseUrl = ''
   const endpoint =
     provider.default_endpoints.find((item) => item.protocol === 'openai' && item.base_url) ??
     provider.default_endpoints.find((item) => item.protocol === 'anthropic' && item.base_url)
@@ -740,17 +752,26 @@ function setupEndpointsForSubmit(models: string[]) {
   const provider = selectedProvider.value
   const endpointModels = [...models]
   if (!provider || provider.code === 'custom') {
-    const baseUrl = setupForm.baseUrl.trim()
-    return baseUrl
-      ? [
-          {
-            protocol: setupForm.protocol,
-            base_url: baseUrl,
-            models: endpointModels,
-            enabled: true
-          }
-        ]
-      : []
+    const endpoints: SetupEndpointPayload[] = []
+    const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
+    const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
+    if (openAiBaseUrl) {
+      endpoints.push({
+        protocol: 'openai',
+        base_url: openAiBaseUrl,
+        models: endpointModels,
+        enabled: true
+      })
+    }
+    if (anthropicBaseUrl) {
+      endpoints.push({
+        protocol: 'anthropic',
+        base_url: anthropicBaseUrl,
+        models: endpointModels,
+        enabled: true
+      })
+    }
+    return endpoints
   }
 
   const endpoints: SetupEndpointPayload[] = []
@@ -769,6 +790,36 @@ function setupEndpointsForSubmit(models: string[]) {
     })
   }
   return endpoints
+}
+
+function setupModelFetchEndpoint() {
+  if (isCustomProviderSelected.value) {
+    const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
+    if (openAiBaseUrl) {
+      return {
+        protocol: 'openai' as const,
+        base_url: openAiBaseUrl
+      }
+    }
+
+    const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
+    if (anthropicBaseUrl) {
+      return {
+        protocol: 'anthropic' as const,
+        base_url: anthropicBaseUrl
+      }
+    }
+
+    return null
+  }
+
+  const baseUrl = setupForm.baseUrl.trim()
+  return baseUrl
+    ? {
+        protocol: setupForm.protocol,
+        base_url: baseUrl
+      }
+    : null
 }
 
 function isValidHttpUrl(value: string) {
@@ -1186,7 +1237,21 @@ onMounted(load)
                   :placeholder="t('channelNamePlaceholder')"
                 />
               </el-form-item>
-              <el-form-item :label="t('baseUrl')">
+              <template v-if="isCustomProviderSelected">
+                <el-form-item :label="t('openAiBaseUrl')">
+                  <el-input
+                    v-model="setupForm.openAiBaseUrl"
+                    :placeholder="t('baseUrlPlaceholder')"
+                  />
+                </el-form-item>
+                <el-form-item :label="t('anthropicBaseUrl')">
+                  <el-input
+                    v-model="setupForm.anthropicBaseUrl"
+                    :placeholder="t('anthropicBaseUrlPlaceholder')"
+                  />
+                </el-form-item>
+              </template>
+              <el-form-item v-else :label="t('baseUrl')">
                 <el-input v-model="setupForm.baseUrl" :placeholder="t('baseUrlPlaceholder')" />
               </el-form-item>
             </div>
@@ -1200,7 +1265,7 @@ onMounted(load)
                   :disabled="
                     saving ||
                     configuringPrices ||
-                    !setupForm.baseUrl.trim() ||
+                    !setupModelFetchEndpoint() ||
                     !setupForm.secret.trim()
                   "
                   :icon="Refresh"

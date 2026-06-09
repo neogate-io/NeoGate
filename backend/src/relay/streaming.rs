@@ -125,9 +125,11 @@ impl StreamingRelay {
             None
         };
         let error_summary = (!self.status.is_success()).then(|| "upstream error".to_string());
-        let failure = (!self.status.is_success())
-            .then(|| key_failure_from_context(&ctx, "upstream error".to_string()))
-            .flatten();
+        let failure = if self.status.is_success() {
+            None
+        } else {
+            key_failure_from_context(&ctx, "upstream error".to_string()).await
+        };
         let usage = usage_from_context(
             &ctx,
             Some(self.status.as_u16() as i32),
@@ -162,9 +164,11 @@ impl StreamingRelay {
             "upstream stream failed while relaying response body"
         );
         release_empty_hold(&ctx.state, ctx.hold.clone(), "stream error").await;
-        let failure = should_cooldown_key_for_stream_error(self.status)
-            .then(|| key_failure_from_context(&ctx, summary.clone()))
-            .flatten();
+        let failure = if should_cooldown_key_for_stream_error(self.status) {
+            key_failure_from_context(&ctx, summary.clone()).await
+        } else {
+            None
+        };
         let usage = usage_from_context(
             &ctx,
             Some(self.status.as_u16() as i32),
@@ -206,9 +210,11 @@ impl Drop for StreamingRelay {
                 "downstream client closed relay stream before completion"
             );
             release_empty_hold(&ctx.state, ctx.hold.clone(), "dropped stream").await;
-            let failure = (!status.is_success())
-                .then(|| key_failure_from_context(&ctx, "upstream error".to_string()))
-                .flatten();
+            let failure = if status.is_success() {
+                None
+            } else {
+                key_failure_from_context(&ctx, "upstream error".to_string()).await
+            };
             let usage = usage_from_context(
                 &ctx,
                 Some(status.as_u16() as i32),

@@ -279,13 +279,21 @@ impl Selector {
 
     pub async fn mark_credential_model_unavailable(
         &self,
+        pool: &PgPool,
         upstream: &SelectedUpstream,
         protocol: UpstreamProtocol,
         model: &str,
         unavailable_until: DateTime<Utc>,
-    ) {
+    ) -> AppResult<bool> {
+        if !self
+            .has_alternate_channel_for_model(pool, protocol, model)
+            .await?
+        {
+            return Ok(false);
+        }
         self.mark_model_unavailable_local(upstream, protocol, model, unavailable_until)
             .await;
+        Ok(true)
     }
 
     pub async fn mark_key_failure_local(
@@ -333,9 +341,17 @@ impl Selector {
         &self,
         pool: &PgPool,
         channel_key_id: DbId,
+        protocol: UpstreamProtocol,
+        model: &str,
         error: &str,
         cooldown_until: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
+        if !self
+            .has_alternate_channel_for_model(pool, protocol, model)
+            .await?
+        {
+            return Ok(false);
+        }
         sqlx::query(
             "UPDATE channel_key
              SET cooldown_until = $2,
@@ -348,7 +364,17 @@ impl Selector {
         .bind(error.chars().take(500).collect::<String>())
         .execute(pool)
         .await?;
-        Ok(())
+        Ok(true)
+    }
+
+    pub async fn has_alternate_channel_for_model(
+        &self,
+        pool: &PgPool,
+        protocol: UpstreamProtocol,
+        model: &str,
+    ) -> AppResult<bool> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        Ok(matching_channel_count(&snapshot, protocol, model) > 1)
     }
 }
 
@@ -687,6 +713,14 @@ pub fn channel_matches_model(channel: &ChannelCandidate, model: &str) -> bool {
     channel.models.is_empty() || channel.models.iter().any(|item| item == model)
 }
 
+fn matching_channel_count(cache: &RoutingCache, protocol: UpstreamProtocol, model: &str) -> usize {
+    cache
+        .channels
+        .iter()
+        .filter(|channel| channel.protocol == protocol && channel_matches_model(channel, model))
+        .count()
+}
+
 #[cfg(test)]
 pub fn choose_channel(channels: &[ChannelCandidate]) -> Option<ChannelCandidate> {
     if channels.is_empty() {
@@ -1005,6 +1039,40 @@ mod tests {
             "a"
         );
         assert_eq!(choose_channel_by_slot(&[a, b], 2).unwrap().name, "b");
+    }
+
+    #[test]
+    fn matching_channel_count_counts_model_and_wildcard_channels() {
+        let mut exact = candidate("exact", 0, 1, vec!["gpt-5.5"]);
+        exact.id = 1;
+        let mut wildcard = candidate("wildcard", 0, 1, vec![]);
+        wildcard.id = 2;
+        let mut other_model = candidate("other", 0, 1, vec!["gpt-4.1"]);
+        other_model.id = 3;
+        let mut other_protocol = candidate("anthropic", 0, 1, vec!["gpt-5.5"]);
+        other_protocol.id = 4;
+        other_protocol.protocol = UpstreamProtocol::Anthropic;
+        let cache = RoutingCache {
+            loaded_at: None,
+            channels: vec![exact, wildcard, other_model, other_protocol],
+            keys: HashMap::new(),
+            model_blocks: HashMap::new(),
+            route_index: HashMap::new(),
+            wildcard_index: HashMap::new(),
+        };
+
+        assert_eq!(
+            matching_channel_count(&cache, UpstreamProtocol::Openai, "gpt-5.5"),
+            2
+        );
+        assert_eq!(
+            matching_channel_count(&cache, UpstreamProtocol::Openai, "gpt-4.1"),
+            2
+        );
+        assert_eq!(
+            matching_channel_count(&cache, UpstreamProtocol::Anthropic, "gpt-5.5"),
+            1
+        );
     }
 
     #[test]

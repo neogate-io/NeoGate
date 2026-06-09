@@ -11,7 +11,7 @@ use crate::{
         user_key_draft_parts_from_token, validate_user_password_input, UserAuth,
     },
     billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
-    email::{smtp_config_error_message, EmailLocale},
+    email::{smtp_config_error, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
     policy::{registration_policy, ServiceMode},
@@ -707,8 +707,8 @@ fn created_id_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sql
 }
 
 fn email_error(err: anyhow::Error) -> AppError {
-    smtp_config_error_message(&err)
-        .map(|message| AppError::BadRequest(message.to_string()))
+    smtp_config_error(&err)
+        .map(|(code, message)| AppError::BadRequestWithCode { code, message })
         .unwrap_or_else(|| AppError::Anyhow(err))
 }
 

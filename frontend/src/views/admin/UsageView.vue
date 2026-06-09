@@ -5,6 +5,7 @@ import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import type { UsageRecord } from '../../types/admin'
 import {
   cacheWriteTokens,
   formatDateTime,
@@ -20,13 +21,13 @@ const DEFAULT_PAGE_SIZE = 20
 
 type UsageFilters = {
   dateRange: string[] | null
-  model: string
+  query: string
   status: AdminUsageStatus
 }
 
 const filters = reactive<UsageFilters>({
   dateRange: [],
-  model: '',
+  query: '',
   status: 'all'
 })
 const {
@@ -58,7 +59,7 @@ const {
       limit: pageSize.value,
       start: usageQueryRange.value.start,
       end: usageQueryRange.value.end,
-      model: filters.model.trim() || undefined,
+      query: filters.query.trim() || undefined,
       status: filters.status,
       cursor: currentCursor.value
     }),
@@ -100,6 +101,12 @@ function billingTone(status: string) {
   return 'is-neutral'
 }
 
+function usageUserDisplay(row: UsageRecord) {
+  if (row.user_email) return row.user_email
+  if (row.user_id != null) return `#${row.user_id}`
+  return '-'
+}
+
 async function handleSearch() {
   resetUsagePagination()
   await reload()
@@ -137,7 +144,7 @@ async function handlePageSizeChange(size: number) {
           :end-placeholder="t('endTime')"
         />
         <el-input
-          v-model="filters.model"
+          v-model="filters.query"
           class="usage-search-input"
           clearable
           :prefix-icon="Search"
@@ -176,6 +183,7 @@ async function handlePageSizeChange(size: number) {
         <span></span>
         <span></span>
         <span></span>
+        <span></span>
       </div>
       <div class="usage-table-loading-row"></div>
       <div class="usage-table-loading-row"></div>
@@ -195,6 +203,13 @@ async function handlePageSizeChange(size: number) {
             <span class="usage-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('usageUser')" min-width="220">
+          <template #default="{ row }">
+            <span class="usage-user-cell" :class="{ 'is-empty': !row.user_email && !row.user_id }">
+              {{ usageUserDisplay(row) }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('model')" min-width="190">
           <template #default="{ row }">
             <div class="usage-model">
@@ -207,12 +222,10 @@ async function handlePageSizeChange(size: number) {
           <template #default="{ row }">
             <div class="usage-stack">
               <div class="usage-tags">
-                <el-tag type="success" effect="plain" round>{{
-                  formatDurationMs(row.latency_ms)
-                }}</el-tag>
-                <el-tag v-if="row.first_response_ms != null" type="success" effect="plain" round>
+                <span class="usage-latency-tag">{{ formatDurationMs(row.latency_ms) }}</span>
+                <span v-if="row.first_response_ms != null" class="usage-latency-tag">
                   {{ formatDurationMs(row.first_response_ms) }}
-                </el-tag>
+                </span>
               </div>
               <span class="usage-muted">
                 {{ row.streamed ? t('streamLabel') : t('nonStreamLabel') }}
@@ -331,9 +344,9 @@ async function handlePageSizeChange(size: number) {
   border-bottom: 1px solid #dfe8f2;
   display: grid;
   gap: 30px;
-  grid-template-columns: 150px 180px 160px 150px 120px;
+  grid-template-columns: 150px 170px 180px 160px 150px 120px;
   height: 48px;
-  min-width: 1180px;
+  min-width: 1320px;
   padding: 0 160px 0 14px;
 }
 
@@ -368,14 +381,18 @@ async function handlePageSizeChange(size: number) {
   width: 56px;
 }
 
+.usage-table-loading-head span:nth-child(6) {
+  width: 54px;
+}
+
 .usage-table-loading-row {
   align-items: center;
   border-bottom: 1px solid #edf3f8;
   display: grid;
   gap: 30px;
-  grid-template-columns: 150px 180px 160px 150px 120px;
+  grid-template-columns: 150px 170px 180px 160px 150px 120px;
   height: 62px;
-  min-width: 1180px;
+  min-width: 1320px;
   padding: 0 160px 0 14px;
 }
 
@@ -420,6 +437,26 @@ async function handlePageSizeChange(size: number) {
   gap: 6px;
 }
 
+.usage-table .usage-latency-tag {
+  align-items: center;
+  animation: none;
+  background: #eef8f2;
+  border: 1px solid #d7eadf;
+  border-radius: 999px;
+  color: #3f7a55;
+  display: inline-flex;
+  font-feature-settings: 'tnum';
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 560;
+  height: 24px;
+  justify-content: center;
+  min-width: 58px;
+  padding: 0 10px;
+  transition: none;
+  white-space: nowrap;
+}
+
 .usage-mono {
   color: #1d2939;
   font-feature-settings: 'tnum';
@@ -433,6 +470,21 @@ async function handlePageSizeChange(size: number) {
   color: #344054;
   font-size: 13px;
   font-weight: 560;
+}
+
+.usage-user-cell {
+  color: #1d2939;
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-user-cell.is-empty {
+  color: #98a2b3;
+  font-weight: 520;
 }
 
 .usage-cost-cell {

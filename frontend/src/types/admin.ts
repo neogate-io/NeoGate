@@ -118,6 +118,7 @@ export type ChannelKey = {
 export type UsageRecord = {
   id: number
   user_id?: number | null
+  user_email?: string | null
   user_key_id?: number | null
   channel_id?: number | null
   channel_key_id?: number | null

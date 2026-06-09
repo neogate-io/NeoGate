@@ -18,7 +18,7 @@ use sqlx::{Postgres, Row, Transaction};
 pub use crate::core::auth::*;
 use crate::{
     billing::{account, CreditAccountType},
-    email::{smtp_config_error_message, EmailLocale},
+    email::{smtp_config_error, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
     policy::{registration_policy, ServiceMode},
@@ -904,8 +904,8 @@ fn client_rate_key(headers: &HeaderMap) -> String {
 }
 
 fn email_error(err: anyhow::Error) -> AppError {
-    smtp_config_error_message(&err)
-        .map(|message| AppError::BadRequest(message.to_string()))
+    smtp_config_error(&err)
+        .map(|(code, message)| AppError::BadRequestWithCode { code, message })
         .unwrap_or_else(|| AppError::Anyhow(err))
 }
 

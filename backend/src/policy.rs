@@ -131,10 +131,7 @@ pub struct CompleteSetupRequest {
 pub struct SetupChannelRequest {
     pub provider: String,
     pub name: String,
-    pub protocol: String,
-    pub base_url: String,
-    #[serde(default)]
-    pub models: Vec<String>,
+    pub endpoints: Vec<ChannelEndpointInput>,
     pub secret: String,
 }
 
@@ -615,14 +612,31 @@ async fn create_setup_channel(
 ) -> AppResult<crate::admin::channel::ChannelRecord> {
     let provider = req.provider.trim().to_string();
     let name = req.name.trim().to_string();
-    let protocol = req.protocol.trim().to_string();
-    let base_url = req.base_url.trim().to_string();
     let secret = req.secret.trim().to_string();
-    let models: Vec<String> = req
-        .models
+    let endpoints: Vec<ChannelEndpointInput> = req
+        .endpoints
         .into_iter()
-        .map(|model| model.trim().to_string())
-        .filter(|model| !model.is_empty())
+        .map(|endpoint| {
+            let protocol = endpoint.protocol.trim().to_string();
+            let base_url = endpoint
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let models = endpoint
+                .models
+                .into_iter()
+                .map(|model| model.trim().to_string())
+                .filter(|model| !model.is_empty())
+                .collect();
+            ChannelEndpointInput {
+                protocol,
+                base_url,
+                models,
+                enabled: endpoint.enabled,
+            }
+        })
         .collect();
     if provider.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
@@ -630,20 +644,31 @@ async fn create_setup_channel(
     if name.is_empty() {
         return Err(AppError::BadRequest("channel name is required".to_string()));
     }
-    if protocol != "openai" && protocol != "anthropic" {
-        return Err(AppError::BadRequest(format!(
-            "invalid protocol: {protocol}"
-        )));
-    }
-    if base_url.is_empty() {
-        return Err(AppError::BadRequest("base_url is required".to_string()));
-    }
     if secret.is_empty() {
         return Err(AppError::BadRequest(
             "upstream api key is required".to_string(),
         ));
     }
-    if models.is_empty() {
+    if endpoints.is_empty() {
+        return Err(AppError::BadRequest(
+            "at least one endpoint is required".to_string(),
+        ));
+    }
+    if let Some(endpoint) = endpoints
+        .iter()
+        .find(|endpoint| endpoint.protocol != "openai" && endpoint.protocol != "anthropic")
+    {
+        return Err(AppError::BadRequest(format!(
+            "invalid protocol: {}",
+            endpoint.protocol
+        )));
+    }
+    if endpoints
+        .iter()
+        .flat_map(|endpoint| endpoint.models.iter())
+        .next()
+        .is_none()
+    {
         return Err(AppError::BadRequest(
             "at least one upstream model is required".to_string(),
         ));
@@ -654,12 +679,7 @@ async fn create_setup_channel(
         CreateChannelRequest {
             provider,
             name: name.clone(),
-            endpoints: vec![ChannelEndpointInput {
-                protocol,
-                base_url: Some(base_url),
-                models,
-                enabled: true,
-            }],
+            endpoints,
             protocol: None,
             base_url: None,
             models: Vec::new(),

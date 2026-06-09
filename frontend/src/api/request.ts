@@ -1,5 +1,5 @@
 import { useAuthStore } from '../stores/auth'
-import { ApiError } from '../utils/errors'
+import { ApiError, readApiErrorPayload } from '../utils/errors'
 import { router } from '../router'
 
 export type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -53,17 +53,11 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}))
 
   if (!response.ok) {
-    throw new ApiError(readErrorMessage(data) ?? response.statusText, response.status)
+    const error = readApiErrorPayload(data)
+    throw new ApiError(error?.message ?? response.statusText, response.status, error?.code)
   }
 
   return data as T
-}
-
-function readErrorMessage(data: unknown) {
-  if (typeof data === 'object' && data && 'error' in data) {
-    const error = (data as { error?: unknown }).error
-    if (typeof error === 'string') return error
-  }
 }
 
 function handleAuthFailure(err: unknown) {
@@ -93,5 +87,5 @@ function handleAuthFailure(err: unknown) {
 }
 
 function isPasswordChangeRequiredError(err: ApiError) {
-  return err.message.includes('password change required')
+  return err.code === 'password_change_required'
 }

@@ -103,6 +103,11 @@ pub enum AppError {
     NotFound,
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("bad request: {message}")]
+    BadRequestWithCode {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("rate limited: {0}")]
     RateLimited(String),
     #[error("upstream unavailable: {0}")]
@@ -132,7 +137,7 @@ impl IntoResponse for AppError {
                 Json(json!({
                     "error": {
                         "message": err.kind.user_message(),
-                        "type": err.kind.type_code(),
+                        "code": err.kind.type_code(),
                         "upstream": err.provider,
                         "retryable": err.retryable,
                     }
@@ -140,7 +145,7 @@ impl IntoResponse for AppError {
             )
                 .into_response();
             response.headers_mut().insert(
-                "x-neogate-error-type",
+                "x-neogate-error-code",
                 HeaderValue::from_static(err.kind.type_code()),
             );
             response.headers_mut().insert(
@@ -163,7 +168,9 @@ impl IntoResponse for AppError {
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
-            AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::BadRequest(_) | AppError::BadRequestWithCode { .. } => {
+                StatusCode::BAD_REQUEST
+            }
             AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             AppError::UpstreamRequest(_) => unreachable!("handled above"),
@@ -178,16 +185,73 @@ impl IntoResponse for AppError {
             tracing::error!(error = %self, error_debug = ?self, "request failed");
         } else if matches!(
             self,
-            AppError::BadRequest(_) | AppError::PayloadTooLarge(_) | AppError::RateLimited(_)
+            AppError::BadRequest(_)
+                | AppError::BadRequestWithCode { .. }
+                | AppError::PayloadTooLarge(_)
+                | AppError::RateLimited(_)
         ) {
             tracing::warn!(error = %self, "request rejected");
         }
-        let message = match &self {
-            AppError::UpstreamUnavailable(_) => self.to_string(),
-            _ if status.is_server_error() => "internal server error".to_string(),
+        let code = self.code();
+        let message = self.user_message(status);
+        let mut response = (
+            status,
+            Json(json!({
+                "error": {
+                    "code": code,
+                    "message": message,
+                }
+            })),
+        )
+            .into_response();
+        response
+            .headers_mut()
+            .insert("x-neogate-error-code", HeaderValue::from_static(code));
+        response
+    }
+}
+
+impl AppError {
+    fn code(&self) -> &'static str {
+        match self {
+            AppError::Unauthorized => "unauthorized",
+            AppError::Forbidden => "forbidden",
+            AppError::PasswordChangeRequired => "password_change_required",
+            AppError::PaymentRequired => "payment_required",
+            AppError::Conflict(_) => "conflict",
+            AppError::PayloadTooLarge(_) => "payload_too_large",
+            AppError::NotFound => "not_found",
+            AppError::BadRequest(_) => "bad_request",
+            AppError::BadRequestWithCode { code, .. } => code,
+            AppError::RateLimited(_) => "rate_limited",
+            AppError::UpstreamUnavailable(_) => "upstream_unavailable",
+            AppError::UpstreamRequest(err) => err.kind.type_code(),
+            AppError::Sqlx(_)
+            | AppError::Io(_)
+            | AppError::Json(_)
+            | AppError::Reqwest(_)
+            | AppError::Redis(_)
+            | AppError::Anyhow(_) => "internal_server_error",
+        }
+    }
+
+    fn user_message(&self, status: StatusCode) -> String {
+        if let AppError::UpstreamUnavailable(message) = self {
+            return message.clone();
+        }
+
+        if status.is_server_error() {
+            return "internal server error".to_string();
+        }
+
+        match self {
+            AppError::Conflict(message)
+            | AppError::PayloadTooLarge(message)
+            | AppError::BadRequest(message)
+            | AppError::RateLimited(message) => message.clone(),
+            AppError::BadRequestWithCode { message, .. } => (*message).to_string(),
             _ => self.to_string(),
-        };
-        (status, Json(json!({ "error": message }))).into_response()
+        }
     }
 }
 
@@ -207,7 +271,8 @@ mod tests {
 
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["error"], "internal server error");
+        assert_eq!(value["error"]["code"], "internal_server_error");
+        assert_eq!(value["error"]["message"], "internal server error");
     }
 
     #[tokio::test]
@@ -217,7 +282,23 @@ mod tests {
 
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["error"], "bad request: invalid provider");
+        assert_eq!(value["error"]["code"], "bad_request");
+        assert_eq!(value["error"]["message"], "invalid provider");
+    }
+
+    #[tokio::test]
+    async fn coded_client_errors_return_structured_payload() {
+        let response = AppError::BadRequestWithCode {
+            code: "smtp_authentication_failed",
+            message: "SMTP authentication failed",
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "smtp_authentication_failed");
+        assert_eq!(value["error"]["message"], "SMTP authentication failed");
     }
 
     #[tokio::test]
@@ -228,10 +309,8 @@ mod tests {
 
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["error"],
-            "upstream unavailable: no available anthropic channel"
-        );
+        assert_eq!(value["error"]["code"], "upstream_unavailable");
+        assert_eq!(value["error"]["message"], "no available anthropic channel");
     }
 
     #[tokio::test]
@@ -244,7 +323,7 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(
-            response.headers()["x-neogate-error-type"],
+            response.headers()["x-neogate-error-code"],
             "upstream_tls_error"
         );
         assert_eq!(response.headers()["x-neogate-retryable"], "true");
@@ -255,7 +334,7 @@ mod tests {
 
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["error"]["type"], "upstream_tls_error");
+        assert_eq!(value["error"]["code"], "upstream_tls_error");
         assert_eq!(value["error"]["upstream"], "gavinhub");
         assert_eq!(value["error"]["retryable"], true);
     }
@@ -272,6 +351,6 @@ mod tests {
 
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["error"]["type"], "upstream_timeout");
+        assert_eq!(value["error"]["code"], "upstream_timeout");
     }
 }

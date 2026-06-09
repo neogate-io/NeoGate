@@ -1,5 +1,5 @@
 import type { LoginRole } from './auth'
-import { ApiError } from '../utils/errors'
+import { ApiError, readApiErrorPayload } from '../utils/errors'
 
 export type CurrentUser = {
   role: LoginRole
@@ -14,7 +14,8 @@ export async function getCurrentUser(token: string) {
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new ApiError(readErrorMessage(data) ?? response.statusText, response.status)
+    const error = readApiErrorPayload(data)
+    throw new ApiError(error?.message ?? response.statusText, response.status, error?.code)
   }
 
   const role = readRole(data)
@@ -34,11 +35,4 @@ function readRole(data: unknown): LoginRole | '' {
 function readRequiresPasswordChange(data: unknown) {
   if (typeof data !== 'object' || !data || !('requires_password_change' in data)) return false
   return (data as { requires_password_change?: unknown }).requires_password_change === true
-}
-
-function readErrorMessage(data: unknown) {
-  if (typeof data === 'object' && data && 'error' in data) {
-    const error = (data as { error?: unknown }).error
-    if (typeof error === 'string') return error
-  }
 }

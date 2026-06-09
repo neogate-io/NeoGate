@@ -194,15 +194,9 @@ pnpm install
 pnpm build
 ```
 
-然后将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管，并将 `/api/`、`/v1/`、`/anthropic/`、`/install`、`/readyz` 和 `/livez` 反向代理到后端。`/install` 安装脚本由后端根据 `PUBLIC_BASE_URL` 动态生成；前端构建不需要指定后端公网地址。
+构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/neogate.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。
 
-仓库提供了 Nginx 示例配置：
-
-```text
-deploy/nginx/neogate.conf.example
-```
-
-示例配置默认将静态文件目录设为 `/usr/share/nginx/html`，并将 `/api/`、`/v1/`、`/anthropic/`、`/install`、`/readyz` 和 `/livez` 转发到本机后端 `http://127.0.0.1:8080`。源码部署时可以按下面方式使用：
+源码部署时可以按下面方式使用：
 
 ```bash
 sudo install -d /usr/share/nginx/html

@@ -13,6 +13,7 @@ export type AdminUsageQuery = {
   limit?: number
   start?: string
   end?: string
+  query?: string
   model?: string
   status?: AdminUsageStatus
   cursor?: string
@@ -25,6 +26,7 @@ export function getAdminUsage(query: AdminUsageQuery = {}) {
   })
   if (query.start) params.set('start', query.start)
   if (query.end) params.set('end', query.end)
+  if (query.query) params.set('query', query.query)
   if (query.model) params.set('model', query.model)
   if (query.status && query.status !== 'all') params.set('status', query.status)
   if (query.cursor) params.set('cursor', query.cursor)

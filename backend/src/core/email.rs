@@ -252,18 +252,68 @@ fn validate_email_config(config: &EmailConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn smtp_config_error_message(err: &anyhow::Error) -> Option<&'static str> {
+pub fn smtp_config_error(err: &anyhow::Error) -> Option<(&'static str, &'static str)> {
     err.chain()
         .map(ToString::to_string)
         .find_map(|message| match message.as_str() {
-            "SMTP settings are not configured" => Some("smtp settings are not configured"),
-            "SMTP settings are invalid" => Some("smtp settings are invalid"),
-            "SMTP host is not configured" => Some("smtp host is not configured"),
-            "SMTP port is invalid" => Some("smtp port is invalid"),
-            "SMTP sender email is not configured" => Some("smtp sender email is not configured"),
-            "SMTP sender email is invalid" => Some("smtp sender email is invalid"),
+            "SMTP settings are not configured" => Some((
+                "smtp_settings_not_configured",
+                "SMTP settings are not configured",
+            )),
+            "SMTP settings are invalid" => {
+                Some(("smtp_settings_invalid", "SMTP settings are invalid"))
+            }
+            "SMTP host is not configured" => {
+                Some(("smtp_host_not_configured", "SMTP host is not configured"))
+            }
+            "SMTP port is invalid" => Some(("smtp_port_invalid", "SMTP port is invalid")),
+            "SMTP sender email is not configured" => Some((
+                "smtp_sender_email_not_configured",
+                "SMTP sender email is not configured",
+            )),
+            "SMTP sender email is invalid" => {
+                Some(("smtp_sender_email_invalid", "SMTP sender email is invalid"))
+            }
             _ => None,
         })
+}
+
+pub fn smtp_test_error(err: &anyhow::Error) -> (&'static str, &'static str) {
+    let message = err
+        .chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+
+    if message.contains("err.login.passerr")
+        || message.contains("authentication failed")
+        || message.contains("auth failed")
+        || message.contains("invalid credentials")
+        || message.contains("login failed")
+        || contains_smtp_status_code(&message, "535")
+    {
+        return ("smtp_authentication_failed", "SMTP authentication failed");
+    }
+
+    if message.contains("timed out") || message.contains("timeout") {
+        return ("smtp_connection_timed_out", "SMTP connection timed out");
+    }
+
+    ("smtp_test_email_failed", "SMTP test email failed")
+}
+
+fn contains_smtp_status_code(message: &str, code: &str) -> bool {
+    message.match_indices(code).any(|(index, _)| {
+        let before = index
+            .checked_sub(1)
+            .and_then(|position| message.as_bytes().get(position))
+            .copied();
+        let after = message.as_bytes().get(index + code.len()).copied();
+
+        !before.is_some_and(|byte| byte.is_ascii_digit())
+            && !after.is_some_and(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn sender_mailbox(config: &EmailConfig, locale: EmailLocale) -> Result<Mailbox> {
@@ -784,5 +834,21 @@ mod tests {
     fn product_name_follows_email_locale() {
         assert_eq!(EmailLocale::ZhCn.product_name(), "NeoGate");
         assert_eq!(EmailLocale::EnUs.product_name(), "NeoGate");
+    }
+
+    #[test]
+    fn smtp_test_error_message_detects_login_failure() {
+        let err = anyhow::anyhow!(
+            "failed to send SMTP test email: permanent error (535): 5.7.0 ERR.LOGIN.PASSERR"
+        );
+
+        assert_eq!(smtp_test_error(&err).0, "smtp_authentication_failed");
+    }
+
+    #[test]
+    fn smtp_test_error_message_detects_timeout() {
+        let err = anyhow::anyhow!("failed to send SMTP test email: operation timed out");
+
+        assert_eq!(smtp_test_error(&err).0, "smtp_connection_timed_out");
     }
 }

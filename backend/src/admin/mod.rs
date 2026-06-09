@@ -896,6 +896,7 @@ struct ListUsageParams {
     cursor: Option<String>,
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
+    query: Option<String>,
     model: Option<String>,
     status: Option<String>,
 }
@@ -914,6 +915,7 @@ struct UsagePage {
 struct UsageRecord {
     id: DbId,
     user_id: Option<DbId>,
+    user_email: Option<String>,
     user_key_id: Option<DbId>,
     channel_id: Option<DbId>,
     channel_key_id: Option<DbId>,
@@ -950,9 +952,10 @@ async fn usage(
     let limit = params.limit.unwrap_or(20).clamp(1, 500);
     let start = params.start.clone();
     let end = params.end.clone();
-    let model = params
-        .model
+    let query = params
+        .query
         .as_deref()
+        .or(params.model.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
@@ -964,31 +967,43 @@ async fn usage(
     let (cursor_created_at, cursor_id) = parse_usage_cursor(params.cursor.as_deref())?
         .map(|cursor| (Some(cursor.0), Some(cursor.1)))
         .unwrap_or((None, None));
-    let model = model.as_deref();
+    let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
+    let query_pattern = query_pattern.as_deref();
     let rows = sqlx::query(
-        "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
-                status_code, streamed, latency_ms, first_response_ms, output_tokens_per_second,
-                input_tokens, output_tokens, total_tokens, cache_in_tokens,
-                cache_create_in_tokens, cache_create_5m_in_tokens,
-                cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
-                audio_out_tokens,
-                cost_micro_usd, billing_status, error_summary, created_at
-         FROM usage
-         WHERE ($1::timestamptz IS NULL OR created_at >= $1)
-           AND ($2::timestamptz IS NULL OR created_at <= $2)
-           AND ($3::text IS NULL OR provider = $3 OR model = $3)
+        r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
+                usage_record.user_key_id, usage_record.channel_id, usage_record.channel_key_id,
+                usage_record.credential_id, usage_record.provider, usage_record.model,
+                usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
+                usage_record.first_response_ms, usage_record.output_tokens_per_second,
+                usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
+                usage_record.cache_in_tokens, usage_record.cache_create_in_tokens,
+                usage_record.cache_create_5m_in_tokens, usage_record.cache_create_1h_in_tokens,
+                usage_record.reason_out_tokens, usage_record.audio_in_tokens,
+                usage_record.audio_out_tokens, usage_record.cost_micro_usd,
+                usage_record.billing_status, usage_record.error_summary, usage_record.created_at
+         FROM usage AS usage_record
+         LEFT JOIN "user" u ON u.id = usage_record.user_id
+         WHERE ($1::timestamptz IS NULL OR usage_record.created_at >= $1)
+           AND ($2::timestamptz IS NULL OR usage_record.created_at <= $2)
+           AND (
+             $3::text IS NULL
+             OR usage_record.provider ILIKE $3
+             OR usage_record.model ILIKE $3
+             OR usage_record.user_id::text ILIKE $3
+             OR u.email::text ILIKE $3
+           )
            AND (
              $4::text IS NULL
-             OR ($4 = 'success' AND status_code >= 200 AND status_code < 400)
-             OR ($4 = 'failed' AND (status_code >= 400 OR error_summary IS NOT NULL))
+             OR ($4 = 'success' AND usage_record.status_code >= 200 AND usage_record.status_code < 400)
+             OR ($4 = 'failed' AND (usage_record.status_code >= 400 OR usage_record.error_summary IS NOT NULL))
            )
-           AND ($5::timestamptz IS NULL OR (created_at, id) < ($5, $6))
-         ORDER BY created_at DESC, id DESC
-         LIMIT $7",
+           AND ($5::timestamptz IS NULL OR (usage_record.created_at, usage_record.id) < ($5, $6))
+         ORDER BY usage_record.created_at DESC, usage_record.id DESC
+         LIMIT $7"#,
     )
     .bind(start)
     .bind(end)
-    .bind(model)
+    .bind(query_pattern)
     .bind(status)
     .bind(cursor_created_at)
     .bind(cursor_id)
@@ -1066,6 +1081,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
     Ok(UsageRecord {
         id: row.try_get("id")?,
         user_id: row.try_get("user_id")?,
+        user_email: row.try_get("user_email")?,
         user_key_id: row.try_get("user_key_id")?,
         channel_id: row.try_get("channel_id")?,
         channel_key_id: row.try_get("channel_key_id")?,

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{
-    email::{EmailConfig, EmailService, SMTP_SETTING_KEY},
+    email::{smtp_test_error, EmailConfig, EmailService, SMTP_SETTING_KEY},
     error::{AppError, AppResult},
     AppState,
 };
@@ -125,7 +125,11 @@ pub async fn test_smtp_setting(
     let config = runtime_config_from_request(state, req).await?;
     EmailService::send_test(&config, &config.from_email)
         .await
-        .map_err(|err| AppError::BadRequest(format!("failed to send test email: {err:#}")))?;
+        .map_err(|err| {
+            tracing::warn!(error = ?err, "failed to send SMTP test email");
+            let (code, message) = smtp_test_error(&err);
+            AppError::BadRequestWithCode { code, message }
+        })?;
     Ok(TestSmtpSettingResponse { ok: true })
 }
 

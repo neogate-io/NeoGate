@@ -36,12 +36,18 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import type { ProviderRecord } from '../../types/admin'
 import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
-import { ApiError, readError } from '../../utils/errors'
+import { ApiError, readError, readSmtpTestError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
 type BusinessSetupStep = 'admin-password' | 'service-mode' | 'upstream' | 'smtp'
+type SetupEndpointPayload = {
+  protocol: Protocol
+  base_url: string
+  models: string[]
+  enabled: boolean
+}
 
 const businessSetupSteps: BusinessSetupStep[] = [
   'admin-password',
@@ -462,13 +468,12 @@ async function submitSetup() {
   if (!validateSetup()) return
   saving.value = true
   try {
+    const models = splitCommaList(setupForm.models)
     const channel = includeUpstream.value
       ? {
           provider: setupForm.provider,
           name: setupForm.channelName.trim(),
-          protocol: setupForm.protocol,
-          base_url: setupForm.baseUrl.trim(),
-          models: splitCommaList(setupForm.models),
+          endpoints: setupEndpointsForSubmit(models),
           secret: setupForm.secret
         }
       : null
@@ -580,16 +585,22 @@ function validateUpstreamStep() {
     ElMessage.error(t('channelNameRequired'))
     return false
   }
-  if (!setupForm.baseUrl.trim()) {
-    ElMessage.error(t('baseUrlRequired'))
-    return false
-  }
   if (!setupForm.secret.trim()) {
     ElMessage.error(t('upstreamKeyRequired'))
     return false
   }
-  if (splitCommaList(setupForm.models).length === 0) {
+  const models = splitCommaList(setupForm.models)
+  if (models.length === 0) {
     ElMessage.error(t('modelsFetchRequired'))
+    return false
+  }
+  const endpoints = setupEndpointsForSubmit(models)
+  if (endpoints.length === 0) {
+    ElMessage.error(t('baseUrlRequired'))
+    return false
+  }
+  if (endpoints.some((endpoint) => !isValidHttpUrl(endpoint.base_url))) {
+    ElMessage.error(t('baseUrlInvalid'))
     return false
   }
   return true
@@ -634,7 +645,7 @@ async function sendSmtpTestEmail() {
     await testSetupSmtpSetting(smtpPayload())
     ElMessage.success(t('smtpTestEmailSent'))
   } catch (err) {
-    ElMessage.error(readError(err))
+    ElMessage.error(readSmtpTestError(err, t))
   } finally {
     testingSmtp.value = false
   }
@@ -723,6 +734,50 @@ function applyProviderDefaults() {
     setupForm.protocol = endpoint.protocol
   }
   setupForm.baseUrl = endpoint?.base_url || ''
+}
+
+function setupEndpointsForSubmit(models: string[]) {
+  const provider = selectedProvider.value
+  const endpointModels = [...models]
+  if (!provider || provider.code === 'custom') {
+    const baseUrl = setupForm.baseUrl.trim()
+    return baseUrl
+      ? [
+          {
+            protocol: setupForm.protocol,
+            base_url: baseUrl,
+            models: endpointModels,
+            enabled: true
+          }
+        ]
+      : []
+  }
+
+  const endpoints: SetupEndpointPayload[] = []
+  for (const endpoint of provider.default_endpoints) {
+    if (endpoint.protocol !== 'openai' && endpoint.protocol !== 'anthropic') continue
+    const baseUrl =
+      endpoint.protocol === setupForm.protocol
+        ? setupForm.baseUrl.trim()
+        : endpoint.base_url.trim()
+    if (!baseUrl) continue
+    endpoints.push({
+      protocol: endpoint.protocol,
+      base_url: baseUrl,
+      models: endpointModels,
+      enabled: true
+    })
+  }
+  return endpoints
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function syncPriceRows() {

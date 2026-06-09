@@ -264,7 +264,7 @@ pub(in crate::relay) async fn respond_upstream_http_failure(
     let payload = json!({
         "error": {
             "message": failure.user_message,
-            "type": failure.error_type,
+            "code": failure.error_type,
             "upstream": ctx.upstream.provider,
             "upstream_status": status.as_u16(),
             "retryable": failure.retryable,
@@ -273,7 +273,7 @@ pub(in crate::relay) async fn respond_upstream_http_failure(
     let mut builder = Response::builder()
         .status(failure.relay_status)
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-neogate-error-type", failure.error_type)
+        .header("x-neogate-error-code", failure.error_type)
         .header(
             "x-neogate-retryable",
             if failure.retryable { "true" } else { "false" },

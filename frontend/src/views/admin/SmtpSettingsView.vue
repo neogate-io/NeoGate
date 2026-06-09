@@ -4,7 +4,7 @@ import { Connection, Lock, Message, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getSmtpSetting, saveSmtpSetting, testSmtpSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
-import { readError } from '../../utils/errors'
+import { readError, readSmtpTestError } from '../../utils/errors'
 
 const { t } = useLocale()
 
@@ -84,7 +84,7 @@ async function sendTestEmail() {
     await testSmtpSetting(smtpPayload())
     ElMessage.success(t('smtpTestEmailSent'))
   } catch (err) {
-    ElMessage.error(readError(err))
+    ElMessage.error(readSmtpTestError(err, t))
   } finally {
     testing.value = false
   }

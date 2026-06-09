@@ -122,9 +122,12 @@ export function completeSetupWizard(input: {
   channel?: {
     provider: string
     name: string
-    protocol: 'openai' | 'anthropic'
-    base_url: string
-    models: string[]
+    endpoints: Array<{
+      protocol: 'openai' | 'anthropic'
+      base_url: string
+      models: string[]
+      enabled: boolean
+    }>
     secret: string
   } | null
   prices: Array<{

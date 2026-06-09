@@ -1,4 +1,4 @@
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use bytes::Bytes;
 use serde_json::{json, Value};
 use tokio::time::Duration;
@@ -32,6 +32,25 @@ pub(super) async fn forward_openai(
             .post(url.clone())
             .bearer_auth(&upstream.secret)
             .header("content-type", "application/json")
+            .body(body.clone())
+    })
+    .await
+}
+
+pub(super) async fn forward_openai_with_content_type(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    body: Bytes,
+    path: &str,
+    content_type: HeaderValue,
+) -> AppResult<reqwest::Response> {
+    let url = upstream_url(&upstream.base_url, path);
+    send_upstream_request(state, upstream, UpstreamProtocol::Openai, path, || {
+        state
+            .http
+            .post(url.clone())
+            .bearer_auth(&upstream.secret)
+            .header("content-type", content_type.clone())
             .body(body.clone())
     })
     .await

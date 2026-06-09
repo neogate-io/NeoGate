@@ -19,7 +19,7 @@ use super::{
     usage_from_context,
 };
 
-const MAX_JSON_USAGE_BUFFER_BYTES: usize = 2 * 1024 * 1024;
+const MAX_JSON_USAGE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SSE_USAGE_BUFFER_BYTES: usize = 256 * 1024;
 
 pub(super) struct RelayContext {

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use axum::{
     body::Body,
     extract::{OriginalUri, Path, State},
-    http::{header, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
 };
 use bytes::Bytes;
@@ -23,8 +23,8 @@ use super::{
     body::RelayBody,
     error::describe_upstream_http_failure,
     finish_relay, finish_task_json_response, forward_openai, forward_openai_bound,
-    handle_upstream_http_error, log_upstream_http_failure, read_upstream_error_body,
-    record_upstream_http_failure, release_empty_hold, reserve_credit,
+    forward_openai_with_content_type, handle_upstream_http_error, log_upstream_http_failure,
+    read_upstream_error_body, record_upstream_http_failure, release_empty_hold, reserve_credit,
     respond_upstream_http_failure,
     selector::{SelectedUpstream, UpstreamProtocol},
     streaming::RelayContext,
@@ -35,6 +35,13 @@ use super::{ensure_key_backed_async_upstream, response_from_bytes};
 
 const MODEL_UNAVAILABLE_MAX_REROUTES: usize = 3;
 const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
+
+#[derive(Debug, Clone)]
+struct ImageRequestMeta {
+    model: String,
+    stream: bool,
+    content_type: HeaderValue,
+}
 
 pub(super) async fn openai_chat_completions(
     State(state): State<Arc<AppState>>,
@@ -50,6 +57,33 @@ pub(super) async fn openai_responses(
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
     relay_openai(state, auth, body, "/v1/responses").await
+}
+
+pub(super) async fn openai_image_generations(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai_image(state, auth, headers, body, "/v1/images/generations").await
+}
+
+pub(super) async fn openai_image_edits(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai_image(state, auth, headers, body, "/v1/images/edits").await
+}
+
+pub(super) async fn openai_image_variations(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai_image(state, auth, headers, body, "/v1/images/variations").await
 }
 
 pub(super) async fn openai_response(
@@ -238,6 +272,62 @@ async fn relay_openai(
             Err(err) => return finish_relay(ctx, Err(err)).await,
         }
     }
+}
+
+async fn relay_openai_image(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    body: Bytes,
+    path: &'static str,
+) -> AppResult<Response> {
+    let meta = image_request_meta(path, &headers, &body)?;
+    auth.ensure_model_allowed(&meta.model)?;
+    let started = Instant::now();
+    let upstream = state
+        .selector
+        .select(
+            &state.db.pool,
+            &state.secrets,
+            UpstreamProtocol::Openai,
+            &meta.model,
+        )
+        .await?;
+    let price = state
+        .billing
+        .price_for(
+            &state.db.pool,
+            &upstream.provider,
+            &meta.model,
+            &auth.user_group,
+        )
+        .await?;
+    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let hold = reserve_credit(
+        &state,
+        &auth,
+        user_key_model_credit_account.as_ref(),
+        &body,
+        state.billing.default_output_tokens(),
+        &price,
+    )
+    .await?;
+    let ctx = RelayContext {
+        state: Arc::clone(&state),
+        auth,
+        upstream: upstream.clone(),
+        protocol: UpstreamProtocol::Openai,
+        path,
+        model: meta.model,
+        streamed: meta.stream,
+        price,
+        hold,
+        user_key_model_credit_account,
+        started,
+    };
+    let response =
+        forward_openai_with_content_type(&state, &upstream, body, path, meta.content_type).await;
+    finish_relay(ctx, response).await
 }
 
 async fn create_background_response(
@@ -517,6 +607,195 @@ fn response_query_streams(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn image_request_meta(
+    path: &'static str,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> AppResult<ImageRequestMeta> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let content_type_text = content_type
+        .to_str()
+        .map_err(|_| AppError::BadRequest("invalid content-type header".to_string()))?;
+    let content_type_text = content_type_text.to_string();
+    let lower_content_type = content_type_text.to_ascii_lowercase();
+
+    if lower_content_type.starts_with("application/json") {
+        if path != "/v1/images/generations" {
+            return Err(AppError::BadRequest(
+                "image edits and variations require multipart/form-data".to_string(),
+            ));
+        }
+        return json_image_request_meta(body, content_type);
+    }
+
+    if lower_content_type.starts_with("multipart/form-data") {
+        if path == "/v1/images/generations" {
+            return Err(AppError::BadRequest(
+                "image generations require application/json".to_string(),
+            ));
+        }
+        return multipart_image_request_meta(body, &content_type_text, content_type);
+    }
+
+    Err(AppError::BadRequest(
+        "images requests require application/json or multipart/form-data".to_string(),
+    ))
+}
+
+fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<ImageRequestMeta> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))?
+        .to_string();
+    let stream = value
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(ImageRequestMeta {
+        model,
+        stream,
+        content_type,
+    })
+}
+
+fn multipart_image_request_meta(
+    body: &[u8],
+    content_type_text: &str,
+    content_type: HeaderValue,
+) -> AppResult<ImageRequestMeta> {
+    let boundary = multipart_boundary(content_type_text)?;
+    let mut model = None;
+    let mut stream = false;
+    for (name, value) in multipart_text_fields(body, &boundary)? {
+        match name.as_str() {
+            "model" if !value.is_empty() => model = Some(value),
+            "stream" => stream = value == "true",
+            _ => {}
+        }
+    }
+    let model = model.ok_or_else(|| AppError::BadRequest("model is required".to_string()))?;
+    Ok(ImageRequestMeta {
+        model,
+        stream,
+        content_type,
+    })
+}
+
+fn multipart_boundary(content_type: &str) -> AppResult<String> {
+    for part in content_type.split(';').skip(1) {
+        let Some((key, value)) = part.trim().split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("boundary") {
+            let boundary = value.trim().trim_matches('"');
+            if boundary.is_empty() {
+                break;
+            }
+            return Ok(boundary.to_string());
+        }
+    }
+    Err(AppError::BadRequest(
+        "multipart/form-data boundary is required".to_string(),
+    ))
+}
+
+fn multipart_text_fields(body: &[u8], boundary: &str) -> AppResult<Vec<(String, String)>> {
+    let marker = format!("--{boundary}").into_bytes();
+    let mut fields = Vec::new();
+    let Some(mut cursor) = find_bytes(body, &marker) else {
+        return Err(AppError::BadRequest("invalid multipart body".to_string()));
+    };
+
+    loop {
+        cursor += marker.len();
+        if body.get(cursor..cursor + 2) == Some(b"--") {
+            break;
+        }
+        cursor = skip_line_break(body, cursor)?;
+        let Some(next_marker_offset) = find_bytes(&body[cursor..], &marker) else {
+            return Err(AppError::BadRequest("invalid multipart body".to_string()));
+        };
+        let mut part = &body[cursor..cursor + next_marker_offset];
+        if part.ends_with(b"\r\n") {
+            part = &part[..part.len() - 2];
+        } else if part.ends_with(b"\n") {
+            part = &part[..part.len() - 1];
+        }
+        if let Some((name, value)) = multipart_text_field(part)? {
+            fields.push((name, value));
+        }
+        cursor += next_marker_offset;
+    }
+
+    Ok(fields)
+}
+
+fn skip_line_break(body: &[u8], cursor: usize) -> AppResult<usize> {
+    if body.get(cursor..cursor + 2) == Some(b"\r\n") {
+        return Ok(cursor + 2);
+    }
+    if body.get(cursor..cursor + 1) == Some(b"\n") {
+        return Ok(cursor + 1);
+    }
+    Err(AppError::BadRequest("invalid multipart body".to_string()))
+}
+
+fn multipart_text_field(part: &[u8]) -> AppResult<Option<(String, String)>> {
+    let (headers, value) = if let Some(offset) = find_bytes(part, b"\r\n\r\n") {
+        (&part[..offset], &part[offset + 4..])
+    } else if let Some(offset) = find_bytes(part, b"\n\n") {
+        (&part[..offset], &part[offset + 2..])
+    } else {
+        return Err(AppError::BadRequest("invalid multipart body".to_string()));
+    };
+    let headers = std::str::from_utf8(headers)
+        .map_err(|_| AppError::BadRequest("invalid multipart headers".to_string()))?;
+    let Some(disposition) = headers.lines().find(|line| {
+        line.to_ascii_lowercase()
+            .starts_with("content-disposition:")
+    }) else {
+        return Ok(None);
+    };
+    if disposition.contains("filename=") {
+        return Ok(None);
+    }
+    let Some(name) = multipart_disposition_name(disposition) else {
+        return Ok(None);
+    };
+    let value = std::str::from_utf8(value)
+        .map_err(|_| AppError::BadRequest("invalid multipart text field".to_string()))?
+        .trim()
+        .to_string();
+    Ok(Some((name, value)))
+}
+
+fn multipart_disposition_name(disposition: &str) -> Option<String> {
+    let (_, params) = disposition.split_once(':')?;
+    for param in params.split(';').skip(1) {
+        let (key, value) = param.trim().split_once('=')?;
+        if key.trim().eq_ignore_ascii_case("name") {
+            return Some(value.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 async fn select_upstream(
     state: &AppState,
     path: &'static str,
@@ -611,6 +890,7 @@ fn should_retry_after_model_unavailable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
     fn response_terminal_statuses_are_detected() {
@@ -628,5 +908,70 @@ mod tests {
         assert!(!response_query_streams(
             "/v1/responses/resp_123?stream=false"
         ));
+    }
+
+    #[test]
+    fn parses_json_image_generation_meta() {
+        let body = br#"{"model":"gpt-image-1","prompt":"draw","stream":true}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+
+        let meta = image_request_meta("/v1/images/generations", &headers, body).unwrap();
+
+        assert_eq!(meta.model, "gpt-image-1");
+        assert!(meta.stream);
+        assert_eq!(
+            meta.content_type,
+            HeaderValue::from_static("application/json")
+        );
+    }
+
+    #[test]
+    fn parses_multipart_image_edit_model_without_rewriting_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data; boundary=----neogate-boundary"),
+        );
+        let body = b"------neogate-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n------neogate-boundary--\r\n";
+
+        let meta = image_request_meta("/v1/images/edits", &headers, body).unwrap();
+
+        assert_eq!(meta.model, "gpt-image-1");
+        assert!(!meta.stream);
+        assert_eq!(
+            meta.content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=----neogate-boundary")
+        );
+    }
+
+    #[test]
+    fn multipart_image_variation_requires_model() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data; boundary=x"),
+        );
+        let body = b"--x\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n--x--\r\n";
+
+        let err = image_request_meta("/v1/images/variations", &headers, body).unwrap_err();
+
+        assert!(err.to_string().contains("model is required"));
+    }
+
+    #[test]
+    fn image_request_rejects_unsupported_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+
+        let err = image_request_meta("/v1/images/generations", &headers, b"model=gpt-image-1")
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("application/json or multipart/form-data"));
     }
 }

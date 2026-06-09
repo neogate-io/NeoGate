@@ -62,6 +62,34 @@ const openAiResponses = computed(
   }'`
 )
 
+const openAiImageGeneration = computed(
+  () => `curl ${openAiBaseUrl.value}/images/generations \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-image-1",
+    "prompt": "A compact glass teapot on a walnut table",
+    "size": "1024x1024"
+  }'`
+)
+
+const openAiImageEdit = computed(
+  () => `curl ${openAiBaseUrl.value}/images/edits \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -F "model=gpt-image-1" \\
+  -F "image=@input.png" \\
+  -F "prompt=Add a soft morning light through the window" \\
+  -F "size=1024x1024"`
+)
+
+const openAiImageVariation = computed(
+  () => `curl ${openAiBaseUrl.value}/images/variations \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -F "model=dall-e-2" \\
+  -F "image=@input.png" \\
+  -F "size=1024x1024"`
+)
+
 const openAiModels = computed(
   () => `curl ${openAiBaseUrl.value}/models \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY"`
@@ -291,9 +319,9 @@ const content = computed(() => {
           'response_id, limit, after',
           '开发中'
         ],
-        ['Images', 'POST', '/v1/images/generations', 'model, prompt, size, quality, n', '开发中'],
-        ['Images', 'POST', '/v1/images/edits', 'model, image, prompt, mask, size, n', '开发中'],
-        ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', '开发中'],
+        ['Images', 'POST', '/v1/images/generations', 'model, prompt, size, quality, n', '已支持'],
+        ['Images', 'POST', '/v1/images/edits', 'model, image, prompt, mask, size, n', '已支持'],
+        ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', '已支持'],
         [
           'Embeddings',
           'POST',
@@ -497,7 +525,7 @@ const content = computed(() => {
         'Responses 后台任务按官方 background 参数创建。NeoGate 要求 background=true 时 store 不能为 false；创建后台任务时不支持直接 stream=true，可在查询接口透传 stream=true 获取后续流。',
       imageTitle: '图片生成',
       openAiImage:
-        'OpenAI 官方 Images、Audio、Embeddings、Moderations、Files、Uploads、Batches、Fine-tuning、Vector Stores、Assistants、Threads、Realtime、Evals 等接口已列入总览，当前均为开发中。',
+        'Images 支持生成、编辑和变体接口。生成接口使用 JSON 请求体，编辑和变体接口使用 multipart/form-data 上传图片；请求中的 model 必须已在后台渠道和价格中启用。',
       modelsTitle: '模型列表',
       sdkTitle: 'SDK 示例',
       anthropicIntro:
@@ -736,16 +764,16 @@ const content = computed(() => {
         'POST',
         '/v1/images/generations',
         'model, prompt, size, quality, n',
-        'In development'
+        'Supported'
       ],
       [
         'Images',
         'POST',
         '/v1/images/edits',
         'model, image, prompt, mask, size, n',
-        'In development'
+        'Supported'
       ],
-      ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', 'In development'],
+      ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', 'Supported'],
       [
         'Embeddings',
         'POST',
@@ -979,7 +1007,7 @@ const content = computed(() => {
       'Background Responses follow the official background parameter. NeoGate requires store not to be false when background=true. Create-time streaming is not supported for background tasks; retrieve can pass through stream=true.',
     imageTitle: 'Image generation',
     openAiImage:
-      'Official Images, Audio, Embeddings, Moderations, Files, Uploads, Batches, Fine-tuning, Vector Stores, Assistants, Threads, Realtime, and Evals APIs are listed above and are currently in development.',
+      'Images supports generation, edits, and variations. Generations use a JSON body; edits and variations use multipart/form-data image uploads. The requested model must be enabled in channel models and pricing.',
     modelsTitle: 'Models',
     sdkTitle: 'SDK examples',
     anthropicIntro:
@@ -1355,6 +1383,48 @@ const content = computed(() => {
                   <h2>{{ content.menu[6][2] }}</h2>
                   <p>{{ content.openAiImage }}</p>
                 </div>
+                <article class="docs-step-card">
+                  <h3>Generations</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiImageGeneration)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiImageGeneration }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Edits</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiImageEdit)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiImageEdit }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Variations</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiImageVariation)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiImageVariation }}</code></pre>
+                  </div>
+                </article>
               </section>
 
               <section id="openai-models" class="docs-subsection">

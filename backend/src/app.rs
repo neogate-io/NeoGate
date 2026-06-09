@@ -474,6 +474,28 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn image_relay_without_user_key_returns_unauthorized() {
+        let state = test_state();
+        let app = Router::new().merge(relay::router()).with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/generations")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"gpt-image-1","prompt":"draw a teapot"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn verify_user_key_without_key_returns_unauthorized() {
         let state = test_state();
         let app = Router::new()

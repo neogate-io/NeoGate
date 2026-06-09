@@ -44,7 +44,8 @@ use error::{describe_upstream_http_failure, UpstreamHttpFailure};
 use models::{list_anthropic_models, list_openai_models};
 pub(crate) use upstream::upstream_url;
 pub(in crate::relay) use upstream::{
-    forward_anthropic, forward_openai, log_relay_upstream_failure, relay_upstream_error,
+    forward_anthropic, forward_openai, forward_openai_with_content_type,
+    log_relay_upstream_failure, relay_upstream_error,
 };
 pub(crate) use upstream::{forward_anthropic_bound, forward_openai_bound};
 use upstream_task::{UpstreamTask, UpstreamTaskType};
@@ -63,6 +64,15 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/v1/responses/{response_id}/cancel",
             post(openai::cancel_openai_response),
+        )
+        .route(
+            "/v1/images/generations",
+            post(openai::openai_image_generations),
+        )
+        .route("/v1/images/edits", post(openai::openai_image_edits))
+        .route(
+            "/v1/images/variations",
+            post(openai::openai_image_variations),
         )
         .route("/anthropic/v1/messages/models", get(list_anthropic_models))
         .route("/v1/messages", post(anthropic::anthropic_messages))

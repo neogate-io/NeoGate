@@ -4,9 +4,11 @@ import { Download, Refresh } from '@element-plus/icons-vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import {
   cacheWriteTokens,
+  downloadCsv,
   formatDateTime,
   formatDurationMs,
   formatMicroUsd,
@@ -15,11 +17,17 @@ import {
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
-const currentPage = ref(1)
-const pageSize = ref(20)
+const DEFAULT_PAGE_SIZE = 20
 const loadingRowCount = 3
-const cursorStack = ref<(string | undefined)[]>([undefined])
 const dateRange = ref<[Date, Date] | null>(null)
+const {
+  currentPage,
+  pageSize,
+  currentCursor,
+  reset: resetCursorPagination,
+  goToNext,
+  goToPrevious
+} = useCursorPagination(DEFAULT_PAGE_SIZE)
 const usageQueryRange = computed(() => {
   if (!dateRange.value) return { start: undefined, end: undefined }
   const [startDate, endDate] = dateRange.value
@@ -40,9 +48,9 @@ const {
       pageSize.value,
       usageQueryRange.value.start,
       usageQueryRange.value.end,
-      cursorStack.value[currentPage.value - 1]
+      currentCursor.value
     ),
-  { items: [], total: 0, page: 1, limit: 20 }
+  { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE }
 )
 
 const filteredItems = computed(() => usagePage.value.items)
@@ -68,27 +76,23 @@ function statusLabel(statusCode?: number | null) {
 
 async function nextPage() {
   if (!usagePage.value.has_more || !usagePage.value.next_cursor) return
-  cursorStack.value[currentPage.value] = usagePage.value.next_cursor
-  currentPage.value += 1
+  goToNext(usagePage.value.next_cursor)
   await reload()
 }
 
 async function previousPage() {
-  if (currentPage.value <= 1) return
-  currentPage.value -= 1
+  if (!goToPrevious()) return
   await reload()
 }
 
 async function handlePageSizeChange(size: number) {
   pageSize.value = size
-  currentPage.value = 1
-  cursorStack.value = [undefined]
+  resetCursorPagination()
   await reload()
 }
 
 async function handleDateRangeChange() {
-  currentPage.value = 1
-  cursorStack.value = [undefined]
+  resetCursorPagination()
   await reload()
 }
 
@@ -129,19 +133,7 @@ async function exportUsage() {
     formatMicroUsd(row.cost_micro_usd, 6),
     statusLabel(row.status_code)
   ])
-  const csv = [headers, ...rows].map((row) => row.map(escapeCsvCell).join(',')).join('\n')
-  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `usage-${new Date().toISOString().slice(0, 10)}.csv`
-  link.click()
-  URL.revokeObjectURL(url)
-}
-
-function escapeCsvCell(value: string | number) {
-  const text = String(value)
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
 }
 </script>
 

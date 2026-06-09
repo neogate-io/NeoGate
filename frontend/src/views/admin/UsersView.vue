@@ -33,6 +33,7 @@ import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
   formatDateTime,
+  downloadCsv,
   formatMicroUsd,
   maskApiKey,
   usdToMicroUsd
@@ -501,18 +502,7 @@ function exportUsers() {
     user.created_at,
     user.last_active_at ?? ''
   ])
-  const csv = [header, ...rows].map((row) => row.map(escapeCsvValue).join(',')).join('\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `users-page-${usersCurrentPage.value}.csv`
-  link.click()
-  URL.revokeObjectURL(url)
-}
-
-function escapeCsvValue(value: string | number) {
-  return `"${String(value).replace(/"/g, '""')}"`
+  downloadCsv(`users-page-${usersCurrentPage.value}.csv`, [header, ...rows])
 }
 
 async function loadSelectedUserKeys() {

@@ -77,9 +77,12 @@ const content = computed(() => {
         ['faq', '常见问题', '4. 常见问题']
       ],
       startTitle: '开始使用',
-      startIntro: '第一次使用只需要完成两步：创建 API 密钥，然后执行安装脚本。',
+      startIntro: '第一次使用只需要完成两步：取得 API 密钥，然后执行安装脚本。',
       startCards: [
-        ['创建 API 密钥', '在首页填写邮箱创建密钥，完整密钥只会通过邮件发送。'],
+        [
+          '获取 API 密钥',
+          '如果已开放注册，可在首页填写邮箱领取；如果未开放注册，请登录用户后台创建，或联系管理员分配。'
+        ],
         ['执行安装脚本', '复制并运行安装脚本，把 NeoGate 写入本机常用 AI 工具配置。']
       ],
       installTitle: '一键配置本机工具',
@@ -157,9 +160,12 @@ const content = computed(() => {
       ['faq', 'FAQ', '4. FAQ']
     ],
     startTitle: 'Start',
-    startIntro: 'First-time setup has two steps: create an API key, then run the install script.',
+    startIntro: 'First-time setup has two steps: get an API key, then run the install script.',
     startCards: [
-      ['Create an API key', 'Create a key from the home page. The full key is only sent by email.'],
+      [
+        'Get an API key',
+        'If registration is open, request one from the home page. If registration is closed, create one after signing in or ask an admin to issue it.'
+      ],
       [
         'Run the install script',
         'Copy and run the script to write NeoGate into common local AI tool configuration.'

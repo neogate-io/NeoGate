@@ -72,6 +72,17 @@ function handleAuthFailure(err: unknown) {
   }
 
   const auth = useAuthStore()
+  if (isPasswordChangeRequiredError(err) && auth.isUser) {
+    auth.markPasswordChangeRequired()
+    void router
+      .replace({
+        name: 'changePassword',
+        query: { redirect: router.currentRoute.value.fullPath }
+      })
+      .catch(() => undefined)
+    return
+  }
+
   auth.clearToken()
   void router
     .replace({
@@ -79,4 +90,8 @@ function handleAuthFailure(err: unknown) {
       query: { redirect: router.currentRoute.value.fullPath }
     })
     .catch(() => undefined)
+}
+
+function isPasswordChangeRequiredError(err: ApiError) {
+  return err.message.includes('password change required')
 }

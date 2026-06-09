@@ -1,9 +1,14 @@
 import { publicRequest } from './request'
 
 export type LoginRole = 'admin' | 'user'
+export type LoginResponse = {
+  token: string
+  role: LoginRole
+  requires_password_change?: boolean
+}
 
 export function login(username: string, password: string, verificationCode = '') {
-  return publicRequest<{ token: string; role: LoginRole }>('/api/login', {
+  return publicRequest<LoginResponse>('/api/login', {
     method: 'POST',
     body: JSON.stringify({ username, password, verification_code: verificationCode })
   })

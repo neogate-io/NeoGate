@@ -21,7 +21,7 @@ export function getUsers(
   return adminRequest<UserPage>(`/api/admin/users${query ? `?${query}` : ''}`)
 }
 
-export function createUser(payload: { email: string; status?: User['status'] }) {
+export function createUser(payload: { email: string; password: string; status?: User['status'] }) {
   return adminRequest<User>('/api/admin/users', {
     method: 'POST',
     body: JSON.stringify(payload)

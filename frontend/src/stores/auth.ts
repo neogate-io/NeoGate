@@ -5,12 +5,16 @@ import type { LoginRole } from '../api/auth'
 
 const tokenStorageKey = 'neogate_token'
 const roleStorageKey = 'neogate_role'
+const passwordChangeStorageKey = 'neogate_requires_password_change'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem(tokenStorageKey) || '')
   const storedRole = localStorage.getItem(roleStorageKey)
   const role = ref<LoginRole | ''>(
     (isLoginRole(storedRole) ? storedRole : null) || roleFromToken(token.value)
+  )
+  const requiresPasswordChange = ref(
+    token.value.length > 0 && localStorage.getItem(passwordChangeStorageKey) === 'true'
   )
   const sessionChecked = ref(token.value.length === 0)
   const verifiedToken = ref('')
@@ -19,9 +23,10 @@ export const useAuthStore = defineStore('auth', () => {
   const isUser = computed(() => role.value === 'user')
   let sessionPromise: Promise<boolean> | null = null
 
-  function setToken(nextToken: string, nextRole: LoginRole) {
+  function setToken(nextToken: string, nextRole: LoginRole, nextRequiresPasswordChange = false) {
     token.value = nextToken
     role.value = nextRole
+    requiresPasswordChange.value = nextRole === 'user' && nextRequiresPasswordChange
     verifiedToken.value = nextToken
     sessionChecked.value = true
   }
@@ -29,9 +34,20 @@ export const useAuthStore = defineStore('auth', () => {
   function clearToken() {
     token.value = ''
     role.value = ''
+    requiresPasswordChange.value = false
     verifiedToken.value = ''
     sessionChecked.value = true
     sessionPromise = null
+  }
+
+  function markPasswordChanged() {
+    requiresPasswordChange.value = false
+    sessionChecked.value = false
+    verifiedToken.value = ''
+  }
+
+  function markPasswordChangeRequired() {
+    requiresPasswordChange.value = role.value === 'user'
   }
 
   async function verifySession(force = false) {
@@ -54,6 +70,8 @@ export const useAuthStore = defineStore('auth', () => {
         }
 
         role.value = currentUser.role
+        requiresPasswordChange.value =
+          currentUser.role === 'user' && currentUser.requires_password_change
         verifiedToken.value = requestToken
         sessionChecked.value = true
         return true
@@ -98,15 +116,30 @@ export const useAuthStore = defineStore('auth', () => {
     { immediate: true }
   )
 
+  watch(
+    requiresPasswordChange,
+    (nextRequiresPasswordChange) => {
+      if (nextRequiresPasswordChange) {
+        localStorage.setItem(passwordChangeStorageKey, 'true')
+      } else {
+        localStorage.removeItem(passwordChangeStorageKey)
+      }
+    },
+    { immediate: true }
+  )
+
   return {
     token,
     role,
+    requiresPasswordChange,
     isAuthed,
     isAdmin,
     isUser,
     sessionChecked,
     setToken,
     clearToken,
+    markPasswordChangeRequired,
+    markPasswordChanged,
     verifySession
   }
 })

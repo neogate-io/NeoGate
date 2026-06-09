@@ -32,8 +32,7 @@ use crate::{
     },
     cache::InvalidationEvent,
     error::{AppError, AppResult},
-    policy,
-    AppState,
+    policy, AppState,
 };
 
 use self::selector::SelectedUpstream;

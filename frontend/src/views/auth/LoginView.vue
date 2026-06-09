@@ -47,7 +47,7 @@ async function login() {
 
   try {
     const data = await loginAccount(username.value, password.value, verificationCode.value)
-    auth.setToken(data.token, data.role)
+    auth.setToken(data.token, data.role, data.requires_password_change === true)
     await router.replace(readRedirectPath(data.role))
   } catch (err) {
     if (isVerificationRequiredError(err)) {
@@ -132,6 +132,10 @@ function isLoginVerificationRateLimitedError(err: unknown) {
 
 function readRedirectPath(role: LoginRole) {
   const redirect = route.query.redirect
+  if (role === 'user' && auth.requiresPasswordChange) {
+    const target = typeof redirect === 'string' && redirect.startsWith('/home') ? redirect : ''
+    return target ? `/change-password?redirect=${encodeURIComponent(target)}` : '/change-password'
+  }
   if (role === 'admin') {
     return typeof redirect === 'string' && redirect.startsWith('/admin') ? redirect : '/admin'
   }

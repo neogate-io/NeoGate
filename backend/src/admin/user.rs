@@ -5,21 +5,22 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    AppState,
     auth::{
-        UserAuth, generate_user_key, generate_user_key_from_parts_and_seed, is_generated_user_key,
-        issue_user_key_draft_token, key_prefix, user_key_draft_parts_from_token,
+        generate_user_key, generate_user_key_from_parts_and_seed, hash_user_password,
+        is_generated_user_key, issue_user_key_draft_token, key_prefix,
+        user_key_draft_parts_from_token, validate_user_password_input, UserAuth,
     },
-    billing::{CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD, account},
-    email::{EmailLocale, smtp_config_error_message},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
+    email::{smtp_config_error_message, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
-    policy::{ServiceMode, registration_policy},
+    policy::{registration_policy, ServiceMode},
+    AppState,
 };
 use axum::{
-    Json, Router,
     extract::State,
     routing::{get, post},
+    Json, Router,
 };
 
 #[derive(Debug, Serialize)]
@@ -54,6 +55,7 @@ pub struct UserGroupRecord {
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub email: String,
+    pub password: String,
     #[serde(default = "default_enabled_status")]
     pub status: String,
 }
@@ -207,17 +209,20 @@ async fn verify_user_key_handler(auth: UserAuth) -> Json<UserKeyVerifyResponse> 
 
 pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<UserRecord> {
     validate_user_status(&req.status)?;
+    validate_user_password_input(&req.password)?;
     let email = normalize_email(&req.email)?;
+    let password_hash = hash_user_password(&req.password, &state.config.admin_token_secret);
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         r#"
-        INSERT INTO "user" (email, status, user_group_id)
-        VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE))
+        INSERT INTO "user" (email, status, user_group_id, password_hash)
+        VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE), $3)
         RETURNING id
         "#,
     )
     .bind(email)
     .bind(req.status)
+    .bind(password_hash)
     .fetch_one(&mut *tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;

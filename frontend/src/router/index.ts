@@ -48,6 +48,12 @@ export const router = createRouter({
       meta: { messageKey: 'resetPassword' }
     },
     {
+      path: '/change-password',
+      name: 'changePassword',
+      component: () => import('../views/auth/ChangePasswordView.vue'),
+      meta: { messageKey: 'changePassword', passwordChange: true }
+    },
+    {
       path: '/home',
       component: () => import('../layouts/UserLayout.vue'),
       meta: { user: true },
@@ -180,6 +186,32 @@ router.beforeEach(async (to) => {
     }
   }
 
+  if (
+    auth.isUser &&
+    auth.requiresPasswordChange &&
+    to.name !== 'changePassword' &&
+    to.name !== 'login'
+  ) {
+    return {
+      name: 'changePassword',
+      query: { redirect: to.fullPath }
+    }
+  }
+
+  if (
+    to.name === 'changePassword' &&
+    (!auth.isAuthed || !(await auth.verifySession()) || !auth.isUser)
+  ) {
+    return {
+      name: 'login',
+      query: { redirect: to.fullPath }
+    }
+  }
+
+  if (to.name === 'changePassword' && auth.isUser && !auth.requiresPasswordChange) {
+    return '/home/overview'
+  }
+
   if (to.meta.admin === true && !auth.isAdmin) {
     return '/home'
   }
@@ -203,6 +235,7 @@ router.beforeEach(async (to) => {
   }
 
   if (to.name === 'login' && auth.isAuthed && (await auth.verifySession())) {
+    if (auth.isUser && auth.requiresPasswordChange) return '/change-password'
     return auth.isAdmin ? '/admin' : '/home/overview'
   }
 })

@@ -30,6 +30,7 @@ const usageQueryRange = computed(() => {
 const {
   data: usagePage,
   loading,
+  loaded: usageLoaded,
   reload
 } = useAsyncData(
   () =>
@@ -44,6 +45,10 @@ const {
 )
 
 const filteredItems = computed(() => usagePage.value.items)
+const usageInitialLoading = computed(() => !usageLoaded.value)
+const hasUsagePagination = computed(
+  () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
+)
 
 function formatFullTime(value: string) {
   return formatDateTime(value, locale.value, {
@@ -288,24 +293,36 @@ function escapeCsvCell(value: string | number) {
         </div>
       </div>
 
-      <div class="usage-pagination">
-        <el-select
-          v-model="pageSize"
-          class="usage-page-size"
-          @change="handlePageSizeChange"
-        >
-          <el-option :value="10" label="10" />
-          <el-option :value="20" label="20" />
-          <el-option :value="50" label="50" />
-          <el-option :value="100" label="100" />
-        </el-select>
-        <span class="usage-page-index">{{ currentPage }}</span>
-        <el-button :disabled="currentPage <= 1 || loading" @click="previousPage">
-          {{ t('previousStep') }}
-        </el-button>
-        <el-button :disabled="!usagePage.has_more || loading" @click="nextPage">
-          {{ t('nextStep') }}
-        </el-button>
+    </div>
+
+    <div
+      v-if="!usageInitialLoading && (hasUsagePagination || filteredItems.length > 1)"
+      class="admin-pagination-bar"
+    >
+      <div class="admin-pagination-summary">
+        <span class="admin-result-count">
+          {{ t('currentPageItems') }} {{ filteredItems.length.toLocaleString(locale) }}
+          {{ t('itemsUnit') }}
+        </span>
+      </div>
+      <div class="admin-pagination-controls">
+        <div class="admin-page-size-control">
+          <span class="admin-page-label">{{ t('pageSize') }}</span>
+          <el-select v-model="pageSize" class="admin-page-size" @change="handlePageSizeChange">
+            <el-option :value="20" label="20" />
+            <el-option :value="50" label="50" />
+            <el-option :value="100" label="100" />
+          </el-select>
+        </div>
+        <span class="admin-result-count">{{ t('currentPage') }} {{ currentPage }}</span>
+        <div class="admin-page-buttons">
+          <el-button :disabled="currentPage <= 1 || loading" @click="previousPage">
+            {{ t('previousPage') }}
+          </el-button>
+          <el-button :disabled="!usagePage.has_more || loading" @click="nextPage">
+            {{ t('nextPage') }}
+          </el-button>
+        </div>
       </div>
     </div>
   </section>
@@ -622,16 +639,6 @@ function escapeCsvCell(value: string | number) {
   font-weight: 400;
   margin: 0;
   overflow-wrap: anywhere;
-}
-
-.usage-pagination {
-  align-items: center;
-  background: #ffffff;
-  border-top: 1px solid #edf1f6;
-  display: flex;
-  justify-content: flex-end;
-  min-height: 62px;
-  padding: 12px 20px;
 }
 
 @media (max-width: 820px) {

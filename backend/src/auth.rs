@@ -236,6 +236,12 @@ pub struct UserSessionAuth {
     pub user_id: DbId,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct UserSessionState {
+    user_id: DbId,
+    requires_password_change: bool,
+}
+
 impl FromRequestParts<Arc<AppState>> for UserSessionAuth {
     type Rejection = AppError;
 
@@ -243,25 +249,14 @@ impl FromRequestParts<Arc<AppState>> for UserSessionAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let Some(user_id) = bearer(&parts.headers)
-            .and_then(|token| validate_user_session_token(token, &state.config.admin_token_secret))
-        else {
-            return Err(AppError::Unauthorized);
-        };
-
-        let row = sqlx::query(r#"SELECT status FROM "user" WHERE id = $1"#)
-            .bind(user_id)
-            .fetch_optional(&state.db.pool)
-            .await?;
-        let Some(row) = row else {
-            return Err(AppError::Unauthorized);
-        };
-        let status: String = row.try_get("status")?;
-        if status != "enabled" {
-            return Err(AppError::Unauthorized);
+        let session = user_session_from_headers(state, &parts.headers).await?;
+        if session.requires_password_change {
+            return Err(AppError::PasswordChangeRequired);
         }
 
-        Ok(Self { user_id })
+        Ok(Self {
+            user_id: session.user_id,
+        })
     }
 }
 
@@ -275,6 +270,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/password-reset-requests", post(request_password_reset))
         .route("/api/password-reset", post(reset_password))
+        .route("/api/user/password", post(update_user_password))
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,11 +284,13 @@ struct LoginRequest {
 struct LoginResponse {
     token: String,
     role: String,
+    requires_password_change: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct MeResponse {
     role: String,
+    requires_password_change: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,6 +311,12 @@ struct ResetPasswordRequest {
     password: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct UpdateUserPasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
 #[derive(Debug, Serialize)]
 struct OkResponse {
     ok: bool,
@@ -326,7 +330,7 @@ async fn login(
         return Ok(Json(response));
     }
 
-    let user_id = login_or_create_user(
+    let user = login_or_create_user(
         &state,
         &req.username,
         &req.password,
@@ -337,9 +341,10 @@ async fn login(
         token: issue_user_session_token(
             state.config.admin_session_ttl,
             &state.config.admin_token_secret,
-            user_id,
+            user.user_id,
         ),
         role: "user".to_string(),
+        requires_password_change: user.requires_password_change,
     }))
 }
 
@@ -348,26 +353,15 @@ async fn me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> AppResult
     if validate_admin_token(token, &state.config.admin_token_secret) {
         return Ok(Json(MeResponse {
             role: "admin".to_string(),
+            requires_password_change: false,
         }));
     }
 
-    let Some(user_id) = validate_user_session_token(token, &state.config.admin_token_secret) else {
-        return Err(AppError::Unauthorized);
-    };
-    let row = sqlx::query(r#"SELECT status FROM "user" WHERE id = $1"#)
-        .bind(user_id)
-        .fetch_optional(&state.db.pool)
-        .await?;
-    let Some(row) = row else {
-        return Err(AppError::Unauthorized);
-    };
-    let status: String = row.try_get("status")?;
-    if status != "enabled" {
-        return Err(AppError::Unauthorized);
-    }
+    let session = user_session_from_token(&state, token).await?;
 
     Ok(Json(MeResponse {
         role: "user".to_string(),
+        requires_password_change: session.requires_password_change,
     }))
 }
 
@@ -413,7 +407,44 @@ async fn login_admin(
             &state.config.admin_token_secret,
         ),
         role: "admin".to_string(),
+        requires_password_change: false,
     }))
+}
+
+async fn user_session_from_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<UserSessionState> {
+    let token = bearer(headers).ok_or(AppError::Unauthorized)?;
+    user_session_from_token(state, token).await
+}
+
+async fn user_session_from_token(state: &AppState, token: &str) -> AppResult<UserSessionState> {
+    let Some(user_id) = validate_user_session_token(token, &state.config.admin_token_secret) else {
+        return Err(AppError::Unauthorized);
+    };
+
+    let row = sqlx::query(
+        r#"
+        SELECT status, (password_changed_at IS NULL) AS requires_password_change
+        FROM "user"
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    let Some(row) = row else {
+        return Err(AppError::Unauthorized);
+    };
+    let status: String = row.try_get("status")?;
+    if status != "enabled" {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(UserSessionState {
+        user_id,
+        requires_password_change: row.try_get("requires_password_change")?,
+    })
 }
 
 async fn record_admin_login_failure(state: &AppState, id: DbId) -> AppResult<()> {
@@ -549,7 +580,7 @@ async fn reset_password(
     let result = sqlx::query(
         r#"
         UPDATE "user"
-        SET password_hash = $2, updated_at = now()
+        SET password_hash = $2, password_changed_at = now(), updated_at = now()
         WHERE email = $1 AND status = 'enabled'
         "#,
     )
@@ -565,12 +596,85 @@ async fn reset_password(
     Ok(Json(OkResponse { ok: true }))
 }
 
+async fn update_user_password(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateUserPasswordRequest>,
+) -> AppResult<Json<OkResponse>> {
+    if req.current_password.is_empty() {
+        return Err(AppError::BadRequest(
+            "current password is required".to_string(),
+        ));
+    }
+    validate_user_password_input(&req.new_password)?;
+
+    let session = user_session_from_headers(&state, &headers).await?;
+    let row = sqlx::query(
+        r#"
+        SELECT password_hash
+        FROM "user"
+        WHERE id = $1 AND status = 'enabled'
+        "#,
+    )
+    .bind(session.user_id)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    let Some(row) = row else {
+        return Err(AppError::Unauthorized);
+    };
+    let password_hash: Option<String> = row.try_get("password_hash")?;
+    let Some(current_hash) = password_hash else {
+        return Err(AppError::Unauthorized);
+    };
+    if !verify_user_password(
+        &req.current_password,
+        &state.config.admin_token_secret,
+        &current_hash,
+    ) {
+        return Err(AppError::BadRequest(
+            "current password is incorrect".to_string(),
+        ));
+    }
+    if verify_user_password(
+        &req.new_password,
+        &state.config.admin_token_secret,
+        &current_hash,
+    ) {
+        return Err(AppError::BadRequest(
+            "new password cannot be the same as the current password".to_string(),
+        ));
+    }
+
+    let next_hash = hash_user_password(&req.new_password, &state.config.admin_token_secret);
+    sqlx::query(
+        r#"
+        UPDATE "user"
+        SET password_hash = $2,
+            password_changed_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(session.user_id)
+    .bind(next_hash)
+    .execute(&state.db.pool)
+    .await?;
+
+    Ok(Json(OkResponse { ok: true }))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UserLogin {
+    user_id: DbId,
+    requires_password_change: bool,
+}
+
 async fn login_or_create_user(
     state: &AppState,
     email: &str,
     password: &str,
     verification_code: Option<&str>,
-) -> AppResult<DbId> {
+) -> AppResult<UserLogin> {
     let email = normalize_email(email)?;
     validate_user_password_input(password)?;
 
@@ -580,7 +684,8 @@ async fn login_or_create_user(
 
     let existing = sqlx::query(
         r#"
-        SELECT id, status, password_hash
+        SELECT id, status, password_hash,
+               (password_changed_at IS NULL) AS requires_password_change
         FROM "user"
         WHERE email = $1
         ORDER BY created_at ASC
@@ -591,10 +696,11 @@ async fn login_or_create_user(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let user_id = if let Some(row) = existing {
+    let user = if let Some(row) = existing {
         let user_id: DbId = row.try_get("id")?;
         let status: String = row.try_get("status")?;
         let stored_hash: Option<String> = row.try_get("password_hash")?;
+        let mut requires_password_change: bool = row.try_get("requires_password_change")?;
         if status != "enabled" {
             if status == "pending" {
                 return Err(AppError::BadRequest("account pending approval".to_string()));
@@ -608,14 +714,24 @@ async fn login_or_create_user(
             }
         } else {
             sqlx::query(
-                r#"UPDATE "user" SET password_hash = $2, updated_at = now() WHERE id = $1"#,
+                r#"
+                UPDATE "user"
+                SET password_hash = $2,
+                    password_changed_at = now(),
+                    updated_at = now()
+                WHERE id = $1
+                "#,
             )
             .bind(user_id)
             .bind(&password_hash)
             .execute(&mut *tx)
             .await?;
+            requires_password_change = false;
         }
-        user_id
+        UserLogin {
+            user_id,
+            requires_password_change,
+        }
     } else {
         let (service_mode, registration_enabled) = registration_policy(state).await?;
         if !registration_enabled {
@@ -638,8 +754,8 @@ async fn login_or_create_user(
 
         let row = sqlx::query(
             r#"
-            INSERT INTO "user" (email, status, user_group_id, password_hash)
-            VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE), $3)
+            INSERT INTO "user" (email, status, user_group_id, password_hash, password_changed_at)
+            VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE), $3, now())
             RETURNING id
             "#,
         )
@@ -657,11 +773,14 @@ async fn login_or_create_user(
             tx.commit().await?;
             return Err(AppError::BadRequest("account pending approval".to_string()));
         }
-        user_id
+        UserLogin {
+            user_id,
+            requires_password_change: false,
+        }
     };
 
     tx.commit().await?;
-    Ok(user_id)
+    Ok(user)
 }
 
 async fn login_email_needs_verification(state: &AppState, email: &str) -> AppResult<bool> {

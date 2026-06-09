@@ -3,6 +3,7 @@ import { ApiError } from '../utils/errors'
 
 export type CurrentUser = {
   role: LoginRole
+  requires_password_change: boolean
 }
 
 export async function getCurrentUser(token: string) {
@@ -21,13 +22,18 @@ export async function getCurrentUser(token: string) {
     throw new ApiError('invalid current user response', response.status)
   }
 
-  return { role }
+  return { role, requires_password_change: readRequiresPasswordChange(data) }
 }
 
 function readRole(data: unknown): LoginRole | '' {
   if (typeof data !== 'object' || !data || !('role' in data)) return ''
   const role = (data as { role?: unknown }).role
   return role === 'admin' || role === 'user' ? role : ''
+}
+
+function readRequiresPasswordChange(data: unknown) {
+  if (typeof data !== 'object' || !data || !('requires_password_change' in data)) return false
+  return (data as { requires_password_change?: unknown }).requires_password_change === true
 }
 
 function readErrorMessage(data: unknown) {

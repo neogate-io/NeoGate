@@ -91,6 +91,8 @@ pub enum AppError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    #[error("password change required")]
+    PasswordChangeRequired,
     #[error("payment required")]
     PaymentRequired,
     #[error("conflict: {0}")]
@@ -156,6 +158,7 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
+            AppError::PasswordChangeRequired => StatusCode::FORBIDDEN,
             AppError::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,

@@ -12,7 +12,8 @@
 
 .root-shell-route-login,
 .root-shell-route-forgotPassword,
-.root-shell-route-resetPassword {
+.root-shell-route-resetPassword,
+.root-shell-route-changePassword {
   --powered-footer-bg: #f6f8fb;
 }
 

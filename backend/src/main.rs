@@ -1,8 +1,8 @@
 mod admin;
 mod app;
 mod auth;
-mod bootstrap;
 mod billing;
+mod bootstrap;
 mod config;
 mod core;
 mod health;

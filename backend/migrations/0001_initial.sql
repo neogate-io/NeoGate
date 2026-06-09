@@ -22,6 +22,7 @@ CREATE TABLE "user" (
     email CITEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled', 'pending')),
     password_hash TEXT,
+    password_changed_at TIMESTAMPTZ,
     user_group_id BIGINT NOT NULL REFERENCES user_group(id),
     last_active_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

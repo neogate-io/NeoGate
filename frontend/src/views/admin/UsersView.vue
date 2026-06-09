@@ -57,6 +57,7 @@ const amountUsd = ref(100)
 const jumpTargetPage = ref(1)
 const createForm = reactive({
   email: '',
+  password: '',
   status: 'enabled' as User['status'],
   userGroupId: 0
 })
@@ -190,6 +191,7 @@ function userGroupTone(row: User) {
 function openCreateDialog() {
   Object.assign(createForm, {
     email: '',
+    password: '',
     status: 'enabled',
     userGroupId:
       userGroups.value.find((group) => group.is_default)?.id ?? userGroups.value[0]?.id ?? 0
@@ -251,10 +253,19 @@ function confirmStatusChange(email: string, status: User['status']) {
 }
 
 async function submitCreateUser() {
+  if (!createForm.password) {
+    ElMessage.error(t('passwordRequired'))
+    return
+  }
+  if (createForm.password.length < 8) {
+    ElMessage.error(t('passwordMinLength'))
+    return
+  }
   createSaving.value = true
   try {
     const created = await createUser({
       email: createForm.email.trim(),
+      password: createForm.password,
       status: createForm.status
     })
     if (createForm.userGroupId && createForm.userGroupId !== created.user_group_id) {
@@ -749,6 +760,14 @@ onMounted(() => {
         <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitCreateUser">
           <el-form-item class="user-dialog-field is-wide" :label="t('email')">
             <el-input v-model="createForm.email" type="email" />
+          </el-form-item>
+          <el-form-item class="user-dialog-field is-wide" :label="t('loginPassword')">
+            <el-input
+              v-model="createForm.password"
+              autocomplete="new-password"
+              show-password
+              type="password"
+            />
           </el-form-item>
           <el-form-item class="user-dialog-field" :label="t('status')">
             <el-select v-model="createForm.status" class="user-edit-select">

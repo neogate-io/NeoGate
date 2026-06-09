@@ -88,17 +88,13 @@ function usageStatusIcon(statusCode?: number | null) {
     : WarningFilled
 }
 
-function billingTone(status: string) {
-  const normalized = status.toLowerCase()
-  if (
-    normalized.includes('success') ||
-    normalized.includes('paid') ||
-    normalized.includes('billed')
-  ) {
-    return 'is-success'
-  }
-  if (normalized.includes('fail') || normalized.includes('error')) return 'is-danger'
-  return 'is-neutral'
+function usageStatusLabel(statusCode?: number | null) {
+  if (statusCode == null) return t('usageStatusUnknown')
+  return statusCode >= 200 && statusCode < 400 ? t('usageStatusSuccess') : t('usageStatusFailed')
+}
+
+function usageStatusTooltip(statusCode?: number | null) {
+  return statusCode == null ? '' : `HTTP ${statusCode}`
 }
 
 function usageUserDisplay(row: UsageRecord) {
@@ -218,7 +214,7 @@ async function handlePageSizeChange(size: number) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('latency')" min-width="170">
+        <el-table-column :label="t('latencyColumnHint')" min-width="170">
           <template #default="{ row }">
             <div class="usage-stack">
               <div class="usage-tags">
@@ -236,7 +232,7 @@ async function handlePageSizeChange(size: number) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('tokens')" min-width="180">
+        <el-table-column :label="t('tokensColumnHint')" min-width="150">
           <template #default="{ row }">
             <div class="usage-stack">
               <span class="usage-mono">
@@ -265,22 +261,21 @@ async function handlePageSizeChange(size: number) {
             <span class="usage-cost-cell">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="billing_status" :label="t('billing')" min-width="130">
-          <template #default="{ row }">
-            <span class="usage-billing-tag" :class="billingTone(row.billing_status)">
-              {{ row.billing_status || '-' }}
-            </span>
-          </template>
-        </el-table-column>
         <el-table-column :label="t('status')" min-width="120" align="center" header-align="center">
           <template #default="{ row }">
-            <span
-              class="channel-runtime-status usage-status-tag"
-              :class="`is-${usageStatusTone(row.status_code)}`"
+            <el-tooltip
+              :content="usageStatusTooltip(row.status_code)"
+              :disabled="row.status_code == null"
+              placement="top"
             >
-              <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
-              {{ row.status_code || '-' }}
-            </span>
+              <span
+                class="channel-runtime-status usage-status-tag"
+                :class="`is-${usageStatusTone(row.status_code)}`"
+              >
+                <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
+                {{ usageStatusLabel(row.status_code) }}
+              </span>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column prop="error_summary" :label="t('error')" min-width="180">
@@ -344,9 +339,9 @@ async function handlePageSizeChange(size: number) {
   border-bottom: 1px solid #dfe8f2;
   display: grid;
   gap: 30px;
-  grid-template-columns: 150px 170px 180px 160px 150px 120px;
+  grid-template-columns: 150px 170px 180px 160px 130px 120px;
   height: 48px;
-  min-width: 1320px;
+  min-width: 1180px;
   padding: 0 160px 0 14px;
 }
 
@@ -390,9 +385,9 @@ async function handlePageSizeChange(size: number) {
   border-bottom: 1px solid #edf3f8;
   display: grid;
   gap: 30px;
-  grid-template-columns: 150px 170px 180px 160px 150px 120px;
+  grid-template-columns: 150px 170px 180px 160px 130px 120px;
   height: 62px;
-  min-width: 1320px;
+  min-width: 1180px;
   padding: 0 160px 0 14px;
 }
 
@@ -493,36 +488,6 @@ async function handlePageSizeChange(size: number) {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   font-weight: 760;
-}
-
-.usage-billing-tag {
-  align-items: center;
-  border: 1px solid #dbe4ef;
-  border-radius: 999px;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 720;
-  min-height: 28px;
-  padding: 0 10px;
-  white-space: nowrap;
-}
-
-.usage-billing-tag.is-success {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  color: #15803d;
-}
-
-.usage-billing-tag.is-danger {
-  background: #fef2f2;
-  border-color: #fecaca;
-  color: #b91c1c;
-}
-
-.usage-billing-tag.is-neutral {
-  background: #eef2f6;
-  border-color: #dbe4ef;
-  color: #64748b;
 }
 
 .usage-error-cell {

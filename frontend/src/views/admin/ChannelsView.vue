@@ -622,7 +622,7 @@ onMounted(loadInitialData)
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="name" :label="t('name')" min-width="250">
+        <el-table-column prop="name" :label="t('name')" min-width="200">
           <template #default="{ row }">
             <span class="channel-name-cell">
               <ProviderIcon :provider="row.provider" />
@@ -1192,14 +1192,14 @@ onMounted(loadInitialData)
   display: grid;
   gap: 10px;
   grid-template-columns:
-    minmax(128px, 0.72fr)
+    minmax(96px, 0.5fr)
     minmax(112px, 0.52fr)
     minmax(112px, 0.52fr)
     minmax(112px, 0.52fr)
     minmax(112px, 0.52fr)
     96px;
   min-height: 46px;
-  min-width: 700px;
+  min-width: 660px;
   padding: 0 14px;
 }
 

@@ -1,19 +1,31 @@
 export type ChannelProvider = string
 export type EndpointProtocol = 'openai' | 'openai_oauth' | 'anthropic'
+export type UserStatus = 'enabled' | 'disabled' | 'pending'
+export type UserKeyStatus = 'enabled' | 'disabled'
 
-export type UserKey = {
+export type CursorPage<T> = {
+  items: T[]
+  limit: number
+  next_cursor?: string | null
+  has_more?: boolean
+}
+
+export type CreditBalance = {
+  balance_micro_usd: number
+  reserved_micro_usd: number
+  available_micro_usd: number
+}
+
+export type UserKey = CreditBalance & {
   id: number
   user_id: number
   name: string
   key: string
   key_prefix: string
-  status: 'enabled' | 'disabled'
+  status: UserKeyStatus
   last_active_at?: string | null
   expires_at?: string | null
   model_limits?: string[] | null
-  balance_micro_usd: number
-  reserved_micro_usd: number
-  available_micro_usd: number
   month_cost_micro_usd: number
   created_at: string
   updated_at: string
@@ -30,17 +42,14 @@ export type UserGroup = {
   updated_at: string
 }
 
-export type User = {
+export type User = CreditBalance & {
   id: number
   email: string
-  status: 'enabled' | 'disabled' | 'pending'
+  status: UserStatus
   user_group_id: number
   user_group_code: string
   user_group_name: string
   user_key_count: number
-  balance_micro_usd: number
-  reserved_micro_usd: number
-  available_micro_usd: number
   last_active_at?: string | null
   created_at: string
   updated_at: string

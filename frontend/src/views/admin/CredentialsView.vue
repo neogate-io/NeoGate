@@ -18,8 +18,10 @@ import {
   refreshCredential as refreshCredentialApi,
   uploadCredentialFile
 } from '../../api/credentials'
+import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
+import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Credential, CredentialQuotaWindow } from '../../types/admin'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime } from '../../utils/format'
@@ -29,10 +31,10 @@ const credentials = ref<Credential[]>([])
 const loading = ref(false)
 const uploading = ref(false)
 const refreshingAll = ref(false)
-const refreshingIds = ref(new Set<number>())
-const togglingIds = ref(new Set<number>())
-const deletingIds = ref(new Set<number>())
-const selectedIds = ref(new Set<number>())
+const refreshingIds = useReactiveSet<number>()
+const togglingIds = useReactiveSet<number>()
+const deletingIds = useReactiveSet<number>()
+const selectedIds = useReactiveSet<number>()
 const uploadInput = ref<HTMLInputElement | null>(null)
 
 const sortedCredentials = computed(() =>
@@ -43,7 +45,7 @@ const sortedCredentials = computed(() =>
     return rightTime - leftTime
   })
 )
-const selectedCount = computed(() => selectedIds.value.size)
+const selectedCount = selectedIds.size
 
 async function loadCredentials() {
   loading.value = true
@@ -71,21 +73,19 @@ async function refreshEnabledCredentials() {
 }
 
 async function refreshCredential(id: number, notify = true) {
-  refreshingIds.value = new Set(refreshingIds.value).add(id)
+  refreshingIds.add(id)
   try {
     const updated = await refreshCredentialApi(id)
     mergeCredential(updated)
   } catch (err) {
     if (notify) ElMessage.error(readError(err))
   } finally {
-    const next = new Set(refreshingIds.value)
-    next.delete(id)
-    refreshingIds.value = next
+    refreshingIds.remove(id)
   }
 }
 
 async function toggleCredential(credential: Credential) {
-  togglingIds.value = new Set(togglingIds.value).add(credential.id)
+  togglingIds.add(credential.id)
   try {
     const updated = credential.enabled
       ? await disableCredential(credential.id)
@@ -98,9 +98,7 @@ async function toggleCredential(credential: Credential) {
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    const next = new Set(togglingIds.value)
-    next.delete(credential.id)
-    togglingIds.value = next
+    togglingIds.remove(credential.id)
   }
 }
 
@@ -109,26 +107,23 @@ async function removeCredential(credential: Credential) {
     await ElMessageBox.confirm(t('credentialDeleteConfirm'), t('delete'), {
       confirmButtonText: t('delete'),
       cancelButtonText: t('cancel'),
+      customClass: 'admin-confirm-dialog',
       type: 'warning'
     })
   } catch {
     return
   }
 
-  deletingIds.value = new Set(deletingIds.value).add(credential.id)
+  deletingIds.add(credential.id)
   try {
     await deleteCredential(credential.id)
     credentials.value = credentials.value.filter((item) => item.id !== credential.id)
-    const nextSelected = new Set(selectedIds.value)
-    nextSelected.delete(credential.id)
-    selectedIds.value = nextSelected
+    selectedIds.remove(credential.id)
     ElMessage.success(t('credentialDeleted'))
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    const next = new Set(deletingIds.value)
-    next.delete(credential.id)
-    deletingIds.value = next
+    deletingIds.remove(credential.id)
   }
 }
 
@@ -180,21 +175,15 @@ function mergeCredential(updated: Credential) {
 
 function pruneSelectedCredentials() {
   const availableIds = new Set(credentials.value.map((credential) => credential.id))
-  selectedIds.value = new Set([...selectedIds.value].filter((id) => availableIds.has(id)))
+  selectedIds.retain((id) => availableIds.has(id))
 }
 
 function isCredentialSelected(id: number) {
-  return selectedIds.value.has(id)
+  return selectedIds.has(id)
 }
 
 function toggleCredentialSelection(id: number, checked: string | number | boolean) {
-  const next = new Set(selectedIds.value)
-  if (checked === true || checked === 'true' || checked === 1 || checked === '1') {
-    next.add(id)
-  } else {
-    next.delete(id)
-  }
-  selectedIds.value = next
+  selectedIds.toggle(id, checked === true || checked === 'true' || checked === 1 || checked === '1')
 }
 
 function toggleCredentialSelected(id: number) {
@@ -396,7 +385,7 @@ void bootstrap()
             formatCompactDateTime(credential.updated_at || credential.last_refresh)
           }}</span>
           <div class="credential-actions">
-            <el-tooltip :content="credential.enabled ? t('disable') : t('enable')" placement="top">
+            <AdminActionTooltip :content="credential.enabled ? t('disable') : t('enable')">
               <el-button
                 circle
                 class="credential-icon-button"
@@ -404,8 +393,8 @@ void bootstrap()
                 :loading="togglingIds.has(credential.id)"
                 @click="toggleCredential(credential)"
               />
-            </el-tooltip>
-            <el-tooltip :content="t('refreshQuota')" placement="top">
+            </AdminActionTooltip>
+            <AdminActionTooltip :content="t('refreshQuota')">
               <el-button
                 v-if="isOpenAICredential(credential)"
                 circle
@@ -414,8 +403,8 @@ void bootstrap()
                 :loading="refreshingIds.has(credential.id)"
                 @click="refreshCredential(credential.id)"
               />
-            </el-tooltip>
-            <el-tooltip :content="t('delete')" placement="top">
+            </AdminActionTooltip>
+            <AdminActionTooltip :content="t('delete')">
               <el-button
                 circle
                 class="credential-icon-button is-danger"
@@ -423,7 +412,7 @@ void bootstrap()
                 :loading="deletingIds.has(credential.id)"
                 @click="removeCredential(credential)"
               />
-            </el-tooltip>
+            </AdminActionTooltip>
           </div>
         </div>
       </article>
@@ -584,7 +573,8 @@ void bootstrap()
 }
 
 .credential-select:focus-visible span {
-  box-shadow: 0 0 0 3px rgba(22, 139, 211, 0.18);
+  outline: 2px solid var(--brand-blue-border);
+  outline-offset: 2px;
 }
 
 .credential-identity {

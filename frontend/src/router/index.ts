@@ -82,6 +82,12 @@ export const router = createRouter({
           name: 'userUsage',
           component: () => import('../views/user/UsageView.vue'),
           meta: { messageKey: 'usage', subtitleKey: 'usageSubtitle' }
+        },
+        {
+          path: 'settings',
+          name: 'userSettings',
+          component: () => import('../views/user/SettingsView.vue'),
+          meta: { messageKey: 'personalSettings', subtitleKey: 'personalSettingsSubtitle' }
         }
       ]
     },

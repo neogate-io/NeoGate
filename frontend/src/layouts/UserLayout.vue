@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
-import { DataBoard, Key, Monitor, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { DataBoard, Key, Monitor, Setting, SwitchButton, Wallet } from '@element-plus/icons-vue'
 import { getUserServicePolicy } from '../api/policy'
 import LocaleToggleButton from '../components/LocaleToggleButton.vue'
 import { isMessageKey, type MessageKey } from '../i18n'
@@ -24,6 +24,7 @@ const navItems = computed(() => {
   if (servicePolicy.value?.recharge_enabled) {
     items.push({ path: '/home/recharge', key: 'recharge', icon: Wallet })
   }
+  items.push({ path: '/home/settings', key: 'personalSettings', icon: Setting })
   return items
 })
 
@@ -39,7 +40,7 @@ const activeRouteSubtitle = computed(() => {
 </script>
 
 <template>
-  <el-container class="app-shell user-shell">
+  <el-container class="app-shell light-sidebar-shell user-shell">
     <el-aside width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">

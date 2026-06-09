@@ -9,14 +9,20 @@ import { useLocale } from '../../composables/useLocale'
 import { formatMicroUsd, toDateKey } from '../../utils/format'
 
 const { t } = useLocale()
-const { data: overview, loading } = useAsyncData(() => getUserOverview(), null)
-const { data: servicePolicy, loading: policyLoading } = useAsyncData(
-  () => getUserServicePolicy(),
-  null
-)
+const {
+  data: overview,
+  loading,
+  loaded: overviewLoaded
+} = useAsyncData(() => getUserOverview(), null)
+const {
+  data: servicePolicy,
+  loading: policyLoading,
+  loaded: policyLoaded
+} = useAsyncData(() => getUserServicePolicy(), null)
 const hoveredChartIndex = ref<number | null>(null)
-const showBalance = computed(
-  () => Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
+const overviewInitialLoading = computed(() => !overviewLoaded.value || !policyLoaded.value)
+const showBalance = computed(() =>
+  Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
 )
 const showRecharge = computed(() => Boolean(servicePolicy.value?.recharge_enabled))
 
@@ -193,6 +199,28 @@ function getCostForDate(date: Date) {
 <template>
   <section class="user-overview-view">
     <div
+      v-if="overviewInitialLoading"
+      class="overview-summary-grid overview-loading-grid"
+      aria-hidden="true"
+    >
+      <div class="user-panel overview-card-skeleton overview-balance-card-skeleton">
+        <span></span>
+        <strong></strong>
+        <small></small>
+      </div>
+      <div class="user-panel overview-card-skeleton">
+        <span></span>
+        <strong></strong>
+        <small></small>
+      </div>
+      <div class="user-panel overview-card-skeleton">
+        <span></span>
+        <strong></strong>
+        <small></small>
+      </div>
+    </div>
+    <div
+      v-else
       v-loading="loading || policyLoading"
       class="overview-summary-grid"
       :class="{ 'without-balance': !showBalance }"
@@ -211,7 +239,12 @@ function getCostForDate(date: Date) {
           <strong>{{ formatMicroUsd(overview?.available_micro_usd) }}</strong>
           <small class="overview-balance-estimate">{{ balanceEstimate }}</small>
         </div>
-        <el-button v-if="showRecharge" class="overview-card-cta" :tag="RouterLink" to="/home/recharge">
+        <el-button
+          v-if="showRecharge"
+          class="overview-card-cta"
+          :tag="RouterLink"
+          to="/home/recharge"
+        >
           {{ t('goRecharge') }}
         </el-button>
       </div>
@@ -229,7 +262,21 @@ function getCostForDate(date: Date) {
       </div>
     </div>
 
-    <div class="user-panel overview-trend-panel">
+    <div
+      v-if="overviewInitialLoading"
+      class="user-panel overview-trend-panel overview-trend-skeleton"
+    >
+      <div class="overview-trend-skeleton-header">
+        <span></span>
+        <strong></strong>
+      </div>
+      <div class="overview-trend-skeleton-chart">
+        <i></i>
+        <i></i>
+        <i></i>
+      </div>
+    </div>
+    <div v-else v-loading="loading" class="user-panel overview-trend-panel">
       <div class="user-section-header">
         <div>
           <span class="user-eyebrow">{{ t('trendSummary') }}</span>
@@ -327,6 +374,50 @@ function getCostForDate(date: Date) {
 .overview-summary-grid.without-balance {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: none;
+}
+
+.overview-loading-grid {
+  min-height: 276px;
+}
+
+.overview-card-skeleton {
+  align-content: center;
+  display: grid;
+  gap: 16px;
+  min-height: 126px;
+  padding: 24px 22px;
+}
+
+.overview-balance-card-skeleton {
+  grid-row: 1 / span 2;
+  min-height: 276px;
+}
+
+.overview-card-skeleton span,
+.overview-card-skeleton strong,
+.overview-card-skeleton small,
+.overview-trend-skeleton span,
+.overview-trend-skeleton strong,
+.overview-trend-skeleton i {
+  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+}
+
+.overview-card-skeleton span {
+  height: 12px;
+  width: 38%;
+}
+
+.overview-card-skeleton strong {
+  height: 30px;
+  width: 58%;
+}
+
+.overview-card-skeleton small {
+  height: 12px;
+  width: 72%;
 }
 
 .overview-balance-card,
@@ -520,10 +611,6 @@ function getCostForDate(date: Date) {
 }
 
 .overview-trend-panel {
-  background:
-    linear-gradient(#ffffff, #ffffff) padding-box,
-    linear-gradient(135deg, rgba(22, 139, 211, 0.2), rgba(105, 194, 237, 0.12)) border-box;
-  border-color: transparent;
   display: grid;
   gap: 12px;
   min-height: 236px;
@@ -531,6 +618,63 @@ function getCostForDate(date: Date) {
   transition:
     border-color 0.16s ease,
     box-shadow 0.16s ease;
+}
+
+.overview-trend-skeleton {
+  align-content: stretch;
+}
+
+.overview-trend-skeleton-header {
+  display: grid;
+  gap: 10px;
+}
+
+.overview-trend-skeleton-header span {
+  height: 11px;
+  width: 116px;
+}
+
+.overview-trend-skeleton-header strong {
+  height: 28px;
+  width: 180px;
+}
+
+.overview-trend-skeleton-chart {
+  align-items: end;
+  background:
+    linear-gradient(
+      to bottom,
+      transparent 0 24%,
+      rgba(226, 232, 240, 0.55) 24% 24.5%,
+      transparent 24.5% 49%,
+      rgba(226, 232, 240, 0.55) 49% 49.5%,
+      transparent 49.5% 74%,
+      rgba(226, 232, 240, 0.55) 74% 74.5%,
+      transparent 74.5%
+    ),
+    #ffffff;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr 1.5fr 0.8fr;
+  min-height: 144px;
+  padding: 20px;
+}
+
+.overview-trend-skeleton-chart i {
+  height: 12px;
+}
+
+.overview-trend-skeleton-chart i:nth-child(1) {
+  margin-bottom: 34px;
+}
+
+.overview-trend-skeleton-chart i:nth-child(2) {
+  margin-bottom: 72px;
+}
+
+.overview-trend-skeleton-chart i:nth-child(3) {
+  margin-bottom: 48px;
 }
 
 .overview-chart-wrap {
@@ -725,6 +869,11 @@ function getCostForDate(date: Date) {
     grid-row: auto;
     min-height: 210px;
     padding: 22px;
+  }
+
+  .overview-balance-card-skeleton {
+    grid-row: auto;
+    min-height: 210px;
   }
 
   .overview-usage-card {

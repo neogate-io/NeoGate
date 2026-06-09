@@ -1,14 +1,21 @@
-import type { UserGroup, UserKey } from '../types/admin'
+import type { CursorPage, UserGroup, UserKey, UserKeyStatus } from '../types/admin'
 import { adminRequest, publicRequest, userRequest } from './request'
 
-export type UserKeyPage = {
-  items: UserKey[]
-  limit: number
-  next_cursor?: string | null
-  has_more?: boolean
+export type UserKeyPage = CursorPage<UserKey>
+
+export type GetUserKeysFilters = {
+  userId?: number
+  limit?: number
+  cursor?: string
 }
 
-export function getUserKeys(filters: { userId?: number; limit?: number; cursor?: string } = {}) {
+export type CreditAccountType = 'user' | 'user_key' | 'user_key_model'
+
+export type AdjustCreditResponse = {
+  balance_micro_usd: number
+}
+
+export function getUserKeys(filters: GetUserKeysFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.userId != null) searchParams.set('user_id', String(filters.userId))
   if (filters.limit) searchParams.set('limit', String(filters.limit))
@@ -39,7 +46,7 @@ export function deleteOwnUserKey(id: number) {
   })
 }
 
-export function updateOwnUserKeyStatus(id: number, status: UserKey['status']) {
+export function updateOwnUserKeyStatus(id: number, status: UserKeyStatus) {
   return userRequest<UserKey>(`/api/user/apikeys/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ status })
@@ -59,8 +66,12 @@ export function createUserKey(email: string, draftId: string, locale: string) {
   })
 }
 
-export function adjustCredit(creditAccountType: 'user' | 'user_key' | 'user_key_model', ownerId: number, amountMicroUsd: number) {
-  return adminRequest<{ balance_micro_usd: number }>('/api/admin/credits', {
+export function adjustCredit(
+  creditAccountType: CreditAccountType,
+  ownerId: number,
+  amountMicroUsd: number
+) {
+  return adminRequest<AdjustCreditResponse>('/api/admin/credits', {
     method: 'POST',
     body: JSON.stringify({
       credit_account_type: creditAccountType,

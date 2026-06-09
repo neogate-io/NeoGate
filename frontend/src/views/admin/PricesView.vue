@@ -18,7 +18,7 @@ import type {
 } from '../../types/admin'
 import { readError } from '../../utils/errors'
 import { formatMicrosPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
-import { findPricingTemplate, priceKey } from '../../utils/pricing'
+import { derivedCacheReadPrice, findPricingTemplate, priceKey } from '../../utils/pricing'
 
 type ProviderModelOption = {
   provider: string
@@ -132,8 +132,8 @@ function addProviderModelOption(
   }
 }
 
-function derivedCacheReadPrice(inputPrice: number) {
-  return Math.round(inputPrice / 10)
+function priceRowKey(row: PriceRow) {
+  return priceKey(row.provider, row.model)
 }
 
 function formatCacheWritePrice(row: PriceRow) {
@@ -312,6 +312,7 @@ onMounted(load)
         v-loading="loading"
         class="admin-table service-table price-table"
         :data="rows"
+        :row-key="priceRowKey"
         stripe
       >
         <el-table-column prop="providerLabel" :label="t('provider')" min-width="150" />

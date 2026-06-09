@@ -22,7 +22,13 @@ const createDialogVisible = ref(false)
 const apiKeyName = ref('')
 const newKeyDialogVisible = ref(false)
 const newKey = ref('')
-const { data: apiKeys, loading, reload } = useAsyncData(() => getOwnUserKeys(), [])
+const keySkeletonCount = 3
+const {
+  data: apiKeys,
+  loading,
+  loaded: keysLoaded,
+  reload
+} = useAsyncData(() => getOwnUserKeys(), [])
 
 function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
@@ -127,8 +133,16 @@ async function confirmDeleteApiKey(row: UserKey) {
 
 <template>
   <section class="user-api-keys-view">
+    <div v-if="!keysLoaded" class="key-card-grid key-loading-grid" aria-hidden="true">
+      <article v-for="index in keySkeletonCount" :key="index" class="user-panel key-card-skeleton">
+        <span></span>
+        <span></span>
+        <span></span>
+      </article>
+    </div>
     <div
-      v-loading="loading"
+      v-else
+      v-loading="loading && apiKeys.length > 0"
       class="key-card-grid"
       :class="{ 'is-empty': apiKeys.length === 0 }"
       role="list"
@@ -272,6 +286,35 @@ async function confirmDeleteApiKey(row: UserKey) {
   transition:
     border-color 0.16s ease,
     box-shadow 0.16s ease;
+}
+
+.key-card-skeleton {
+  display: grid;
+  gap: 14px;
+  min-height: 132px;
+  padding: 16px;
+}
+
+.key-card-skeleton span {
+  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 12px;
+}
+
+.key-card-skeleton span:nth-child(1) {
+  width: 46%;
+}
+
+.key-card-skeleton span:nth-child(2) {
+  border-radius: 8px;
+  height: 46px;
+  width: 100%;
+}
+
+.key-card-skeleton span:nth-child(3) {
+  width: 72%;
 }
 
 .key-card:hover,

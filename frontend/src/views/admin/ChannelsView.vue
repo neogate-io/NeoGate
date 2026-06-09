@@ -22,6 +22,7 @@ import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog
 import ChannelPriceDialog, {
   type ChannelPriceForm
 } from '../../components/admin/channels/ChannelPriceDialog.vue'
+import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useChannels } from '../../composables/useChannels'
@@ -30,7 +31,7 @@ import type { Channel, ChannelKey, PricingTemplate, ProviderPrice } from '../../
 import { ApiError, readError } from '../../utils/errors'
 import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
-import { findPricingTemplate, priceKey } from '../../utils/pricing'
+import { derivedCacheReadPrice, findPricingTemplate, priceKey } from '../../utils/pricing'
 
 const { t } = useLocale()
 
@@ -109,10 +110,6 @@ const filteredChannels = computed(() => {
 function channelModelList(row: Channel) {
   const models = row.endpoints.flatMap((endpoint) => endpoint.models)
   return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
-}
-
-function derivedCacheReadPrice(inputPrice: number) {
-  return Math.round(inputPrice / 10)
 }
 
 function channelPriceStatus(row: Channel) {
@@ -696,23 +693,23 @@ onMounted(loadInitialData)
         <el-table-column :label="t('actions')" width="164" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
-              <el-tooltip :content="t('configurePrice')" placement="top">
+              <AdminActionTooltip :content="t('configurePrice')">
                 <el-button
                   class="admin-action-button icon-only-action price-config-action"
                   :aria-label="t('configurePrice')"
                   :icon="Coin"
                   @click="openPriceDialog(row)"
                 />
-              </el-tooltip>
-              <el-tooltip :content="t('edit')" placement="top">
+              </AdminActionTooltip>
+              <AdminActionTooltip :content="t('edit')">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </el-tooltip>
-              <el-tooltip :content="t('delete')" placement="top">
+              </AdminActionTooltip>
+              <AdminActionTooltip :content="t('delete')">
                 <el-button
                   :icon="Delete"
                   class="admin-action-button icon-only-action"
@@ -721,7 +718,7 @@ onMounted(loadInitialData)
                   :loading="deletingId === row.id"
                   @click="confirmDeleteChannel(row)"
                 />
-              </el-tooltip>
+              </AdminActionTooltip>
             </div>
           </template>
         </el-table-column>
@@ -1176,11 +1173,11 @@ onMounted(loadInitialData)
   --el-button-hover-bg-color: var(--brand-blue-hover);
   --el-button-hover-border-color: var(--brand-blue-hover);
   --el-button-hover-text-color: #ffffff;
-  box-shadow: 0 6px 14px rgba(22, 139, 211, 0.16);
+  box-shadow: none;
 }
 
 .expand-price-action.el-button:not(.is-disabled):hover {
-  box-shadow: 0 10px 24px rgba(22, 139, 211, 0.22);
+  box-shadow: none;
 }
 
 .channel-expand-price-table {

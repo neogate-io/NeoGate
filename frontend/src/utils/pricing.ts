@@ -7,11 +7,11 @@ export function priceKey(provider: string, model: string) {
   return `${provider}\u0000${model}`
 }
 
-export function findPricingTemplate(
-  templates: PricingTemplate[],
-  provider: string,
-  model: string
-) {
+export function derivedCacheReadPrice(inputPrice: number) {
+  return Math.round(inputPrice / 10)
+}
+
+export function findPricingTemplate(templates: PricingTemplate[], provider: string, model: string) {
   const normalizedProvider = provider.trim()
   const normalizedModel = model.trim()
   const enabledTemplates = templates.filter(

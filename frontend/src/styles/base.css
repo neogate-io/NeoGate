@@ -193,6 +193,74 @@ body {
   line-height: 38px;
 }
 
+.light-sidebar-shell {
+  --shell-sidebar-bg: #ffffff;
+  --shell-sidebar-border: #e0e7f0;
+  --shell-sidebar-text: #111827;
+  --shell-sidebar-menu-text: #4f5f73;
+  --shell-sidebar-hover-bg: #f1f6fb;
+  --shell-sidebar-icon: #8796aa;
+  --shell-sidebar-logo-width: 108px;
+  --shell-sidebar-padding: 20px 16px;
+  --shell-sidebar-active-color: var(--brand-blue);
+}
+
+.light-sidebar-shell > .el-aside {
+  background: var(--shell-sidebar-bg);
+  border-right-color: var(--shell-sidebar-border);
+  color: var(--shell-sidebar-text);
+  padding: var(--shell-sidebar-padding);
+}
+
+.light-sidebar-shell > .el-aside .shell-logo {
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.light-sidebar-shell > .el-aside .shell-logo-image {
+  width: var(--shell-sidebar-logo-width);
+}
+
+.light-sidebar-shell > .el-aside .el-menu {
+  --el-menu-active-color: var(--shell-sidebar-active-color);
+  --el-menu-hover-bg-color: var(--shell-sidebar-hover-bg);
+  --el-menu-text-color: var(--shell-sidebar-menu-text);
+  display: grid;
+  gap: 4px;
+}
+
+.light-sidebar-shell > .el-aside .el-menu-item,
+.light-sidebar-shell > .el-aside .el-sub-menu .el-menu-item,
+.light-sidebar-shell > .el-aside .el-sub-menu__title {
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 650;
+  height: 42px;
+  line-height: 42px;
+  margin-bottom: 0;
+}
+
+.light-sidebar-shell > .el-aside .el-menu-item .el-icon,
+.light-sidebar-shell > .el-aside .el-sub-menu__title .el-icon {
+  color: var(--shell-sidebar-icon);
+  font-size: 17px;
+}
+
+.light-sidebar-shell > .el-aside .el-menu-item:hover .el-icon,
+.light-sidebar-shell > .el-aside .el-sub-menu.is-active > .el-sub-menu__title .el-icon {
+  color: var(--shell-sidebar-active-color);
+}
+
+.light-sidebar-shell > .el-aside .el-menu-item.is-active {
+  background: var(--brand-blue);
+  box-shadow: none;
+  color: #ffffff;
+}
+
+.light-sidebar-shell > .el-aside .el-menu-item.is-active .el-icon {
+  color: #ffffff;
+}
+
 .content {
   align-content: start;
   display: grid;

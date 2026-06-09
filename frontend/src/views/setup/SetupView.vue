@@ -1342,10 +1342,10 @@ onMounted(load)
 .setup-stage {
   align-items: start;
   display: grid;
-  gap: clamp(20px, 3vw, 34px);
-  grid-template-columns: 300px minmax(0, 680px);
+  gap: clamp(18px, 2.8vw, 30px);
+  grid-template-columns: 288px minmax(0, 680px);
   margin: 0 auto;
-  max-width: 1040px;
+  max-width: 1010px;
   min-height: calc(100dvh - var(--setup-footer-height) - 44px);
   padding-top: 24px;
 }
@@ -1353,8 +1353,8 @@ onMounted(load)
 .setup-brief {
   align-content: start;
   display: grid;
-  gap: 16px;
-  padding: 18px 0 0;
+  gap: 12px;
+  padding: 10px 0 0;
   position: sticky;
   top: 18px;
 }
@@ -1362,13 +1362,13 @@ onMounted(load)
 .setup-logo-lockup {
   align-items: center;
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .setup-logo-lockup img {
-  height: 34px;
+  height: 30px;
   object-fit: contain;
-  width: 124px;
+  width: 112px;
 }
 
 .setup-logo-lockup span {
@@ -1377,12 +1377,12 @@ onMounted(load)
   font-size: 13px;
   font-weight: 700;
   line-height: 1;
-  padding-left: 12px;
+  padding-left: 10px;
 }
 
 .setup-heading {
   display: grid;
-  gap: 10px;
+  gap: 7px;
 }
 
 .setup-heading h1,
@@ -1393,7 +1393,7 @@ onMounted(load)
 }
 
 .setup-heading h1 {
-  font-size: 36px;
+  font-size: 28px;
   font-weight: 840;
   line-height: 1.12;
 }
@@ -1406,13 +1406,18 @@ onMounted(load)
   margin: 0;
 }
 
+.setup-heading p {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .setup-progress-card {
   background: rgba(255, 255, 255, 0.68);
   border: 1px solid #dfe7f1;
   border-radius: 8px;
   display: grid;
-  gap: 9px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
 }
 
 .setup-progress-card > div {
@@ -1423,7 +1428,7 @@ onMounted(load)
 
 .setup-progress-card span {
   color: #64748b;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 760;
 }
 
@@ -1437,7 +1442,7 @@ onMounted(load)
   background: #e6edf5;
   border-radius: 999px;
   display: block;
-  height: 8px;
+  height: 7px;
   overflow: hidden;
 }
 
@@ -1451,7 +1456,7 @@ onMounted(load)
 
 .setup-steps {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1463,9 +1468,9 @@ onMounted(load)
   border: 1px solid transparent;
   border-radius: 8px;
   display: grid;
-  gap: 9px;
-  grid-template-columns: 26px minmax(0, 1fr);
-  padding: 9px;
+  gap: 7px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  padding: 7px;
   transition:
     background-color 0.15s ease,
     border-color 0.15s ease,
@@ -1486,10 +1491,10 @@ onMounted(load)
   display: inline-flex;
   font-size: 13px;
   font-weight: 800;
-  height: 26px;
+  height: 22px;
   justify-content: center;
   position: relative;
-  width: 26px;
+  width: 22px;
 }
 
 .setup-step-mark .el-icon {
@@ -1532,13 +1537,22 @@ onMounted(load)
   line-height: 1.35;
 }
 
+.setup-steps strong {
+  font-size: 13px;
+}
+
 .setup-steps small,
 .setup-inline-control small {
   color: #738093;
   display: block;
   font-size: 13px;
-  line-height: 1.46;
+  line-height: 1.4;
   margin-top: 3px;
+}
+
+.setup-steps small {
+  font-size: 12px;
+  line-height: 1.36;
 }
 
 .setup-panel {
@@ -1550,15 +1564,18 @@ onMounted(load)
   display: grid;
   gap: 16px;
   margin-bottom: 0;
+  min-height: min(560px, calc(100dvh - var(--setup-footer-height) - 68px));
   min-width: 0;
   padding: 22px;
   width: min(680px, 100%);
 }
 
 .setup-panel > .el-form {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   max-width: none;
+  min-height: 100%;
   width: 100%;
 }
 
@@ -1959,6 +1976,7 @@ onMounted(load)
   border-top: 1px solid #edf1f5;
   bottom: 0;
   margin: 0 -6px -8px;
+  margin-top: auto;
   padding: 12px 6px 0;
   position: sticky;
   z-index: 1;
@@ -2036,6 +2054,7 @@ onMounted(load)
   }
 
   .setup-panel {
+    min-height: auto;
     width: 100%;
   }
 

@@ -1,13 +1,9 @@
-import type { UsageRecord } from '../types/admin'
+import type { CursorPage, UsageRecord } from '../types/admin'
 import { adminRequest, userRequest } from './request'
 
-export type UsagePage = {
-  items: UsageRecord[]
+export type UsagePage = CursorPage<UsageRecord> & {
   total: number
   page: number
-  limit: number
-  next_cursor?: string | null
-  has_more?: boolean
 }
 
 export type AdminUsageStatus = 'all' | 'success' | 'failed'

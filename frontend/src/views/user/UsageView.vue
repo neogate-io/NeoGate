@@ -17,6 +17,7 @@ import {
 const { locale, t } = useLocale()
 const currentPage = ref(1)
 const pageSize = ref(20)
+const loadingRowCount = 3
 const cursorStack = ref<(string | undefined)[]>([undefined])
 const dateRange = ref<[Date, Date] | null>(null)
 const usageQueryRange = computed(() => {
@@ -146,7 +147,7 @@ function escapeCsvCell(value: string | number) {
 
 <template>
   <section class="usage-view">
-    <div v-loading="loading" class="user-panel usage-console-panel">
+    <div v-loading="loading && filteredItems.length > 0" class="user-panel usage-console-panel">
       <div class="usage-toolbar">
         <div class="usage-toolbar-title">
           <h3>{{ t('usageRecords') }}</h3>
@@ -171,7 +172,7 @@ function escapeCsvCell(value: string | number) {
       </div>
 
       <div class="usage-list">
-        <div class="usage-table-header" role="row">
+        <div v-if="filteredItems.length > 0" class="usage-table-header" role="row">
           <span>{{ t('time') }}</span>
           <span>{{ t('model') }}</span>
           <span>{{ t('tokensColumnHint') }}</span>
@@ -289,10 +290,16 @@ function escapeCsvCell(value: string | number) {
           class="usage-loading-rows"
           aria-hidden="true"
         >
-          <span v-for="index in pageSize" :key="index"></span>
+          <span v-for="index in loadingRowCount" :key="index">
+            <i></i>
+            <i></i>
+            <i></i>
+          </span>
+        </div>
+        <div v-else-if="filteredItems.length === 0" class="usage-empty-state">
+          <el-empty :description="t('noData')" />
         </div>
       </div>
-
     </div>
 
     <div
@@ -429,11 +436,64 @@ function escapeCsvCell(value: string | number) {
 
 .usage-loading-rows {
   display: grid;
+  gap: 12px;
+  min-height: 220px;
+  padding: 24px 22px;
 }
 
 .usage-loading-rows span {
-  border-bottom: 1px solid #edf1f6;
-  min-height: 78px;
+  align-items: center;
+  background: #fbfdff;
+  border: 1px solid #edf1f6;
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 156px minmax(160px, 1fr) 120px;
+  min-height: 54px;
+  padding: 0 16px;
+}
+
+.usage-loading-rows i {
+  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 12px;
+}
+
+.usage-loading-rows i:nth-child(2) {
+  max-width: 280px;
+}
+
+.usage-loading-rows i:nth-child(3) {
+  max-width: 96px;
+}
+
+.usage-empty-state {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 260px;
+  padding: 32px 20px;
+}
+
+.usage-empty-state :deep(.el-empty) {
+  --el-empty-fill-color-1: #f8fafc;
+  --el-empty-fill-color-2: #eef3f8;
+  --el-empty-fill-color-3: #dfe7ef;
+  --el-empty-fill-color-4: #cbd7e5;
+  --el-empty-fill-color-5: #e6edf4;
+  padding: 0;
+}
+
+.usage-empty-state :deep(.el-empty__description) {
+  margin-top: 12px;
+}
+
+.usage-empty-state :deep(.el-empty__description p) {
+  color: #697586;
+  font-size: 14px;
+  font-weight: 540;
 }
 
 .usage-row {
@@ -663,6 +723,25 @@ function escapeCsvCell(value: string | number) {
 
   .usage-date-range {
     width: 100%;
+  }
+
+  .usage-loading-rows {
+    min-height: 200px;
+    padding: 18px 16px;
+  }
+
+  .usage-loading-rows span {
+    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .usage-loading-rows i:nth-child(2) {
+    max-width: 72%;
+  }
+
+  .usage-loading-rows i:nth-child(3) {
+    max-width: 44%;
   }
 
   .usage-row summary {

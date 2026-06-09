@@ -22,6 +22,7 @@ const historyDialogVisible = ref(false)
 const orders = ref<PaymentOrder[]>([])
 const ordersLoaded = ref(false)
 const loading = ref(false)
+const ordersInitialLoading = computed(() => loading.value && !ordersLoaded.value)
 
 const plans = computed(() => [
   { key: 'trial', amount: 10, name: t('trialPlan'), hint: t('trialPlanHint') },
@@ -250,7 +251,20 @@ async function submitRecharge() {
             <el-button :icon="Refresh" :loading="loading" @click="reloadOrders" />
           </el-tooltip>
         </div>
-        <el-table v-loading="loading" class="admin-table service-table" :data="orders" stripe>
+        <div v-if="ordersInitialLoading" class="recharge-order-loading" aria-hidden="true">
+          <span v-for="index in 3" :key="index">
+            <i></i>
+            <i></i>
+            <i></i>
+          </span>
+        </div>
+        <el-table
+          v-else
+          v-loading="loading"
+          class="admin-table service-table"
+          :data="orders"
+          stripe
+        >
           <el-table-column :label="t('time')" min-width="170">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
@@ -271,7 +285,14 @@ async function submitRecharge() {
             <el-empty :description="t('noData')" />
           </template>
         </el-table>
-        <div v-loading="loading" class="recharge-order-cards">
+        <div v-if="ordersInitialLoading" class="recharge-order-cards recharge-order-card-loading">
+          <article v-for="index in 3" :key="index" class="recharge-order-card-skeleton">
+            <span></span>
+            <span></span>
+            <span></span>
+          </article>
+        </div>
+        <div v-else v-loading="loading" class="recharge-order-cards">
           <article v-for="row in orders" :key="row.id" class="recharge-order-card">
             <div>
               <span>{{ t('time') }}</span>
@@ -488,6 +509,41 @@ async function submitRecharge() {
   margin-bottom: 12px;
 }
 
+.recharge-order-loading {
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+}
+
+.recharge-order-loading span {
+  align-items: center;
+  background: #fbfdff;
+  border: 1px solid #edf1f6;
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1.4fr 0.9fr 0.7fr;
+  min-height: 52px;
+  padding: 0 16px;
+}
+
+.recharge-order-loading i,
+.recharge-order-card-skeleton span {
+  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 12px;
+}
+
+.recharge-order-loading i:nth-child(2) {
+  max-width: 120px;
+}
+
+.recharge-order-loading i:nth-child(3) {
+  max-width: 86px;
+}
+
 .recharge-order-cards {
   display: none;
 }
@@ -538,10 +594,40 @@ async function submitRecharge() {
     display: none;
   }
 
+  .recharge-order-loading {
+    display: none;
+  }
+
   .recharge-order-cards {
     display: grid;
     gap: 10px;
     padding: 12px;
+  }
+
+  .recharge-order-card-loading {
+    min-height: 200px;
+  }
+
+  .recharge-order-card-skeleton {
+    background: #ffffff;
+    border: 1px solid #edf1f6;
+    border-radius: 8px;
+    display: grid;
+    gap: 10px;
+    min-height: 90px;
+    padding: 12px;
+  }
+
+  .recharge-order-card-skeleton span:nth-child(1) {
+    width: 72%;
+  }
+
+  .recharge-order-card-skeleton span:nth-child(2) {
+    width: 48%;
+  }
+
+  .recharge-order-card-skeleton span:nth-child(3) {
+    width: 34%;
   }
 
   .recharge-order-card {

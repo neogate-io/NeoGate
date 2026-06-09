@@ -12,14 +12,23 @@ import {
   UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, type Component } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adjustCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
-import { createUser, deleteUser, getUsers, updateUser, updateUserStatus } from '../../api/users'
+import {
+  createUser,
+  deleteUser,
+  getUsers,
+  type UserPage,
+  updateUser,
+  updateUserStatus
+} from '../../api/users'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
+import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
-import type { User, UserGroup, UserKey } from '../../types/admin'
+import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -35,10 +44,57 @@ defineOptions({
   name: 'UsersView'
 })
 
-type CreditLike = Pick<
-  User | UserKey,
-  'balance_micro_usd' | 'reserved_micro_usd' | 'available_micro_usd'
->
+type CreditClass = 'is-available' | 'is-depleted' | 'is-unlimited'
+type ConfirmType = 'info' | 'warning'
+type UserGroupTone = 'default' | 'premium' | 'standard'
+type UserStatusTone = 'success' | 'warning' | 'neutral'
+type UserForm = {
+  email: string
+  status: UserStatus
+  userGroupId: number
+}
+type CreateUserForm = UserForm & {
+  password: string
+}
+type TranslationKey = Parameters<typeof t>[0]
+type UserStatusMeta = {
+  labelKey: TranslationKey
+  icon: Component
+  tone: UserStatusTone
+  confirmType: ConfirmType
+}
+
+const DEFAULT_USER_PAGE_SIZE = 50
+const DEFAULT_USER_KEY_PAGE_SIZE = 100
+const DEFAULT_RECHARGE_USD = 100
+const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
+const RELATIVE_TIME_UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
+  ['year', 60 * 60 * 24 * 365],
+  ['month', 60 * 60 * 24 * 30],
+  ['day', 60 * 60 * 24],
+  ['hour', 60 * 60],
+  ['minute', 60]
+]
+const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
+  enabled: {
+    labelKey: 'enabled',
+    icon: CircleCheckFilled,
+    tone: 'success',
+    confirmType: 'info'
+  },
+  pending: {
+    labelKey: 'pendingApproval',
+    icon: WarningFilled,
+    tone: 'warning',
+    confirmType: 'info'
+  },
+  disabled: {
+    labelKey: 'disabled',
+    icon: WarningFilled,
+    tone: 'neutral',
+    confirmType: 'warning'
+  }
+}
 
 const emailSearch = ref('')
 const apiKeySearch = ref('')
@@ -53,28 +109,38 @@ const approvingUserId = ref<number | null>(null)
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
 const servicePolicy = ref<ServicePolicy | null>(null)
-const amountUsd = ref(100)
+const amountUsd = ref(DEFAULT_RECHARGE_USD)
 const jumpTargetPage = ref(1)
-const createForm = reactive({
+const createForm = reactive<CreateUserForm>({
   email: '',
   password: '',
-  status: 'enabled' as User['status'],
+  status: 'enabled',
   userGroupId: 0
 })
-const editForm = reactive({
+const editForm = reactive<UserForm>({
   email: '',
-  status: 'enabled' as User['status'],
+  status: 'enabled',
   userGroupId: 0
 })
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
-const usersCurrentPage = ref(1)
-const usersPageSize = ref(50)
-const usersCursorStack = ref<(string | undefined)[]>([undefined])
-const userKeysCurrentPage = ref(1)
-const userKeysPageSize = ref(100)
-const userKeysCursorStack = ref<(string | undefined)[]>([undefined])
+const {
+  currentPage: usersCurrentPage,
+  pageSize: usersPageSize,
+  currentCursor: usersCurrentCursor,
+  reset: resetUsersCursorPagination,
+  goToNext: goToNextUsersPage,
+  goToPrevious: goToPreviousUsersPage
+} = useCursorPagination(DEFAULT_USER_PAGE_SIZE)
+const {
+  currentPage: userKeysCurrentPage,
+  pageSize: userKeysPageSize,
+  currentCursor: userKeysCurrentCursor,
+  reset: resetUserKeysPagination,
+  goToNext: goToNextUserKeysPage,
+  goToPrevious: goToPreviousUserKeysPage
+} = useCursorPagination(DEFAULT_USER_KEY_PAGE_SIZE)
 const userKeysHasMore = ref(false)
 const userKeysNextCursor = ref<string | null | undefined>(undefined)
 const {
@@ -84,14 +150,24 @@ const {
   reload
 } = useAsyncData(loadUsers, {
   items: [],
-  limit: 50,
+  limit: DEFAULT_USER_PAGE_SIZE,
   next_cursor: null,
   has_more: false
-})
+} satisfies UserPage)
 const users = computed(() => usersPage.value.items)
 const usersInitialLoading = computed(() => !usersLoaded.value)
 const hasUserPagination = computed(
   () => usersCurrentPage.value > 1 || Boolean(usersPage.value.has_more)
+)
+const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
+const relativeTimeFormatter = computed(
+  () => new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
+)
+const defaultUserGroupId = computed(
+  () => userGroups.value.find((group) => group.is_default)?.id ?? userGroups.value[0]?.id ?? 0
+)
+const emptyUsersDescription = computed(() =>
+  emailSearch.value || apiKeySearch.value ? t('noMatchingUsers') : t('noUsers')
 )
 const rechargePreviewMicroUsd = computed(() => {
   if (!selectedUser.value) return usdToMicroUsd(amountUsd.value)
@@ -103,33 +179,28 @@ async function loadUsers() {
     email: emailSearch.value.trim(),
     apiKey: apiKeySearch.value.trim(),
     limit: usersPageSize.value,
-    cursor: usersCursorStack.value[usersCurrentPage.value - 1]
+    cursor: usersCurrentCursor.value
   })
 }
 
 function resetUsersPagination(page = 1) {
-  usersCurrentPage.value = page
-  usersCursorStack.value = [undefined]
+  resetUsersCursorPagination(page)
   jumpTargetPage.value = page
 }
 
-function creditRequired() {
-  return servicePolicy.value?.credit_required ?? true
-}
-
-function formatAvailableUsd(row: Pick<CreditLike, 'available_micro_usd'>) {
-  if (!creditRequired()) return t('unlimitedCredit')
+function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
+  if (!isCreditRequired.value) return t('unlimitedCredit')
   if (row.available_micro_usd <= 0) return t('creditDepleted')
   return formatMicroUsd(row.available_micro_usd, 2)
 }
 
-function creditCellClass(row: Pick<CreditLike, 'available_micro_usd'>) {
-  if (!creditRequired()) return 'is-unlimited'
+function creditCellClass(row: Pick<CreditBalance, 'available_micro_usd'>): CreditClass {
+  if (!isCreditRequired.value) return 'is-unlimited'
   return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
 }
 
-function creditTooltip(row: CreditLike) {
-  if (!creditRequired()) return t('creditUnlimitedTooltip')
+function creditTooltip(row: CreditBalance) {
+  if (!isCreditRequired.value) return t('creditUnlimitedTooltip')
   return [
     `${t('totalCredit')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
     `${t('reservedCredit')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
@@ -146,15 +217,8 @@ function formatRelativeTime(value?: string | null) {
   const timestamp = new Date(value).getTime()
   if (Number.isNaN(timestamp)) return '-'
   const diffSeconds = Math.round((timestamp - Date.now()) / 1000)
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ['year', 60 * 60 * 24 * 365],
-    ['month', 60 * 60 * 24 * 30],
-    ['day', 60 * 60 * 24],
-    ['hour', 60 * 60],
-    ['minute', 60]
-  ]
-  const formatter = new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
-  for (const [unit, seconds] of units) {
+  const formatter = relativeTimeFormatter.value
+  for (const [unit, seconds] of RELATIVE_TIME_UNITS) {
     if (Math.abs(diffSeconds) >= seconds) {
       return formatter.format(Math.round(diffSeconds / seconds), unit)
     }
@@ -162,27 +226,21 @@ function formatRelativeTime(value?: string | null) {
   return formatter.format(diffSeconds, 'second')
 }
 
-function userStatusText(status: User['status']) {
-  if (status === 'enabled') return t('enabled')
-  if (status === 'pending') return t('pendingApproval')
-  return t('disabled')
+function userStatusText(status: UserStatus) {
+  return t(USER_STATUS_META[status].labelKey)
 }
 
-function userStatusIcon(status: User['status']) {
-  if (status === 'enabled') return CircleCheckFilled
-  if (status === 'pending') return WarningFilled
-  return WarningFilled
+function userStatusIcon(status: UserStatus) {
+  return USER_STATUS_META[status].icon
 }
 
-function userStatusTone(status: User['status']) {
-  if (status === 'enabled') return 'success'
-  if (status === 'pending') return 'warning'
-  return 'neutral'
+function userStatusTone(status: UserStatus): UserStatusTone {
+  return USER_STATUS_META[status].tone
 }
 
-function userGroupTone(row: User) {
+function userGroupTone(row: User): UserGroupTone {
   if (row.user_group_code === 'default') return 'default'
-  if (/pro|premium|vip|advanced|高级/i.test(`${row.user_group_code} ${row.user_group_name}`)) {
+  if (PREMIUM_GROUP_PATTERN.test(`${row.user_group_code} ${row.user_group_name}`)) {
     return 'premium'
   }
   return 'standard'
@@ -193,15 +251,14 @@ function openCreateDialog() {
     email: '',
     password: '',
     status: 'enabled',
-    userGroupId:
-      userGroups.value.find((group) => group.is_default)?.id ?? userGroups.value[0]?.id ?? 0
+    userGroupId: defaultUserGroupId.value
   })
   createDialogVisible.value = true
 }
 
 function openCreditDialog(row: User) {
   selectedUser.value = row
-  amountUsd.value = 100
+  amountUsd.value = DEFAULT_RECHARGE_USD
   creditDialogVisible.value = true
 }
 
@@ -225,6 +282,7 @@ async function confirmDialog(
     await ElMessageBox.confirm(message, title, {
       confirmButtonText,
       cancelButtonText: t('cancel'),
+      customClass: 'admin-confirm-dialog',
       type
     })
     return true
@@ -233,17 +291,17 @@ async function confirmDialog(
   }
 }
 
-function userStatusConfirmMessage(email: string, status: User['status']) {
+function userStatusConfirmMessage(email: string, status: UserStatus) {
   return t('changeUserStatusConfirm')
     .replace('{email}', email)
     .replace('{status}', userStatusText(status))
 }
 
-function userStatusConfirmType(status: User['status']) {
-  return status === 'disabled' ? 'warning' : 'info'
+function userStatusConfirmType(status: UserStatus): ConfirmType {
+  return USER_STATUS_META[status].confirmType
 }
 
-function confirmStatusChange(email: string, status: User['status']) {
+function confirmStatusChange(email: string, status: UserStatus) {
   return confirmDialog(
     userStatusConfirmMessage(email, status),
     t('confirmAction'),
@@ -285,8 +343,7 @@ async function openUserKeysDialog(row: User) {
   selectedUser.value = row
   userKeysDialogVisible.value = true
   selectedUserKeys.value = []
-  userKeysCurrentPage.value = 1
-  userKeysCursorStack.value = [undefined]
+  resetUserKeysPagination()
   await withUserKeysLoading(loadSelectedUserKeys)
 }
 
@@ -341,7 +398,7 @@ async function approveUser(row: User) {
   await confirmUserStatusChange(row, 'enabled')
 }
 
-async function confirmUserStatusChange(row: User, status: User['status']) {
+async function confirmUserStatusChange(row: User, status: UserStatus) {
   if (row.status === status) return
   const confirmed = await confirmStatusChange(row.email, status)
   if (!confirmed) return
@@ -384,15 +441,13 @@ async function searchUsers() {
 
 async function nextUsersPage() {
   if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
-  usersCursorStack.value[usersCurrentPage.value] = usersPage.value.next_cursor
-  usersCurrentPage.value += 1
+  goToNextUsersPage(usersPage.value.next_cursor)
   jumpTargetPage.value = usersCurrentPage.value
   await reload()
 }
 
 async function previousUsersPage() {
-  if (usersCurrentPage.value <= 1) return
-  usersCurrentPage.value -= 1
+  if (!goToPreviousUsersPage()) return
   jumpTargetPage.value = usersCurrentPage.value
   await reload()
 }
@@ -424,7 +479,7 @@ async function jumpUsersPage() {
 }
 
 function exportUsers() {
-  const header = [
+  const header: string[] = [
     'id',
     'email',
     'group',
@@ -446,9 +501,7 @@ function exportUsers() {
     user.created_at,
     user.last_active_at ?? ''
   ])
-  const csv = [header, ...rows]
-    .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
-    .join('\n')
+  const csv = [header, ...rows].map((row) => row.map(escapeCsvValue).join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -458,12 +511,16 @@ function exportUsers() {
   URL.revokeObjectURL(url)
 }
 
+function escapeCsvValue(value: string | number) {
+  return `"${String(value).replace(/"/g, '""')}"`
+}
+
 async function loadSelectedUserKeys() {
   if (!selectedUser.value) return
   const page = await getUserKeys({
     userId: selectedUser.value.id,
     limit: userKeysPageSize.value,
-    cursor: userKeysCursorStack.value[userKeysCurrentPage.value - 1]
+    cursor: userKeysCurrentCursor.value
   })
   selectedUserKeys.value = page.items
   userKeysHasMore.value = Boolean(page.has_more)
@@ -483,14 +540,12 @@ async function withUserKeysLoading(task: () => Promise<void>) {
 
 async function nextUserKeysPage() {
   if (!userKeysHasMore.value || !userKeysNextCursor.value) return
-  userKeysCursorStack.value[userKeysCurrentPage.value] = userKeysNextCursor.value
-  userKeysCurrentPage.value += 1
+  goToNextUserKeysPage(userKeysNextCursor.value)
   await withUserKeysLoading(loadSelectedUserKeys)
 }
 
 async function previousUserKeysPage() {
-  if (userKeysCurrentPage.value <= 1) return
-  userKeysCurrentPage.value -= 1
+  if (!goToPreviousUserKeysPage()) return
   await withUserKeysLoading(loadSelectedUserKeys)
 }
 
@@ -579,6 +634,7 @@ onMounted(() => {
         v-loading="loading"
         class="admin-table service-table user-table"
         :data="users"
+        row-key="id"
         stripe
       >
         <el-table-column prop="id" label="ID" width="76" align="right" header-align="right" />
@@ -607,8 +663,8 @@ onMounted(() => {
         <el-table-column
           :label="t('availableCredit')"
           min-width="132"
-          align="right"
-          header-align="right"
+          align="center"
+          header-align="center"
         >
           <template #default="{ row }">
             <el-tooltip :content="creditTooltip(row)" placement="top">
@@ -652,31 +708,31 @@ onMounted(() => {
                 :loading="approvingUserId === row.id"
                 @click="approveUser(row)"
               />
-              <el-tooltip :content="t('viewApiKeys')" placement="top">
+              <AdminActionTooltip :content="t('viewApiKeys')">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewApiKeys')"
                   :icon="Key"
                   @click="openUserKeysDialog(row)"
                 />
-              </el-tooltip>
-              <el-tooltip :content="t('edit')" placement="top">
+              </AdminActionTooltip>
+              <AdminActionTooltip :content="t('edit')">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </el-tooltip>
-              <el-tooltip :content="t('recharge')" placement="top">
+              </AdminActionTooltip>
+              <AdminActionTooltip :content="t('recharge')">
                 <el-button
                   class="admin-action-button icon-only-action user-recharge-action"
                   :aria-label="t('recharge')"
                   :icon="Money"
                   @click="openCreditDialog(row)"
                 />
-              </el-tooltip>
-              <el-tooltip :content="t('delete')" placement="top">
+              </AdminActionTooltip>
+              <AdminActionTooltip :content="t('delete')">
                 <el-button
                   class="admin-action-button icon-only-action"
                   type="danger"
@@ -685,15 +741,13 @@ onMounted(() => {
                   :loading="deletingUserId === row.id"
                   @click="confirmDeleteUser(row)"
                 />
-              </el-tooltip>
+              </AdminActionTooltip>
             </div>
           </template>
         </el-table-column>
         <template #empty>
           <div class="channel-empty-state user-empty-state">
-            <el-empty
-              :description="emailSearch || apiKeySearch ? t('noMatchingUsers') : t('noUsers')"
-            >
+            <el-empty :description="emptyUsersDescription">
               <el-button type="primary" :icon="Plus" @click="openCreateDialog">
                 {{ t('addUser') }}
               </el-button>
@@ -891,6 +945,7 @@ onMounted(() => {
             v-loading="userKeysLoading"
             class="admin-table service-table user-key-detail-table"
             :data="selectedUserKeys"
+            row-key="id"
             stripe
           >
             <el-table-column :label="t('name')" min-width="112">
@@ -914,8 +969,8 @@ onMounted(() => {
             <el-table-column
               :label="t('availableCredit')"
               width="96"
-              align="right"
-              header-align="right"
+              align="center"
+              header-align="center"
             >
               <template #default="{ row }">{{ formatAvailableUsd(row) }}</template>
             </el-table-column>

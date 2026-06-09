@@ -625,6 +625,7 @@ export function useChannels(t: Translate) {
         confirmButtonText: t('delete'),
         cancelButtonText: t('cancel'),
         confirmButtonClass: 'el-button--danger',
+        customClass: 'admin-confirm-dialog',
         type: 'warning'
       })
     } catch {

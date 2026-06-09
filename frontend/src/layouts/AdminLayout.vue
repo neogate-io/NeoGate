@@ -62,7 +62,7 @@ watch(
 </script>
 
 <template>
-  <el-container class="app-shell admin-shell">
+  <el-container class="app-shell light-sidebar-shell admin-shell">
     <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">

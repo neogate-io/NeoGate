@@ -1,16 +1,28 @@
-import type { User } from '../types/admin'
+import type { CursorPage, User, UserStatus } from '../types/admin'
 import { adminRequest } from './request'
 
-export type UserPage = {
-  items: User[]
-  limit: number
-  next_cursor?: string | null
-  has_more?: boolean
+export type UserPage = CursorPage<User>
+
+export type GetUsersFilters = {
+  email?: string
+  apiKey?: string
+  limit?: number
+  cursor?: string
 }
 
-export function getUsers(
-  filters: { email?: string; apiKey?: string; limit?: number; cursor?: string } = {}
-) {
+export type CreateUserPayload = {
+  email: string
+  password: string
+  status?: UserStatus
+}
+
+export type UpdateUserPayload = {
+  email?: string
+  status?: UserStatus
+  user_group_id?: number
+}
+
+export function getUsers(filters: GetUsersFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.email) searchParams.set('email', filters.email)
   if (filters.apiKey) searchParams.set('api_key', filters.apiKey)
@@ -21,28 +33,21 @@ export function getUsers(
   return adminRequest<UserPage>(`/api/admin/users${query ? `?${query}` : ''}`)
 }
 
-export function createUser(payload: { email: string; password: string; status?: User['status'] }) {
+export function createUser(payload: CreateUserPayload) {
   return adminRequest<User>('/api/admin/users', {
     method: 'POST',
     body: JSON.stringify(payload)
   })
 }
 
-export function updateUser(
-  id: number,
-  payload: {
-    email?: string
-    status?: User['status']
-    user_group_id?: number
-  }
-) {
+export function updateUser(id: number, payload: UpdateUserPayload) {
   return adminRequest<User>(`/api/admin/users/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload)
   })
 }
 
-export function updateUserStatus(id: number, status: User['status']) {
+export function updateUserStatus(id: number, status: UserStatus) {
   return updateUser(id, { status })
 }
 

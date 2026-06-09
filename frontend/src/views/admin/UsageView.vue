@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive } from 'vue'
 import { CircleCheckFilled, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
-import { getAdminUsage, type AdminUsageStatus } from '../../api/usage'
+import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import {
   cacheWriteTokens,
@@ -15,14 +16,27 @@ import {
 
 const { locale, t } = useLocale()
 
-const filters = reactive({
-  dateRange: [] as string[] | null,
+const DEFAULT_PAGE_SIZE = 20
+
+type UsageFilters = {
+  dateRange: string[] | null
+  model: string
+  status: AdminUsageStatus
+}
+
+const filters = reactive<UsageFilters>({
+  dateRange: [],
   model: '',
-  status: 'all' as AdminUsageStatus
+  status: 'all'
 })
-const currentPage = ref(1)
-const pageSize = ref(20)
-const cursorStack = ref<(string | undefined)[]>([undefined])
+const {
+  currentPage,
+  pageSize,
+  currentCursor,
+  reset: resetCursorPagination,
+  goToNext,
+  goToPrevious
+} = useCursorPagination(DEFAULT_PAGE_SIZE)
 
 const usageQueryRange = computed(() => {
   const [start, end] = filters.dateRange ?? []
@@ -46,9 +60,9 @@ const {
       end: usageQueryRange.value.end,
       model: filters.model.trim() || undefined,
       status: filters.status,
-      cursor: cursorStack.value[currentPage.value - 1]
+      cursor: currentCursor.value
     }),
-  { items: [], total: 0, page: 1, limit: 20 }
+  { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE } satisfies UsagePage
 )
 
 const usageItems = computed(() => usagePage.value.items)
@@ -58,8 +72,7 @@ const hasUsagePagination = computed(
 )
 
 function resetUsagePagination() {
-  currentPage.value = 1
-  cursorStack.value = [undefined]
+  resetCursorPagination()
 }
 
 function usageStatusTone(statusCode?: number | null) {
@@ -94,14 +107,12 @@ async function handleSearch() {
 
 async function nextPage() {
   if (!usagePage.value.has_more || !usagePage.value.next_cursor) return
-  cursorStack.value[currentPage.value] = usagePage.value.next_cursor
-  currentPage.value += 1
+  goToNext(usagePage.value.next_cursor)
   await reload()
 }
 
 async function previousPage() {
-  if (currentPage.value <= 1) return
-  currentPage.value -= 1
+  if (!goToPrevious()) return
   await reload()
 }
 
@@ -176,6 +187,7 @@ async function handlePageSizeChange(size: number) {
         v-loading="loading"
         class="admin-table service-table usage-table"
         :data="usageItems"
+        row-key="id"
         stripe
       >
         <el-table-column :label="t('time')" min-width="180">

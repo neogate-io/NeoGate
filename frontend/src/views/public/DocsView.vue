@@ -250,6 +250,7 @@ const content = computed(() => {
       <nav class="home-nav" :aria-label="t('appName')">
         <RouterLink to="/">{{ t('home') }}</RouterLink>
         <RouterLink to="/docs">{{ t('docs') }}</RouterLink>
+        <RouterLink to="/interfaces">{{ t('interfaces') }}</RouterLink>
       </nav>
       <div class="home-header-actions">
         <LocaleToggleButton class="home-language-button" />

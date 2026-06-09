@@ -24,6 +24,12 @@ export const router = createRouter({
       meta: { messageKey: 'docs' }
     },
     {
+      path: '/interfaces',
+      name: 'interfaces',
+      component: () => import('../views/public/InterfacesView.vue'),
+      meta: { messageKey: 'interfaces' }
+    },
+    {
       path: '/services',
       name: 'services',
       component: () => import('../views/public/ServicesView.vue'),

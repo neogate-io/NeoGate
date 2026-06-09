@@ -21,7 +21,8 @@
   --powered-footer-bg: #f2f5f9;
 }
 
-.root-shell-route-docs {
+.root-shell-route-docs,
+.root-shell-route-interfaces {
   --powered-footer-bg: #eef3f8;
 }
 
@@ -707,6 +708,96 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.interface-meta-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.interface-meta-grid article {
+  background: var(--public-surface-soft);
+  border: 1px solid rgba(216, 225, 236, 0.78);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px 18px;
+}
+
+.interface-meta-grid span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+.interface-meta-grid code,
+.interface-table code {
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.interface-table-wrap {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid var(--public-border-soft);
+  border-radius: 8px;
+  box-shadow: var(--public-shadow);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.interface-table {
+  border-collapse: collapse;
+  min-width: 760px;
+  width: 100%;
+}
+
+.interface-table th,
+.interface-table td {
+  border-bottom: 1px solid rgba(216, 225, 236, 0.72);
+  padding: 13px 14px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.interface-table th {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.25;
+}
+
+.interface-table td {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.interface-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.interface-table td:first-child {
+  color: var(--public-text);
+  font-weight: 720;
+}
+
+.interface-method {
+  background: var(--brand-blue-soft);
+  border: 1px solid var(--brand-blue-border);
+  border-radius: 6px;
+  color: var(--brand-blue);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 780;
+  line-height: 1;
+  padding: 5px 7px;
+  white-space: nowrap;
+}
+
 .docs-check-item {
   background: var(--public-surface-soft);
   border: 1px solid rgba(216, 225, 236, 0.78);
@@ -1017,6 +1108,10 @@
   }
 
   .docs-feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .interface-meta-grid {
     grid-template-columns: 1fr;
   }
 

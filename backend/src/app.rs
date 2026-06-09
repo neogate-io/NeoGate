@@ -21,7 +21,7 @@ use crate::{
     db::Db,
     email::EmailService,
     health::{self, RuntimeHealth},
-    payment, policy,
+    install, payment, policy,
     relay::{self, selector::Selector},
     secrets::SecretStore,
     task,
@@ -63,6 +63,7 @@ pub async fn run() -> anyhow::Result<()> {
     if !probe.full_config_ready() {
         let (bootstrap_restart_tx, bootstrap_restart_rx) = watch::channel(false);
         let app = bootstrap::router(bootstrap_restart_tx)
+            .merge(install::bootstrap_router())
             .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
             .layer(cors_layer_from_origins(&["*".to_string()])?)
             .layer(TraceLayer::new_for_http());
@@ -245,6 +246,7 @@ fn router(state: Arc<AppState>) -> Router {
         .merge(admin::router())
         .merge(user::router())
         .merge(health::router())
+        .merge(install::router())
         .merge(payment::router())
         .merge(policy::router())
         .merge(admin::public_router())
@@ -342,7 +344,7 @@ fn load_dotenv() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{sync::Arc, time::Duration};
 
     use axum::{
@@ -365,7 +367,7 @@ mod tests {
         secrets::SecretStore,
     };
 
-    fn test_state() -> Arc<AppState> {
+    pub(crate) fn test_state() -> Arc<AppState> {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgres://localhost/neogate")
             .unwrap();

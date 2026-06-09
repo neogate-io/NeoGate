@@ -6,6 +6,7 @@ mod billing;
 mod config;
 mod core;
 mod health;
+mod install;
 mod payment;
 mod policy;
 mod relay;

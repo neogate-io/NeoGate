@@ -175,7 +175,7 @@ pnpm install
 pnpm build
 ```
 
-Then serve `frontend/dist` with Nginx or another static web server, and reverse proxy `/api/`, `/v1/`, `/anthropic/`, `/readyz`, and `/livez` to the backend. The frontend build does not need a public backend origin.
+Then serve `frontend/dist` with Nginx or another static web server, and reverse proxy `/api/`, `/v1/`, `/anthropic/`, `/install`, `/readyz`, and `/livez` to the backend. The `/install` script is generated dynamically by the backend from `PUBLIC_BASE_URL`; the frontend build does not need a public backend origin.
 
 The repository includes an example Nginx config:
 
@@ -183,7 +183,7 @@ The repository includes an example Nginx config:
 deploy/nginx/neogate.conf.example
 ```
 
-The example uses `/usr/share/nginx/html` as the static file root and proxies `/api/`, `/v1/`, `/anthropic/`, `/readyz`, and `/livez` to the local backend at `http://127.0.0.1:8080`. For source deployments, you can use it like this:
+The example uses `/usr/share/nginx/html` as the static file root and proxies `/api/`, `/v1/`, `/anthropic/`, `/install`, `/readyz`, and `/livez` to the local backend at `http://127.0.0.1:8080`. For source deployments, you can use it like this:
 
 ```bash
 sudo install -d /usr/share/nginx/html

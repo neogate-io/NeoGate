@@ -152,8 +152,11 @@ Description=NeoGate backend
 [Service]
 WorkingDirectory=/opt/neogate/backend
 Environment=BIND_ADDR=127.0.0.1:8080
+Environment=RUST_LOG=info
 ExecStart=/opt/neogate/backend/target/release/neogate
 Restart=always
+StandardOutput=append:/var/log/neogate/backend.log
+StandardError=append:/var/log/neogate/error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -162,9 +165,25 @@ WantedBy=multi-user.target
 保存为 `/etc/systemd/system/neogate.service` 后启动：
 
 ```bash
+sudo mkdir -p /var/log/neogate
 sudo systemctl daemon-reload
 sudo systemctl enable --now neogate
 sudo systemctl status neogate
+```
+
+建议为后端日志添加 logrotate，避免日志文件长期运行后持续增长：
+
+```bash
+sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
+/var/log/neogate/*.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
 ```
 
 构建前端：
@@ -175,7 +194,7 @@ pnpm install
 pnpm build
 ```
 
-然后将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管，并将 `/api/`、`/v1/`、`/anthropic/`、`/readyz` 和 `/livez` 反向代理到后端。前端构建不需要指定后端公网地址。
+然后将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管，并将 `/api/`、`/v1/`、`/anthropic/`、`/install`、`/readyz` 和 `/livez` 反向代理到后端。`/install` 安装脚本由后端根据 `PUBLIC_BASE_URL` 动态生成；前端构建不需要指定后端公网地址。
 
 仓库提供了 Nginx 示例配置：
 
@@ -183,7 +202,7 @@ pnpm build
 deploy/nginx/neogate.conf.example
 ```
 
-示例配置默认将静态文件目录设为 `/usr/share/nginx/html`，并将 `/api/`、`/v1/`、`/anthropic/`、`/readyz` 和 `/livez` 转发到本机后端 `http://127.0.0.1:8080`。源码部署时可以按下面方式使用：
+示例配置默认将静态文件目录设为 `/usr/share/nginx/html`，并将 `/api/`、`/v1/`、`/anthropic/`、`/install`、`/readyz` 和 `/livez` 转发到本机后端 `http://127.0.0.1:8080`。源码部署时可以按下面方式使用：
 
 ```bash
 sudo install -d /usr/share/nginx/html

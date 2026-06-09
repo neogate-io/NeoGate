@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { readFileSync } from 'node:fs'
 
-const installTemplatePath = new URL('./install.template', import.meta.url)
+const installTemplatePath = new URL('../backend/templates/install.template', import.meta.url)
 const localBackendOrigin = 'http://127.0.0.1:8080'
 
 function requestOrigin(headers: Record<string, string | string[] | undefined>) {

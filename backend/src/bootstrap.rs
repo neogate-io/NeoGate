@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::{
     config::{RuntimeProbe, DEFAULT_ADMIN_TOKEN_SECRET, DEFAULT_UPSTREAM_SECRET_KEY},
     error::{AppError, AppResult},
+    install::inferred_public_base_url,
 };
 
 const SERVICE_POLICY_SETTING_KEY: &str = "service_policy";
@@ -316,36 +317,6 @@ async fn runtime_status(
     })
 }
 
-fn inferred_public_base_url(headers: &HeaderMap) -> Option<String> {
-    let host = header_first_value(headers, "x-forwarded-host")
-        .or_else(|| header_first_value(headers, "host"))?;
-    let proto = header_first_value(headers, "x-forwarded-proto")
-        .or_else(|| header_first_value(headers, "x-forwarded-scheme"))
-        .unwrap_or_else(|| "http".to_string());
-    let proto = proto.to_ascii_lowercase();
-
-    if proto != "http" && proto != "https" {
-        return None;
-    }
-    if host.contains('/') || host.contains('\\') || host.trim().is_empty() {
-        return None;
-    }
-
-    Some(format!("{proto}://{}", host.trim().trim_end_matches('/')))
-}
-
-fn header_first_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)?
-        .to_str()
-        .ok()?
-        .split(',')
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 pub async fn test_database(database_url: &str) -> AppResult<()> {
     let pool = PgPoolOptions::new()
         .max_connections(1)
@@ -534,43 +505,4 @@ fn generate_secret() -> String {
         Uuid::new_v4().simple(),
         Uuid::new_v4().simple()
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::http::HeaderMap;
-
-    use super::inferred_public_base_url;
-
-    #[test]
-    fn infers_public_base_url_from_forwarded_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-proto", "https".parse().unwrap());
-        headers.insert("x-forwarded-host", "dev.moligate.com".parse().unwrap());
-
-        assert_eq!(
-            inferred_public_base_url(&headers).as_deref(),
-            Some("https://dev.moligate.com")
-        );
-    }
-
-    #[test]
-    fn falls_back_to_host_when_forwarded_host_is_missing() {
-        let mut headers = HeaderMap::new();
-        headers.insert("host", "localhost:8080".parse().unwrap());
-
-        assert_eq!(
-            inferred_public_base_url(&headers).as_deref(),
-            Some("http://localhost:8080")
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_forwarded_proto() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-proto", "javascript".parse().unwrap());
-        headers.insert("x-forwarded-host", "dev.moligate.com".parse().unwrap());
-
-        assert_eq!(inferred_public_base_url(&headers), None);
-    }
 }

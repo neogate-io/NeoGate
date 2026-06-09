@@ -5,6 +5,7 @@ WORKDIR /app/backend
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/migrations ./migrations
 COPY backend/src ./src
+COPY backend/templates ./templates
 
 RUN cargo build --release
 

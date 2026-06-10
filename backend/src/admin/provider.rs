@@ -8,6 +8,11 @@ use crate::{
 };
 
 pub const CUSTOM_PROVIDER_CODE: &str = "custom";
+pub const NEWAPI_PROVIDER_CODE: &str = "newapi";
+const CUSTOM_PROVIDER_DISPLAY_NAME: &str = "自定义";
+const CUSTOM_PROVIDER_NAME: &str = "Custom";
+const NEWAPI_PROVIDER_DISPLAY_NAME: &str = "NewAPI";
+const NEWAPI_PROVIDER_NAME: &str = "NewAPI";
 pub const OPENAI_OAUTH_PROTOCOL: &str = "openai_oauth";
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,6 +36,9 @@ pub struct ProviderDefaultEndpointRecord {
 }
 
 pub async fn list_providers(state: &AppState) -> AppResult<Vec<ProviderRecord>> {
+    ensure_custom_provider(state).await?;
+    ensure_newapi_provider(state).await?;
+
     let rows = sqlx::query(
         "SELECT id, code, display_name, name, default_models,
                 default_openai_base_url, default_openai_oauth_base_url, default_anthropic_base_url,
@@ -107,12 +115,40 @@ pub async fn provider_default_models(
         .map_err(Into::into)
 }
 
+pub async fn ensure_newapi_provider(state: &AppState) -> AppResult<()> {
+    ensure_builtin_manual_provider(
+        state,
+        NEWAPI_PROVIDER_CODE,
+        NEWAPI_PROVIDER_DISPLAY_NAME,
+        NEWAPI_PROVIDER_NAME,
+        1,
+    )
+    .await
+}
+
 pub async fn ensure_custom_provider(state: &AppState) -> AppResult<()> {
+    ensure_builtin_manual_provider(
+        state,
+        CUSTOM_PROVIDER_CODE,
+        CUSTOM_PROVIDER_DISPLAY_NAME,
+        CUSTOM_PROVIDER_NAME,
+        0,
+    )
+    .await
+}
+
+async fn ensure_builtin_manual_provider(
+    state: &AppState,
+    code: &str,
+    display_name: &str,
+    name: &str,
+    sort_order: i32,
+) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO provider
          (code, display_name, name, default_models, default_openai_base_url,
           default_openai_oauth_base_url, default_anthropic_base_url, enabled, sort_order)
-         VALUES ($1, '自定义', 'Custom', ARRAY[]::TEXT[], '', '', '', TRUE, 0)
+         VALUES ($1, $2, $3, ARRAY[]::TEXT[], '', '', '', TRUE, $4)
          ON CONFLICT (code) DO UPDATE
          SET display_name = EXCLUDED.display_name,
              name = EXCLUDED.name,
@@ -124,7 +160,10 @@ pub async fn ensure_custom_provider(state: &AppState) -> AppResult<()> {
              sort_order = EXCLUDED.sort_order,
              updated_at = now()",
     )
-    .bind(CUSTOM_PROVIDER_CODE)
+    .bind(code)
+    .bind(display_name)
+    .bind(name)
+    .bind(sort_order)
     .execute(&state.db.pool)
     .await?;
 

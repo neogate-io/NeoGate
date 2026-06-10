@@ -21,8 +21,8 @@ use crate::{
             UpsertProviderPriceRequest,
         },
         provider::{
-            ensure_custom_provider, list_providers, provider_default_endpoints,
-            record_provider_models, ProviderRecord,
+            ensure_custom_provider, ensure_newapi_provider, list_providers,
+            provider_default_endpoints, record_provider_models, ProviderRecord,
         },
         setting::{
             test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,
@@ -418,6 +418,9 @@ async fn setup_upstream_models(
     }
     if provider == "custom" {
         ensure_custom_provider(&state).await?;
+    }
+    if provider == "newapi" {
+        ensure_newapi_provider(&state).await?;
     }
     provider_default_endpoints(&state, provider)
         .await?

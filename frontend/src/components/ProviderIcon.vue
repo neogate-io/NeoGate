@@ -7,6 +7,7 @@ const props = defineProps<{
 }>()
 
 const iconUrl: Record<string, string> = {
+  newapi: '/provider-icons/newapi.png',
   openai: '/provider-icons/openai.svg',
   anthropic: '/provider-icons/anthropic.ico',
   google: '/provider-icons/gemini.png',

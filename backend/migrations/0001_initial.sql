@@ -141,6 +141,7 @@ INSERT INTO provider
      default_openai_base_url, default_openai_oauth_base_url, default_anthropic_base_url, sort_order)
 VALUES
     ('custom', '自定义', 'Custom', ARRAY[]::TEXT[], '', '', '', 0),
+    ('newapi', 'NewAPI', 'NewAPI', ARRAY[]::TEXT[], '', '', '', 1),
     ('openai', 'OpenAI 官方', 'OpenAI', ARRAY['gpt-4o', 'gpt-4o-mini'], 'https://api.openai.com', 'https://chatgpt.com/backend-api/codex', '', 10),
     ('anthropic', 'Anthropic 官方', 'Anthropic', ARRAY['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'], '', '', 'https://api.anthropic.com', 20),
     ('google', '谷歌 Gemini', 'Google Gemini', ARRAY['gemini-2.0-flash', 'gemini-1.5-pro'], 'https://generativelanguage.googleapis.com/v1beta/openai', '', '', 30),

@@ -47,8 +47,9 @@ use self::{
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
     provider::{
-        ensure_custom_provider, list_providers, provider_default_endpoints, record_provider_models,
-        ProviderRecord, CUSTOM_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+        ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
+        record_provider_models, ProviderRecord, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE,
+        OPENAI_OAUTH_PROTOCOL,
     },
     setting::{
         get_smtp_setting, test_smtp_setting, upsert_smtp_setting, SmtpSettingRecord,
@@ -371,6 +372,9 @@ async fn upstream_models(
     }
     if provider_code == CUSTOM_PROVIDER_CODE {
         ensure_custom_provider(&state).await?;
+    }
+    if provider_code == NEWAPI_PROVIDER_CODE {
+        ensure_newapi_provider(&state).await?;
     }
 
     let defaults = provider_default_endpoints(&state, provider_code)

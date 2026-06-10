@@ -12,8 +12,9 @@ use crate::{
 };
 
 use super::provider::{
-    ensure_custom_provider, provider_default_endpoint_base_url, provider_default_endpoints,
-    provider_default_models, record_provider_models, CUSTOM_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+    ensure_custom_provider, ensure_newapi_provider, provider_default_endpoint_base_url,
+    provider_default_endpoints, provider_default_models, record_provider_models,
+    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -172,6 +173,9 @@ pub async fn create_channel(
     }
     if provider_code == CUSTOM_PROVIDER_CODE {
         ensure_custom_provider(state).await?;
+    }
+    if provider_code == NEWAPI_PROVIDER_CODE {
+        ensure_newapi_provider(state).await?;
     }
     ensure_provider_exists(state, &provider_code).await?;
     let endpoints = normalize_create_endpoints(state, &provider_code, &req).await?;

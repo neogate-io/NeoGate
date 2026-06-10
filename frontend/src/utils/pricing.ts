@@ -1,7 +1,7 @@
 import type { PricingTemplate } from '../types/admin'
 
 const CONFIRMED_PRICE_SOURCE = 'confirmed_price'
-const CUSTOM_PROVIDER = 'custom'
+const MANUAL_BASE_URL_PROVIDERS = new Set(['custom', 'newapi'])
 
 export function priceKey(provider: string, model: string) {
   return `${provider}\u0000${model}`
@@ -22,7 +22,7 @@ export function findPricingTemplate(templates: PricingTemplate[], provider: stri
   if (exact && exact.source !== CONFIRMED_PRICE_SOURCE) {
     return exact
   }
-  if (normalizedProvider !== CUSTOM_PROVIDER) {
+  if (!MANUAL_BASE_URL_PROVIDERS.has(normalizedProvider)) {
     return undefined
   }
 

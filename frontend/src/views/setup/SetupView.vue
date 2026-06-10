@@ -228,7 +228,9 @@ const setupProgressPercent = computed(() => {
 const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
-const isCustomProviderSelected = computed(() => selectedProvider.value?.code === 'custom')
+const isManualBaseUrlProviderSelected = computed(
+  () => selectedProvider.value?.code === 'custom' || selectedProvider.value?.code === 'newapi'
+)
 const bootstrapMissingDatabase = computed(() => !status.value?.database_configured)
 const clusterBlocked = computed(
   () => status.value?.bootstrap_required && status.value.runtime_mode === 'distributed'
@@ -727,7 +729,7 @@ function isBusinessStepDone(step: BusinessSetupStep) {
 function applyProviderDefaults() {
   const provider = selectedProvider.value
   if (!provider) return
-  if (provider.code === 'custom') {
+  if (provider.code === 'custom' || provider.code === 'newapi') {
     setupForm.channelName = ''
     setupForm.baseUrl = ''
     setupForm.openAiBaseUrl = ''
@@ -751,7 +753,7 @@ function applyProviderDefaults() {
 function setupEndpointsForSubmit(models: string[]) {
   const provider = selectedProvider.value
   const endpointModels = [...models]
-  if (!provider || provider.code === 'custom') {
+  if (!provider || provider.code === 'custom' || provider.code === 'newapi') {
     const endpoints: SetupEndpointPayload[] = []
     const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
     const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
@@ -793,7 +795,7 @@ function setupEndpointsForSubmit(models: string[]) {
 }
 
 function setupModelFetchEndpoint() {
-  if (isCustomProviderSelected.value) {
+  if (isManualBaseUrlProviderSelected.value) {
     const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
     if (openAiBaseUrl) {
       return {
@@ -1237,7 +1239,7 @@ onMounted(load)
                   :placeholder="t('channelNamePlaceholder')"
                 />
               </el-form-item>
-              <template v-if="isCustomProviderSelected">
+              <template v-if="isManualBaseUrlProviderSelected">
                 <el-form-item :label="t('openAiBaseUrl')">
                   <el-input
                     v-model="setupForm.openAiBaseUrl"

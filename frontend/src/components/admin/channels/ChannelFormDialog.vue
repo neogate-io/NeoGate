@@ -98,7 +98,10 @@ const { t } = useLocale()
         <el-input v-model="form.name" :placeholder="t('channelNamePlaceholder')" />
       </el-form-item>
 
-      <div v-if="form.provider === 'custom'" class="custom-base-url-grid">
+      <div
+        v-if="form.provider === 'custom' || form.provider === 'newapi'"
+        class="manual-base-url-grid"
+      >
         <el-form-item :label="t('openAiBaseUrl')">
           <el-input
             v-model="form.endpoints.openai.base_url"
@@ -256,7 +259,7 @@ const { t } = useLocale()
   -webkit-text-fill-color: #667085;
 }
 
-.custom-base-url-grid {
+.manual-base-url-grid {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr);

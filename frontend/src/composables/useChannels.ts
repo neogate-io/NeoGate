@@ -22,10 +22,11 @@ import type {
 import {
   customProviderOption,
   findProviderOption,
-  isCustomProvider,
+  isManualBaseUrlProvider,
+  newapiProviderOption,
   providerToOption,
   splitCommaList,
-  withCustomProviderFirst,
+  withManualProvidersFirst,
   type ChannelProviderOption
 } from '../utils/channel'
 import { readError } from '../utils/errors'
@@ -123,7 +124,7 @@ export function useChannels(t: Translate) {
   const createBaseUrl = computed({
     get: () => visibleBaseUrl(createForm),
     set: (value: string) => {
-      if (isCustomProvider(createForm.provider)) {
+      if (isManualBaseUrlProvider(createForm.provider)) {
         setVisibleBaseUrl(createForm, value)
       }
     }
@@ -132,7 +133,7 @@ export function useChannels(t: Translate) {
   const editBaseUrl = computed({
     get: () => visibleBaseUrl(editForm),
     set: (value: string) => {
-      if (isCustomProvider(editForm.provider)) {
+      if (isManualBaseUrlProvider(editForm.provider)) {
         setVisibleBaseUrl(editForm, value)
       }
     }
@@ -153,12 +154,12 @@ export function useChannels(t: Translate) {
   })
 
   const providerOptions = computed(() => {
-    return withCustomProviderFirst(providers.value)
+    return withManualProvidersFirst(providers.value)
   })
 
-  const isCreateCustomProvider = computed(() => isCustomProvider(createForm.provider))
-  const isCreateBaseUrlReadonly = computed(() => !isCustomProvider(createForm.provider))
-  const isEditBaseUrlReadonly = computed(() => !isCustomProvider(editForm.provider))
+  const isCreateCustomProvider = computed(() => isManualBaseUrlProvider(createForm.provider))
+  const isCreateBaseUrlReadonly = computed(() => !isManualBaseUrlProvider(createForm.provider))
+  const isEditBaseUrlReadonly = computed(() => !isManualBaseUrlProvider(editForm.provider))
 
   const keyCounts = computed(() => {
     const counts = new Map<number, number>()
@@ -181,6 +182,7 @@ export function useChannels(t: Translate) {
   function openCreateDialog() {
     const provider =
       findProviderOption(customProviderOption.value, providerOptions.value) ??
+      findProviderOption(newapiProviderOption.value, providerOptions.value) ??
       providerOptions.value[0]
     Object.assign(createForm, defaultCreateForm(provider))
     resetFetchedModels()
@@ -470,8 +472,8 @@ export function useChannels(t: Translate) {
       ]
     }
 
-    if (isCustomProvider(form.provider)) {
-      const endpoints = customProviderEndpointsForSubmit(form, models)
+    if (isManualBaseUrlProvider(form.provider)) {
+      const endpoints = manualProviderEndpointsForSubmit(form, models)
       if (!endpoints) return null
       if (endpoints.length === 0) {
         ElMessage.warning(t('baseUrlRequired'))
@@ -544,7 +546,7 @@ export function useChannels(t: Translate) {
       return form.endpoints.openai_oauth
     }
 
-    if (isCustomProvider(form.provider)) {
+    if (isManualBaseUrlProvider(form.provider)) {
       return form.endpoints.openai.base_url.trim()
         ? form.endpoints.openai
         : form.endpoints.anthropic
@@ -579,7 +581,7 @@ export function useChannels(t: Translate) {
     form.endpoints.anthropic.base_url = ''
   }
 
-  function customProviderEndpointsForSubmit(form: ChannelForm, models: string[]) {
+  function manualProviderEndpointsForSubmit(form: ChannelForm, models: string[]) {
     const endpoints: Array<{
       protocol: EndpointProtocol
       base_url: string

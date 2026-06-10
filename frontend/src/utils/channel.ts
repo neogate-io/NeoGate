@@ -18,9 +18,21 @@ export const customProviderOption: ChannelProviderOption = {
   defaultEndpoints: emptyDefaultEndpoints()
 }
 
+export const newapiProviderOption: ChannelProviderOption = {
+  value: 'newapi',
+  label: 'NewAPI',
+  defaultName: '',
+  defaultModels: '',
+  defaultEndpoints: emptyDefaultEndpoints()
+}
+
 export function providerToOption(provider: ProviderRecord): ChannelProviderOption {
   if (isCustomProvider(provider.code)) {
     return customProviderOption
+  }
+
+  if (isNewapiProvider(provider.code)) {
+    return newapiProviderOption
   }
 
   const defaultEndpoints = emptyDefaultEndpoints()
@@ -43,10 +55,19 @@ export function isCustomProvider(provider: ChannelProvider) {
   return provider === customProviderOption.value
 }
 
-export function withCustomProviderFirst(providers: ChannelProviderOption[]) {
+export function isNewapiProvider(provider: ChannelProvider) {
+  return provider === newapiProviderOption.value
+}
+
+export function isManualBaseUrlProvider(provider: ChannelProvider) {
+  return isCustomProvider(provider) || isNewapiProvider(provider)
+}
+
+export function withManualProvidersFirst(providers: ChannelProviderOption[]) {
   return [
     customProviderOption,
-    ...providers.filter((provider) => !isCustomProvider(provider.value))
+    newapiProviderOption,
+    ...providers.filter((provider) => !isManualBaseUrlProvider(provider.value))
   ]
 }
 

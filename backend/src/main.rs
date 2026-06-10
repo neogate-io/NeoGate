@@ -9,6 +9,7 @@ mod health;
 mod install;
 mod payment;
 mod policy;
+mod provider;
 mod relay;
 mod task;
 mod usage;

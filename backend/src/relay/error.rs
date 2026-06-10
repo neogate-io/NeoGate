@@ -3,16 +3,16 @@ use serde_json::Value;
 
 const UPSTREAM_ERROR_BODY_LOG_LIMIT: usize = 1000;
 
-pub(in crate::relay) struct UpstreamHttpFailure {
-    pub(in crate::relay) error_type: &'static str,
-    pub(in crate::relay) user_message: &'static str,
-    pub(in crate::relay) summary: String,
-    pub(in crate::relay) detail: String,
-    pub(in crate::relay) relay_status: StatusCode,
-    pub(in crate::relay) retryable: bool,
+pub(crate) struct UpstreamHttpFailure {
+    pub(crate) error_type: &'static str,
+    pub(crate) user_message: &'static str,
+    pub(crate) summary: String,
+    pub(crate) detail: String,
+    pub(crate) relay_status: StatusCode,
+    pub(crate) retryable: bool,
 }
 
-pub(in crate::relay) fn describe_upstream_http_failure(
+pub(crate) fn describe_upstream_http_failure(
     status: StatusCode,
     body: &[u8],
 ) -> UpstreamHttpFailure {

@@ -20,25 +20,23 @@ use crate::{
     AppState,
 };
 
-use super::{
-    body::RelayBody,
+use crate::relay::{
     ensure_key_backed_async_upstream, finish_relay, finish_task_json_response, forward_anthropic,
-    forward_anthropic_bound, raw_upstream_response, release_empty_hold,
-    request::{prepare_relay_body, BodyKind, PreparedRelayBody},
+    forward_anthropic_bound, prepare_relay_body, raw_upstream_response, release_empty_hold,
     reserve_credit, response_from_bytes,
     selector::{SelectedUpstream, UpstreamProtocol},
-    streaming::RelayContext,
-    upstream_task::{NewUpstreamTask, UpstreamTask, UpstreamTaskType},
+    BodyKind, PreparedRelayBody, RelayBody, RelayContext,
 };
+use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
 #[derive(Debug, Deserialize)]
-pub(super) struct AnthropicBatchListQuery {
+pub(crate) struct AnthropicBatchListQuery {
     limit: Option<i64>,
     after_id: Option<String>,
     before_id: Option<String>,
 }
 
-pub(super) async fn anthropic_messages(
+pub(crate) async fn anthropic_messages(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -103,7 +101,7 @@ pub(super) async fn anthropic_messages(
     .await
 }
 
-pub(super) async fn create_anthropic_message_batch(
+pub(crate) async fn create_anthropic_message_batch(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -163,7 +161,7 @@ pub(super) async fn create_anthropic_message_batch(
     finish_batch_create(state, auth, upstream, model, hold, response).await
 }
 
-pub(super) async fn list_anthropic_message_batches(
+pub(crate) async fn list_anthropic_message_batches(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     Query(query): Query<AnthropicBatchListQuery>,
@@ -217,7 +215,7 @@ pub(super) async fn list_anthropic_message_batches(
     )
 }
 
-pub(super) async fn anthropic_message_batch(
+pub(crate) async fn anthropic_message_batch(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -236,7 +234,7 @@ pub(super) async fn anthropic_message_batch(
     finish_task_json_response(state, auth, task, response).await
 }
 
-pub(super) async fn cancel_anthropic_message_batch(
+pub(crate) async fn cancel_anthropic_message_batch(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -255,7 +253,7 @@ pub(super) async fn cancel_anthropic_message_batch(
     finish_task_json_response(state, auth, task, response).await
 }
 
-pub(super) async fn delete_anthropic_message_batch(
+pub(crate) async fn delete_anthropic_message_batch(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -274,7 +272,7 @@ pub(super) async fn delete_anthropic_message_batch(
     raw_upstream_response(response).await
 }
 
-pub(super) async fn anthropic_message_batch_results(
+pub(crate) async fn anthropic_message_batch_results(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -458,7 +456,7 @@ impl Drop for AnthropicResultsRelay {
     }
 }
 
-pub(super) fn batch_terminal(status: &str) -> bool {
+pub(crate) fn batch_terminal(status: &str) -> bool {
     matches!(status, "ended" | "canceled" | "cancelled" | "expired")
 }
 

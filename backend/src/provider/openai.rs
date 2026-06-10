@@ -18,20 +18,20 @@ use crate::{
     AppState,
 };
 
-use super::request::{prepare_relay_body, BodyKind, PreparedRelayBody};
-use super::{
-    body::RelayBody,
-    error::describe_upstream_http_failure,
-    finish_relay, finish_task_json_response, forward_openai, forward_openai_bound,
-    forward_openai_with_content_type, handle_upstream_http_error, log_upstream_http_failure,
-    read_upstream_error_body, record_upstream_http_failure, release_empty_hold, reserve_credit,
-    respond_upstream_http_failure,
-    selector::{SelectedUpstream, UpstreamProtocol},
-    streaming::RelayContext,
-    task_status_from_value,
-    upstream_task::{NewUpstreamTask, UpstreamTask, UpstreamTaskType},
+use crate::relay::{ensure_key_backed_async_upstream, response_from_bytes};
+use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
+use crate::{
+    provider::newapi,
+    relay::{
+        describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_openai,
+        forward_openai_bound, forward_openai_with_content_type, handle_upstream_http_error,
+        log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
+        record_upstream_http_failure, release_empty_hold, reserve_credit,
+        respond_upstream_http_failure,
+        selector::{SelectedUpstream, UpstreamProtocol},
+        task_status_from_value, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
+    },
 };
-use super::{ensure_key_backed_async_upstream, response_from_bytes};
 
 const MODEL_UNAVAILABLE_MAX_REROUTES: usize = 3;
 const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
@@ -43,7 +43,7 @@ struct ImageRequestMeta {
     content_type: HeaderValue,
 }
 
-pub(super) async fn openai_chat_completions(
+pub(crate) async fn openai_chat_completions(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     RelayBody(body): RelayBody,
@@ -51,7 +51,7 @@ pub(super) async fn openai_chat_completions(
     relay_openai(state, auth, body, "/v1/chat/completions").await
 }
 
-pub(super) async fn openai_responses(
+pub(crate) async fn openai_responses(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     RelayBody(body): RelayBody,
@@ -59,7 +59,7 @@ pub(super) async fn openai_responses(
     relay_openai(state, auth, body, "/v1/responses").await
 }
 
-pub(super) async fn openai_image_generations(
+pub(crate) async fn openai_image_generations(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -68,7 +68,7 @@ pub(super) async fn openai_image_generations(
     relay_openai_image(state, auth, headers, body, "/v1/images/generations").await
 }
 
-pub(super) async fn openai_image_edits(
+pub(crate) async fn openai_image_edits(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -77,7 +77,7 @@ pub(super) async fn openai_image_edits(
     relay_openai_image(state, auth, headers, body, "/v1/images/edits").await
 }
 
-pub(super) async fn openai_image_variations(
+pub(crate) async fn openai_image_variations(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     headers: HeaderMap,
@@ -86,7 +86,7 @@ pub(super) async fn openai_image_variations(
     relay_openai_image(state, auth, headers, body, "/v1/images/variations").await
 }
 
-pub(super) async fn openai_response(
+pub(crate) async fn openai_response(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     Path(response_id): Path<String>,
@@ -110,7 +110,7 @@ pub(super) async fn openai_response(
     finish_task_json_response(state, auth, task, response).await
 }
 
-pub(super) async fn cancel_openai_response(
+pub(crate) async fn cancel_openai_response(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     Path(response_id): Path<String>,
@@ -325,13 +325,14 @@ async fn relay_openai_image(
         user_key_model_credit_account,
         started,
     };
+    let compat = newapi::image_request_compat(&upstream.provider, meta.stream);
     let response = forward_openai_with_content_type(
         &state,
         &upstream,
         body,
         path,
         meta.content_type,
-        meta.stream,
+        compat.accept_event_stream,
     )
     .await;
     finish_relay(ctx, response).await
@@ -596,7 +597,7 @@ async fn refresh_task_after_stream(
     Ok(())
 }
 
-pub(super) fn response_terminal(status: &str) -> bool {
+pub(crate) fn response_terminal(status: &str) -> bool {
     matches!(
         status,
         "completed" | "failed" | "cancelled" | "canceled" | "incomplete"
@@ -840,7 +841,7 @@ async fn select_upstream(
 async fn mark_credential_model_unavailable(
     ctx: &RelayContext,
     status: StatusCode,
-    failure: &super::error::UpstreamHttpFailure,
+    failure: &crate::relay::UpstreamHttpFailure,
 ) -> AppResult<bool> {
     let unavailable_until =
         chrono::Utc::now() + chrono::Duration::hours(MODEL_UNAVAILABLE_BLOCK_HOURS);
@@ -886,7 +887,7 @@ fn mark_credential_model_available(ctx: &RelayContext) {
 
 fn should_retry_after_model_unavailable(
     ctx: &RelayContext,
-    failure: &super::error::UpstreamHttpFailure,
+    failure: &crate::relay::UpstreamHttpFailure,
 ) -> bool {
     matches!(
         ctx.protocol,

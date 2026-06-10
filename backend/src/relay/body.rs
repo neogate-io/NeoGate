@@ -8,7 +8,7 @@ use axum::{
 
 use crate::{error::AppError, AppState};
 
-pub(super) struct RelayBody(pub(super) Bytes);
+pub(crate) struct RelayBody(pub(crate) Bytes);
 
 impl FromRequest<Arc<AppState>> for RelayBody {
     type Rejection = AppError;

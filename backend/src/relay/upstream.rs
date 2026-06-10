@@ -15,7 +15,7 @@ use super::streaming::RelayContext;
 const UPSTREAM_MAX_TRANSPORT_ATTEMPTS: usize = 2;
 const UPSTREAM_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
-pub(super) async fn forward_openai(
+pub(crate) async fn forward_openai(
     state: &AppState,
     upstream: &SelectedUpstream,
     protocol: UpstreamProtocol,
@@ -37,7 +37,7 @@ pub(super) async fn forward_openai(
     .await
 }
 
-pub(super) async fn forward_openai_with_content_type(
+pub(crate) async fn forward_openai_with_content_type(
     state: &AppState,
     upstream: &SelectedUpstream,
     body: Bytes,
@@ -222,7 +222,7 @@ fn convert_system_roles(value: &mut Value) {
     }
 }
 
-pub(super) async fn forward_anthropic(
+pub(crate) async fn forward_anthropic(
     state: &AppState,
     headers: &HeaderMap,
     upstream: &SelectedUpstream,
@@ -353,7 +353,7 @@ where
     }
 }
 
-pub(super) fn relay_upstream_error(ctx: &RelayContext, err: AppError) -> AppError {
+pub(crate) fn relay_upstream_error(ctx: &RelayContext, err: AppError) -> AppError {
     match err {
         AppError::Reqwest(err) => AppError::UpstreamRequest(UpstreamRequestError::new(
             classify_reqwest_error(&err),
@@ -364,7 +364,7 @@ pub(super) fn relay_upstream_error(ctx: &RelayContext, err: AppError) -> AppErro
     }
 }
 
-pub(super) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
+pub(crate) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
     let latency_ms = ctx.started.elapsed().as_millis() as i64;
     match err {
         AppError::UpstreamRequest(upstream_error) => {

@@ -1,9 +1,7 @@
-mod anthropic;
 mod body;
 mod credential;
 mod error;
 mod models;
-mod openai;
 mod request;
 pub mod selector;
 mod streaming;
@@ -24,6 +22,7 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::provider::{anthropic, openai};
 use crate::{
     auth::UserAuth,
     billing::{
@@ -36,14 +35,16 @@ use crate::{
 };
 
 use self::selector::SelectedUpstream;
-use self::streaming::RelayContext;
 use crate::task::{billing as task_billing, upstream as upstream_task};
 use crate::usage::{KeyFailure, UsageInsert};
+pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
-use error::{describe_upstream_http_failure, UpstreamHttpFailure};
+pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
 use models::{list_anthropic_models, list_openai_models};
+pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
+pub(crate) use streaming::RelayContext;
 pub(crate) use upstream::upstream_url;
-pub(in crate::relay) use upstream::{
+pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type,
     log_relay_upstream_failure, relay_upstream_error,
 };
@@ -100,7 +101,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
 }
 
-pub(in crate::relay) async fn finish_task_json_response(
+pub(crate) async fn finish_task_json_response(
     state: Arc<AppState>,
     auth: UserAuth,
     task: UpstreamTask,
@@ -148,7 +149,7 @@ pub(in crate::relay) async fn finish_task_json_response(
     response_from_bytes(status, content_type, body)
 }
 
-pub(in crate::relay) async fn raw_upstream_response(
+pub(crate) async fn raw_upstream_response(
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
     let status = StatusCode::from_u16(upstream_response.status().as_u16())
@@ -162,7 +163,7 @@ pub(in crate::relay) async fn raw_upstream_response(
     response_from_bytes(status, content_type, body)
 }
 
-pub(in crate::relay) fn response_from_bytes(
+pub(crate) fn response_from_bytes(
     status: StatusCode,
     content_type: HeaderValue,
     body: Bytes,
@@ -174,7 +175,7 @@ pub(in crate::relay) fn response_from_bytes(
         .map_err(|err| AppError::BadRequest(err.to_string()))
 }
 
-pub(in crate::relay) fn task_status_from_value(
+pub(crate) fn task_status_from_value(
     task_type: UpstreamTaskType,
     value: &Value,
     task: &UpstreamTask,
@@ -201,9 +202,7 @@ pub(in crate::relay) fn task_status_from_value(
     }
 }
 
-pub(in crate::relay) fn ensure_key_backed_async_upstream(
-    upstream: &SelectedUpstream,
-) -> AppResult<()> {
+pub(crate) fn ensure_key_backed_async_upstream(upstream: &SelectedUpstream) -> AppResult<()> {
     if upstream.channel_key_id.is_none() || upstream.credential_id.is_some() {
         return Err(AppError::BadRequest(
             "async tasks require a key-backed upstream channel".to_string(),
@@ -212,7 +211,7 @@ pub(in crate::relay) fn ensure_key_backed_async_upstream(
     Ok(())
 }
 
-pub(in crate::relay) async fn finish_relay(
+pub(crate) async fn finish_relay(
     ctx: RelayContext,
     response: AppResult<reqwest::Response>,
 ) -> AppResult<Response> {
@@ -253,7 +252,7 @@ pub(in crate::relay) async fn finish_relay(
     }
 }
 
-pub(in crate::relay) async fn handle_upstream_http_error(
+pub(crate) async fn handle_upstream_http_error(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
@@ -263,7 +262,7 @@ pub(in crate::relay) async fn handle_upstream_http_error(
     respond_upstream_http_failure(ctx, status, failure).await
 }
 
-pub(in crate::relay) async fn respond_upstream_http_failure(
+pub(crate) async fn respond_upstream_http_failure(
     ctx: RelayContext,
     status: StatusCode,
     failure: UpstreamHttpFailure,
@@ -302,7 +301,7 @@ pub(in crate::relay) async fn respond_upstream_http_failure(
         .map_err(|err| AppError::BadRequest(err.to_string()))
 }
 
-pub(in crate::relay) fn log_upstream_http_failure(
+pub(crate) fn log_upstream_http_failure(
     ctx: &RelayContext,
     status: StatusCode,
     failure: &UpstreamHttpFailure,
@@ -358,7 +357,7 @@ fn format_upstream_http_failure_log(
     )
 }
 
-pub(in crate::relay) async fn record_upstream_http_failure(
+pub(crate) async fn record_upstream_http_failure(
     ctx: &RelayContext,
     status: StatusCode,
     failure: &UpstreamHttpFailure,
@@ -377,9 +376,7 @@ pub(in crate::relay) async fn record_upstream_http_failure(
     enqueue_relay_usage(&ctx.state, usage, key_failure).await;
 }
 
-pub(in crate::relay) async fn read_upstream_error_body(
-    upstream_response: reqwest::Response,
-) -> Bytes {
+pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {
     let mut stream = upstream_response.bytes_stream();
     let mut body = Vec::new();
     let mut truncated = false;
@@ -418,7 +415,7 @@ fn append_limited_error_body(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
     }
 }
 
-pub(in crate::relay) fn usage_from_context(
+pub(crate) fn usage_from_context(
     ctx: &RelayContext,
     status_code: Option<i32>,
     error_summary: Option<String>,
@@ -450,7 +447,7 @@ pub(in crate::relay) fn usage_from_context(
     }
 }
 
-pub(in crate::relay) async fn key_failure_from_context(
+pub(crate) async fn key_failure_from_context(
     ctx: &RelayContext,
     error: String,
 ) -> Option<KeyFailure> {
@@ -510,13 +507,13 @@ fn optional_id(id: Option<i64>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
-pub(in crate::relay) async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
+pub(crate) async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
     if let Err(err) = state.billing.release_hold(&state.db.pool, hold).await {
         tracing::warn!("failed to release {context} hold: {err}");
     }
 }
 
-pub(in crate::relay) async fn reserve_credit(
+pub(crate) async fn reserve_credit(
     state: &AppState,
     auth: &UserAuth,
     user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,

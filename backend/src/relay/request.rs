@@ -7,24 +7,24 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 
 #[derive(Clone, Copy)]
-pub(super) enum BodyKind {
+pub(crate) enum BodyKind {
     OpenaiChat,
     OpenaiResponses,
     Anthropic,
 }
 
 #[derive(Debug)]
-pub(super) struct RelayRequestMeta {
-    pub(super) model: String,
-    pub(super) stream: bool,
-    pub(super) background: bool,
-    pub(super) store: Option<bool>,
+pub(crate) struct RelayRequestMeta {
+    pub(crate) model: String,
+    pub(crate) stream: bool,
+    pub(crate) background: bool,
+    pub(crate) store: Option<bool>,
 }
 
-pub(super) struct PreparedRelayBody {
-    pub(super) body: Bytes,
-    pub(super) meta: RelayRequestMeta,
-    pub(super) output_tokens: i64,
+pub(crate) struct PreparedRelayBody {
+    pub(crate) body: Bytes,
+    pub(crate) meta: RelayRequestMeta,
+    pub(crate) output_tokens: i64,
 }
 
 #[derive(Deserialize)]
@@ -45,7 +45,7 @@ struct StreamOptionsProbe {
     include_usage: Option<bool>,
 }
 
-pub(super) fn prepare_relay_body(
+pub(crate) fn prepare_relay_body(
     body: Bytes,
     kind: BodyKind,
     default_output_tokens: i64,

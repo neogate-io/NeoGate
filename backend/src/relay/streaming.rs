@@ -22,21 +22,21 @@ use super::{
 const MAX_JSON_USAGE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SSE_USAGE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) struct RelayContext {
-    pub(super) state: Arc<AppState>,
-    pub(super) auth: UserAuth,
-    pub(super) upstream: SelectedUpstream,
-    pub(super) protocol: UpstreamProtocol,
-    pub(super) path: &'static str,
-    pub(super) model: String,
-    pub(super) streamed: bool,
-    pub(super) price: Price,
-    pub(super) hold: DebitHold,
-    pub(super) user_key_model_credit_account: Option<CreditAccountId>,
-    pub(super) started: Instant,
+pub(crate) struct RelayContext {
+    pub(crate) state: Arc<AppState>,
+    pub(crate) auth: UserAuth,
+    pub(crate) upstream: SelectedUpstream,
+    pub(crate) protocol: UpstreamProtocol,
+    pub(crate) path: &'static str,
+    pub(crate) model: String,
+    pub(crate) streamed: bool,
+    pub(crate) price: Price,
+    pub(crate) hold: DebitHold,
+    pub(crate) user_key_model_credit_account: Option<CreditAccountId>,
+    pub(crate) started: Instant,
 }
 
-pub(super) fn body(
+pub(crate) fn body(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,

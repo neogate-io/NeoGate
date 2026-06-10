@@ -62,6 +62,82 @@ const openAiResponses = computed(
   }'`
 )
 
+const openAiResponsesStream = computed(
+  () => `curl -N ${openAiBaseUrl.value}/responses \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-5.5",
+    "input": "连续输出 3 个排查 API 问题的步骤",
+    "stream": true
+  }'`
+)
+
+const openAiResponseBackground = computed(
+  () => `curl ${openAiBaseUrl.value}/responses \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-5.5",
+    "input": "生成一份 500 字的接口迁移说明",
+    "background": true,
+    "store": true
+  }'`
+)
+
+const openAiResponseStreamRetrieve = computed(
+  () => `curl -N "${openAiBaseUrl.value}/responses/resp_123?stream=true" \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY"`
+)
+
+const openAiResponseImageGeneration = computed(
+  () => `curl ${openAiBaseUrl.value}/responses \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-5.5",
+    "input": "生成一张赛博朋克风格的白猫坐在霓虹灯下的图片",
+    "tools": [
+      { "type": "image_generation" }
+    ],
+    "background": true,
+    "store": true
+  }'`
+)
+
+const openAiResponseImageEdit = computed(
+  () => `IMG_B64="$(base64 < input.png | tr -d '\\n')"
+
+curl ${openAiBaseUrl.value}/responses \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d @- <<JSON
+{
+  "model": "gpt-5.5",
+  "background": true,
+  "store": true,
+  "tools": [
+    { "type": "image_generation" }
+  ],
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "基于这张图重新生成：保持主体姿态，改成赛博朋克夜景风格。"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,$IMG_B64"
+        }
+      ]
+    }
+  ]
+}
+JSON`
+)
+
 const openAiImageGeneration = computed(
   () => `curl ${openAiBaseUrl.value}/images/generations \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -73,6 +149,19 @@ const openAiImageGeneration = computed(
   }'`
 )
 
+const openAiImageGenerationStream = computed(
+  () => `curl -N ${openAiBaseUrl.value}/images/generations \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-image-1",
+    "prompt": "A compact glass teapot on a walnut table",
+    "size": "1024x1024",
+    "stream": true,
+    "partial_images": 2
+  }'`
+)
+
 const openAiImageEdit = computed(
   () => `curl ${openAiBaseUrl.value}/images/edits \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -80,6 +169,17 @@ const openAiImageEdit = computed(
   -F "image=@input.png" \\
   -F "prompt=Add a soft morning light through the window" \\
   -F "size=1024x1024"`
+)
+
+const openAiImageEditStream = computed(
+  () => `curl -N ${openAiBaseUrl.value}/images/edits \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -F "model=gpt-image-1" \\
+  -F "image=@input.png" \\
+  -F "prompt=Add a soft morning light through the window" \\
+  -F "size=1024x1024" \\
+  -F "stream=true" \\
+  -F "partial_images=2"`
 )
 
 const openAiImageVariation = computed(
@@ -226,10 +326,10 @@ const content = computed(() => {
         ['openai', 'OpenAI 兼容接口', '2. OpenAI 兼容接口'],
         ['openai-quick-start', '快速开始', '2.1 快速开始', 'sub'],
         ['openai-text', '文本生成', '2.2 文本生成', 'sub'],
-        ['openai-stream', '流式输出', '2.3 流式输出', 'sub'],
-        ['openai-async', '异步任务', '2.4 异步任务', 'sub'],
-        ['openai-images', '图片与多媒体', '2.5 图片与多媒体', 'sub'],
-        ['openai-models', '模型与文件', '2.6 模型与文件', 'sub'],
+        ['openai-text-async', '文本生成（异步）', '2.3 文本生成（异步）', 'sub'],
+        ['openai-images', '图片生成', '2.4 图片生成', 'sub'],
+        ['openai-images-async', '图片生成（异步）', '2.5 图片生成（异步）', 'sub'],
+        ['openai-models', '模型列表', '2.6 模型列表', 'sub'],
         ['openai-sdk', 'SDK 示例', '2.7 SDK 示例', 'sub'],
         ['anthropic', 'Anthropic 兼容接口', '3. Anthropic 兼容接口'],
         ['anthropic-quick-start', '快速开始', '3.1 快速开始', 'sub'],
@@ -267,7 +367,7 @@ const content = computed(() => {
       openAiAuthItems: [
         ['Base URL', openAiBaseUrl.value],
         ['认证头', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
-        ['Content-Type', 'application/json']
+        ['Content-Type', 'application/json；图片上传接口使用 multipart/form-data']
       ],
       openAiEndpoints: [
         ['Models', 'GET', '/v1/models', '-', '已支持'],
@@ -319,8 +419,20 @@ const content = computed(() => {
           'response_id, limit, after',
           '开发中'
         ],
-        ['Images', 'POST', '/v1/images/generations', 'model, prompt, size, quality, n', '已支持'],
-        ['Images', 'POST', '/v1/images/edits', 'model, image, prompt, mask, size, n', '已支持'],
+        [
+          'Images',
+          'POST',
+          '/v1/images/generations',
+          'model, prompt, size, quality, n, stream, partial_images',
+          '已支持'
+        ],
+        [
+          'Images',
+          'POST',
+          '/v1/images/edits',
+          'model, image, prompt, mask, size, n, stream, partial_images',
+          '已支持'
+        ],
         ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', '已支持'],
         [
           'Embeddings',
@@ -517,15 +629,17 @@ const content = computed(() => {
       quickStartTitle: '快速开始',
       textTitle: '文本生成',
       openAiText:
-        'Chat Completions 与 Responses 均按 OpenAI 官方请求体转发。NeoGate 当前支持 create；Chat Completions 的 stored completion 查询、更新、删除仍在开发中。',
-      streamTitle: '流式输出',
+        'Chat Completions 与 Responses 均按 OpenAI 官方请求体转发。本节展示同步和流式文本生成。流式输出会以 text/event-stream 持续返回增量内容，适合边生成边展示。Chat Completions 的 stored completion 查询、更新、删除仍在开发中。',
       streamText: '将 stream 设置为 true，响应会以 text/event-stream 形式返回。',
-      asyncTitle: '异步任务',
-      openAiAsync:
-        'Responses 后台任务按官方 background 参数创建。NeoGate 要求 background=true 时 store 不能为 false；创建后台任务时不支持直接 stream=true，可在查询接口透传 stream=true 获取后续流。',
+      textAsyncTitle: '文本生成（异步）',
+      openAiTextAsync:
+        'Responses 后台文本任务按官方 background 参数创建。NeoGate 要求 background=true 时 store 不能为 false；创建后台任务时不支持直接 stream=true，可在查询接口透传 stream=true 恢复流式结果。后台任务只支持 key-backed OpenAI 通道，不走 OpenAI OAuth/Codex 凭证通道。',
       imageTitle: '图片生成',
       openAiImage:
-        'Images 支持生成、编辑和变体接口。生成接口使用 JSON 请求体，编辑和变体接口使用 multipart/form-data 上传图片；请求中的 model 必须已在后台渠道和价格中启用。',
+        'Images 支持文生图、图生图/局部编辑和图片变体。生成接口使用 JSON 请求体，编辑接口支持 JSON images 数组或 multipart/form-data 上传图片，变体接口使用 multipart/form-data；流式输出会以 text/event-stream 返回生成过程中的 partial image，适合展示预览进度。',
+      imageAsyncTitle: '图片生成（异步）',
+      openAiImageAsync:
+        '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
       modelsTitle: '模型列表',
       sdkTitle: 'SDK 示例',
       anthropicIntro:
@@ -648,10 +762,10 @@ const content = computed(() => {
       ['openai', 'OpenAI Compatible', '2. OpenAI-compatible APIs'],
       ['openai-quick-start', 'Quick start', '2.1 Quick start', 'sub'],
       ['openai-text', 'Text generation', '2.2 Text generation', 'sub'],
-      ['openai-stream', 'Streaming', '2.3 Streaming', 'sub'],
-      ['openai-async', 'Async tasks', '2.4 Async tasks', 'sub'],
-      ['openai-images', 'Images and media', '2.5 Images and media', 'sub'],
-      ['openai-models', 'Models and files', '2.6 Models and files', 'sub'],
+      ['openai-text-async', 'Text generation async', '2.3 Text generation async', 'sub'],
+      ['openai-images', 'Images', '2.4 Images', 'sub'],
+      ['openai-images-async', 'Images async', '2.5 Images async', 'sub'],
+      ['openai-models', 'Models', '2.6 Models', 'sub'],
       ['openai-sdk', 'SDK examples', '2.7 SDK examples', 'sub'],
       ['anthropic', 'Anthropic Compatible', '3. Anthropic-compatible APIs'],
       ['anthropic-quick-start', 'Quick start', '3.1 Quick start', 'sub'],
@@ -701,7 +815,7 @@ const content = computed(() => {
     openAiAuthItems: [
       ['Base URL', openAiBaseUrl.value],
       ['Auth header', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
-      ['Content-Type', 'application/json']
+      ['Content-Type', 'application/json; image upload APIs use multipart/form-data']
     ],
     openAiEndpoints: [
       ['Models', 'GET', '/v1/models', '-', 'Supported'],
@@ -763,14 +877,14 @@ const content = computed(() => {
         'Images',
         'POST',
         '/v1/images/generations',
-        'model, prompt, size, quality, n',
+        'model, prompt, size, quality, n, stream, partial_images',
         'Supported'
       ],
       [
         'Images',
         'POST',
         '/v1/images/edits',
-        'model, image, prompt, mask, size, n',
+        'model, image, prompt, mask, size, n, stream, partial_images',
         'Supported'
       ],
       ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', 'Supported'],
@@ -999,15 +1113,17 @@ const content = computed(() => {
     quickStartTitle: 'Quick start',
     textTitle: 'Text generation',
     openAiText:
-      'Chat Completions and Responses are forwarded with the official OpenAI request body. NeoGate currently supports create; stored Chat Completion retrieve, update, message listing, and delete are in development.',
-    streamTitle: 'Streaming',
+      'Chat Completions and Responses are forwarded with the official OpenAI request body. This section shows synchronous and streaming text generation. Streaming returns incremental content over text/event-stream, which is useful when the UI should render while the model is still generating. Stored Chat Completion retrieve, update, message listing, and delete are still in development.',
     streamText: 'Set stream to true to receive a text/event-stream response.',
-    asyncTitle: 'Async tasks',
-    openAiAsync:
-      'Background Responses follow the official background parameter. NeoGate requires store not to be false when background=true. Create-time streaming is not supported for background tasks; retrieve can pass through stream=true.',
+    textAsyncTitle: 'Text generation async',
+    openAiTextAsync:
+      'Background text Responses follow the official background parameter. NeoGate requires store not to be false when background=true. Create-time streaming is not supported for background tasks; retrieve can pass through stream=true to resume streamed results. Background tasks require key-backed OpenAI channels and do not use OpenAI OAuth/Codex credential channels.',
     imageTitle: 'Image generation',
     openAiImage:
-      'Images supports generation, edits, and variations. Generations use a JSON body; edits and variations use multipart/form-data image uploads. The requested model must be enabled in channel models and pricing.',
+      'Images supports text-to-image, image edits, and image variations. Generations use a JSON body; edits support a JSON images array or multipart/form-data image uploads, while variations use multipart/form-data. Streaming returns partial images over text/event-stream, which is useful for showing generation progress.',
+    imageAsyncTitle: 'Image generation async',
+    openAiImageAsync:
+      'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
     modelsTitle: 'Models',
     sdkTitle: 'SDK examples',
     anthropicIntro:
@@ -1307,7 +1423,7 @@ const content = computed(() => {
                   <p>{{ content.openAiText }}</p>
                 </div>
                 <article class="docs-step-card">
-                  <h3>Responses</h3>
+                  <h3>Responses Create</h3>
                   <div class="docs-copy-block">
                     <el-button
                       :icon="DocumentCopy"
@@ -1320,15 +1436,8 @@ const content = computed(() => {
                     ><code>{{ openAiResponses }}</code></pre>
                   </div>
                 </article>
-              </section>
-
-              <section id="openai-stream" class="docs-subsection">
-                <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[4][2] }}</h2>
-                  <p>{{ content.streamText }}</p>
-                </div>
                 <article class="docs-step-card">
-                  <h3>Chat Completions</h3>
+                  <h3>Chat Completions Stream</h3>
                   <div class="docs-copy-block">
                     <el-button
                       :icon="DocumentCopy"
@@ -1341,13 +1450,41 @@ const content = computed(() => {
                     ><code>{{ openAiStream }}</code></pre>
                   </div>
                 </article>
+                <article class="docs-step-card">
+                  <h3>Responses Stream</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponsesStream)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponsesStream }}</code></pre>
+                  </div>
+                </article>
               </section>
 
-              <section id="openai-async" class="docs-subsection">
+              <section id="openai-text-async" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[5][2] }}</h2>
-                  <p>{{ content.openAiAsync }}</p>
+                  <h2>{{ content.menu[4][2] }}</h2>
+                  <p>{{ content.openAiTextAsync }}</p>
                 </div>
+                <article class="docs-step-card">
+                  <h3>Create Background Response</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseBackground)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseBackground }}</code></pre>
+                  </div>
+                </article>
                 <article class="docs-step-card">
                   <h3>Retrieve Response</h3>
                   <div class="docs-copy-block">
@@ -1360,6 +1497,20 @@ const content = computed(() => {
                     <pre
                       class="docs-code-sample docs-inner-code"
                     ><code>{{ openAiResponseRetrieve }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Retrieve Stream</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseStreamRetrieve)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseStreamRetrieve }}</code></pre>
                   </div>
                 </article>
                 <article class="docs-step-card">
@@ -1380,7 +1531,7 @@ const content = computed(() => {
 
               <section id="openai-images" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[6][2] }}</h2>
+                  <h2>{{ content.menu[5][2] }}</h2>
                   <p>{{ content.openAiImage }}</p>
                 </div>
                 <article class="docs-step-card">
@@ -1398,6 +1549,20 @@ const content = computed(() => {
                   </div>
                 </article>
                 <article class="docs-step-card">
+                  <h3>Generations Stream</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiImageGenerationStream)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiImageGenerationStream }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
                   <h3>Edits</h3>
                   <div class="docs-copy-block">
                     <el-button
@@ -1412,6 +1577,20 @@ const content = computed(() => {
                   </div>
                 </article>
                 <article class="docs-step-card">
+                  <h3>Edits Stream</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiImageEditStream)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiImageEditStream }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
                   <h3>Variations</h3>
                   <div class="docs-copy-block">
                     <el-button
@@ -1423,6 +1602,83 @@ const content = computed(() => {
                     <pre
                       class="docs-code-sample docs-inner-code"
                     ><code>{{ openAiImageVariation }}</code></pre>
+                  </div>
+                </article>
+              </section>
+
+              <section id="openai-images-async" class="docs-subsection">
+                <div class="docs-section-heading docs-subsection-heading">
+                  <h2>{{ content.menu[6][2] }}</h2>
+                  <p>{{ content.openAiImageAsync }}</p>
+                </div>
+                <article class="docs-step-card">
+                  <h3>Background Text to Image</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseImageGeneration)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseImageGeneration }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Background Image to Image</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseImageEdit)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseImageEdit }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Retrieve Response</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseRetrieve)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseRetrieve }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Retrieve Stream</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseStreamRetrieve)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseStreamRetrieve }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Cancel Response</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiResponseCancel)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiResponseCancel }}</code></pre>
                   </div>
                 </article>
               </section>

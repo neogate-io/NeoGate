@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DocumentCopy, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   createOwnUserKey,
   deleteOwnUserKey,
@@ -22,6 +22,7 @@ const createDialogVisible = ref(false)
 const apiKeyName = ref('')
 const newKeyDialogVisible = ref(false)
 const newKey = ref('')
+const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const keySkeletonCount = 3
 const {
   data: apiKeys,
@@ -34,10 +35,10 @@ function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
 }
 
-async function copyText(value: string) {
+async function copyText(value: string, successMessage = t('apiKeyCopied')) {
   try {
     await navigator.clipboard.writeText(value)
-    ElMessage.success(t('apiKeyCopied'))
+    ElMessage.success(successMessage)
   } catch (err) {
     ElMessage.error(readError(err))
   }
@@ -45,6 +46,10 @@ async function copyText(value: string) {
 
 async function copyApiKey(row: UserKey) {
   await copyText(row.key)
+}
+
+async function copyBaseUrl() {
+  await copyText(apiBaseUrl.value, t('baseUrlCopied'))
 }
 
 async function toggleApiKeyStatus(row: UserKey, enabled: boolean) {
@@ -133,6 +138,21 @@ async function confirmDeleteApiKey(row: UserKey) {
 
 <template>
   <section class="user-api-keys-view">
+    <section class="api-base-url-panel" :aria-label="t('baseUrl')">
+      <span>{{ t('baseUrl') }}:</span>
+      <div class="api-base-url-row">
+        <code>{{ apiBaseUrl }}</code>
+        <el-tooltip :content="t('copy')" placement="top">
+          <el-button
+            class="key-inline-copy"
+            :aria-label="t('copy')"
+            :icon="DocumentCopy"
+            @click="copyBaseUrl"
+          />
+        </el-tooltip>
+      </div>
+    </section>
+
     <div v-if="!keysLoaded" class="key-card-grid key-loading-grid" aria-hidden="true">
       <article v-for="index in keySkeletonCount" :key="index" class="user-panel key-card-skeleton">
         <span></span>
@@ -267,6 +287,45 @@ async function confirmDeleteApiKey(row: UserKey) {
   display: grid;
   gap: 12px;
   width: min(1120px, 100%);
+}
+
+.api-base-url-panel {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 0 2px 2px;
+}
+
+.api-base-url-panel > span {
+  color: #64748b;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.api-base-url-row {
+  align-items: center;
+  display: flex;
+  flex: 0 1 auto;
+  gap: 8px;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.api-base-url-row code {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .key-card-grid {
@@ -576,6 +635,16 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 @media (max-width: 560px) {
+  .api-base-url-panel {
+    align-items: start;
+    display: grid;
+    gap: 8px;
+  }
+
+  .api-base-url-row {
+    justify-content: start;
+  }
+
   .key-card-meta {
     grid-template-columns: 1fr;
   }

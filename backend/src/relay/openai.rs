@@ -623,9 +623,9 @@ fn image_request_meta(
     let lower_content_type = content_type_text.to_ascii_lowercase();
 
     if lower_content_type.starts_with("application/json") {
-        if path != "/v1/images/generations" {
+        if path == "/v1/images/variations" {
             return Err(AppError::BadRequest(
-                "image edits and variations require multipart/form-data".to_string(),
+                "image variations require multipart/form-data".to_string(),
             ));
         }
         return json_image_request_meta(body, content_type);
@@ -930,6 +930,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_json_image_edit_meta() {
+        let body = br#"{"model":"gpt-image-2","prompt":"edit","images":[{"image_url":"data:image/png;base64,AAAA"}],"stream":true,"partial_images":2}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+
+        let meta = image_request_meta("/v1/images/edits", &headers, body).unwrap();
+
+        assert_eq!(meta.model, "gpt-image-2");
+        assert!(meta.stream);
+        assert_eq!(
+            meta.content_type,
+            HeaderValue::from_static("application/json")
+        );
+    }
+
+    #[test]
     fn parses_multipart_image_edit_model_without_rewriting_body() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -949,6 +968,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_multipart_image_edit_stream_flag() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data; boundary=\"quoted-boundary\""),
+        );
+        let body = b"--quoted-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n--quoted-boundary--\r\n";
+
+        let meta = image_request_meta("/v1/images/edits", &headers, body).unwrap();
+
+        assert_eq!(meta.model, "gpt-image-1");
+        assert!(meta.stream);
+    }
+
+    #[test]
     fn multipart_image_variation_requires_model() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -960,6 +994,74 @@ mod tests {
         let err = image_request_meta("/v1/images/variations", &headers, body).unwrap_err();
 
         assert!(err.to_string().contains("model is required"));
+    }
+
+    #[test]
+    fn image_generation_rejects_multipart_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data; boundary=x"),
+        );
+
+        let err = image_request_meta(
+            "/v1/images/generations",
+            &headers,
+            b"--x\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n--x--\r\n",
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("image generations require application/json"));
+    }
+
+    #[test]
+    fn image_variation_rejects_json_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+
+        let err = image_request_meta(
+            "/v1/images/variations",
+            &headers,
+            br#"{"model":"dall-e-2","image":"data:image/png;base64,AAAA"}"#,
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("image variations require multipart/form-data"));
+    }
+
+    #[test]
+    fn multipart_image_request_requires_boundary() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data"),
+        );
+
+        let err = image_request_meta("/v1/images/edits", &headers, b"").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("multipart/form-data boundary is required"));
+    }
+
+    #[test]
+    fn multipart_image_request_rejects_invalid_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data; boundary=x"),
+        );
+
+        let err = image_request_meta("/v1/images/edits", &headers, b"not multipart").unwrap_err();
+
+        assert!(err.to_string().contains("invalid multipart body"));
     }
 
     #[test]

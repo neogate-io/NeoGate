@@ -340,7 +340,7 @@ where
         unreachable!("upstream attempt loop always returns")
     };
 
-    match tokio::time::timeout(state.config.upstream_response_timeout, send).await {
+    match tokio::time::timeout(state.config.upstream_timeout, send).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(err)) => Err(AppError::Reqwest(err)),
         Err(_) => Err(AppError::UpstreamRequest(UpstreamRequestError::new(
@@ -348,7 +348,7 @@ where
             upstream.provider.clone(),
             format!(
                 "response headers were not received within {} seconds",
-                state.config.upstream_response_timeout.as_secs()
+                state.config.upstream_timeout.as_secs()
             ),
         ))),
     }

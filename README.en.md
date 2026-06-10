@@ -205,6 +205,7 @@ Before going live:
 - Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links.
 - Set `SITE_NAME` in the first-run wizard or environment configuration for page, email, and payment gateway display.
 - If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration.
+- If you proxy image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; by default it follows `REQUEST_TIMEOUT_SECONDS`, usually 600 seconds.
 - Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims.
 - For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console.
 - For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode.

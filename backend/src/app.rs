@@ -387,7 +387,7 @@ pub(crate) mod tests {
                 key_cooldown: Duration::from_secs(60),
                 request_timeout: Duration::from_secs(60),
                 upstream_connect_timeout: Duration::from_secs(10),
-                upstream_response_timeout: Duration::from_secs(30),
+                upstream_timeout: Duration::from_secs(30),
                 relay_body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
                 credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                 http_pool_max_idle_per_host: 100,

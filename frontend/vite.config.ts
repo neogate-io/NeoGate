@@ -4,6 +4,11 @@ import { readFileSync } from 'node:fs'
 
 const installTemplatePath = new URL('../backend/templates/install.template', import.meta.url)
 const localBackendOrigin = 'http://127.0.0.1:8080'
+const apiProxy = {
+  target: localBackendOrigin,
+  timeout: 10 * 60 * 1000,
+  proxyTimeout: 10 * 60 * 1000
+}
 
 function requestOrigin(headers: Record<string, string | string[] | undefined>) {
   const forwarded = parseForwarded(firstHeader(headers.forwarded))
@@ -142,9 +147,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': localBackendOrigin,
-      '/v1': localBackendOrigin,
-      '/anthropic': localBackendOrigin
+      '/api': apiProxy,
+      '/v1': apiProxy,
+      '/anthropic': apiProxy
     }
   }
 })

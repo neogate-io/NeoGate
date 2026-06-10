@@ -2,7 +2,7 @@ use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 
-pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 pub const DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-production";
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
@@ -23,7 +23,7 @@ pub struct Config {
     pub key_cooldown: Duration,
     pub request_timeout: Duration,
     pub upstream_connect_timeout: Duration,
-    pub upstream_response_timeout: Duration,
+    pub upstream_timeout: Duration,
     pub relay_body_limit_bytes: usize,
     pub credential_upload_limit_bytes: usize,
     pub http_pool_max_idle_per_host: usize,
@@ -165,14 +165,14 @@ impl Config {
                 .unwrap_or_else(|_| DEFAULT_UPSTREAM_SECRET_KEY.to_string()),
             anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)),
-            request_timeout: Duration::from_secs(parse_u64("REQUEST_TIMEOUT_SECONDS", 120)),
+            request_timeout: Duration::from_secs(parse_u64("REQUEST_TIMEOUT_SECONDS", 600)),
             upstream_connect_timeout: Duration::from_secs(parse_u64(
                 "UPSTREAM_CONNECT_TIMEOUT_SECONDS",
                 10,
             )),
-            upstream_response_timeout: Duration::from_secs(parse_u64(
-                "UPSTREAM_RESPONSE_TIMEOUT_SECONDS",
-                30,
+            upstream_timeout: Duration::from_secs(parse_u64(
+                "UPSTREAM_TIMEOUT_SECONDS",
+                parse_u64("REQUEST_TIMEOUT_SECONDS", 600),
             )),
             relay_body_limit_bytes: parse_usize(
                 "RELAY_BODY_LIMIT_BYTES",
@@ -260,8 +260,8 @@ impl Config {
         if self.upstream_connect_timeout.is_zero() {
             anyhow::bail!("UPSTREAM_CONNECT_TIMEOUT_SECONDS must be positive");
         }
-        if self.upstream_response_timeout.is_zero() {
-            anyhow::bail!("UPSTREAM_RESPONSE_TIMEOUT_SECONDS must be positive");
+        if self.upstream_timeout.is_zero() {
+            anyhow::bail!("UPSTREAM_TIMEOUT_SECONDS must be positive");
         }
         if self.relay_body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");

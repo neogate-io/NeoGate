@@ -224,6 +224,7 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 - 在首次运行向导或环境配置中设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接。
 - 在首次运行向导或环境配置中设置 `SITE_NAME`，用于页面、邮件和支付网关显示。
 - 如果前端与 API 是跨域访问，设置正确的 `CORS_ALLOWED_ORIGINS`；同域反向代理部署通常无需额外配置。
+- 如需转发图片编辑、文件上传或超长上下文请求，确认反向代理的请求体限制不低于后端 `RELAY_BODY_LIMIT_BYTES`（默认 64 MiB）。图片编辑等长耗时请求如果出现 504，可调大 `UPSTREAM_TIMEOUT_SECONDS`（默认跟随 `REQUEST_TIMEOUT_SECONDS`，通常为 600 秒）。
 - 如需公开邮箱领取 API key，在首次运行向导或管理员后台的系统设置中配置 SMTP。
 - 如需使用计费模式，在首次运行向导或管理员后台配置模型价格、充值套餐和支付通道。
 - 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。

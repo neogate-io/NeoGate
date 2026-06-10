@@ -251,6 +251,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_openai_image_stream_usage() {
+        let usage = parse_usage_from_sse_data(
+            r#"{"type":"image_generation.completed","usage":{"input_tokens":120,"output_tokens":42,"total_tokens":162}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 120);
+        assert_eq!(usage.output_tokens, 42);
+    }
+
+    #[test]
     fn parses_anthropic_cache_details() {
         let usage = parse_usage_from_sse_data(
             r#"{"message":{"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":7}}}}"#,

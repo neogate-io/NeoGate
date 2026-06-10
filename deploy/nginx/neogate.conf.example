@@ -6,8 +6,8 @@ server {
     ssl_certificate /path/to/fullchain.pem;
     ssl_certificate_key /path/to/privkey.pem;
 
-    # Increase this if clients send large model requests, file content, or long contexts.
-    client_max_body_size 50m;
+    # Increase this if clients send large model requests, image edits, file content, or long contexts.
+    client_max_body_size 64m;
 
     root /usr/share/nginx/html;
 

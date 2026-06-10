@@ -252,6 +252,9 @@ fn is_model_error(status: StatusCode, lowered: &str) -> bool {
                 "not supported",
                 "unsupported model",
                 "no such model",
+                "unknown provider for model",
+                "no provider for model",
+                "provider for model",
                 "模型不存在",
                 "模型不可用",
                 "不支持的模型",
@@ -376,6 +379,20 @@ mod tests {
         assert_eq!(failure.error_type, "upstream_model_unavailable");
         assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
         assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn classifies_provider_model_mapping_errors() {
+        let body = br#"{"error":{"message":"unknown provider for model gpt-5.2","type":"server_error","code":"internal_server_error"}}"#;
+
+        let failure = describe_upstream_http_failure(StatusCode::BAD_GATEWAY, body);
+
+        assert_eq!(failure.error_type, "upstream_model_unavailable");
+        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
+        assert!(!failure.retryable);
+        assert!(failure
+            .detail
+            .contains("unknown provider for model gpt-5.2"));
     }
 
     #[test]

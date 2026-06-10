@@ -316,21 +316,15 @@ where
                 {
                     let kind = classify_reqwest_error(&err);
                     tracing::warn!(
-                        provider = %upstream.provider,
-                        channel_id = upstream.channel_id,
-                        channel_name = %upstream.channel_name,
-                        channel_endpoint_id = upstream.channel_endpoint_id,
-                        channel_key_id = ?upstream.channel_key_id,
-                        credential_id = ?upstream.credential_id,
-                        protocol = protocol.as_str(),
-                        path,
-                        base_url = %upstream.base_url,
-                        error_kind = kind.type_code(),
-                        retryable = true,
-                        attempt,
-                        max_attempts = UPSTREAM_MAX_TRANSPORT_ATTEMPTS,
-                        error = %err,
-                        "retrying upstream request after transport error"
+                        "{}",
+                        format_upstream_transport_retry_log(
+                            upstream,
+                            protocol,
+                            path,
+                            kind,
+                            attempt,
+                            err.to_string()
+                        )
                     );
                     tokio::time::sleep(UPSTREAM_RETRY_BACKOFF).await;
                 }
@@ -369,24 +363,29 @@ pub(super) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
     let latency_ms = ctx.started.elapsed().as_millis() as i64;
     match err {
         AppError::UpstreamRequest(upstream_error) => {
-            tracing::warn!(
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                path = ctx.path,
-                base_url = %ctx.upstream.base_url,
-                error_kind = upstream_error.kind.type_code(),
-                retryable = upstream_error.retryable,
-                status = upstream_error.status().as_u16(),
+            let client_response = json!({
+                "error": {
+                    "message": upstream_error.kind.user_message(),
+                    "code": upstream_error.kind.type_code(),
+                    "upstream": upstream_error.provider,
+                    "retryable": upstream_error.retryable,
+                }
+            })
+            .to_string();
+            let line = format_relay_upstream_failure_log(
+                ctx,
+                upstream_error.kind.type_code(),
+                upstream_error.retryable,
+                upstream_error.status(),
                 latency_ms,
-                error = %upstream_error.detail,
-                "upstream request failed"
+                &upstream_error.detail,
+                &client_response,
             );
+            if upstream_error.status().is_server_error() {
+                tracing::error!("{line}");
+            } else {
+                tracing::warn!("{line}");
+            }
         }
         err => {
             tracing::error!(
@@ -406,6 +405,68 @@ pub(super) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
             );
         }
     }
+}
+
+fn format_upstream_transport_retry_log(
+    upstream: &SelectedUpstream,
+    protocol: UpstreamProtocol,
+    path: &str,
+    kind: UpstreamErrorKind,
+    attempt: usize,
+    error: String,
+) -> String {
+    format!(
+        "retry upstream transport error | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} path={} upstream={} error_kind={} retryable=true attempt={}/{} error={}",
+        upstream.channel_name,
+        upstream.channel_id,
+        upstream.channel_endpoint_id,
+        optional_id(upstream.channel_key_id),
+        optional_id(upstream.credential_id),
+        upstream.provider,
+        protocol.as_str(),
+        path,
+        upstream.base_url,
+        kind.type_code(),
+        attempt,
+        UPSTREAM_MAX_TRANSPORT_ATTEMPTS,
+        error
+    )
+}
+
+fn format_relay_upstream_failure_log(
+    ctx: &RelayContext,
+    error_kind: &str,
+    retryable: bool,
+    status: StatusCode,
+    latency_ms: i64,
+    error: &str,
+    client_response: &str,
+) -> String {
+    format!(
+        "upstream request failed | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream={} status={} latency={}ms error_kind={} retryable={} error={} client_status={} client_response={}",
+        ctx.upstream.channel_name,
+        ctx.upstream.channel_id,
+        ctx.upstream.channel_endpoint_id,
+        optional_id(ctx.upstream.channel_key_id),
+        optional_id(ctx.upstream.credential_id),
+        ctx.upstream.provider,
+        ctx.protocol.as_str(),
+        ctx.model,
+        ctx.path,
+        ctx.upstream.base_url,
+        status.as_u16(),
+        latency_ms,
+        error_kind,
+        retryable,
+        error,
+        status.as_u16(),
+        client_response
+    )
+}
+
+fn optional_id(id: Option<i64>) -> String {
+    id.map(|id| id.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn should_retry_transport_error(err: &reqwest::Error) -> bool {

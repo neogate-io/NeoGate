@@ -1,17 +1,30 @@
-use std::sync::Arc;
+use std::{
+    fmt::{self, Write as _},
+    sync::Arc,
+};
 
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderName, HeaderValue, Method},
     Router,
 };
+use chrono::{SecondsFormat, Utc};
 use reqwest::Client;
 use tokio::sync::watch;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::{
+    field::{Field, Visit},
+    Event, Level, Subscriber,
+};
+use tracing_subscriber::{
+    fmt::{format::Writer, FmtContext, FormatEvent, FormatFields},
+    layer::SubscriberExt,
+    registry::LookupSpan,
+    util::SubscriberInitExt,
+};
 
 use crate::{
     admin, auth,
@@ -52,12 +65,7 @@ pub struct AppState {
 
 pub async fn run() -> anyhow::Result<()> {
     load_dotenv();
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    init_tracing();
 
     let probe = RuntimeProbe::from_env()?;
     if !probe.full_config_ready() {
@@ -66,7 +74,7 @@ pub async fn run() -> anyhow::Result<()> {
             .merge(install::bootstrap_router())
             .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
             .layer(cors_layer_from_origins(&["*".to_string()])?)
-            .layer(TraceLayer::new_for_http());
+            .layer(TraceLayer::new_for_http().on_failure(()));
         let listener = tokio::net::TcpListener::bind(&probe.bind_addr).await?;
         tracing::info!(
             "neogate bootstrap listener running on {} because runtime configuration is incomplete",
@@ -94,7 +102,7 @@ pub async fn run() -> anyhow::Result<()> {
     let app = router(state)
         .layer(DefaultBodyLimit::max(config.relay_body_limit_bytes))
         .layer(cors_layer(&config)?)
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http().on_failure(()));
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
@@ -102,6 +110,107 @@ pub async fn run() -> anyhow::Result<()> {
         .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
         .await?;
     Ok(())
+}
+
+fn init_tracing() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer().event_format(NeogateLogFormat))
+        .init();
+}
+
+struct NeogateLogFormat;
+
+impl<S, N> FormatEvent<S, N> for NeogateLogFormat
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        _ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let meta = event.metadata();
+        let mut fields = LogFields::default();
+        event.record(&mut fields);
+
+        write_gray(
+            &mut writer,
+            Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+        )?;
+        write!(writer, " ")?;
+        write_level(&mut writer, *meta.level())?;
+        write!(writer, " ")?;
+        write_gray(&mut writer, format_args!("{}:", meta.target()))?;
+
+        if let Some(message) = fields.message {
+            write!(writer, " {message}")?;
+        }
+
+        if !fields.fields.is_empty() {
+            write!(writer, " ")?;
+            write_gray(&mut writer, "|")?;
+            write!(writer, " {}", fields.fields)?;
+        }
+
+        writeln!(writer)
+    }
+}
+
+fn write_gray(writer: &mut Writer<'_>, value: impl fmt::Display) -> fmt::Result {
+    if writer.has_ansi_escapes() {
+        write!(writer, "\x1b[90m{value}\x1b[0m")
+    } else {
+        write!(writer, "{value}")
+    }
+}
+
+fn write_level(writer: &mut Writer<'_>, level: Level) -> fmt::Result {
+    if !writer.has_ansi_escapes() {
+        return write!(writer, "{level:>5}");
+    }
+
+    let color = match level {
+        Level::ERROR => "\x1b[31;1m",
+        Level::WARN => "\x1b[33;1m",
+        Level::INFO => "\x1b[32m",
+        Level::DEBUG => "\x1b[34m",
+        Level::TRACE => "\x1b[35m",
+    };
+    write!(writer, "{color}{level:>5}\x1b[0m")
+}
+
+#[derive(Default)]
+struct LogFields {
+    message: Option<String>,
+    fields: String,
+}
+
+impl LogFields {
+    fn record_value(&mut self, field: &Field, value: String) {
+        if field.name() == "message" {
+            self.message = Some(value);
+        } else {
+            if !self.fields.is_empty() {
+                self.fields.push(' ');
+            }
+            let _ = write!(self.fields, "{}={}", field.name(), value);
+        }
+    }
+}
+
+impl Visit for LogFields {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.record_value(field, format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_value(field, value.to_string());
+    }
 }
 
 async fn build_state(

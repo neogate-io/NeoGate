@@ -208,7 +208,6 @@ async fn relay_openai(
                 let body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &body);
                 if should_retry_after_model_unavailable(&ctx, &failure) {
-                    log_upstream_http_failure(&ctx, status, &failure);
                     let blocked = mark_credential_model_unavailable(&ctx, status, &failure).await?;
                     if !blocked {
                         tracing::info!(
@@ -242,6 +241,7 @@ async fn relay_openai(
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     model_unavailable_reroutes += 1;
+                    log_upstream_http_failure(&ctx, status, &failure, None);
                     record_upstream_http_failure(
                         &ctx,
                         status,

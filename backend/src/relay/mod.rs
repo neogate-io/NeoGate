@@ -268,18 +268,21 @@ pub(in crate::relay) async fn respond_upstream_http_failure(
     status: StatusCode,
     failure: UpstreamHttpFailure,
 ) -> AppResult<Response> {
-    log_upstream_http_failure(&ctx, status, &failure);
-    record_upstream_http_failure(&ctx, status, &failure, "upstream error").await;
-
+    let client_message = upstream_http_failure_client_message(&ctx, status, &failure);
     let payload = json!({
         "error": {
-            "message": failure.user_message,
+            "message": client_message,
             "code": failure.error_type,
             "upstream": ctx.upstream.provider,
             "upstream_status": status.as_u16(),
+            "upstream_error": failure.detail,
             "retryable": failure.retryable,
         }
     });
+    let client_response = payload.to_string();
+    log_upstream_http_failure(&ctx, status, &failure, Some(&client_response));
+    record_upstream_http_failure(&ctx, status, &failure, "upstream error").await;
+
     let mut builder = Response::builder()
         .status(failure.relay_status)
         .header(header::CONTENT_TYPE, "application/json")
@@ -295,7 +298,7 @@ pub(in crate::relay) async fn respond_upstream_http_failure(
         builder = builder.header("x-neogate-upstream-status", value);
     }
     builder
-        .body(Body::from(payload.to_string()))
+        .body(Body::from(client_response))
         .map_err(|err| AppError::BadRequest(err.to_string()))
 }
 
@@ -303,25 +306,56 @@ pub(in crate::relay) fn log_upstream_http_failure(
     ctx: &RelayContext,
     status: StatusCode,
     failure: &UpstreamHttpFailure,
+    client_response: Option<&str>,
 ) {
-    tracing::warn!(
-        provider = %ctx.upstream.provider,
-        channel_id = ctx.upstream.channel_id,
-        channel_name = %ctx.upstream.channel_name,
-        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-        channel_key_id = ?ctx.upstream.channel_key_id,
-        credential_id = ?ctx.upstream.credential_id,
-        protocol = ctx.protocol.as_str(),
-        model = %ctx.model,
-        path = ctx.path,
-        base_url = %ctx.upstream.base_url,
-        upstream_status = status.as_u16(),
-        upstream_error_type = failure.error_type,
-        retryable = failure.retryable,
-        latency_ms = ctx.started.elapsed().as_millis() as i64,
-        upstream_error = %failure.detail,
-        "upstream returned error response"
-    );
+    let line = format_upstream_http_failure_log(ctx, status, failure, client_response);
+    if client_response.is_some() && failure.relay_status.is_server_error() {
+        tracing::error!("{line}");
+    } else {
+        tracing::warn!("{line}");
+    }
+}
+
+fn upstream_http_failure_client_message(
+    ctx: &RelayContext,
+    status: StatusCode,
+    failure: &UpstreamHttpFailure,
+) -> String {
+    format!(
+        "{} Upstream {} returned {}: {}",
+        failure.user_message,
+        ctx.upstream.provider,
+        status.as_u16(),
+        failure.detail
+    )
+}
+
+fn format_upstream_http_failure_log(
+    ctx: &RelayContext,
+    status: StatusCode,
+    failure: &UpstreamHttpFailure,
+    client_response: Option<&str>,
+) -> String {
+    format!(
+        "upstream returned error | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream={} upstream_status={} relay_status={} latency={}ms error_type={} retryable={} error={} client_response={}",
+        ctx.upstream.channel_name,
+        ctx.upstream.channel_id,
+        ctx.upstream.channel_endpoint_id,
+        optional_id(ctx.upstream.channel_key_id),
+        optional_id(ctx.upstream.credential_id),
+        ctx.upstream.provider,
+        ctx.protocol.as_str(),
+        ctx.model,
+        ctx.path,
+        ctx.upstream.base_url,
+        status.as_u16(),
+        failure.relay_status.as_u16(),
+        ctx.started.elapsed().as_millis(),
+        failure.error_type,
+        failure.retryable,
+        failure.detail,
+        client_response.unwrap_or("not_returned_attempting_reroute")
+    )
 }
 
 pub(in crate::relay) async fn record_upstream_http_failure(
@@ -433,16 +467,7 @@ pub(in crate::relay) async fn key_failure_from_context(
             error,
         }),
         Ok(false) => {
-            tracing::info!(
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                "skipping upstream key cooldown because this model has no alternate channel"
-            );
+            tracing::info!("{}", format_skipped_key_cooldown_log(ctx, channel_key_id));
             None
         }
         Err(err) => {
@@ -464,6 +489,25 @@ pub(in crate::relay) async fn key_failure_from_context(
             })
         }
     }
+}
+
+fn format_skipped_key_cooldown_log(ctx: &RelayContext, channel_key_id: i64) -> String {
+    format!(
+        "skipped upstream key cooldown | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} reason=no_alternate_channel_for_model",
+        ctx.upstream.channel_name,
+        ctx.upstream.channel_id,
+        ctx.upstream.channel_endpoint_id,
+        channel_key_id,
+        optional_id(ctx.upstream.credential_id),
+        ctx.upstream.provider,
+        ctx.protocol.as_str(),
+        ctx.model
+    )
+}
+
+fn optional_id(id: Option<i64>) -> String {
+    id.map(|id| id.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 pub(in crate::relay) async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {

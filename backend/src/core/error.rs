@@ -32,7 +32,7 @@ impl UpstreamErrorKind {
         }
     }
 
-    fn user_message(self) -> &'static str {
+    pub(crate) fn user_message(self) -> &'static str {
         match self {
             Self::Timeout => {
                 "The upstream provider did not respond in time. Please retry later or switch to another channel."
@@ -181,8 +181,15 @@ impl IntoResponse for AppError {
             | AppError::Redis(_)
             | AppError::Anyhow(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
+        let code = self.code();
+        let message = self.user_message(status);
         if status.is_server_error() {
-            tracing::error!(error = %self, error_debug = ?self, "request failed");
+            tracing::error!(
+                code,
+                status = status.as_u16(),
+                error = %self,
+                "request failed"
+            );
         } else if matches!(
             self,
             AppError::BadRequest(_)
@@ -190,10 +197,13 @@ impl IntoResponse for AppError {
                 | AppError::PayloadTooLarge(_)
                 | AppError::RateLimited(_)
         ) {
-            tracing::warn!(error = %self, "request rejected");
+            tracing::warn!(
+                code,
+                status = status.as_u16(),
+                error = %self,
+                "request rejected"
+            );
         }
-        let code = self.code();
-        let message = self.user_message(status);
         let mut response = (
             status,
             Json(json!({

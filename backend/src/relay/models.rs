@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::{auth::UserAuth, error::AppResult, AppState};
+use crate::{auth::UserAuth, error::AppError, error::AppResult, AppState};
 
 use super::selector::UpstreamProtocol;
 
@@ -31,7 +31,7 @@ pub(super) struct OpenAiModelList {
 }
 
 #[derive(Debug, Serialize)]
-struct OpenAiModel {
+pub(super) struct OpenAiModel {
     id: String,
     object: &'static str,
     created: i64,
@@ -62,16 +62,22 @@ pub(super) async fn list_openai_models(
     let models = available_openai_models(&state, &auth).await?;
     Ok(Json(OpenAiModelList {
         object: "list",
-        data: models
-            .into_iter()
-            .map(|model| OpenAiModel {
-                id: model.id,
-                object: "model",
-                created: 0,
-                owned_by: model.owned_by,
-            })
-            .collect(),
+        data: models.into_iter().map(openai_model).collect(),
     }))
+}
+
+pub(super) async fn retrieve_openai_model(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    Path(model_id): Path<String>,
+) -> AppResult<Json<OpenAiModel>> {
+    let models = available_openai_models(&state, &auth).await?;
+    let model = models
+        .into_iter()
+        .find(|model| model.id == model_id)
+        .ok_or(AppError::NotFound)?;
+
+    Ok(Json(openai_model(model)))
 }
 
 async fn available_openai_models(
@@ -86,6 +92,15 @@ async fn available_openai_models(
         }
     }
     Ok(models)
+}
+
+fn openai_model(model: AvailableModel) -> OpenAiModel {
+    OpenAiModel {
+        id: model.id,
+        object: "model",
+        created: 0,
+        owned_by: model.owned_by,
+    }
 }
 
 pub(super) async fn list_anthropic_models(

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use axum::{
     body::Body,
     extract::{OriginalUri, Path, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::Response,
 };
 use bytes::Bytes;
@@ -18,7 +18,7 @@ use crate::{
     AppState,
 };
 
-use crate::relay::{ensure_key_backed_async_upstream, response_from_bytes};
+use crate::relay::{ensure_key_backed_async_upstream, raw_upstream_response, response_from_bytes};
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 use crate::{
     provider::newapi,
@@ -49,7 +49,30 @@ pub(crate) async fn openai_chat_completions(
     auth: UserAuth,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    relay_openai(state, auth, body, "/v1/chat/completions").await
+    relay_openai(
+        state,
+        auth,
+        body,
+        "/v1/chat/completions",
+        BodyKind::OpenaiChat,
+    )
+    .await
+}
+
+pub(crate) async fn openai_embeddings(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai(state, auth, body, "/v1/embeddings", BodyKind::OpenaiJson).await
+}
+
+pub(crate) async fn openai_moderations(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai(state, auth, body, "/v1/moderations", BodyKind::OpenaiJson).await
 }
 
 pub(crate) async fn openai_responses(
@@ -57,7 +80,14 @@ pub(crate) async fn openai_responses(
     auth: UserAuth,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    relay_openai(state, auth, body, "/v1/responses").await
+    relay_openai(
+        state,
+        auth,
+        body,
+        "/v1/responses",
+        BodyKind::OpenaiResponses,
+    )
+    .await
 }
 
 pub(crate) async fn openai_image_generations(
@@ -111,6 +141,24 @@ pub(crate) async fn openai_response(
     finish_task_json_response(state, auth, task, response).await
 }
 
+pub(crate) async fn openai_response_input_items(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    Path(response_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+) -> AppResult<Response> {
+    let (task, upstream) = upstream_task::fetch_task_for_auth(
+        &state,
+        &auth,
+        UpstreamTaskType::OpenAiResponse,
+        &response_id,
+    )
+    .await?;
+    let path = response_subresource_path(&task.upstream_task_id, &uri, "input_items");
+    let response = forward_openai_bound(&state, &upstream, Method::GET, &path, None).await?;
+    raw_upstream_response(response).await
+}
+
 pub(crate) async fn cancel_openai_response(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
@@ -133,12 +181,8 @@ async fn relay_openai(
     auth: UserAuth,
     body: Bytes,
     path: &'static str,
+    body_kind: BodyKind,
 ) -> AppResult<Response> {
-    let body_kind = if path == "/v1/responses" {
-        BodyKind::OpenaiResponses
-    } else {
-        BodyKind::OpenaiChat
-    };
     let PreparedRelayBody {
         body,
         meta,
@@ -272,6 +316,18 @@ async fn relay_openai(
             }
             Err(err) => return finish_relay(ctx, Err(err)).await,
         }
+    }
+}
+
+fn response_subresource_path(response_id: &str, uri: &Uri, subresource: &str) -> String {
+    let query = uri
+        .path_and_query()
+        .and_then(|value| value.as_str().split_once('?').map(|(_, query)| query));
+    match query {
+        Some(query) if !query.is_empty() => {
+            format!("/v1/responses/{response_id}/{subresource}?{query}")
+        }
+        _ => format!("/v1/responses/{response_id}/{subresource}"),
     }
 }
 
@@ -1038,6 +1094,20 @@ mod tests {
         assert!(!response_query_streams(
             "/v1/responses/resp_123?stream=false"
         ));
+    }
+
+    #[test]
+    fn response_subresource_path_uses_upstream_id_and_preserves_query() {
+        let uri: Uri = "/v1/responses/resp_client/input_items?limit=20&after=item_1"
+            .parse()
+            .unwrap();
+
+        let path = response_subresource_path("resp_upstream", &uri, "input_items");
+
+        assert_eq!(
+            path,
+            "/v1/responses/resp_upstream/input_items?limit=20&after=item_1"
+        );
     }
 
     #[test]

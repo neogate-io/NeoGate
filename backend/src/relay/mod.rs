@@ -40,7 +40,7 @@ use crate::usage::{KeyFailure, UsageInsert};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
-use models::{list_anthropic_models, list_openai_models};
+use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
 pub(crate) use streaming::{synthetic_body_from_bytes, RelayContext};
 pub(crate) use upstream::upstream_url;
@@ -56,12 +56,19 @@ const UPSTREAM_ERROR_BODY_READ_LIMIT: usize = 64 * 1024;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/models", get(list_openai_models))
+        .route("/v1/models/{model_id}", get(retrieve_openai_model))
         .route(
             "/v1/chat/completions",
             post(openai::openai_chat_completions),
         )
+        .route("/v1/embeddings", post(openai::openai_embeddings))
+        .route("/v1/moderations", post(openai::openai_moderations))
         .route("/v1/responses", post(openai::openai_responses))
         .route("/v1/responses/{response_id}", get(openai::openai_response))
+        .route(
+            "/v1/responses/{response_id}/input_items",
+            get(openai::openai_response_input_items),
+        )
         .route(
             "/v1/responses/{response_id}/cancel",
             post(openai::cancel_openai_response),

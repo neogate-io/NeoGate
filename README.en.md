@@ -175,14 +175,14 @@ pnpm install
 pnpm build
 ```
 
-After the build, serve `frontend/dist` with Nginx or another static web server. The included `deploy/nginx/neogate.conf.example` uses `/usr/share/nginx/html` as the static file root and proxies backend APIs and health-check paths to the local backend at `http://127.0.0.1:8080`. The `/install` script is generated dynamically by the backend from `PUBLIC_BASE_URL`; the frontend build does not need a public backend origin.
+After the build, serve `frontend/dist` with Nginx or another static web server. The included `deploy/nginx/standalone.conf.example` uses `/usr/share/nginx/html` as the static file root and proxies backend APIs and health-check paths to the local backend at `http://127.0.0.1:8080`. The `/install` script is generated dynamically by the backend from `PUBLIC_BASE_URL`; the frontend build does not need a public backend origin.
 
 For source deployments, you can use it like this:
 
 ```bash
 sudo install -d /usr/share/nginx/html
 sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/neogate.conf.example /etc/nginx/conf.d/neogate.conf
+sudo cp deploy/nginx/standalone.conf.example /etc/nginx/conf.d/neogate.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```

@@ -64,7 +64,14 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
     let output_tokens = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
-        .and_then(Value::as_i64)?;
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            usage
+                .get("total_tokens")
+                .and_then(Value::as_i64)
+                .map(|total| total.saturating_sub(input_tokens).max(0))
+        })
+        .unwrap_or(0);
 
     let input_details = usage
         .get("prompt_tokens_details")
@@ -248,6 +255,18 @@ mod tests {
         assert_eq!(usage.output_tokens, 93);
         assert_eq!(usage.cached_input_tokens, Some(96_640));
         assert_eq!(usage.reasoning_output_tokens, Some(11));
+    }
+
+    #[test]
+    fn parses_openai_embedding_prompt_only_usage() {
+        let usage = parse_usage_from_bytes(
+            br#"{"object":"list","data":[],"usage":{"prompt_tokens":8,"total_tokens":8}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 8);
+        assert_eq!(usage.output_tokens, 0);
     }
 
     #[test]

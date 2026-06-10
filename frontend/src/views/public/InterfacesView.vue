@@ -26,6 +26,10 @@ async function copyDocText(text: string) {
   ElMessage.success(t('apiKeyCopied'))
 }
 
+function isSupportedStatus(status: string) {
+  return status.startsWith('已支持') || status.startsWith('Supported')
+}
+
 const openAiQuickStart = computed(
   () => `curl ${openAiBaseUrl.value}/chat/completions \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -371,7 +375,7 @@ const content = computed(() => {
       ],
       openAiEndpoints: [
         ['Models', 'GET', '/v1/models', '-', '已支持'],
-        ['Models', 'GET', '/v1/models/{model}', 'model', '开发中'],
+        ['Models', 'GET', '/v1/models/{model}', 'model', '已支持'],
         ['Models', 'DELETE', '/v1/models/{model}', 'model', '开发中'],
         ['Chat Completions', 'POST', '/v1/chat/completions', 'model, messages, stream', '已支持'],
         [
@@ -408,30 +412,36 @@ const content = computed(() => {
           'GET',
           '/v1/responses/{response_id}',
           'response_id, stream, starting_after',
-          '已支持'
+          '已支持（后台任务）'
         ],
         ['Responses', 'DELETE', '/v1/responses/{response_id}', 'response_id', '开发中'],
-        ['Responses', 'POST', '/v1/responses/{response_id}/cancel', 'response_id', '已支持'],
+        [
+          'Responses',
+          'POST',
+          '/v1/responses/{response_id}/cancel',
+          'response_id',
+          '已支持（后台任务）'
+        ],
         [
           'Responses',
           'GET',
           '/v1/responses/{response_id}/input_items',
           'response_id, limit, after',
-          '开发中'
+          '已支持（后台任务）'
         ],
         [
           'Images',
           'POST',
           '/v1/images/generations',
           'model, prompt, size, quality, n, stream, partial_images',
-          '已支持'
+          '已支持（含流式）'
         ],
         [
           'Images',
           'POST',
           '/v1/images/edits',
           'model, image, prompt, mask, size, n, stream, partial_images',
-          '已支持'
+          '已支持（含流式）'
         ],
         ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', '已支持'],
         [
@@ -439,7 +449,7 @@ const content = computed(() => {
           'POST',
           '/v1/embeddings',
           'model, input, dimensions, encoding_format',
-          '开发中'
+          '已支持'
         ],
         ['Audio', 'POST', '/v1/audio/speech', 'model, input, voice, response_format', '开发中'],
         [
@@ -450,7 +460,7 @@ const content = computed(() => {
           '开发中'
         ],
         ['Audio', 'POST', '/v1/audio/translations', 'model, file, response_format', '开发中'],
-        ['Moderations', 'POST', '/v1/moderations', 'model, input', '开发中'],
+        ['Moderations', 'POST', '/v1/moderations', 'model, input', '已支持'],
         ['Files', 'POST', '/v1/files', 'file, purpose', '开发中'],
         ['Files', 'GET', '/v1/files', 'purpose, limit, after', '开发中'],
         ['Files', 'GET', '/v1/files/{file_id}', 'file_id', '开发中'],
@@ -819,7 +829,7 @@ const content = computed(() => {
     ],
     openAiEndpoints: [
       ['Models', 'GET', '/v1/models', '-', 'Supported'],
-      ['Models', 'GET', '/v1/models/{model}', 'model', 'In development'],
+      ['Models', 'GET', '/v1/models/{model}', 'model', 'Supported'],
       ['Models', 'DELETE', '/v1/models/{model}', 'model', 'In development'],
       ['Chat Completions', 'POST', '/v1/chat/completions', 'model, messages, stream', 'Supported'],
       [
@@ -862,30 +872,36 @@ const content = computed(() => {
         'GET',
         '/v1/responses/{response_id}',
         'response_id, stream, starting_after',
-        'Supported'
+        'Supported (background tasks)'
       ],
       ['Responses', 'DELETE', '/v1/responses/{response_id}', 'response_id', 'In development'],
-      ['Responses', 'POST', '/v1/responses/{response_id}/cancel', 'response_id', 'Supported'],
+      [
+        'Responses',
+        'POST',
+        '/v1/responses/{response_id}/cancel',
+        'response_id',
+        'Supported (background tasks)'
+      ],
       [
         'Responses',
         'GET',
         '/v1/responses/{response_id}/input_items',
         'response_id, limit, after',
-        'In development'
+        'Supported (background tasks)'
       ],
       [
         'Images',
         'POST',
         '/v1/images/generations',
         'model, prompt, size, quality, n, stream, partial_images',
-        'Supported'
+        'Supported (streaming)'
       ],
       [
         'Images',
         'POST',
         '/v1/images/edits',
         'model, image, prompt, mask, size, n, stream, partial_images',
-        'Supported'
+        'Supported (streaming)'
       ],
       ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', 'Supported'],
       [
@@ -893,7 +909,7 @@ const content = computed(() => {
         'POST',
         '/v1/embeddings',
         'model, input, dimensions, encoding_format',
-        'In development'
+        'Supported'
       ],
       [
         'Audio',
@@ -910,7 +926,7 @@ const content = computed(() => {
         'In development'
       ],
       ['Audio', 'POST', '/v1/audio/translations', 'model, file, response_format', 'In development'],
-      ['Moderations', 'POST', '/v1/moderations', 'model, input', 'In development'],
+      ['Moderations', 'POST', '/v1/moderations', 'model, input', 'Supported'],
       ['Files', 'POST', '/v1/files', 'file, purpose', 'In development'],
       ['Files', 'GET', '/v1/files', 'purpose, limit, after', 'In development'],
       ['Files', 'GET', '/v1/files/{file_id}', 'file_id', 'In development'],
@@ -1385,10 +1401,7 @@ const content = computed(() => {
                     </td>
                     <td>{{ params }}</td>
                     <td>
-                      <span
-                        v-if="status === '已支持' || status === 'Supported'"
-                        class="interface-status"
-                      >
+                      <span v-if="isSupportedStatus(status)" class="interface-status">
                         {{ status }}
                       </span>
                     </td>
@@ -1771,10 +1784,7 @@ const content = computed(() => {
                     </td>
                     <td>{{ params }}</td>
                     <td>
-                      <span
-                        v-if="status === '已支持' || status === 'Supported'"
-                        class="interface-status"
-                      >
+                      <span v-if="isSupportedStatus(status)" class="interface-status">
                         {{ status }}
                       </span>
                     </td>

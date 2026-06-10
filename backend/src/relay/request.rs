@@ -9,6 +9,7 @@ use crate::error::{AppError, AppResult};
 #[derive(Clone, Copy)]
 pub(crate) enum BodyKind {
     OpenaiChat,
+    OpenaiJson,
     OpenaiResponses,
     Anthropic,
 }
@@ -53,13 +54,16 @@ pub(crate) fn prepare_relay_body(
     let probe: RequestProbe<'_> = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let meta = request_meta_from_probe(&probe)?;
-    let (output_tokens, has_output_limit) = output_limit_from_probe(&probe, kind)
-        .map(|tokens| (tokens, true))
-        .unwrap_or((default_output_tokens, false));
+    let needs_output_limit = needs_output_limit(kind);
+    let (output_tokens, has_output_limit) = match output_limit_from_probe(&probe, kind) {
+        Some(tokens) => (tokens, true),
+        None if needs_output_limit => (default_output_tokens, false),
+        None => (0, true),
+    };
     let needs_stream_usage = meta.stream
         && matches!(kind, BodyKind::OpenaiChat | BodyKind::OpenaiResponses)
         && !openai_stream_usage_included(&probe);
-    let changed = !has_output_limit || needs_stream_usage;
+    let changed = (needs_output_limit && !has_output_limit) || needs_stream_usage;
     if !changed {
         return Ok(PreparedRelayBody {
             body,
@@ -70,7 +74,7 @@ pub(crate) fn prepare_relay_body(
 
     let mut value: Value = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
-    if !has_output_limit {
+    if needs_output_limit && !has_output_limit {
         ensure_output_limit(&mut value, kind, default_output_tokens)?;
     }
     if needs_stream_usage {
@@ -103,10 +107,15 @@ fn request_meta_from_probe(probe: &RequestProbe<'_>) -> AppResult<RelayRequestMe
 fn output_limit_from_probe(probe: &RequestProbe<'_>, kind: BodyKind) -> Option<i64> {
     let tokens = match kind {
         BodyKind::OpenaiChat => probe.max_completion_tokens.or(probe.max_tokens),
+        BodyKind::OpenaiJson => None,
         BodyKind::OpenaiResponses => probe.max_output_tokens,
         BodyKind::Anthropic => probe.max_tokens,
     }?;
     (tokens > 0).then_some(tokens)
+}
+
+fn needs_output_limit(kind: BodyKind) -> bool {
+    !matches!(kind, BodyKind::OpenaiJson)
 }
 
 fn openai_stream_usage_included(probe: &RequestProbe<'_>) -> bool {
@@ -127,6 +136,7 @@ fn ensure_output_limit(
         .ok_or_else(|| AppError::BadRequest("request body must be a json object".to_string()))?;
     let keys: &[&str] = match kind {
         BodyKind::OpenaiChat => &["max_completion_tokens", "max_tokens"],
+        BodyKind::OpenaiJson => &[],
         BodyKind::OpenaiResponses => &["max_output_tokens"],
         BodyKind::Anthropic => &["max_tokens"],
     };
@@ -203,5 +213,18 @@ mod tests {
 
         assert_eq!(value["stream_options"]["include_usage"], true);
         assert!(prepared.meta.stream);
+    }
+
+    #[test]
+    fn keeps_openai_json_body_without_output_limit_rewrite() {
+        let body = Bytes::from_static(
+            br#"{"model":"text-embedding-3-small","input":"hello","encoding_format":"float"}"#,
+        );
+
+        let prepared = prepare_relay_body(body.clone(), BodyKind::OpenaiJson, 4096).unwrap();
+
+        assert_eq!(prepared.body, body);
+        assert_eq!(prepared.meta.model, "text-embedding-3-small");
+        assert_eq!(prepared.output_tokens, 0);
     }
 }

@@ -194,14 +194,14 @@ pnpm install
 pnpm build
 ```
 
-构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/neogate.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。
+构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/standalone.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。
 
 源码部署时可以按下面方式使用：
 
 ```bash
 sudo install -d /usr/share/nginx/html
 sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/neogate.conf.example /etc/nginx/conf.d/neogate.conf
+sudo cp deploy/nginx/standalone.conf.example /etc/nginx/conf.d/neogate.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```

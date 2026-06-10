@@ -12,7 +12,7 @@ RUN pnpm build
 
 FROM nginx:1.27-alpine AS runtime
 
-COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY deploy/nginx/compose.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 ENV API_UPSTREAM=http://backend:8080

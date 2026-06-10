@@ -43,15 +43,20 @@ pub(super) async fn forward_openai_with_content_type(
     body: Bytes,
     path: &str,
     content_type: HeaderValue,
+    accept_event_stream: bool,
 ) -> AppResult<reqwest::Response> {
     let url = upstream_url(&upstream.base_url, path);
     send_upstream_request(state, upstream, UpstreamProtocol::Openai, path, || {
-        state
+        let mut request = state
             .http
             .post(url.clone())
             .bearer_auth(&upstream.secret)
             .header("content-type", content_type.clone())
-            .body(body.clone())
+            .body(body.clone());
+        if accept_event_stream {
+            request = request.header("accept", "text/event-stream");
+        }
+        request
     })
     .await
 }
@@ -323,7 +328,7 @@ where
                             path,
                             kind,
                             attempt,
-                            err.to_string()
+                            format!("{err:?}")
                         )
                     );
                     tokio::time::sleep(UPSTREAM_RETRY_BACKOFF).await;
@@ -353,7 +358,7 @@ pub(super) fn relay_upstream_error(ctx: &RelayContext, err: AppError) -> AppErro
         AppError::Reqwest(err) => AppError::UpstreamRequest(UpstreamRequestError::new(
             classify_reqwest_error(&err),
             ctx.upstream.provider.clone(),
-            err.to_string(),
+            format!("{err:?}"),
         )),
         err => err,
     }

@@ -3,7 +3,6 @@ import http.client
 import json
 import mimetypes
 import os
-import tempfile
 import time
 import unittest
 import uuid
@@ -13,20 +12,15 @@ from urllib.request import Request, urlopen
 
 
 ENV_FILE = Path(__file__).parent / "../.env"
+MODEL = "gpt-image-2"
+RESPONSE_MODEL = "gpt-5.5"
 DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1"
-DEFAULT_IMAGE_MODEL = "gpt-image-2"
-DEFAULT_RESPONSE_MODEL = "gpt-5.5"
-DEFAULT_SIZE = "1024x1024"
+DEFAULT_IMAGE_SIZE = "1536x1024"
 REQUEST_TIMEOUT_SECONDS = 600
 RESPONSE_POLL_TIMEOUT_SECONDS = 900
 RESPONSE_POLL_INTERVAL_SECONDS = 5
-DEFAULT_OUTPUT_DIR = Path(__file__).parent / "output"
-
-# 1x1 transparent PNG.
-PNG_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAF"
-    "gwJ/l1JrNwAAAABJRU5ErkJggg=="
-)
+OUTPUT_DIR = Path(__file__).parent / "output"
+TEST_IMAGE_PATH = Path(__file__).parent / "test.png"
 
 
 def load_env_file(path):
@@ -52,22 +46,16 @@ def load_env_file(path):
 ENV = load_env_file(ENV_FILE)
 
 
-def config(name, default=None):
-    value = os.environ.get(name)
-    if value is not None and value.strip():
-        return value.strip()
-    value = ENV.get(name)
-    if value is not None and value.strip():
-        return value.strip()
-    return default
+def env_value(name):
+    return (os.environ.get(name) or ENV.get(name) or "").strip()
 
 
 def normalized_base_url():
-    explicit = config("NEOGATE_BASE_URL")
+    explicit = env_value("NEOGATE_BASE_URL")
     if explicit:
         return explicit.rstrip("/")
 
-    public_base_url = config("PUBLIC_BASE_URL")
+    public_base_url = env_value("PUBLIC_BASE_URL")
     if public_base_url:
         return f"{public_base_url.rstrip('/')}/v1"
 
@@ -75,11 +63,8 @@ def normalized_base_url():
 
 
 BASE_URL = normalized_base_url()
-API_KEY = config("NEOGATE_API_KEY")
-IMAGE_MODEL = config("NEOGATE_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
-VARIATION_MODEL = config("NEOGATE_VARIATION_MODEL", IMAGE_MODEL)
-RESPONSE_MODEL = config("NEOGATE_RESPONSE_MODEL", DEFAULT_RESPONSE_MODEL)
-OUTPUT_DIR = Path(config("NEOGATE_IMAGE_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR)))
+API_KEY = env_value("NEOGATE_API_KEY")
+IMAGE_SIZE = env_value("NEOGATE_IMAGE_SIZE") or DEFAULT_IMAGE_SIZE
 
 
 def require_api_key():
@@ -266,15 +251,10 @@ def image_bytes_from_payload(payload):
     return image_bytes, extension
 
 
-def assert_image_payload(payload):
-    image_bytes_from_payload(payload)
-
-
 def save_image_payload(test_name, payload):
     image_bytes, extension = image_bytes_from_payload(payload)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    file_name = f"{output_name(test_name)}_{uuid.uuid4().hex[:6]}{extension}"
-    path = OUTPUT_DIR / file_name
+    path = unique_output_path(output_name(test_name), extension)
     path.write_bytes(image_bytes)
     print(f"saved image: {path}")
     return path
@@ -282,14 +262,31 @@ def save_image_payload(test_name, payload):
 
 def save_image_payloads(test_name, payloads):
     saved = []
-    for index, payload in enumerate(payloads, start=1):
-        saved.append(save_image_payload(f"{test_name}-{index}", payload))
+    for payload in payloads:
+        saved.append(save_image_payload(test_name, payload))
     return saved
 
 
 def output_name(test_name):
     name = test_name.removeprefix("test_").replace("-", "_")
     return "_".join(part for part in name.split("_") if part)
+
+
+def timestamp_suffix():
+    return time.strftime("%H%M%S")
+
+
+def unique_output_path(prefix, extension):
+    suffix = timestamp_suffix()
+    path = OUTPUT_DIR / f"{prefix}_{suffix}{extension}"
+    if not path.exists():
+        return path
+    index = 2
+    while True:
+        path = OUTPUT_DIR / f"{prefix}_{suffix}_{index}{extension}"
+        if not path.exists():
+            return path
+        index += 1
 
 
 def image_extension(content_type):
@@ -339,10 +336,17 @@ def collect_image_payloads(value):
     return payloads
 
 
-def write_test_png(directory):
-    path = Path(directory) / "input.png"
-    path.write_bytes(base64.b64decode(PNG_BASE64))
-    return path
+def test_png_path():
+    if not TEST_IMAGE_PATH.exists():
+        raise AssertionError(f"test image is missing: {TEST_IMAGE_PATH}")
+    return TEST_IMAGE_PATH
+
+
+def test_png_data_url():
+    if not TEST_IMAGE_PATH.exists():
+        raise AssertionError(f"test image is missing: {TEST_IMAGE_PATH}")
+    encoded = base64.b64encode(TEST_IMAGE_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def client():
@@ -354,9 +358,9 @@ def _test_images_generation_json():
     status, _headers, body = client().post_json(
         "/images/generations",
         {
-            "model": IMAGE_MODEL,
+            "model": MODEL,
             "prompt": "A compact glass teapot on a walnut table",
-            "size": DEFAULT_SIZE,
+            "size": IMAGE_SIZE,
         },
     )
     assert_success(status, body)
@@ -365,17 +369,15 @@ def _test_images_generation_json():
 
 
 def _test_images_edit_multipart():
-    with tempfile.TemporaryDirectory() as directory:
-        image_path = write_test_png(directory)
-        status, _headers, body = client().post_multipart(
-            "/images/edits",
-            {
-                "model": IMAGE_MODEL,
-                "prompt": "Add soft morning light through the window",
-                "size": DEFAULT_SIZE,
-            },
-            {"image": image_path},
-        )
+    status, _headers, body = client().post_multipart(
+        "/images/edits",
+        {
+            "model": MODEL,
+            "prompt": "Add soft morning light through the window",
+            "size": IMAGE_SIZE,
+        },
+        {"image": test_png_path()},
+    )
 
     assert_success(status, body)
     value = parse_json_body(body)
@@ -386,9 +388,9 @@ def _test_images_generation_stream():
     conn, response = client().stream_json(
         "/images/generations",
         {
-            "model": IMAGE_MODEL,
+            "model": MODEL,
             "prompt": "A compact glass teapot on a walnut table",
-            "size": DEFAULT_SIZE,
+            "size": IMAGE_SIZE,
             "stream": True,
             "partial_images": 2,
         },
@@ -412,21 +414,55 @@ def _test_images_generation_stream():
         raise AssertionError(
             f"stream response did not include partial/completed/error events: {events[:5]}"
         )
-    for index, payload in enumerate(collect_image_payloads(events), start=1):
-        save_image_payload(f"test_images_generation_stream-{index}", payload)
+    for payload in collect_image_payloads(events):
+        save_image_payload("test_images_generation_stream", payload)
+
+
+def _test_images_edit_json_stream():
+    conn, response = client().stream_json(
+        "/images/edits",
+        {
+            "model": MODEL,
+            "prompt": "Add soft morning light through the window.",
+            "images": [{"image_url": test_png_data_url()}],
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "stream": True,
+            "partial_images": 2,
+        },
+    )
+    try:
+        body = response.read()
+    finally:
+        conn.close()
+
+    assert_success(response.status, body)
+    content_type = response.getheader("content-type", "")
+    if "text/event-stream" in content_type:
+        events = parse_sse_events(body)
+        if not events:
+            raise AssertionError("stream response did not contain SSE events")
+        payloads = collect_image_payloads(events)
+        if not payloads:
+            raise AssertionError(f"stream response did not include image payloads: {events[:5]}")
+        for payload in payloads:
+            save_image_payload("test_images_edit_json_stream", payload)
+        return
+
+    value = parse_json_body(body)
+    save_image_payloads("test_images_edit_json_stream", image_payloads_from_images_response(value))
 
 
 def _test_images_variation():
-    with tempfile.TemporaryDirectory() as directory:
-        image_path = write_test_png(directory)
-        status, _headers, body = client().post_multipart(
-            "/images/variations",
-            {
-                "model": VARIATION_MODEL,
-                "size": DEFAULT_SIZE,
-            },
-            {"image": image_path},
-        )
+    status, _headers, body = client().post_multipart(
+        "/images/variations",
+        {
+            "model": MODEL,
+            "size": IMAGE_SIZE,
+        },
+        {"image": test_png_path()},
+    )
 
     assert_success(status, body)
     value = parse_json_body(body)
@@ -484,6 +520,10 @@ def test_images_generation_stream():
     return make_test_case(_test_images_generation_stream)
 
 
+def test_images_edit_json_stream():
+    return make_test_case(_test_images_edit_json_stream)
+
+
 def test_images_variation():
     return make_test_case(_test_images_variation)
 
@@ -499,6 +539,7 @@ def load_tests(loader, tests, pattern):
             test_images_generation_json(),
             test_images_edit_multipart(),
             test_images_generation_stream(),
+            test_images_edit_json_stream(),
             test_images_variation(),
             test_responses_image_generation_background(),
         ]

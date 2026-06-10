@@ -12,14 +12,15 @@ Required:
 NEOGATE_API_KEY=your_neogate_api_key
 ```
 
-Useful defaults:
+Optional:
 
 ```bash
 NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
-NEOGATE_IMAGE_MODEL=gpt-image-2
-NEOGATE_RESPONSE_MODEL=gpt-5.5
-NEOGATE_IMAGE_OUTPUT_DIR=output
+NEOGATE_IMAGE_SIZE=1536x1024
 ```
+
+The image model is fixed to `gpt-image-2`, and generated images are saved under
+`output/`.
 
 Run all image smoke tests:
 
@@ -33,9 +34,9 @@ Run one test:
 python -m unittest test_openai_image.test_images_generation_json
 python -m unittest test_openai_image.test_images_edit_multipart
 python -m unittest test_openai_image.test_images_generation_stream
+python -m unittest test_openai_image.test_images_edit_json_stream
 python -m unittest test_openai_image.test_images_variation
 python -m unittest test_openai_image.test_responses_image_generation_background
 ```
 
-Generated images are saved under `output/`. The directory is ignored by git
-except for its `.gitignore` file.
+The `output/` directory is ignored by git except for its `.gitignore` file.

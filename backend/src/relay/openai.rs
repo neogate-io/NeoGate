@@ -325,8 +325,15 @@ async fn relay_openai_image(
         user_key_model_credit_account,
         started,
     };
-    let response =
-        forward_openai_with_content_type(&state, &upstream, body, path, meta.content_type).await;
+    let response = forward_openai_with_content_type(
+        &state,
+        &upstream,
+        body,
+        path,
+        meta.content_type,
+        meta.stream,
+    )
+    .await;
     finish_relay(ctx, response).await
 }
 

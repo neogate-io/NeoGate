@@ -8,3 +8,5 @@ frontend/.env.local
 frontend/.env.*.local
 .sqlx/
 scripts/
+output/
+__pycache__/

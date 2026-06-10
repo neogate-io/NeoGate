@@ -62,7 +62,7 @@ Running from source is split into development deployment and production deployme
 Prepare these dependencies on the server first:
 
 - PostgreSQL 16 or a compatible version
-- Rust 1.85 or newer
+- Rust 1.94 or newer
 - Node.js 20 or a compatible version
 - pnpm
 

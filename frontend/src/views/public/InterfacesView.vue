@@ -194,10 +194,26 @@ const openAiImageVariation = computed(
   -F "size=1024x1024"`
 )
 
+const openAiEmbeddings = computed(
+  () => `curl ${openAiBaseUrl.value}/embeddings \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "text-embedding-3-small",
+    "input": [
+      "NeoGate routes OpenAI-compatible API requests.",
+      "Embeddings can be used for search and retrieval."
+    ],
+    "encoding_format": "float"
+  }'`
+)
+
 const openAiModels = computed(
   () => `curl ${openAiBaseUrl.value}/models \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY"`
 )
+
+const openAiPythonInstall = 'pip install openai'
 
 const openAiPython = computed(
   () => `from openai import OpenAI
@@ -216,6 +232,8 @@ response = client.chat.completions.create(
 
 print(response.choices[0].message.content)`
 )
+
+const openAiNodeInstall = 'npm install openai'
 
 const openAiNode = computed(
   () => `import OpenAI from "openai";
@@ -333,8 +351,9 @@ const content = computed(() => {
         ['openai-text-async', '文本生成（异步）', '2.3 文本生成（异步）', 'sub'],
         ['openai-images', '图片生成', '2.4 图片生成', 'sub'],
         ['openai-images-async', '图片生成（异步）', '2.5 图片生成（异步）', 'sub'],
-        ['openai-models', '模型列表', '2.6 模型列表', 'sub'],
-        ['openai-sdk', 'SDK 示例', '2.7 SDK 示例', 'sub'],
+        ['openai-embeddings', '向量嵌入', '2.6 向量嵌入', 'sub'],
+        ['openai-models', '模型列表', '2.7 模型列表', 'sub'],
+        ['openai-sdk', 'SDK 示例', '2.8 SDK 示例', 'sub'],
         ['anthropic', 'Anthropic 兼容接口', '3. Anthropic 兼容接口'],
         ['anthropic-quick-start', '快速开始', '3.1 快速开始', 'sub'],
         ['anthropic-text', '文本生成', '3.2 文本生成', 'sub'],
@@ -650,6 +669,9 @@ const content = computed(() => {
       imageAsyncTitle: '图片生成（异步）',
       openAiImageAsync:
         '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
+      embeddingTitle: '向量嵌入',
+      openAiEmbeddings:
+        'Embeddings 接口按 OpenAI 官方 JSON 请求体转发，适合 RAG、语义搜索、去重和召回场景。请求中的 model 会走 NeoGate 的模型权限、渠道选择、计费和用量记录。',
       modelsTitle: '模型列表',
       sdkTitle: 'SDK 示例',
       anthropicIntro:
@@ -775,8 +797,9 @@ const content = computed(() => {
       ['openai-text-async', 'Text generation async', '2.3 Text generation async', 'sub'],
       ['openai-images', 'Images', '2.4 Images', 'sub'],
       ['openai-images-async', 'Images async', '2.5 Images async', 'sub'],
-      ['openai-models', 'Models', '2.6 Models', 'sub'],
-      ['openai-sdk', 'SDK examples', '2.7 SDK examples', 'sub'],
+      ['openai-embeddings', 'Embeddings', '2.6 Embeddings', 'sub'],
+      ['openai-models', 'Models', '2.7 Models', 'sub'],
+      ['openai-sdk', 'SDK examples', '2.8 SDK examples', 'sub'],
       ['anthropic', 'Anthropic Compatible', '3. Anthropic-compatible APIs'],
       ['anthropic-quick-start', 'Quick start', '3.1 Quick start', 'sub'],
       ['anthropic-text', 'Text generation', '3.2 Text generation', 'sub'],
@@ -1140,6 +1163,9 @@ const content = computed(() => {
     imageAsyncTitle: 'Image generation async',
     openAiImageAsync:
       'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
+    embeddingTitle: 'Embeddings',
+    openAiEmbeddings:
+      'Embeddings are forwarded with the official OpenAI JSON request body and are useful for RAG, semantic search, deduplication, and retrieval. The requested model still uses NeoGate model permissions, routing, billing, and usage records.',
     modelsTitle: 'Models',
     sdkTitle: 'SDK examples',
     anthropicIntro:
@@ -1696,9 +1722,30 @@ const content = computed(() => {
                 </article>
               </section>
 
-              <section id="openai-models" class="docs-subsection">
+              <section id="openai-embeddings" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
                   <h2>{{ content.menu[7][2] }}</h2>
+                  <p>{{ content.openAiEmbeddings }}</p>
+                </div>
+                <article class="docs-step-card">
+                  <h3>Embeddings</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiEmbeddings)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiEmbeddings }}</code></pre>
+                  </div>
+                </article>
+              </section>
+
+              <section id="openai-models" class="docs-subsection">
+                <div class="docs-section-heading docs-subsection-heading">
+                  <h2>{{ content.menu[8][2] }}</h2>
                 </div>
                 <article class="docs-step-card">
                   <h3>Models</h3>
@@ -1718,35 +1765,63 @@ const content = computed(() => {
 
               <section id="openai-sdk" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[8][2] }}</h2>
+                  <h2>{{ content.menu[9][2] }}</h2>
                 </div>
                 <article class="docs-step-card">
-                  <h3>Python</h3>
-                  <div class="docs-copy-block">
-                    <el-button
-                      :icon="DocumentCopy"
-                      text
-                      :aria-label="t('copy')"
-                      @click="copyDocText(openAiPython)"
-                    />
-                    <pre
-                      class="docs-code-sample docs-inner-code"
-                    ><code>{{ openAiPython }}</code></pre>
-                  </div>
-                </article>
-                <article class="docs-step-card">
-                  <h3>Node.js</h3>
-                  <div class="docs-copy-block">
-                    <el-button
-                      :icon="DocumentCopy"
-                      text
-                      :aria-label="t('copy')"
-                      @click="copyDocText(openAiNode)"
-                    />
-                    <pre
-                      class="docs-code-sample docs-inner-code"
-                    ><code>{{ openAiNode }}</code></pre>
-                  </div>
+                  <el-tabs>
+                    <el-tab-pane label="Python">
+                      <div class="docs-sdk-tab-panel">
+                        <div class="docs-copy-block">
+                          <el-button
+                            :icon="DocumentCopy"
+                            text
+                            :aria-label="t('copy')"
+                            @click="copyDocText(openAiPythonInstall)"
+                          />
+                          <pre
+                            class="docs-code-sample docs-inner-code"
+                          ><code>{{ openAiPythonInstall }}</code></pre>
+                        </div>
+                        <div class="docs-copy-block">
+                          <el-button
+                            :icon="DocumentCopy"
+                            text
+                            :aria-label="t('copy')"
+                            @click="copyDocText(openAiPython)"
+                          />
+                          <pre
+                            class="docs-code-sample docs-inner-code"
+                          ><code>{{ openAiPython }}</code></pre>
+                        </div>
+                      </div>
+                    </el-tab-pane>
+                    <el-tab-pane label="Node.js">
+                      <div class="docs-sdk-tab-panel">
+                        <div class="docs-copy-block">
+                          <el-button
+                            :icon="DocumentCopy"
+                            text
+                            :aria-label="t('copy')"
+                            @click="copyDocText(openAiNodeInstall)"
+                          />
+                          <pre
+                            class="docs-code-sample docs-inner-code"
+                          ><code>{{ openAiNodeInstall }}</code></pre>
+                        </div>
+                        <div class="docs-copy-block">
+                          <el-button
+                            :icon="DocumentCopy"
+                            text
+                            :aria-label="t('copy')"
+                            @click="copyDocText(openAiNode)"
+                          />
+                          <pre
+                            class="docs-code-sample docs-inner-code"
+                          ><code>{{ openAiNode }}</code></pre>
+                        </div>
+                      </div>
+                    </el-tab-pane>
+                  </el-tabs>
                 </article>
               </section>
             </div>
@@ -1754,7 +1829,7 @@ const content = computed(() => {
 
           <section id="anthropic" class="docs-section">
             <div class="docs-section-heading">
-              <h2>3. {{ content.menu[9][1] }}</h2>
+              <h2>3. {{ content.menu[10][1] }}</h2>
               <p>{{ content.anthropicIntro }}</p>
             </div>
             <div class="interface-meta-grid">
@@ -1795,7 +1870,7 @@ const content = computed(() => {
             <div class="docs-guide-flow">
               <section id="anthropic-quick-start" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[10][2] }}</h2>
+                  <h2>{{ content.menu[11][2] }}</h2>
                 </div>
                 <article class="docs-step-card">
                   <h3>curl</h3>
@@ -1815,14 +1890,14 @@ const content = computed(() => {
 
               <section id="anthropic-text" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[11][2] }}</h2>
+                  <h2>{{ content.menu[12][2] }}</h2>
                   <p>{{ content.anthropicText }}</p>
                 </div>
               </section>
 
               <section id="anthropic-stream" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[12][2] }}</h2>
+                  <h2>{{ content.menu[13][2] }}</h2>
                   <p>{{ content.streamText }}</p>
                 </div>
                 <article class="docs-step-card">
@@ -1843,7 +1918,7 @@ const content = computed(() => {
 
               <section id="anthropic-batches" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[13][2] }}</h2>
+                  <h2>{{ content.menu[14][2] }}</h2>
                   <p>{{ content.batchText }}</p>
                 </div>
                 <article class="docs-step-card">
@@ -1892,7 +1967,7 @@ const content = computed(() => {
 
               <section id="anthropic-models" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[14][2] }}</h2>
+                  <h2>{{ content.menu[15][2] }}</h2>
                 </div>
                 <article class="docs-step-card">
                   <h3>Models</h3>
@@ -1914,7 +1989,7 @@ const content = computed(() => {
 
           <section id="errors" class="docs-section">
             <div class="docs-section-heading">
-              <h2>4. {{ content.menu[15][1] }}</h2>
+              <h2>4. {{ content.menu[16][1] }}</h2>
               <p>{{ content.errorIntro }}</p>
             </div>
             <article class="docs-step-card">
@@ -1950,7 +2025,7 @@ const content = computed(() => {
 
           <section id="billing" class="docs-section">
             <div class="docs-section-heading">
-              <h2>5. {{ content.menu[16][1] }}</h2>
+              <h2>5. {{ content.menu[17][1] }}</h2>
               <p>{{ content.billingIntro }}</p>
             </div>
             <div class="docs-check-list">

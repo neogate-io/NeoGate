@@ -20,6 +20,7 @@ import { ElPagination } from 'element-plus/es/components/pagination/index'
 import { ElSegmented } from 'element-plus/es/components/segmented/index'
 import { ElSwitch } from 'element-plus/es/components/switch/index'
 import { ElTable, ElTableColumn } from 'element-plus/es/components/table/index'
+import { ElTabPane, ElTabs } from 'element-plus/es/components/tabs/index'
 import { ElTag } from 'element-plus/es/components/tag/index'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index'
 import 'element-plus/es/components/alert/style/css'
@@ -43,6 +44,7 @@ import 'element-plus/es/components/select/style/css'
 import 'element-plus/es/components/segmented/style/css'
 import 'element-plus/es/components/switch/style/css'
 import 'element-plus/es/components/table/style/css'
+import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/tag/style/css'
 import 'element-plus/es/components/tooltip/style/css'
 import './styles/base.css'
@@ -87,6 +89,8 @@ for (const component of [
   ElSwitch,
   ElTable,
   ElTableColumn,
+  ElTabPane,
+  ElTabs,
   ElTag,
   ElTooltip
 ]) {

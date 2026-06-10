@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.94-bookworm AS builder
 
 WORKDIR /app/backend
 
@@ -15,11 +15,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --system --create-home --home-dir /app neogate
+RUN useradd --system --create-home --home-dir /app neogate \
+    && mkdir -p /app-config \
+    && chown neogate:neogate /app-config
 
 WORKDIR /app
 COPY --from=builder /app/backend/target/release/neogate /usr/local/bin/neogate
 
+VOLUME ["/app-config"]
 USER neogate
 EXPOSE 8080
 

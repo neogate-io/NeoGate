@@ -62,7 +62,7 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --bui
 先在服务器上准备这些依赖：
 
 - PostgreSQL 16 或兼容版本
-- Rust 1.85 或更新版本
+- Rust 1.94 或更新版本
 - Node.js 20 或兼容版本
 - pnpm
 

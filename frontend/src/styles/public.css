@@ -975,6 +975,12 @@
   margin: 0;
 }
 
+.docs-sdk-tab-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
 .docs-guide-flow {
   display: grid;
   gap: 12px;

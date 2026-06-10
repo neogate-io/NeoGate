@@ -29,7 +29,8 @@ use crate::{
         record_upstream_http_failure, release_empty_hold, reserve_credit,
         respond_upstream_http_failure,
         selector::{SelectedUpstream, UpstreamProtocol},
-        task_status_from_value, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
+        synthetic_body_from_bytes, task_status_from_value, BodyKind, PreparedRelayBody, RelayBody,
+        RelayContext,
     },
 };
 
@@ -325,16 +326,137 @@ async fn relay_openai_image(
         user_key_model_credit_account,
         started,
     };
-    let compat = newapi::image_request_compat(&upstream.provider, meta.stream);
     let response = forward_openai_with_content_type(
         &state,
         &upstream,
-        body,
+        body.clone(),
         path,
-        meta.content_type,
-        compat.accept_event_stream,
+        meta.content_type.clone(),
+        meta.stream,
     )
     .await;
+    if newapi::should_retry_image_variation(&upstream.provider, path) {
+        return finish_newapi_image_variation(
+            &state,
+            &upstream,
+            body,
+            meta.content_type,
+            meta.stream,
+            ctx,
+            response,
+        )
+        .await;
+    }
+    if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
+        return finish_newapi_image_stream(ctx, response).await;
+    }
+    finish_relay(ctx, response).await
+}
+
+async fn finish_newapi_image_stream(
+    ctx: RelayContext,
+    response: AppResult<reqwest::Response>,
+) -> AppResult<Response> {
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return handle_upstream_http_error(ctx, status, upstream_response).await;
+    }
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    if newapi::is_event_stream(&content_type) {
+        return finish_relay(ctx, Ok(upstream_response)).await;
+    }
+
+    let body = match upstream_response.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            release_empty_hold(
+                &ctx.state,
+                ctx.hold.clone(),
+                "newapi image stream body read error",
+            )
+            .await;
+            return Err(err.into());
+        }
+    };
+    let sse_body = match newapi::images_json_to_sse(&body) {
+        Ok(body) => body,
+        Err(err) => {
+            release_empty_hold(
+                &ctx.state,
+                ctx.hold.clone(),
+                "newapi image stream json-to-sse error",
+            )
+            .await;
+            return Err(err);
+        }
+    };
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(synthetic_body_from_bytes(ctx, status, sse_body))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+async fn finish_newapi_image_variation(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    body: Bytes,
+    content_type: HeaderValue,
+    stream: bool,
+    ctx: RelayContext,
+    response: AppResult<reqwest::Response>,
+) -> AppResult<Response> {
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if status != StatusCode::BAD_REQUEST {
+        return finish_relay(ctx, Ok(upstream_response)).await;
+    }
+
+    let error_body = read_upstream_error_body(upstream_response).await;
+    if !newapi::should_retry_variation_as_edit(ctx.path, status, &error_body) {
+        let failure = describe_upstream_http_failure(status, &error_body);
+        return respond_upstream_http_failure(ctx, status, failure).await;
+    }
+
+    tracing::warn!(
+        provider = %upstream.provider,
+        channel_id = upstream.channel_id,
+        channel_name = %upstream.channel_name,
+        channel_endpoint_id = upstream.channel_endpoint_id,
+        channel_key_id = ?upstream.channel_key_id,
+        credential_id = ?upstream.credential_id,
+        model = %ctx.model,
+        path = ctx.path,
+        retry_path = "/v1/images/edits",
+        "retrying NewAPI image variation as image edit because upstream dropped multipart model field"
+    );
+
+    let retry = newapi::variation_as_edit_request(&body, &content_type)?;
+    let response = forward_openai_with_content_type(
+        state,
+        upstream,
+        retry.body,
+        retry.path,
+        retry.content_type,
+        stream,
+    )
+    .await;
+    if stream {
+        return finish_newapi_image_stream(ctx, response).await;
+    }
     finish_relay(ctx, response).await
 }
 

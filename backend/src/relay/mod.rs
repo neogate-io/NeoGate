@@ -42,7 +42,7 @@ pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
 use models::{list_anthropic_models, list_openai_models};
 pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
-pub(crate) use streaming::RelayContext;
+pub(crate) use streaming::{synthetic_body_from_bytes, RelayContext};
 pub(crate) use upstream::upstream_url;
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type,

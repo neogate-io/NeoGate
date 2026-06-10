@@ -41,11 +41,38 @@ pub(crate) fn body(
     status: StatusCode,
     upstream_response: reqwest::Response,
 ) -> Body {
+    body_from_stream(
+        ctx,
+        status,
+        upstream_response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|err| err.to_string()))
+            .boxed(),
+    )
+}
+
+pub(crate) fn synthetic_body_from_bytes(
+    ctx: RelayContext,
+    status: StatusCode,
+    body: Bytes,
+) -> Body {
+    body_from_stream(
+        ctx,
+        status,
+        futures_util::stream::once(async move { Ok::<Bytes, String>(body) }).boxed(),
+    )
+}
+
+fn body_from_stream(
+    ctx: RelayContext,
+    status: StatusCode,
+    stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
+) -> Body {
     let streamed = ctx.streamed;
     let relay = StreamingRelay {
         ctx: Some(ctx),
         status,
-        stream: upstream_response.bytes_stream().boxed(),
+        stream,
         usage: ResponseUsageParser::for_response(status, streamed),
         first_response_ms: None,
     };
@@ -65,8 +92,7 @@ pub(crate) fn body(
                     relay.usage.observe(&chunk);
                     Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                 }
-                Some(Err(err)) => {
-                    let summary = err.to_string();
+                Some(Err(summary)) => {
                     relay.finish_stream_error(summary.clone()).await;
                     Some((Err(std::io::Error::other(summary)), None))
                 }
@@ -82,7 +108,7 @@ pub(crate) fn body(
 struct StreamingRelay {
     ctx: Option<RelayContext>,
     status: StatusCode,
-    stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
     usage: ResponseUsageParser,
     first_response_ms: Option<i64>,
 }

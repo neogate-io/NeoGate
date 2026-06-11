@@ -82,7 +82,7 @@ const messages = {
     setupPricesHint: '价格按每 1M Tokens 计，初始化后可在渠道页继续调整。',
     setupSmtpHint: '填写 SMTP 连接、认证和发件人信息；也可以跳过后在后台系统设置中配置。',
     setupPaymentHint: '可选。收费模式下启用充值支付网关。',
-    setupInternalMode: '团队内部模式',
+    setupInternalMode: '内部模式',
     setupInternalModeDescription:
       '默认不需要额度即可调用，适合团队自用；仍会记录用量、Token、费用和延迟。',
     setupPaidMode: '收费服务模式',
@@ -162,7 +162,7 @@ const messages = {
     servicePolicy: '服务策略',
     servicePolicyHint: '服务模式在首次运行时确定；内部模式可调整是否要求额度。',
     serviceMode: '服务模式',
-    internalServiceMode: '团队内部模式',
+    internalServiceMode: '内部模式',
     paidServiceMode: '收费服务模式',
     creditRequired: '调用需要额度',
     creditRequiredEnabledDescription:
@@ -177,7 +177,7 @@ const messages = {
     registrationDisabledDescription:
       '已关闭用户注册，公开首页不会显示邮箱领取 API Key 入口，新邮箱也不能注册。',
     registrationInternalEnabledDescription:
-      '已开放注册。团队内部模式下，新用户注册后需管理员审核通过才能登录和使用。',
+      '已开放注册。内部模式下，新用户注册后需管理员审核通过才能登录和使用。',
     registrationPaidEnabledDescription:
       '已开放注册。收费服务模式下，新用户注册后会自动启用，无需管理员审核。',
     servicePolicySaved: '服务策略已保存。',

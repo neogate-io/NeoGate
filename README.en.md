@@ -4,24 +4,26 @@
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-NeoGate is a lightweight LLM API gateway built with Rust. It is designed for high-performance request forwarding while staying simple to deploy and use, helping teams bring multiple model providers behind one unified entry point for access keys, routing, and usage records.
+NeoGate is a lightweight LLM API gateway built with Rust. It is designed for high-performance request forwarding while staying simple to deploy and use. Built for enterprise private deployment, it helps teams bring multiple model providers behind one unified entry point for access keys, model routing, project usage, and cost attribution.
 
 Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 ## 1. What You Can Do
 
-- Issue independent API keys to teams, customers, or internal apps without exposing upstream provider keys.
+- Deploy a privately controlled enterprise LLM API entry point that centralizes upstream credentials and access policies for multiple model providers.
+- Use projects as business applications, internal projects, or cost units, with unified management for members, API keys, model permissions, budgets, and usage attribution.
+- Issue independent API keys to teams, projects, customers, or internal apps, with permissions, quota, and cost isolation by project and API key.
 - Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight.
-- Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect with minimal changes.
-- Track usage by user and API key for troubleshooting, cost analysis, and future billing.
-- Choose a service mode during first-run setup, using NeoGate either as an internal team gateway or as a paid service with billing and payment support.
-- Cool down failing upstream keys and continue routing through available keys.
+- Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect to the enterprise gateway with minimal changes.
+- Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing.
+- Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support.
+- Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure.
 
 ## 2. Service Modes
 
-NeoGate asks you to choose internal team mode or billing mode during first-run setup. Both modes provide a unified entry point, hide upstream provider keys, route models, and record usage. The main difference is whether users need credit balance and whether payment gateways are enabled.
+NeoGate asks you to choose internal mode or billing mode during first-run setup. Both modes provide a unified entry point, centralized upstream credential management, model routing, and usage records. The main difference is whether users need credit balance and whether payment gateways are enabled.
 
-- Internal team mode: for company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members. By default, users can call without available credit; NeoGate still records usage and cost for analysis and internal management.
+- Internal mode: for company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members. By default, users can call without available credit; NeoGate still records usage and cost for analysis and internal management.
 - Billing mode: for paid access offered to customers, developers, or external users. Users need available credit before calls and can recharge through a payment gateway. Before going live, configure model prices, recharge plans, and the payment gateway.
 
 ## 3. Quick Start

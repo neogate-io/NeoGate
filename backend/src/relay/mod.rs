@@ -240,23 +240,36 @@ pub(crate) async fn finish_relay(
                         HeaderValue::from_static("application/json")
                     }
                 });
+            if !ctx.streamed {
+                let body = match upstream_response.bytes().await {
+                    Ok(body) => body,
+                    Err(err) => return finish_relay_error(ctx, AppError::Reqwest(err)).await,
+                };
+                return Response::builder()
+                    .status(status)
+                    .header("content-type", content_type)
+                    .body(streaming::synthetic_body_from_bytes(ctx, status, body))
+                    .map_err(|err| AppError::BadRequest(err.to_string()));
+            }
             Response::builder()
                 .status(status)
                 .header("content-type", content_type)
                 .body(streaming::body(ctx, status, upstream_response))
                 .map_err(|err| AppError::BadRequest(err.to_string()))
         }
-        Err(err) => {
-            let err = relay_upstream_error(&ctx, err);
-            let summary = err.to_string();
-            log_relay_upstream_failure(&ctx, &err);
-            let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
-            let failure = key_failure_from_context(&ctx, summary).await;
-            release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
-            enqueue_relay_usage(&ctx.state, usage, failure).await;
-            Err(err)
-        }
+        Err(err) => finish_relay_error(ctx, err).await,
     }
+}
+
+async fn finish_relay_error(ctx: RelayContext, err: AppError) -> AppResult<Response> {
+    let err = relay_upstream_error(&ctx, err);
+    let summary = err.to_string();
+    log_relay_upstream_failure(&ctx, &err);
+    let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
+    let failure = key_failure_from_context(&ctx, summary).await;
+    release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
+    enqueue_relay_usage(&ctx.state, usage, failure).await;
+    Err(err)
 }
 
 pub(crate) async fn handle_upstream_http_error(

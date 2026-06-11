@@ -147,7 +147,7 @@ const openAiImageGeneration = computed(
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-image-1",
+    "model": "gpt-image-2",
     "prompt": "A compact glass teapot on a walnut table",
     "size": "1024x1024"
   }'`
@@ -158,7 +158,7 @@ const openAiImageGenerationStream = computed(
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-image-1",
+    "model": "gpt-image-2",
     "prompt": "A compact glass teapot on a walnut table",
     "size": "1024x1024",
     "stream": true,
@@ -169,7 +169,7 @@ const openAiImageGenerationStream = computed(
 const openAiImageEdit = computed(
   () => `curl ${openAiBaseUrl.value}/images/edits \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
-  -F "model=gpt-image-1" \\
+  -F "model=gpt-image-2" \\
   -F "image=@input.png" \\
   -F "prompt=Add a soft morning light through the window" \\
   -F "size=1024x1024"`
@@ -178,7 +178,7 @@ const openAiImageEdit = computed(
 const openAiImageEditStream = computed(
   () => `curl -N ${openAiBaseUrl.value}/images/edits \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
-  -F "model=gpt-image-1" \\
+  -F "model=gpt-image-2" \\
   -F "image=@input.png" \\
   -F "prompt=Add a soft morning light through the window" \\
   -F "size=1024x1024" \\

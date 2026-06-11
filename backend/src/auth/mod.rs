@@ -1,21 +1,14 @@
-use std::{
-    collections::HashMap,
-    net::IpAddr,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::{net::IpAddr, sync::Arc};
 
-use axum::{
-    extract::{FromRequestParts, State},
-    http::{request::Parts, HeaderMap},
-    routing::{get, post},
-    Json, Router,
-};
+use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 
-pub use crate::core::auth::*;
+mod rate_limit;
+mod session;
+
+pub use crate::core::tokens::*;
 use crate::{
     billing::{account, CreditAccountType},
     email::{smtp_config_error, EmailLocale},
@@ -24,246 +17,16 @@ use crate::{
     policy::{registration_policy, ServiceMode},
     project, AppState,
 };
+pub use rate_limit::AuthRateLimiter;
+pub use session::UserSessionAuth;
 
 const PASSWORD_RESET_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const LOGIN_VERIFICATION_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const MIN_USER_PASSWORD_LEN: usize = 8;
-const MAX_ADMIN_LOGIN_FAILURES: i32 = 5;
-const ADMIN_LOGIN_LOCK_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-const LOGIN_CODE_EMAIL_LIMIT: u32 = 5;
-const LOGIN_CODE_IP_LIMIT: u32 = 30;
-const LOGIN_CODE_ATTEMPT_LIMIT: u32 = 10;
-const PASSWORD_RESET_EMAIL_LIMIT: u32 = 3;
-const PASSWORD_RESET_IP_LIMIT: u32 = 20;
-const PASSWORD_RESET_ATTEMPT_LIMIT: u32 = 10;
-const AUTH_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60 * 60);
-const AUTH_RATE_LIMIT_MAX_ENTRIES: usize = 20_000;
-
-#[derive(Clone)]
-pub struct AuthRateLimiter {
-    backend: AuthRateLimitBackend,
-}
-
-#[derive(Clone)]
-enum AuthRateLimitBackend {
-    Local(LocalAuthRateLimiter),
-    Redis(RedisAuthRateLimiter),
-}
-
-#[derive(Clone, Default)]
-struct LocalAuthRateLimiter {
-    buckets: Arc<Mutex<HashMap<String, RateLimitBucket>>>,
-}
-
-#[derive(Clone)]
-struct RedisAuthRateLimiter {
-    manager: redis::aio::ConnectionManager,
-    key_prefix: String,
-}
-
-#[derive(Clone)]
-struct RateLimitBucket {
-    count: u32,
-    reset_at: Instant,
-}
-
-impl AuthRateLimiter {
-    pub fn local() -> Self {
-        Self {
-            backend: AuthRateLimitBackend::Local(LocalAuthRateLimiter::default()),
-        }
-    }
-
-    pub async fn redis(redis_url: &str, key_prefix: String) -> AppResult<Self> {
-        let client = redis::Client::open(redis_url)?;
-        let manager = client.get_connection_manager().await?;
-        Ok(Self {
-            backend: AuthRateLimitBackend::Redis(RedisAuthRateLimiter {
-                manager,
-                key_prefix,
-            }),
-        })
-    }
-
-    async fn check_login_verification_request(
-        &self,
-        email: &str,
-        client_key: &str,
-    ) -> AppResult<()> {
-        self.check(
-            format!("login-code-email:{email}"),
-            LOGIN_CODE_EMAIL_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many login verification code requests",
-        )
-        .await?;
-        self.check(
-            format!("login-code-ip:{client_key}"),
-            LOGIN_CODE_IP_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many login verification code requests",
-        )
-        .await
-    }
-
-    async fn check_login_verification_attempt(&self, email: &str) -> AppResult<()> {
-        self.check(
-            format!("login-code-attempt:{email}"),
-            LOGIN_CODE_ATTEMPT_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many login verification attempts",
-        )
-        .await
-    }
-
-    async fn check_password_reset_request(&self, email: &str, client_key: &str) -> AppResult<()> {
-        self.check(
-            format!("password-reset-email:{email}"),
-            PASSWORD_RESET_EMAIL_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many password reset requests",
-        )
-        .await?;
-        self.check(
-            format!("password-reset-ip:{client_key}"),
-            PASSWORD_RESET_IP_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many password reset requests",
-        )
-        .await
-    }
-
-    async fn check_password_reset_attempt(&self, token: &str, client_key: &str) -> AppResult<()> {
-        self.check(
-            format!("password-reset-attempt-token:{}", hash_key(token)),
-            PASSWORD_RESET_ATTEMPT_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many password reset attempts",
-        )
-        .await?;
-        self.check(
-            format!("password-reset-attempt-ip:{client_key}"),
-            PASSWORD_RESET_IP_LIMIT,
-            AUTH_RATE_LIMIT_WINDOW,
-            "too many password reset attempts",
-        )
-        .await
-    }
-
-    async fn check(
-        &self,
-        key: String,
-        limit: u32,
-        window: Duration,
-        message: &'static str,
-    ) -> AppResult<()> {
-        match &self.backend {
-            AuthRateLimitBackend::Local(local) => local.check(key, limit, window, message),
-            AuthRateLimitBackend::Redis(redis) => redis.check(key, limit, window, message).await,
-        }
-    }
-}
-
-impl Default for AuthRateLimiter {
-    fn default() -> Self {
-        Self::local()
-    }
-}
-
-impl LocalAuthRateLimiter {
-    fn check(
-        &self,
-        key: String,
-        limit: u32,
-        window: Duration,
-        message: &'static str,
-    ) -> AppResult<()> {
-        let now = Instant::now();
-        let mut buckets = self.buckets.lock().expect("auth rate limiter poisoned");
-        if buckets.len() > AUTH_RATE_LIMIT_MAX_ENTRIES {
-            buckets.retain(|_, bucket| bucket.reset_at > now);
-        }
-        let bucket = buckets.entry(key).or_insert_with(|| RateLimitBucket {
-            count: 0,
-            reset_at: now + window,
-        });
-        if bucket.reset_at <= now {
-            bucket.count = 0;
-            bucket.reset_at = now + window;
-        }
-        if bucket.count >= limit {
-            return Err(AppError::RateLimited(message.to_string()));
-        }
-        bucket.count += 1;
-        Ok(())
-    }
-}
-
-impl RedisAuthRateLimiter {
-    async fn check(
-        &self,
-        key: String,
-        limit: u32,
-        window: Duration,
-        message: &'static str,
-    ) -> AppResult<()> {
-        let mut conn = self.manager.clone();
-        let redis_key = format!("{}:auth_rate_limit:{key}", self.key_prefix);
-        let ttl_ms = window.as_millis().clamp(1, i64::MAX as u128) as i64;
-        let count: i64 = redis::Script::new(
-            r#"
-            local count = redis.call('INCR', KEYS[1])
-            if count == 1 then
-                redis.call('PEXPIRE', KEYS[1], ARGV[1])
-            end
-            return count
-            "#,
-        )
-        .key(redis_key)
-        .arg(ttl_ms)
-        .invoke_async(&mut conn)
-        .await?;
-
-        if count > limit as i64 {
-            return Err(AppError::RateLimited(message.to_string()));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UserSessionAuth {
-    pub user_id: DbId,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UserSessionState {
-    user_id: DbId,
-    requires_password_change: bool,
-}
-
-impl FromRequestParts<Arc<AppState>> for UserSessionAuth {
-    type Rejection = AppError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<AppState>,
-    ) -> Result<Self, Self::Rejection> {
-        let session = user_session_from_headers(state, &parts.headers).await?;
-        if session.requires_password_change {
-            return Err(AppError::PasswordChangeRequired);
-        }
-
-        Ok(Self {
-            user_id: session.user_id,
-        })
-    }
-}
-
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/login", post(login))
-        .route("/api/me", get(me))
+        .route("/api/me", axum::routing::get(session::me))
         .route(
             "/api/login-verification-codes",
             post(request_login_verification_code),
@@ -278,19 +41,6 @@ struct LoginRequest {
     username: String,
     password: String,
     verification_code: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct LoginResponse {
-    token: String,
-    role: String,
-    requires_password_change: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct MeResponse {
-    role: String,
-    requires_password_change: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,8 +75,8 @@ struct OkResponse {
 async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
-) -> AppResult<Json<LoginResponse>> {
-    if let Some(response) = login_admin(&state, &req.username, &req.password).await? {
+) -> AppResult<Json<session::LoginResponse>> {
+    if let Some(response) = session::login_admin(&state, &req.username, &req.password).await? {
         return Ok(Json(response));
     }
 
@@ -337,7 +87,7 @@ async fn login(
         req.verification_code.as_deref(),
     )
     .await?;
-    Ok(Json(LoginResponse {
+    Ok(Json(session::LoginResponse {
         token: issue_user_session_token(
             state.config.admin_session_ttl,
             &state.config.admin_token_secret,
@@ -346,143 +96,6 @@ async fn login(
         role: "user".to_string(),
         requires_password_change: user.requires_password_change,
     }))
-}
-
-async fn me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> AppResult<Json<MeResponse>> {
-    let token = bearer(&headers).ok_or(AppError::Unauthorized)?;
-    if validate_admin_token(token, &state.config.admin_token_secret) {
-        return Ok(Json(MeResponse {
-            role: "admin".to_string(),
-            requires_password_change: false,
-        }));
-    }
-
-    let session = user_session_from_token(&state, token).await?;
-
-    Ok(Json(MeResponse {
-        role: "user".to_string(),
-        requires_password_change: session.requires_password_change,
-    }))
-}
-
-async fn login_admin(
-    state: &AppState,
-    username: &str,
-    password: &str,
-) -> AppResult<Option<LoginResponse>> {
-    let row = sqlx::query(
-        r#"
-        SELECT id, password_hash, status, COALESCE(locked_until > now(), FALSE) AS locked
-        FROM admin
-        WHERE username = $1
-        ORDER BY id ASC
-        LIMIT 1
-        "#,
-    )
-    .bind(username)
-    .fetch_optional(&state.db.pool)
-    .await?;
-
-    let Some(row) = row else {
-        return Ok(None);
-    };
-
-    let id: DbId = row.try_get("id")?;
-    let status: String = row.try_get("status")?;
-    let locked: bool = row.try_get("locked")?;
-    if status != "enabled" || locked {
-        return Err(AppError::Unauthorized);
-    }
-
-    let password_hash: String = row.try_get("password_hash")?;
-    if !verify_user_password(password, &state.config.admin_token_secret, &password_hash) {
-        record_admin_login_failure(state, id).await?;
-        return Err(AppError::Unauthorized);
-    }
-
-    record_admin_login_success(state, id).await?;
-    Ok(Some(LoginResponse {
-        token: issue_admin_token(
-            state.config.admin_session_ttl,
-            &state.config.admin_token_secret,
-        ),
-        role: "admin".to_string(),
-        requires_password_change: false,
-    }))
-}
-
-async fn user_session_from_headers(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> AppResult<UserSessionState> {
-    let token = bearer(headers).ok_or(AppError::Unauthorized)?;
-    user_session_from_token(state, token).await
-}
-
-async fn user_session_from_token(state: &AppState, token: &str) -> AppResult<UserSessionState> {
-    let Some(user_id) = validate_user_session_token(token, &state.config.admin_token_secret) else {
-        return Err(AppError::Unauthorized);
-    };
-
-    let row = sqlx::query(
-        r#"
-        SELECT status, (password_changed_at IS NULL) AS requires_password_change
-        FROM "user"
-        WHERE id = $1
-        "#,
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db.pool)
-    .await?;
-    let Some(row) = row else {
-        return Err(AppError::Unauthorized);
-    };
-    let status: String = row.try_get("status")?;
-    if status != "enabled" {
-        return Err(AppError::Unauthorized);
-    }
-    Ok(UserSessionState {
-        user_id,
-        requires_password_change: row.try_get("requires_password_change")?,
-    })
-}
-
-async fn record_admin_login_failure(state: &AppState, id: DbId) -> AppResult<()> {
-    sqlx::query(
-        r#"
-        UPDATE admin
-        SET failed_login_attempts = failed_login_attempts + 1,
-            locked_until = CASE
-                WHEN failed_login_attempts + 1 >= $2 THEN now() + $3::interval
-                ELSE locked_until
-            END,
-            updated_at = now()
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .bind(MAX_ADMIN_LOGIN_FAILURES)
-    .bind(format!("{} seconds", ADMIN_LOGIN_LOCK_TTL.as_secs()))
-    .execute(&state.db.pool)
-    .await?;
-    Ok(())
-}
-
-async fn record_admin_login_success(state: &AppState, id: DbId) -> AppResult<()> {
-    sqlx::query(
-        r#"
-        UPDATE admin
-        SET failed_login_attempts = 0,
-            locked_until = NULL,
-            last_login_at = now(),
-            updated_at = now()
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .execute(&state.db.pool)
-    .await?;
-    Ok(())
 }
 
 async fn request_login_verification_code(
@@ -608,7 +221,7 @@ async fn update_user_password(
     }
     validate_user_password_input(&req.new_password)?;
 
-    let session = user_session_from_headers(&state, &headers).await?;
+    let session = session::user_session_from_headers(&state, &headers).await?;
     let row = sqlx::query(
         r#"
         SELECT password_hash
@@ -975,24 +588,5 @@ mod tests {
     #[test]
     fn client_rate_key_uses_unknown_without_proxy_headers() {
         assert_eq!(client_rate_key(&HeaderMap::new()), "unknown");
-    }
-
-    #[tokio::test]
-    async fn auth_rate_limiter_blocks_repeated_requests() {
-        let limiter = AuthRateLimiter::default();
-        let client_key = "192.0.2.10";
-
-        for _ in 0..LOGIN_CODE_EMAIL_LIMIT {
-            limiter
-                .check_login_verification_request("user@example.com", client_key)
-                .await
-                .unwrap();
-        }
-
-        let err = limiter
-            .check_login_verification_request("user@example.com", client_key)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::RateLimited(_)));
     }
 }

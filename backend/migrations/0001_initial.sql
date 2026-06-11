@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE user_group (
     id BIGSERIAL PRIMARY KEY,
@@ -419,12 +420,12 @@ CREATE TABLE credit_ledger (
 
 CREATE TABLE usage_daily (
     day DATE NOT NULL,
-    user_id BIGINT REFERENCES "user"(id) ON DELETE SET NULL,
-    project_id BIGINT REFERENCES project(id) ON DELETE SET NULL,
-    user_key_id BIGINT REFERENCES user_key(id) ON DELETE SET NULL,
-    channel_id BIGINT REFERENCES channel(id) ON DELETE SET NULL,
-    channel_key_id BIGINT REFERENCES channel_key(id) ON DELETE SET NULL,
-    credential_id BIGINT REFERENCES credential(id) ON DELETE SET NULL,
+    user_id BIGINT,
+    project_id BIGINT,
+    user_key_id BIGINT,
+    channel_id BIGINT,
+    channel_key_id BIGINT,
+    credential_id BIGINT,
     provider TEXT NOT NULL,
     model TEXT NOT NULL DEFAULT '',
     request_count BIGINT NOT NULL DEFAULT 0 CHECK (request_count >= 0),
@@ -503,6 +504,7 @@ CREATE INDEX idx_user_key_model_enabled_key
     WHERE enabled = TRUE;
 CREATE INDEX idx_user_user_group ON "user"(user_group_id);
 CREATE INDEX idx_user_created_id ON "user"(created_at DESC, id DESC);
+CREATE INDEX idx_user_email_trgm ON "user" USING GIN ((email::TEXT) gin_trgm_ops);
 CREATE INDEX idx_project_owner_created ON project(owner_user_id, created_at DESC, id DESC);
 CREATE INDEX idx_project_member_user ON project_member(user_id, project_id);
 CREATE INDEX idx_admin_status ON admin(status);
@@ -524,24 +526,25 @@ CREATE INDEX idx_channel_endpoint_relay_ready ON channel_endpoint(protocol, chan
 CREATE INDEX idx_channel_key_channel_id ON channel_key(channel_id);
 CREATE INDEX idx_channel_key_relay_ready ON channel_key(channel_id, created_at ASC)
     WHERE enabled = TRUE AND healthy = TRUE;
-CREATE INDEX idx_credential_provider_enabled
-    ON credential(provider, enabled);
+CREATE INDEX idx_credential_provider_enabled_updated
+    ON credential(provider, enabled, updated_at DESC, id DESC);
 CREATE INDEX idx_credential_provider_plan
     ON credential(provider, plan_type)
     WHERE enabled = TRUE AND plan_type IS NOT NULL;
 CREATE INDEX idx_usage_created_id ON usage(created_at DESC, id DESC);
 CREATE INDEX idx_usage_user_created ON usage(user_id, created_at DESC);
 CREATE INDEX idx_usage_project_created ON usage(project_id, created_at DESC);
-CREATE INDEX idx_usage_created ON usage(created_at DESC);
-CREATE INDEX idx_usage_user_billable_created
-    ON usage(user_id, created_at DESC)
-    WHERE billing_status IN ('billed', 'undercharged')
-      AND cost_micro_usd IS NOT NULL;
+CREATE INDEX idx_usage_user_key_created ON usage(user_key_id, created_at DESC)
+    WHERE user_key_id IS NOT NULL;
 CREATE INDEX idx_usage_user_billable_cursor
     ON usage(user_id, created_at DESC, id DESC)
     WHERE billing_status IN ('billed', 'undercharged')
       AND cost_micro_usd IS NOT NULL;
 CREATE INDEX idx_usage_channel_created ON usage(channel_id, created_at DESC);
+CREATE INDEX idx_usage_channel_key_created ON usage(channel_key_id, created_at DESC)
+    WHERE channel_key_id IS NOT NULL;
+CREATE INDEX idx_usage_credential_created ON usage(credential_id, created_at DESC)
+    WHERE credential_id IS NOT NULL;
 CREATE INDEX idx_usage_provider_created ON usage(provider, created_at DESC, id DESC);
 CREATE INDEX idx_usage_model_created ON usage(model, created_at DESC, id DESC)
     WHERE model IS NOT NULL;
@@ -554,8 +557,10 @@ CREATE INDEX idx_provider_plan_lookup
     ON provider_plan(provider, protocol, plan_type, model)
     WHERE enabled = TRUE;
 CREATE INDEX idx_credential_model_unavailable
-    ON credential_model(channel_endpoint_id, model, unavailable_until)
+    ON credential_model(unavailable_until, channel_endpoint_id, model, credential_id)
     WHERE status = 'unavailable';
+CREATE INDEX idx_credential_model_credential_status
+    ON credential_model(credential_id, status, unavailable_until);
 CREATE INDEX idx_pricing_template_provider_model ON pricing_template(provider, model) WHERE enabled = TRUE;
 CREATE INDEX idx_pricing_policy_user_group_enabled
     ON pricing_policy(user_group, enabled, priority DESC);
@@ -585,6 +590,12 @@ CREATE INDEX idx_usage_daily_day ON usage_daily(day DESC);
 CREATE INDEX idx_usage_daily_user_day ON usage_daily(user_id, day DESC);
 CREATE INDEX idx_usage_daily_project_day ON usage_daily(project_id, day DESC);
 CREATE INDEX idx_usage_daily_user_key_day ON usage_daily(user_id, user_key_id, day DESC);
+CREATE INDEX idx_usage_daily_channel_day ON usage_daily(channel_id, day DESC)
+    WHERE channel_id IS NOT NULL;
+CREATE INDEX idx_usage_daily_channel_key_day ON usage_daily(channel_key_id, day DESC)
+    WHERE channel_key_id IS NOT NULL;
+CREATE INDEX idx_usage_daily_credential_day ON usage_daily(credential_id, day DESC)
+    WHERE credential_id IS NOT NULL;
 CREATE INDEX idx_usage_daily_provider_model_day ON usage_daily(provider, model, day DESC);
 CREATE INDEX idx_task_upstream_owner
     ON task_upstream(user_key_id, task_type, provider, upstream_task_id);

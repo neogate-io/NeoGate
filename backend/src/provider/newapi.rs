@@ -1,6 +1,5 @@
 use axum::http::{HeaderValue, StatusCode};
 use bytes::Bytes;
-use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
 
@@ -63,21 +62,6 @@ pub(crate) fn variation_as_edit_request(
         body,
         content_type: content_type.clone(),
     })
-}
-
-pub(crate) fn images_json_to_sse(body: &[u8]) -> AppResult<Bytes> {
-    let value: Value = serde_json::from_slice(body)?;
-    let data = value.get("data").cloned().unwrap_or(Value::Null);
-    let event = json!({
-        "type": "image_generation.completed",
-        "data": data,
-        "created": value.get("created").cloned(),
-        "usage": value.get("usage").cloned(),
-    });
-    Ok(Bytes::from(format!(
-        "event: image_generation.completed\ndata: {}\n\n",
-        event
-    )))
 }
 
 fn multipart_boundary(content_type: &str) -> AppResult<String> {
@@ -173,17 +157,5 @@ mod tests {
         assert!(rewritten.contains("name=\"prompt\""));
         assert!(rewritten.contains(VARIATION_PROMPT));
         assert!(rewritten.ends_with("--x--\r\n"));
-    }
-
-    #[test]
-    fn wraps_images_json_as_completed_sse() {
-        let body = br#"{"created":123,"data":[{"b64_json":"QUJD"}]}"#;
-
-        let sse = images_json_to_sse(body).unwrap();
-        let sse = String::from_utf8(sse.to_vec()).unwrap();
-
-        assert!(sse.contains("event: image_generation.completed"));
-        assert!(sse.contains("\"type\":\"image_generation.completed\""));
-        assert!(sse.contains("\"b64_json\":\"QUJD\""));
     }
 }

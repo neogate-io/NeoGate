@@ -424,7 +424,7 @@ CREATE TABLE usage_daily (
 CREATE TABLE task_upstream (
     id BIGSERIAL PRIMARY KEY,
     task_type TEXT NOT NULL CHECK (
-        task_type IN ('openai_response', 'anthropic_message_batch')
+        task_type IN ('openai_response', 'anthropic_message_batch', 'neogate_response')
     ),
     upstream_task_id TEXT NOT NULL,
 

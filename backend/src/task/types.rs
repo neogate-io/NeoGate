@@ -12,6 +12,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpstreamTaskType {
     OpenAiResponse,
+    NeogateResponse,
     AnthropicMessageBatch,
 }
 
@@ -19,6 +20,7 @@ impl UpstreamTaskType {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::OpenAiResponse => "openai_response",
+            Self::NeogateResponse => "neogate_response",
             Self::AnthropicMessageBatch => "anthropic_message_batch",
         }
     }

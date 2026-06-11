@@ -48,6 +48,10 @@ pub struct Config {
     pub task_upstream_poll_batch_size: i64,
     pub task_upstream_retention: Duration,
     pub task_upstream_stale_hold_release: Duration,
+    pub neogate_response_asset_dir: PathBuf,
+    pub neogate_response_retention: Duration,
+    pub image_sync_global_limit: usize,
+    pub image_sync_key_limit: usize,
     pub payment: PaymentConfig,
     pub db_pool: DbPoolConfig,
     pub cors_allowed_origins: Vec<String>,
@@ -226,6 +230,17 @@ impl Config {
                 "TASK_UPSTREAM_STALE_HOLD_RELEASE_SECONDS",
                 parse_u64("CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS", 900),
             )),
+            neogate_response_asset_dir: env::var("NEOGATE_ASSET_DIR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("data/assets")),
+            neogate_response_retention: Duration::from_secs(parse_u64(
+                "NEOGATE_RESPONSE_RETENTION_SECONDS",
+                604_800,
+            )),
+            image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8),
+            image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2),
             payment: PaymentConfig::default(),
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
@@ -283,6 +298,15 @@ impl Config {
         }
         if self.task_upstream_stale_hold_release.is_zero() {
             anyhow::bail!("TASK_UPSTREAM_STALE_HOLD_RELEASE_SECONDS must be positive");
+        }
+        if self.neogate_response_retention.is_zero() {
+            anyhow::bail!("NEOGATE_RESPONSE_RETENTION_SECONDS must be positive");
+        }
+        if self.image_sync_global_limit == 0 {
+            anyhow::bail!("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT must be positive");
+        }
+        if self.image_sync_key_limit == 0 {
+            anyhow::bail!("NEOGATE_IMAGE_SYNC_KEY_LIMIT must be positive");
         }
         if self.user_auth_cache_max_entries == 0 {
             anyhow::bail!("USER_AUTH_CACHE_MAX_ENTRIES must be positive");

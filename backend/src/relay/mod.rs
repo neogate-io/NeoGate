@@ -1,6 +1,7 @@
 mod body;
 mod credential;
 mod error;
+mod limit;
 mod models;
 mod request;
 pub mod selector;
@@ -40,9 +41,10 @@ use crate::usage::{KeyFailure, UsageInsert};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
+pub(crate) use limit::ImageSyncLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
-pub(crate) use streaming::{synthetic_body_from_bytes, RelayContext};
+pub(crate) use streaming::RelayContext;
 pub(crate) use upstream::upstream_url;
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type,
@@ -188,7 +190,7 @@ pub(crate) fn task_status_from_value(
     task: &UpstreamTask,
 ) -> (String, bool) {
     match task_type {
-        UpstreamTaskType::OpenAiResponse => {
+        UpstreamTaskType::OpenAiResponse | UpstreamTaskType::NeogateResponse => {
             let status = value
                 .get("status")
                 .and_then(Value::as_str)
@@ -240,17 +242,6 @@ pub(crate) async fn finish_relay(
                         HeaderValue::from_static("application/json")
                     }
                 });
-            if !ctx.streamed {
-                let body = match upstream_response.bytes().await {
-                    Ok(body) => body,
-                    Err(err) => return finish_relay_error(ctx, AppError::Reqwest(err)).await,
-                };
-                return Response::builder()
-                    .status(status)
-                    .header("content-type", content_type)
-                    .body(streaming::synthetic_body_from_bytes(ctx, status, body))
-                    .map_err(|err| AppError::BadRequest(err.to_string()));
-            }
             Response::builder()
                 .status(status)
                 .header("content-type", content_type)

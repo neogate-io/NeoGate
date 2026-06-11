@@ -95,6 +95,7 @@ pub(crate) async fn anthropic_messages(
             hold,
             user_key_model_credit_account,
             started,
+            _image_sync_permit: None,
         },
         response,
     )

@@ -14,7 +14,7 @@ use crate::{
     auth::UserAuth,
     billing::parse_usage_from_bytes,
     error::{AppError, AppResult},
-    task::{billing as task_billing, upstream as upstream_task},
+    task::{billing as task_billing, jobs, upstream as upstream_task},
     AppState,
 };
 
@@ -29,8 +29,7 @@ use crate::{
         record_upstream_http_failure, release_empty_hold, reserve_credit,
         respond_upstream_http_failure,
         selector::{SelectedUpstream, UpstreamProtocol},
-        synthetic_body_from_bytes, task_status_from_value, BodyKind, PreparedRelayBody, RelayBody,
-        RelayContext,
+        task_status_from_value, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
     },
 };
 
@@ -123,6 +122,21 @@ pub(crate) async fn openai_response(
     Path(response_id): Path<String>,
     OriginalUri(uri): OriginalUri,
 ) -> AppResult<Response> {
+    match upstream_task::fetch_task(
+        &state.db.pool,
+        auth.user_key_id,
+        UpstreamTaskType::NeogateResponse,
+        &response_id,
+    )
+    .await
+    {
+        Ok(task) => {
+            let response = jobs::response_for_task(&state, &task).await?;
+            return jobs::response(response).await;
+        }
+        Err(AppError::NotFound) => {}
+        Err(err) => return Err(err),
+    }
     let (task, upstream) = upstream_task::fetch_task_for_auth(
         &state,
         &auth,
@@ -164,6 +178,21 @@ pub(crate) async fn cancel_openai_response(
     auth: UserAuth,
     Path(response_id): Path<String>,
 ) -> AppResult<Response> {
+    match upstream_task::fetch_task(
+        &state.db.pool,
+        auth.user_key_id,
+        UpstreamTaskType::NeogateResponse,
+        &response_id,
+    )
+    .await
+    {
+        Ok(task) => {
+            let response = jobs::cancel(&state, task).await?;
+            return jobs::response(response).await;
+        }
+        Err(AppError::NotFound) => {}
+        Err(err) => return Err(err),
+    }
     let (task, upstream) = upstream_task::fetch_task_for_auth(
         &state,
         &auth,
@@ -238,6 +267,7 @@ async fn relay_openai(
             hold,
             user_key_model_credit_account: user_key_model_credit_account.clone(),
             started,
+            _image_sync_permit: None,
         };
         let response = forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await;
 
@@ -360,6 +390,12 @@ async fn relay_openai_image(
         )
         .await?;
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let image_sync_permit = Some(
+        state
+            .image_sync_limiter
+            .try_acquire(auth.user_key_id)
+            .await?,
+    );
     let hold = reserve_credit(
         &state,
         &auth,
@@ -381,6 +417,7 @@ async fn relay_openai_image(
         hold,
         user_key_model_credit_account,
         started,
+        _image_sync_permit: image_sync_permit,
     };
     let response = forward_openai_with_content_type(
         &state,
@@ -431,35 +468,18 @@ async fn finish_newapi_image_stream(
         return finish_relay(ctx, Ok(upstream_response)).await;
     }
 
-    let body = match upstream_response.bytes().await {
-        Ok(body) => body,
-        Err(err) => {
-            release_empty_hold(
-                &ctx.state,
-                ctx.hold.clone(),
-                "newapi image stream body read error",
-            )
-            .await;
-            return Err(err.into());
-        }
-    };
-    let sse_body = match newapi::images_json_to_sse(&body) {
-        Ok(body) => body,
-        Err(err) => {
-            release_empty_hold(
-                &ctx.state,
-                ctx.hold.clone(),
-                "newapi image stream json-to-sse error",
-            )
-            .await;
-            return Err(err);
-        }
-    };
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .body(synthetic_body_from_bytes(ctx, status, sse_body))
-        .map_err(|err| AppError::BadRequest(err.to_string()))
+    tracing::warn!(
+        provider = %ctx.upstream.provider,
+        channel_id = ctx.upstream.channel_id,
+        channel_name = %ctx.upstream.channel_name,
+        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+        channel_key_id = ?ctx.upstream.channel_key_id,
+        credential_id = ?ctx.upstream.credential_id,
+        model = %ctx.model,
+        path = ctx.path,
+        "NewAPI image stream request returned non-SSE response; relaying upstream body without JSON-to-SSE buffering"
+    );
+    finish_relay(ctx, Ok(upstream_response)).await
 }
 
 async fn finish_newapi_image_variation(
@@ -548,6 +568,16 @@ async fn create_background_response(
         &price,
     )
     .await?;
+    if newapi::is_newapi_provider(&upstream.provider) && jobs::has_image_generation_tool(&body) {
+        let response = match jobs::create(&state, &auth, &upstream, &model, body, &hold).await {
+            Ok(response) => response,
+            Err(err) => {
+                release_empty_hold(&state, hold, "neogate response create error").await;
+                return Err(err);
+            }
+        };
+        return jobs::response(response).await;
+    }
     let response = forward_openai(
         &state,
         &upstream,
@@ -568,6 +598,7 @@ async fn create_background_response(
         hold: hold.clone(),
         user_key_model_credit_account,
         started,
+        _image_sync_permit: None,
     };
 
     let upstream_response = match response {

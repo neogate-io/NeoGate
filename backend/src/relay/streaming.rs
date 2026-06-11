@@ -14,7 +14,9 @@ use crate::{
 };
 
 use super::{
-    enqueue_relay_usage, key_failure_from_context, release_empty_hold,
+    enqueue_relay_usage, key_failure_from_context,
+    limit::ImageSyncPermit,
+    release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
     usage_from_context,
 };
@@ -34,6 +36,7 @@ pub(crate) struct RelayContext {
     pub(crate) hold: DebitHold,
     pub(crate) user_key_model_credit_account: Option<CreditAccountId>,
     pub(crate) started: Instant,
+    pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
 }
 
 pub(crate) fn body(
@@ -51,29 +54,18 @@ pub(crate) fn body(
     )
 }
 
-pub(crate) fn synthetic_body_from_bytes(
-    ctx: RelayContext,
-    status: StatusCode,
-    body: Bytes,
-) -> Body {
-    body_from_stream(
-        ctx,
-        status,
-        futures_util::stream::once(async move { Ok::<Bytes, String>(body) }).boxed(),
-    )
-}
-
 fn body_from_stream(
     ctx: RelayContext,
     status: StatusCode,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
 ) -> Body {
     let streamed = ctx.streamed;
+    let path = ctx.path;
     let relay = StreamingRelay {
         ctx: Some(ctx),
         status,
         stream,
-        usage: ResponseUsageParser::for_response(status, streamed),
+        usage: ResponseUsageParser::for_response(status, streamed, path),
         first_response_ms: None,
     };
 
@@ -261,8 +253,10 @@ enum ResponseUsageParser {
 }
 
 impl ResponseUsageParser {
-    fn for_response(status: StatusCode, streamed: bool) -> Self {
+    fn for_response(status: StatusCode, streamed: bool, path: &str) -> Self {
         if !status.is_success() {
+            Self::Disabled
+        } else if path.starts_with("/v1/images/") {
             Self::Disabled
         } else if streamed {
             Self::Sse(StreamUsageParser::default())

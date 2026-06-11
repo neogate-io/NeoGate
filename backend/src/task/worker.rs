@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::{
-    billing as task_billing,
+    billing as task_billing, jobs,
     results::AnthropicResultsUsageParser,
     upstream::{self, UpstreamTask, UpstreamTaskType},
 };
@@ -67,6 +67,7 @@ async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
 }
 
 async fn cleanup_expired_tasks(state: &Arc<AppState>) -> AppResult<()> {
+    jobs::cleanup_expired_assets(state, state.config.task_upstream_poll_batch_size).await?;
     let deleted = upstream::delete_expired_terminal_tasks(
         &state.db.pool,
         state.config.task_upstream_poll_batch_size,
@@ -79,6 +80,9 @@ async fn cleanup_expired_tasks(state: &Arc<AppState>) -> AppResult<()> {
 }
 
 async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
+    if task.task_type == UpstreamTaskType::NeogateResponse {
+        return jobs::run(state, task).await;
+    }
     let upstream = task
         .selected_upstream(&state.db.pool, &state.secrets)
         .await?;
@@ -87,6 +91,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             let path = format!("/v1/responses/{}", task.upstream_task_id);
             forward_openai_bound(state, &upstream, Method::GET, &path, None).await?
         }
+        UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {
             let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
             forward_anthropic_bound(
@@ -107,7 +112,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     }
     let body = response.bytes().await?;
     let value: Value = serde_json::from_slice(&body)?;
-    let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
+    let (status_text, terminal) = task_status_from_value(&value, &task);
     let mut usage = parse_usage_from_bytes(&body, false);
     upstream::update_task_from_upstream_value(
         &state.db.pool,
@@ -162,12 +167,8 @@ async fn poll_anthropic_batch_results_usage(
     Ok(parser.finish())
 }
 
-fn task_status_from_value(
-    task_type: UpstreamTaskType,
-    value: &Value,
-    task: &UpstreamTask,
-) -> (String, bool) {
-    match task_type {
+fn task_status_from_value(value: &Value, task: &UpstreamTask) -> (String, bool) {
+    match task.task_type {
         UpstreamTaskType::OpenAiResponse => {
             let status = value
                 .get("status")
@@ -177,6 +178,7 @@ fn task_status_from_value(
             let terminal = openai_response_terminal(&status);
             (status, terminal)
         }
+        UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {
             let status = value
                 .get("processing_status")

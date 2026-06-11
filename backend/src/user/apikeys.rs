@@ -15,7 +15,7 @@ use crate::{
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
-    AppState,
+    project, AppState,
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -110,15 +110,17 @@ async fn create_apikey(
     let key = generate_user_key();
     let secret_ciphertext = state.secrets.encrypt(&key)?;
     let mut tx = state.db.pool.begin().await?;
+    let project_id = project::default_project_for_user(&mut tx, auth.user_id).await?;
     let row = sqlx::query(
         r#"
         INSERT INTO user_key
-            (user_id, name, key_prefix, secret_ciphertext, status, expires_at, model_limits)
-        VALUES ($1, $2, $3, $4, 'enabled', NULL, NULL)
+            (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status, expires_at, model_limits)
+        VALUES ($1, $2, $1, $3, $4, $5, 'enabled', NULL, NULL)
         RETURNING id
         "#,
     )
     .bind(auth.user_id)
+    .bind(project_id)
     .bind(name)
     .bind(key_prefix(&key))
     .bind(secret_ciphertext)

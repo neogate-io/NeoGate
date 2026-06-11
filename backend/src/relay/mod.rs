@@ -441,6 +441,7 @@ pub(crate) fn usage_from_context(
     });
     UsageInsert {
         user_id: ctx.auth.user_id,
+        project_id: ctx.auth.project_id,
         user_key_id: ctx.auth.user_key_id,
         channel_id: ctx.upstream.channel_id,
         channel_key_id: ctx.upstream.channel_key_id,
@@ -548,10 +549,11 @@ pub(crate) async fn reserve_credit(
             &state.db.pool,
             BillingAccounts {
                 user_id: auth.user_id,
+                project_id: auth.project_id,
                 user_key_id: auth.user_key_id,
                 user_key_model_credit_account,
                 user_key_credit_account: &auth.user_key_credit_account,
-                user_credit_account: &auth.user_credit_account,
+                project_credit_account: &auth.project_credit_account,
             },
             estimated,
         )

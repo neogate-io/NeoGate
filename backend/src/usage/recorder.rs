@@ -534,7 +534,7 @@ async fn flush_unbilled_usage(
 
     let mut query_builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO usage
-         (user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
+         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -545,6 +545,7 @@ async fn flush_unbilled_usage(
     );
     query_builder.push_values(usages, |mut row, item| {
         row.push_bind(item.user_id)
+            .push_bind(item.project_id)
             .push_bind(item.user_key_id)
             .push_bind(item.channel_id)
             .push_bind(item.channel_key_id)
@@ -598,7 +599,7 @@ async fn insert_usage(
 ) -> AppResult<sqlx::postgres::PgRow> {
     let row = sqlx::query(
         "INSERT INTO usage
-         (user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
+         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -607,10 +608,11 @@ async fn insert_usage(
           cost_micro_usd, billing_status, billing_transaction_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                 $21, $22, $23, $24, $25, $26)
+                 $21, $22, $23, $24, $25, $26, $27)
          RETURNING id",
     )
     .bind(item.user_id)
+    .bind(item.project_id)
     .bind(item.user_key_id)
     .bind(item.channel_id)
     .bind(item.channel_key_id)
@@ -668,7 +670,7 @@ async fn flush_usage_daily_aggregates(
 
     let mut query_builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO usage_daily
-         (day, user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
+         (day, user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
           request_count, success_count, error_count, streamed_count,
           latency_ms_total, first_response_ms_total, first_response_count,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
@@ -680,6 +682,7 @@ async fn flush_usage_daily_aggregates(
     query_builder.push_values(aggregates, |mut row, item| {
         row.push_bind(item.key.day)
             .push_bind(item.key.user_id)
+            .push_bind(item.key.project_id)
             .push_bind(item.key.user_key_id)
             .push_bind(item.key.channel_id)
             .push_bind(item.key.channel_key_id)
@@ -709,6 +712,7 @@ async fn flush_usage_daily_aggregates(
         " ON CONFLICT (
               day,
               COALESCE(user_id, '-1'::BIGINT),
+              COALESCE(project_id, '-1'::BIGINT),
               COALESCE(user_key_id, '-1'::BIGINT),
               COALESCE(channel_id, '-1'::BIGINT),
               COALESCE(channel_key_id, '-1'::BIGINT),
@@ -745,6 +749,7 @@ async fn flush_usage_daily_aggregates(
 struct DailyUsageKey {
     day: NaiveDate,
     user_id: DbId,
+    project_id: DbId,
     user_key_id: DbId,
     channel_id: DbId,
     channel_key_id: Option<DbId>,
@@ -815,6 +820,7 @@ impl DailyUsageAggregate {
         let key = DailyUsageKey {
             day,
             user_id: item.user_id,
+            project_id: item.project_id,
             user_key_id: item.user_key_id,
             channel_id: item.channel_id,
             channel_key_id: item.channel_key_id,
@@ -1016,6 +1022,7 @@ mod tests {
     fn usage_insert(id: DbId) -> UsageInsert {
         UsageInsert {
             user_id: id,
+            project_id: id,
             user_key_id: id,
             channel_id: id,
             channel_key_id: Some(id),
@@ -1046,6 +1053,7 @@ mod tests {
         let charge = billing_charge();
         let usage = UsageInsert {
             user_id: 1,
+            project_id: 1,
             user_key_id: 2,
             channel_id: 3,
             channel_key_id: Some(4),

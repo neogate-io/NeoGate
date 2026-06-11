@@ -22,7 +22,7 @@ use crate::{
     error::{AppError, AppResult},
     id::DbId,
     policy::{registration_policy, ServiceMode},
-    AppState,
+    project, AppState,
 };
 
 const PASSWORD_RESET_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -769,6 +769,7 @@ async fn login_or_create_user(
         .await?;
         let user_id: DbId = row.try_get("id")?;
         account::create_credit_account(&mut tx, CreditAccountType::User, user_id).await?;
+        project::create_default_project_for_user(&mut tx, user_id).await?;
         if service_mode == ServiceMode::Internal {
             tx.commit().await?;
             return Err(AppError::BadRequest("account pending approval".to_string()));

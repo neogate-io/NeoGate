@@ -46,6 +46,7 @@ pub(crate) struct UpstreamTask {
     pub(crate) task_type: UpstreamTaskType,
     pub(crate) upstream_task_id: String,
     pub(crate) user_id: DbId,
+    pub(crate) project_id: DbId,
     pub(crate) user_key_id: DbId,
     pub(crate) provider: String,
     pub(crate) model: Option<String>,
@@ -63,8 +64,9 @@ pub(crate) struct UpstreamTask {
 #[derive(Debug, Clone)]
 pub(crate) struct TaskBillingContext {
     pub(crate) user_id: DbId,
+    pub(crate) project_id: DbId,
     pub(crate) user_key_id: DbId,
-    pub(crate) user_credit_account: CreditAccountId,
+    pub(crate) project_credit_account: CreditAccountId,
     pub(crate) user_key_credit_account: CreditAccountId,
     pub(crate) user_key_model_credit_account: Option<CreditAccountId>,
     pub(crate) user_group: String,

@@ -13,7 +13,7 @@ use crate::{
     AppState,
 };
 
-const INSTALL_TEMPLATE: &str = include_str!("../templates/install.template");
+const INSTALL_TEMPLATE: &str = include_str!("../../templates/install.template");
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/install", get(install_script))

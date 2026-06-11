@@ -118,12 +118,13 @@ impl StreamingRelay {
                     SettleRequest {
                         accounts: BillingAccounts {
                             user_id: ctx.auth.user_id,
+                            project_id: ctx.auth.project_id,
                             user_key_id: ctx.auth.user_key_id,
                             user_key_model_credit_account: ctx
                                 .user_key_model_credit_account
                                 .as_ref(),
                             user_key_credit_account: &ctx.auth.user_key_credit_account,
-                            user_credit_account: &ctx.auth.user_credit_account,
+                            project_credit_account: &ctx.auth.project_credit_account,
                         },
                         hold: ctx.hold.clone(),
                         usage: token_usage,

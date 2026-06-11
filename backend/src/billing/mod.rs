@@ -47,10 +47,11 @@ pub struct Billing {
 #[derive(Clone, Copy)]
 pub struct BillingAccounts<'a> {
     pub user_id: DbId,
+    pub project_id: DbId,
     pub user_key_id: DbId,
     pub user_key_model_credit_account: Option<&'a CreditAccountId>,
     pub user_key_credit_account: &'a CreditAccountId,
-    pub user_credit_account: &'a CreditAccountId,
+    pub project_credit_account: &'a CreditAccountId,
 }
 
 pub struct SettleRequest<'a> {
@@ -477,18 +478,18 @@ impl Billing {
         }
 
         if remaining > 0 {
-            let user_target = self.prefetch_micro_usd.max(remaining);
-            if let Some((allocation_id, amount)) = allocate_user(
+            let project_target = self.prefetch_micro_usd.max(remaining);
+            if let Some((allocation_id, amount)) = allocate_project(
                 &mut tx,
-                accounts.user_id,
-                accounts.user_credit_account,
-                user_target,
+                accounts.project_id,
+                accounts.project_credit_account,
+                project_target,
             )
             .await?
             {
                 allocations.push((
                     HotAllocation {
-                        credit_account: accounts.user_credit_account.clone(),
+                        credit_account: accounts.project_credit_account.clone(),
                         allocation_id,
                     },
                     amount,
@@ -546,7 +547,7 @@ fn ordered_credit_accounts(accounts: BillingAccounts<'_>) -> Vec<CreditAccountId
         credit_accounts.push(credit_account.clone());
     }
     credit_accounts.push(accounts.user_key_credit_account.clone());
-    credit_accounts.push(accounts.user_credit_account.clone());
+    credit_accounts.push(accounts.project_credit_account.clone());
     credit_accounts
 }
 
@@ -554,7 +555,7 @@ fn prefetch_lock_index(accounts: BillingAccounts<'_>, len: usize) -> usize {
     let mut hasher = DefaultHasher::new();
     accounts.user_key_model_credit_account.hash(&mut hasher);
     accounts.user_key_credit_account.hash(&mut hasher);
-    accounts.user_credit_account.hash(&mut hasher);
+    accounts.project_credit_account.hash(&mut hasher);
     hasher.finish() as usize % len.max(1)
 }
 
@@ -743,20 +744,20 @@ async fn allocate_user_key_model(
     reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
 }
 
-async fn allocate_user(
+async fn allocate_project(
     tx: &mut Transaction<'_, Postgres>,
-    user_id: DbId,
+    project_id: DbId,
     credit_account: &CreditAccountId,
     target_micro_usd: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
         r#"SELECT w.balance_micro_usd, w.reserved_micro_usd
-           FROM "user" u
-           JOIN credit_account w ON w.owner_type = 'user' AND w.owner_id = u.id
-           WHERE u.id = $1 AND w.id = $2
+           FROM project p
+           JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+           WHERE p.id = $1 AND w.id = $2
            FOR UPDATE OF w"#,
     )
-    .bind(user_id)
+    .bind(project_id)
     .bind(credit_account.id)
     .fetch_optional(&mut **tx)
     .await?;

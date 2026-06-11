@@ -196,8 +196,9 @@ pub fn user_key_draft_parts_from_token(
 #[derive(Debug, Clone)]
 pub struct UserAuth {
     pub user_id: DbId,
+    pub project_id: DbId,
     pub user_key_id: DbId,
-    pub user_credit_account: CreditAccountId,
+    pub project_credit_account: CreditAccountId,
     pub user_key_credit_account: CreditAccountId,
     pub user_key_model_credit_accounts: Arc<HashMap<String, CreditAccountId>>,
     pub user_group: String,
@@ -344,14 +345,16 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
 
         let rows = sqlx::query(
             r#"
-            SELECT uk.id AS user_key_id, uk.user_id, uk.status AS key_status,
+            SELECT uk.id AS user_key_id, uk.user_id, uk.project_id, uk.status AS key_status,
+                   p.status AS project_status,
                    uk.secret_ciphertext, uk.expires_at, uk.model_limits, u.status AS user_status,
-                   uw.id AS user_credit_account_id, ukw.id AS user_key_credit_account_id,
+                   pw.id AS project_credit_account_id, ukw.id AS user_key_credit_account_id,
                    ug.code AS user_group
             FROM user_key uk
             JOIN "user" u ON u.id = uk.user_id
+            JOIN project p ON p.id = uk.project_id
             JOIN user_group ug ON ug.id = u.user_group_id
-            JOIN credit_account uw ON uw.owner_type = 'user' AND uw.owner_id = u.id
+            JOIN credit_account pw ON pw.owner_type = 'project' AND pw.owner_id = p.id
             JOIN credit_account ukw ON ukw.owner_type = 'user_key' AND ukw.owner_id = uk.id
             WHERE uk.key_prefix = $1
             "#,
@@ -374,7 +377,8 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
         let row = matched.ok_or(AppError::Unauthorized)?;
         let user_status: String = row.try_get("user_status")?;
         let key_status: String = row.try_get("key_status")?;
-        if user_status != "enabled" || key_status != "enabled" {
+        let project_status: String = row.try_get("project_status")?;
+        if user_status != "enabled" || project_status != "enabled" || key_status != "enabled" {
             return Err(AppError::Forbidden);
         }
         let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
@@ -385,8 +389,9 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
         let user_key_id: DbId = row.try_get("user_key_id")?;
         let auth = Self {
             user_id: row.try_get("user_id")?,
+            project_id: row.try_get("project_id")?,
             user_key_id,
-            user_credit_account: CreditAccountId::new(row.try_get("user_credit_account_id")?),
+            project_credit_account: CreditAccountId::new(row.try_get("project_credit_account_id")?),
             user_key_credit_account: CreditAccountId::new(
                 row.try_get("user_key_credit_account_id")?,
             ),
@@ -712,8 +717,9 @@ mod tests {
     fn model_limits_reject_unlisted_models() {
         let auth = UserAuth {
             user_id: 1,
+            project_id: 1,
             user_key_id: 1,
-            user_credit_account: CreditAccountId::new(100),
+            project_credit_account: CreditAccountId::new(100),
             user_key_credit_account: CreditAccountId::new(101),
             user_key_model_credit_accounts: Arc::new(HashMap::new()),
             user_group: "default".to_string(),
@@ -730,8 +736,9 @@ mod tests {
             "key-a".to_string(),
             UserAuth {
                 user_id: 1,
+                project_id: 1,
                 user_key_id: 10,
-                user_credit_account: CreditAccountId::new(100),
+                project_credit_account: CreditAccountId::new(100),
                 user_key_credit_account: CreditAccountId::new(110),
                 user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
@@ -743,8 +750,9 @@ mod tests {
             "key-b".to_string(),
             UserAuth {
                 user_id: 1,
+                project_id: 1,
                 user_key_id: 11,
-                user_credit_account: CreditAccountId::new(100),
+                project_credit_account: CreditAccountId::new(100),
                 user_key_credit_account: CreditAccountId::new(111),
                 user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
@@ -756,8 +764,9 @@ mod tests {
             "key-c".to_string(),
             UserAuth {
                 user_id: 2,
+                project_id: 2,
                 user_key_id: 20,
-                user_credit_account: CreditAccountId::new(200),
+                project_credit_account: CreditAccountId::new(200),
                 user_key_credit_account: CreditAccountId::new(120),
                 user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),

@@ -30,14 +30,14 @@ use crate::{
         },
     },
     auth::{AdminAuth, UserSessionAuth},
-    bootstrap::{
-        save_runtime_config, test_database, BootstrapConfigInput, BootstrapConfigResult,
-        TestDatabaseInput, TestDatabaseResult,
-    },
     cache::InvalidationEvent,
     config::RuntimeProbe,
     error::{AppError, AppResult},
     payment::settings::{upsert_payment_setting, UpsertPaymentSettingRequest},
+    setup::bootstrap::{
+        save_runtime_config, test_database, BootstrapConfigInput, BootstrapConfigResult,
+        TestDatabaseInput, TestDatabaseResult,
+    },
     AppState,
 };
 

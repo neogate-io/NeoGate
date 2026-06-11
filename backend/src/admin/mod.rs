@@ -290,6 +290,7 @@ async fn adjust_credit_handler(
 ) -> AppResult<Json<AdjustCreditResponse>> {
     let credit_account_type = match req.credit_account_type.as_str() {
         "user" => CreditAccountType::User,
+        "project" => CreditAccountType::Project,
         "user_key" => CreditAccountType::UserKey,
         "user_key_model" => CreditAccountType::UserKeyModel,
         other => {

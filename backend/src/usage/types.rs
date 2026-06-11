@@ -9,6 +9,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageInsert {
     pub user_id: DbId,
+    pub project_id: DbId,
     pub user_key_id: DbId,
     pub channel_id: DbId,
     pub channel_key_id: Option<DbId>,

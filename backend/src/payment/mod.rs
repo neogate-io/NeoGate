@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserSessionAuth,
-    billing::{account, CreditAccountType, MICRO_USD_PER_USD},
+    billing::{account, MICRO_USD_PER_USD},
     config::{PaymentProvider, ZpayConfig},
     error::{AppError, AppResult},
     id::DbId,
@@ -140,9 +140,7 @@ pub async fn create_user_payment_order(
 
     let order_id = Uuid::new_v4();
     let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
-    let credit_account =
-        account::owner_credit_account(&state.db.pool, CreditAccountType::User, auth.user_id)
-            .await?;
+    let credit_account = default_project_credit_account(state, auth.user_id).await?;
     let notify_url = notify_url(&payment_config, provider)?;
     let gateway_req = GatewayCreateRequest {
         order_id,
@@ -178,6 +176,29 @@ pub async fn create_user_payment_order(
         checkout_url: order.checkout_url.clone(),
         order,
     })
+}
+
+async fn default_project_credit_account(
+    state: &AppState,
+    user_id: DbId,
+) -> AppResult<crate::billing::CreditAccountId> {
+    let row = sqlx::query(
+        r#"
+        SELECT w.id
+        FROM project p
+        JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+        WHERE p.owner_user_id = $1
+          AND p.is_default = TRUE
+          AND p.status = 'enabled'
+        ORDER BY p.id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or_else(|| AppError::BadRequest("default project is missing".to_string()))?;
+    Ok(crate::billing::CreditAccountId::new(row.try_get("id")?))
 }
 
 pub async fn list_user_payment_orders(

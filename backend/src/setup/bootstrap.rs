@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::{
     config::{RuntimeProbe, DEFAULT_ADMIN_TOKEN_SECRET, DEFAULT_UPSTREAM_SECRET_KEY},
     error::{AppError, AppResult},
-    install::inferred_public_base_url,
+    setup::install::inferred_public_base_url,
 };
 
 const SERVICE_POLICY_SETTING_KEY: &str = "service_policy";

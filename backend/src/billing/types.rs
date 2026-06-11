@@ -7,6 +7,7 @@ use crate::id::DbId;
 #[serde(rename_all = "snake_case")]
 pub enum CreditAccountType {
     User,
+    Project,
     UserKey,
     UserKeyModel,
 }
@@ -15,6 +16,7 @@ impl CreditAccountType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::User => "user",
+            Self::Project => "project",
             Self::UserKey => "user_key",
             Self::UserKeyModel => "user_key_model",
         }

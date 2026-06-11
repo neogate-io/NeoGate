@@ -52,11 +52,11 @@ pub(crate) async fn insert_task(
     sqlx::query(
         r#"
         INSERT INTO task_upstream (
-            task_type, upstream_task_id, user_id, user_key_id, protocol, provider, model,
+            task_type, upstream_task_id, user_id, project_id, user_key_id, protocol, provider, model,
             channel_id, channel_endpoint_id, channel_key_id, credential_id, upstream_base_url,
             status, terminal, billing_hold, upstream_metadata, next_poll_at, expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         ON CONFLICT (task_type, provider, upstream_task_id) DO UPDATE
         SET status = EXCLUDED.status,
             terminal = EXCLUDED.terminal,
@@ -67,6 +67,7 @@ pub(crate) async fn insert_task(
     .bind(task.task_type.as_str())
     .bind(task.upstream_task_id)
     .bind(task.auth.user_id)
+    .bind(task.auth.project_id)
     .bind(task.auth.user_key_id)
     .bind(protocol)
     .bind(&task.upstream.provider)
@@ -129,7 +130,7 @@ pub(crate) async fn claim_due_tasks(
             updated_at = now()
         FROM due
         WHERE task.id = due.id
-        RETURNING task.id, task.task_type, task.upstream_task_id, task.user_id, task.user_key_id,
+        RETURNING task.id, task.task_type, task.upstream_task_id, task.user_id, task.project_id, task.user_key_id,
                   task.provider, task.model, task.channel_id, task.channel_endpoint_id,
                   task.channel_key_id, task.credential_id, task.upstream_base_url,
                   task.status, task.terminal, task.upstream_metadata, task.created_at
@@ -149,7 +150,7 @@ pub(crate) async fn fetch_stale_terminal_held_tasks(
 ) -> AppResult<Vec<UpstreamTask>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, task_type, upstream_task_id, user_id, user_key_id,
+        SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
                upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
@@ -178,7 +179,7 @@ pub(crate) async fn list_tasks_for_auth(
 ) -> AppResult<Vec<UpstreamTask>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, task_type, upstream_task_id, user_id, user_key_id,
+        SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
                upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
@@ -256,14 +257,15 @@ pub(crate) async fn billing_context(
     let row = sqlx::query(
         r#"
         SELECT
-            uw.id AS user_credit_account_id,
+            pw.id AS project_credit_account_id,
             ukw.id AS user_key_credit_account_id,
             ukmw.id AS user_key_model_credit_account_id,
             ug.code AS user_group
         FROM task_upstream task
         JOIN "user" u ON u.id = task.user_id
         JOIN user_group ug ON ug.id = u.user_group_id
-        JOIN credit_account uw ON uw.owner_type = 'user' AND uw.owner_id = task.user_id
+        JOIN project p ON p.id = task.project_id
+        JOIN credit_account pw ON pw.owner_type = 'project' AND pw.owner_id = p.id
         JOIN credit_account ukw ON ukw.owner_type = 'user_key' AND ukw.owner_id = task.user_key_id
         LEFT JOIN user_key_model ukm
             ON ukm.user_key_id = task.user_key_id
@@ -282,8 +284,9 @@ pub(crate) async fn billing_context(
     .ok_or(AppError::NotFound)?;
     Ok(TaskBillingContext {
         user_id: task.user_id,
+        project_id: task.project_id,
         user_key_id: task.user_key_id,
-        user_credit_account: CreditAccountId::new(row.try_get("user_credit_account_id")?),
+        project_credit_account: CreditAccountId::new(row.try_get("project_credit_account_id")?),
         user_key_credit_account: CreditAccountId::new(row.try_get("user_key_credit_account_id")?),
         user_key_model_credit_account: row
             .try_get::<Option<DbId>, _>("user_key_model_credit_account_id")?
@@ -300,7 +303,7 @@ pub(crate) async fn fetch_task(
 ) -> AppResult<UpstreamTask> {
     let row = sqlx::query(
         r#"
-        SELECT id, task_type, upstream_task_id, user_id, user_key_id,
+        SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
                upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
@@ -439,6 +442,7 @@ fn task_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UpstreamTask> {
         },
         upstream_task_id: row.try_get("upstream_task_id")?,
         user_id: row.try_get("user_id")?,
+        project_id: row.try_get("project_id")?,
         user_key_id: row.try_get("user_key_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,

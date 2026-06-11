@@ -34,8 +34,9 @@ pub(crate) async fn finalize_for_auth(
         &upstream,
         AsyncTaskBillingContext {
             user_id: auth.user_id,
+            project_id: auth.project_id,
             user_key_id: auth.user_key_id,
-            user_credit_account: auth.user_credit_account.clone(),
+            project_credit_account: auth.project_credit_account.clone(),
             user_key_credit_account: auth.user_key_credit_account.clone(),
             user_key_model_credit_account,
             user_group: auth.user_group.clone(),
@@ -58,8 +59,9 @@ pub(crate) async fn finalize_polled(
         &upstream,
         AsyncTaskBillingContext {
             user_id: billing_context.user_id,
+            project_id: billing_context.project_id,
             user_key_id: billing_context.user_key_id,
-            user_credit_account: billing_context.user_credit_account,
+            project_credit_account: billing_context.project_credit_account,
             user_key_credit_account: billing_context.user_key_credit_account,
             user_key_model_credit_account: billing_context.user_key_model_credit_account,
             user_group: billing_context.user_group,
@@ -85,8 +87,9 @@ pub(crate) async fn release_task_hold_by_id(
 
 struct AsyncTaskBillingContext {
     user_id: DbId,
+    project_id: DbId,
     user_key_id: DbId,
-    user_credit_account: CreditAccountId,
+    project_credit_account: CreditAccountId,
     user_key_credit_account: CreditAccountId,
     user_key_model_credit_account: Option<CreditAccountId>,
     user_group: String,
@@ -137,12 +140,13 @@ async fn finalize_loaded(
                 SettleRequest {
                     accounts: BillingAccounts {
                         user_id: billing_context.user_id,
+                        project_id: billing_context.project_id,
                         user_key_id: billing_context.user_key_id,
                         user_key_model_credit_account: billing_context
                             .user_key_model_credit_account
                             .as_ref(),
                         user_key_credit_account: &billing_context.user_key_credit_account,
-                        user_credit_account: &billing_context.user_credit_account,
+                        project_credit_account: &billing_context.project_credit_account,
                     },
                     hold: hold.clone(),
                     usage: Some(usage),
@@ -160,6 +164,7 @@ async fn finalize_loaded(
         };
         state.billing_outbox.enqueue_or_retry(UsageInsert {
             user_id: billing_context.user_id,
+            project_id: billing_context.project_id,
             user_key_id: billing_context.user_key_id,
             channel_id: upstream.channel_id,
             channel_key_id: upstream.channel_key_id,

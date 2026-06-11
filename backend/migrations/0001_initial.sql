@@ -30,6 +30,30 @@ CREATE TABLE "user" (
     CONSTRAINT user_email_unique UNIQUE (email)
 );
 
+CREATE TABLE project (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled')),
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX idx_project_single_default_per_owner
+    ON project(owner_user_id)
+    WHERE is_default = TRUE;
+
+CREATE TABLE project_member (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'owner' CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (project_id, user_id)
+);
+
 CREATE TABLE user_code (
     id BIGSERIAL PRIMARY KEY,
     email CITEXT NOT NULL,
@@ -56,6 +80,8 @@ CREATE TABLE admin (
 CREATE TABLE user_key (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    project_id BIGINT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    owner_user_id BIGINT REFERENCES "user"(id) ON DELETE SET NULL,
     name TEXT NOT NULL DEFAULT 'API Key',
     key_prefix TEXT NOT NULL,
     secret_ciphertext TEXT NOT NULL,
@@ -80,7 +106,7 @@ CREATE TABLE user_key_model (
 
 CREATE TABLE credit_account (
     id BIGSERIAL PRIMARY KEY,
-    owner_type TEXT NOT NULL CHECK (owner_type IN ('user', 'user_key', 'user_key_model')),
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('user', 'project', 'user_key', 'user_key_model')),
     owner_id BIGINT NOT NULL,
     balance_micro_usd BIGINT NOT NULL DEFAULT 0,
     reserved_micro_usd BIGINT NOT NULL DEFAULT 0,
@@ -229,6 +255,7 @@ CREATE TABLE credential (
 CREATE TABLE usage (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES "user"(id) ON DELETE SET NULL,
+    project_id BIGINT REFERENCES project(id) ON DELETE SET NULL,
     user_key_id BIGINT REFERENCES user_key(id) ON DELETE SET NULL,
     channel_id BIGINT REFERENCES channel(id) ON DELETE SET NULL,
     channel_key_id BIGINT REFERENCES channel_key(id) ON DELETE SET NULL,
@@ -393,6 +420,7 @@ CREATE TABLE credit_ledger (
 CREATE TABLE usage_daily (
     day DATE NOT NULL,
     user_id BIGINT REFERENCES "user"(id) ON DELETE SET NULL,
+    project_id BIGINT REFERENCES project(id) ON DELETE SET NULL,
     user_key_id BIGINT REFERENCES user_key(id) ON DELETE SET NULL,
     channel_id BIGINT REFERENCES channel(id) ON DELETE SET NULL,
     channel_key_id BIGINT REFERENCES channel_key(id) ON DELETE SET NULL,
@@ -429,6 +457,7 @@ CREATE TABLE task_upstream (
     upstream_task_id TEXT NOT NULL,
 
     user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    project_id BIGINT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     user_key_id BIGINT NOT NULL REFERENCES user_key(id) ON DELETE CASCADE,
 
     protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
@@ -462,14 +491,20 @@ CREATE TABLE task_upstream (
 );
 
 CREATE INDEX idx_user_key_user_id ON user_key(user_id);
+CREATE INDEX idx_user_key_project_id ON user_key(project_id);
+CREATE INDEX idx_user_key_owner_user_id ON user_key(owner_user_id)
+    WHERE owner_user_id IS NOT NULL;
 CREATE INDEX idx_user_key_key_prefix ON user_key(key_prefix);
 CREATE INDEX idx_user_key_created_id ON user_key(created_at DESC, id DESC);
 CREATE INDEX idx_user_key_user_created_id ON user_key(user_id, created_at DESC, id DESC);
+CREATE INDEX idx_user_key_project_created_id ON user_key(project_id, created_at DESC, id DESC);
 CREATE INDEX idx_user_key_model_enabled_key
     ON user_key_model(user_key_id)
     WHERE enabled = TRUE;
 CREATE INDEX idx_user_user_group ON "user"(user_group_id);
 CREATE INDEX idx_user_created_id ON "user"(created_at DESC, id DESC);
+CREATE INDEX idx_project_owner_created ON project(owner_user_id, created_at DESC, id DESC);
+CREATE INDEX idx_project_member_user ON project_member(user_id, project_id);
 CREATE INDEX idx_admin_status ON admin(status);
 CREATE INDEX idx_user_code_email_active
     ON user_code(email, expires_at)
@@ -494,9 +529,10 @@ CREATE INDEX idx_credential_provider_enabled
 CREATE INDEX idx_credential_provider_plan
     ON credential(provider, plan_type)
     WHERE enabled = TRUE AND plan_type IS NOT NULL;
-CREATE INDEX idx_usage_created ON usage(created_at DESC);
 CREATE INDEX idx_usage_created_id ON usage(created_at DESC, id DESC);
 CREATE INDEX idx_usage_user_created ON usage(user_id, created_at DESC);
+CREATE INDEX idx_usage_project_created ON usage(project_id, created_at DESC);
+CREATE INDEX idx_usage_created ON usage(created_at DESC);
 CREATE INDEX idx_usage_user_billable_created
     ON usage(user_id, created_at DESC)
     WHERE billing_status IN ('billed', 'undercharged')
@@ -537,6 +573,7 @@ CREATE UNIQUE INDEX idx_credit_ledger_transaction_allocation
 CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
     day,
     COALESCE(user_id, '-1'::BIGINT),
+    COALESCE(project_id, '-1'::BIGINT),
     COALESCE(user_key_id, '-1'::BIGINT),
     COALESCE(channel_id, '-1'::BIGINT),
     COALESCE(channel_key_id, '-1'::BIGINT),
@@ -546,6 +583,7 @@ CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
 );
 CREATE INDEX idx_usage_daily_day ON usage_daily(day DESC);
 CREATE INDEX idx_usage_daily_user_day ON usage_daily(user_id, day DESC);
+CREATE INDEX idx_usage_daily_project_day ON usage_daily(project_id, day DESC);
 CREATE INDEX idx_usage_daily_user_key_day ON usage_daily(user_id, user_key_id, day DESC);
 CREATE INDEX idx_usage_daily_provider_model_day ON usage_daily(provider, model, day DESC);
 CREATE INDEX idx_task_upstream_owner

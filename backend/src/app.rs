@@ -5,16 +5,15 @@ use std::{
 
 use axum::{
     extract::DefaultBodyLimit,
-    http::{header, HeaderName, HeaderValue, Method},
+    http::{header, HeaderName, HeaderValue, Method, Request},
+    middleware::{self, Next},
+    response::Response,
     Router,
 };
 use chrono::{SecondsFormat, Utc};
 use reqwest::Client;
 use tokio::sync::watch;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    trace::TraceLayer,
-};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{
     field::{Field, Visit},
     Event, Level, Subscriber,
@@ -25,6 +24,7 @@ use tracing_subscriber::{
     registry::LookupSpan,
     util::SubscriberInitExt,
 };
+use uuid::Uuid;
 
 use crate::{
     admin, auth,
@@ -41,6 +41,8 @@ use crate::{
     usage::{ActivityRecorder, UsageDailyRecorder, UsageRecorder},
     user,
 };
+
+const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -75,7 +77,7 @@ pub async fn run() -> anyhow::Result<()> {
             .merge(install::bootstrap_router())
             .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
             .layer(cors_layer_from_origins(&["*".to_string()])?)
-            .layer(TraceLayer::new_for_http().on_failure(()));
+            .layer(middleware::from_fn(log_http_request));
         let listener = tokio::net::TcpListener::bind(&probe.bind_addr).await?;
         tracing::info!(
             "neogate bootstrap listener running on {} because runtime configuration is incomplete",
@@ -103,7 +105,7 @@ pub async fn run() -> anyhow::Result<()> {
     let app = router(state)
         .layer(DefaultBodyLimit::max(config.relay_body_limit_bytes))
         .layer(cors_layer(&config)?)
-        .layer(TraceLayer::new_for_http().on_failure(()));
+        .layer(middleware::from_fn(log_http_request));
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
@@ -120,6 +122,42 @@ fn init_tracing() {
         )
         .with(tracing_subscriber::fmt::layer().event_format(NeogateLogFormat))
         .init();
+}
+
+async fn log_http_request(mut request: Request<axum::body::Body>, next: Next) -> Response {
+    let method = request.method().clone();
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string());
+    let request_id = request_id_from_request(&request);
+    request.extensions_mut().insert(request_id.clone());
+
+    let mut response = next.run(request).await;
+    let status = response.status();
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+    tracing::info!(
+        method = %method,
+        path = %path,
+        status = %status.as_u16(),
+        request_id = %request_id,
+        "http request"
+    );
+    response
+}
+
+fn request_id_from_request(request: &Request<axum::body::Body>) -> String {
+    request
+        .headers()
+        .get(&REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().simple().to_string())
 }
 
 struct NeogateLogFormat;

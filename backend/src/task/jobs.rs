@@ -32,7 +32,7 @@ const STATUS_IN_PROGRESS: &str = "in_progress";
 const STATUS_COMPLETED: &str = "completed";
 const STATUS_FAILED: &str = "failed";
 const STATUS_CANCELLED: &str = "cancelled";
-const SSE_BUFFER_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+const SSE_BUFFER_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NeogateResponseMetadata {
@@ -665,6 +665,21 @@ data: "response":{"output":[{"type":"image_generation_call","result":"QUJD"}]}}
 "#,
             )
             .unwrap();
+
+        assert!(collector.completed.is_some());
+    }
+
+    #[test]
+    fn collector_allows_large_image_result_event() {
+        let mut collector = NeogateResponseSseCollector::default();
+        let result = "A".repeat(3 * 1024 * 1024);
+        let event = format!(
+            "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"output\":[{{\"type\":\"image_generation_call\",\"result\":\"{result}\"}}]}}}}\n\n"
+        );
+
+        for chunk in event.as_bytes().chunks(8192) {
+            collector.observe(chunk).unwrap();
+        }
 
         assert!(collector.completed.is_some());
     }

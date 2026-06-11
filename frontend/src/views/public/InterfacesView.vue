@@ -99,7 +99,7 @@ const openAiResponseImageGeneration = computed(
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-5.5",
+    "model": "gpt-image-2",
     "input": "生成一张赛博朋克风格的白猫坐在霓虹灯下的图片",
     "tools": [
       { "type": "image_generation" }
@@ -117,7 +117,7 @@ curl ${openAiBaseUrl.value}/responses \\
   -H "Content-Type: application/json" \\
   -d @- <<JSON
 {
-  "model": "gpt-5.5",
+  "model": "gpt-image-2",
   "background": true,
   "store": true,
   "tools": [
@@ -189,7 +189,7 @@ const openAiImageEditStream = computed(
 const openAiImageVariation = computed(
   () => `curl ${openAiBaseUrl.value}/images/variations \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
-  -F "model=dall-e-2" \\
+  -F "model=gpt-image-2" \\
   -F "image=@input.png" \\
   -F "size=1024x1024"`
 )

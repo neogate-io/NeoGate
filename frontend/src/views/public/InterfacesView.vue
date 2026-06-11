@@ -99,7 +99,7 @@ const openAiResponseImageGeneration = computed(
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-image-2",
+    "model": "gpt-5.5",
     "input": "生成一张赛博朋克风格的白猫坐在霓虹灯下的图片",
     "tools": [
       { "type": "image_generation" }
@@ -117,7 +117,7 @@ curl ${openAiBaseUrl.value}/responses \\
   -H "Content-Type: application/json" \\
   -d @- <<JSON
 {
-  "model": "gpt-image-2",
+  "model": "gpt-5.5",
   "background": true,
   "store": true,
   "tools": [

@@ -29,6 +29,16 @@ export type AddProjectMemberPayload = ProjectMemberRolePayload & {
   user_id: number
 }
 
+export type CreatedProjectMember = {
+  record: ProjectMember
+  key?: string | null
+}
+
+export type CreatedProject = {
+  record: Project
+  key?: string | null
+}
+
 export function getProjects(filters: GetProjectsFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.search) searchParams.set('search', filters.search)
@@ -41,7 +51,7 @@ export function getProjects(filters: GetProjectsFilters = {}) {
 }
 
 export function createProject(payload: CreateProjectPayload) {
-  return adminRequest<Project>('/api/admin/projects', {
+  return adminRequest<CreatedProject>('/api/admin/projects', {
     method: 'POST',
     body: JSON.stringify(payload)
   })
@@ -65,7 +75,7 @@ export function getProjectMembers(id: number) {
 }
 
 export function addProjectMember(id: number, payload: AddProjectMemberPayload) {
-  return adminRequest<ProjectMember>(`/api/admin/projects/${id}/members`, {
+  return adminRequest<CreatedProjectMember>(`/api/admin/projects/${id}/members`, {
     method: 'POST',
     body: JSON.stringify(payload)
   })

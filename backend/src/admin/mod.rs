@@ -48,11 +48,11 @@ use self::{
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
     project::{
-        add_project_member, create_project, create_project_user_key, delete_project,
-        delete_project_member, list_project_members, list_projects, update_project,
-        update_project_member, CreateProjectRequest, CreateProjectUserKeyRequest,
-        ListProjectsQuery, ProjectMemberRecord, ProjectPage, ProjectRecord,
-        UpdateProjectMemberRequest, UpdateProjectRequest, UpsertProjectMemberRequest,
+        add_project_member, create_project, delete_project, delete_project_member,
+        list_project_members, list_projects, update_project, update_project_member,
+        CreateProjectRequest, CreatedProject, CreatedProjectMember, ListProjectsQuery,
+        ProjectMemberRecord, ProjectPage, ProjectRecord, UpdateProjectMemberRequest,
+        UpdateProjectRequest, UpsertProjectMemberRequest,
     },
     provider::{
         ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
@@ -113,10 +113,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/projects/{id}/members/{member_id}",
             patch(update_project_member_handler).delete(delete_project_member_handler),
-        )
-        .route(
-            "/api/admin/projects/{id}/user-keys",
-            post(create_project_user_key_handler),
         )
         .route("/api/admin/credits", post(adjust_credit_handler))
         .route(
@@ -365,7 +361,7 @@ async fn create_project_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
     Json(req): Json<CreateProjectRequest>,
-) -> AppResult<Json<ProjectRecord>> {
+) -> AppResult<Json<CreatedProject>> {
     Ok(Json(create_project(&state, req).await?))
 }
 
@@ -400,7 +396,7 @@ async fn add_project_member_handler(
     _admin: AdminAuth,
     Path(id): Path<DbId>,
     Json(req): Json<UpsertProjectMemberRequest>,
-) -> AppResult<Json<ProjectMemberRecord>> {
+) -> AppResult<Json<CreatedProjectMember>> {
     Ok(Json(add_project_member(&state, id, req).await?))
 }
 
@@ -422,15 +418,6 @@ async fn delete_project_member_handler(
 ) -> AppResult<Json<Value>> {
     delete_project_member(&state, id, member_id).await?;
     Ok(Json(json!({ "ok": true })))
-}
-
-async fn create_project_user_key_handler(
-    State(state): State<Arc<AppState>>,
-    _admin: AdminAuth,
-    Path(id): Path<DbId>,
-    Json(req): Json<CreateProjectUserKeyRequest>,
-) -> AppResult<Json<CreatedUserKey>> {
-    Ok(Json(create_project_user_key(&state, id, req).await?))
 }
 
 async fn channels(

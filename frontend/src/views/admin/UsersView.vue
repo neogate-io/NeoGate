@@ -709,11 +709,7 @@ onMounted(() => {
         </el-table-column>
         <template #empty>
           <div class="channel-empty-state user-empty-state">
-            <el-empty :description="emptyUsersDescription">
-              <el-button type="primary" :icon="Plus" @click="openCreateDialog">
-                {{ t('addUser') }}
-              </el-button>
-            </el-empty>
+            <el-empty :description="emptyUsersDescription" />
           </div>
         </template>
       </el-table>

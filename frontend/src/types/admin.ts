@@ -83,6 +83,9 @@ export type ProjectMember = {
   user_username?: string | null
   role: 'owner' | 'admin' | 'member' | 'viewer'
   user_status: UserStatus
+  api_key?: string | null
+  api_key_prefix?: string | null
+  last_active_at?: string | null
   created_at: string
   updated_at: string
 }

@@ -16,14 +16,6 @@ export type AdjustCreditResponse = {
   balance_micro_usd: number
 }
 
-export type CreateProjectUserKeyPayload = {
-  name?: string
-  status?: UserKeyStatus
-  owner_user_id?: number | null
-  expires_at?: string | null
-  model_limits?: string[] | null
-}
-
 export type CreatedUserKey = {
   record: UserKey
   key: string
@@ -38,13 +30,6 @@ export function getUserKeys(filters: GetUserKeysFilters = {}) {
 
   const query = searchParams.toString()
   return adminRequest<UserKeyPage>(`/api/admin/user-keys${query ? `?${query}` : ''}`)
-}
-
-export function createProjectUserKey(projectId: number, payload: CreateProjectUserKeyPayload) {
-  return adminRequest<CreatedUserKey>(`/api/admin/projects/${projectId}/user-keys`, {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  })
 }
 
 export function getUserGroups() {

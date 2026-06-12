@@ -442,7 +442,19 @@ async fn flush_user_key_activity(
     sqlx::query(
         "UPDATE user_key SET last_active_at = now(), updated_at = now() WHERE id = ANY($1)",
     )
-    .bind(user_key_ids)
+    .bind(&user_key_ids)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE project_member AS pm
+         SET last_active_at = now(), updated_at = now()
+         FROM user_key AS uk
+         WHERE uk.id = ANY($1)
+           AND uk.owner_user_id IS NOT NULL
+           AND pm.project_id = uk.project_id
+           AND pm.user_id = uk.owner_user_id",
+    )
+    .bind(&user_key_ids)
     .execute(&mut **tx)
     .await?;
     Ok(())

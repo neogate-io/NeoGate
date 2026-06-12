@@ -10,8 +10,6 @@ use crate::{
     AppState,
 };
 
-use super::user::{user_key_from_row, validate_user_key_status, CreatedUserKey};
-
 #[derive(Debug, Serialize)]
 pub struct ProjectRecord {
     pub id: DbId,
@@ -40,8 +38,23 @@ pub struct ProjectMemberRecord {
     pub user_username: Option<String>,
     pub role: String,
     pub user_status: String,
+    pub api_key: Option<String>,
+    pub api_key_prefix: Option<String>,
+    pub last_active_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreatedProjectMember {
+    pub record: ProjectMemberRecord,
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreatedProject {
+    pub record: ProjectRecord,
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,23 +98,8 @@ pub struct UpdateProjectMemberRequest {
     pub role: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CreateProjectUserKeyRequest {
-    #[serde(default = "default_project_user_key_name")]
-    pub name: String,
-    #[serde(default = "default_enabled_status")]
-    pub status: String,
-    pub owner_user_id: Option<DbId>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub model_limits: Option<Vec<String>>,
-}
-
 fn default_enabled_status() -> String {
     "enabled".to_string()
-}
-
-fn default_project_user_key_name() -> String {
-    "Project API Key".to_string()
 }
 
 pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppResult<ProjectPage> {
@@ -235,7 +233,7 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
 pub async fn create_project(
     state: &AppState,
     req: CreateProjectRequest,
-) -> AppResult<ProjectRecord> {
+) -> AppResult<CreatedProject> {
     validate_project_status(&req.status)?;
     let name = normalize_project_name(&req.name)?;
     let mut tx = state.db.pool.begin().await?;
@@ -262,8 +260,13 @@ pub async fn create_project(
     .execute(&mut *tx)
     .await?;
     account::create_credit_account(&mut tx, CreditAccountType::Project, project_id).await?;
+    let key =
+        ensure_project_member_user_key_in_tx(state, &mut tx, project_id, req.owner_user_id).await?;
     tx.commit().await?;
-    get_project(state, project_id).await
+    Ok(CreatedProject {
+        record: get_project(state, project_id).await?,
+        key,
+    })
 }
 
 pub async fn update_project(
@@ -344,9 +347,22 @@ pub async fn list_project_members(
     let rows = sqlx::query(
         "SELECT pm.id, pm.project_id, pm.user_id,
                 u.email AS user_email, u.username AS user_username,
-                pm.role, u.status AS user_status, pm.created_at, pm.updated_at
+                pm.role, u.status AS user_status,
+                member_key.id AS api_key_id,
+                member_key.key_prefix AS api_key_prefix,
+                member_key.secret_ciphertext AS api_key_secret_ciphertext,
+                pm.last_active_at,
+                pm.created_at, pm.updated_at
          FROM project_member pm
          JOIN \"user\" u ON u.id = pm.user_id
+         LEFT JOIN LATERAL (
+             SELECT uk.id, uk.key_prefix, uk.secret_ciphertext
+             FROM user_key uk
+             WHERE uk.project_id = pm.project_id
+               AND uk.owner_user_id = pm.user_id
+             ORDER BY uk.created_at ASC, uk.id ASC
+             LIMIT 1
+         ) member_key ON TRUE
          WHERE pm.project_id = $1
          ORDER BY
            CASE pm.role
@@ -363,7 +379,7 @@ pub async fn list_project_members(
     .await?;
     Ok(rows
         .iter()
-        .map(project_member_from_row)
+        .map(|row| project_member_from_row(state, row))
         .collect::<Result<_, _>>()?)
 }
 
@@ -371,7 +387,7 @@ pub async fn add_project_member(
     state: &AppState,
     project_id: DbId,
     req: UpsertProjectMemberRequest,
-) -> AppResult<ProjectMemberRecord> {
+) -> AppResult<CreatedProjectMember> {
     validate_editable_project_member_role(&req.role)?;
     let mut tx = state.db.pool.begin().await?;
     ensure_project_exists_in_tx(&mut tx, project_id).await?;
@@ -407,8 +423,12 @@ pub async fn add_project_member(
     .fetch_one(&mut *tx)
     .await?;
     let member_id: DbId = row.try_get("id")?;
+    let key = ensure_project_member_user_key_in_tx(state, &mut tx, project_id, req.user_id).await?;
     tx.commit().await?;
-    get_project_member(state, project_id, member_id).await
+    Ok(CreatedProjectMember {
+        record: get_project_member(state, project_id, member_id).await?,
+        key,
+    })
 }
 
 pub async fn update_project_member(
@@ -452,111 +472,26 @@ pub async fn delete_project_member(
             "project owner cannot be removed".to_string(),
         ));
     }
+    recover_project_member_user_key_hot_credit_accounts(state, project_id, current.user_id).await?;
+    invalidate_project_member_user_keys(state, project_id, current.user_id).await?;
     let result = sqlx::query(
-        "DELETE FROM project_member
+        "WITH deleted_keys AS (
+             DELETE FROM user_key
+             WHERE project_id = $1 AND owner_user_id = $3
+         )
+         DELETE FROM project_member
          WHERE project_id = $1 AND id = $2
            AND role <> 'owner'",
     )
     .bind(project_id)
     .bind(member_id)
+    .bind(current.user_id)
     .execute(&state.db.pool)
     .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
     Ok(())
-}
-
-pub async fn create_project_user_key(
-    state: &AppState,
-    project_id: DbId,
-    req: CreateProjectUserKeyRequest,
-) -> AppResult<CreatedUserKey> {
-    validate_user_key_status(&req.status)?;
-    let name = normalize_project_user_key_name(&req.name)?;
-    let mut tx = state.db.pool.begin().await?;
-    let project = sqlx::query(
-        "SELECT id, owner_user_id
-         FROM project
-         WHERE id = $1
-         FOR KEY SHARE",
-    )
-    .bind(project_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    let project_owner_user_id: DbId = project.try_get("owner_user_id")?;
-
-    if let Some(owner_user_id) = req.owner_user_id {
-        let is_member = sqlx::query(
-            "SELECT id
-             FROM project_member
-             WHERE project_id = $1 AND user_id = $2
-             FOR KEY SHARE",
-        )
-        .bind(project_id)
-        .bind(owner_user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_some();
-        if !is_member {
-            return Err(AppError::BadRequest(
-                "key owner must be a project member".to_string(),
-            ));
-        }
-    }
-
-    let key = generate_user_key();
-    let secret_ciphertext = state.secrets.encrypt(&key)?;
-    let compatibility_user_id = req.owner_user_id.unwrap_or(project_owner_user_id);
-    let row = sqlx::query(
-        "INSERT INTO user_key
-            (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status, expires_at, model_limits)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id",
-    )
-    .bind(compatibility_user_id)
-    .bind(project_id)
-    .bind(req.owner_user_id)
-    .bind(name)
-    .bind(key_prefix(&key))
-    .bind(secret_ciphertext)
-    .bind(req.status)
-    .bind(req.expires_at)
-    .bind(req.model_limits)
-    .fetch_one(&mut *tx)
-    .await?;
-    let user_key_id: DbId = row.try_get("id")?;
-    account::create_credit_account(&mut tx, CreditAccountType::UserKey, user_key_id).await?;
-    tx.commit().await?;
-
-    Ok(CreatedUserKey {
-        record: get_project_user_key(state, user_key_id).await?,
-        key,
-    })
-}
-
-async fn get_project_user_key(
-    state: &AppState,
-    user_key_id: DbId,
-) -> AppResult<super::user::UserKeyRecord> {
-    let row = sqlx::query(
-        "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
-                p.name AS project_name,
-                uk.name, uk.key_prefix, uk.secret_ciphertext,
-                uk.status, uk.last_active_at, uk.expires_at,
-                uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
-                uk.created_at, uk.updated_at
-         FROM user_key uk
-         JOIN project p ON p.id = uk.project_id
-         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
-         WHERE uk.id = $1",
-    )
-    .bind(user_key_id)
-    .fetch_optional(&state.db.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    user_key_from_row(state, &row)
 }
 
 async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
@@ -602,6 +537,47 @@ async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
     project_from_row(&row)
 }
 
+async fn ensure_project_member_user_key_in_tx(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: DbId,
+    user_id: DbId,
+) -> AppResult<Option<String>> {
+    let existing = sqlx::query(
+        "SELECT id
+         FROM user_key
+         WHERE project_id = $1 AND owner_user_id = $2
+         LIMIT 1
+         FOR KEY SHARE",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if existing.is_some() {
+        return Ok(None);
+    }
+
+    let key = generate_user_key();
+    let secret_ciphertext = state.secrets.encrypt(&key)?;
+    let row = sqlx::query(
+        "INSERT INTO user_key
+            (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status)
+         VALUES ($1, $2, $3, 'Project member API Key', $4, $5, 'enabled')
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(project_id)
+    .bind(user_id)
+    .bind(key_prefix(&key))
+    .bind(secret_ciphertext)
+    .fetch_one(&mut **tx)
+    .await?;
+    let user_key_id: DbId = row.try_get("id")?;
+    account::create_credit_account(tx, CreditAccountType::UserKey, user_key_id).await?;
+    Ok(Some(key))
+}
+
 async fn get_project_member(
     state: &AppState,
     project_id: DbId,
@@ -610,9 +586,22 @@ async fn get_project_member(
     let row = sqlx::query(
         "SELECT pm.id, pm.project_id, pm.user_id,
                 u.email AS user_email, u.username AS user_username,
-                pm.role, u.status AS user_status, pm.created_at, pm.updated_at
+                pm.role, u.status AS user_status,
+                member_key.id AS api_key_id,
+                member_key.key_prefix AS api_key_prefix,
+                member_key.secret_ciphertext AS api_key_secret_ciphertext,
+                pm.last_active_at,
+                pm.created_at, pm.updated_at
          FROM project_member pm
          JOIN \"user\" u ON u.id = pm.user_id
+         LEFT JOIN LATERAL (
+             SELECT uk.id, uk.key_prefix, uk.secret_ciphertext
+             FROM user_key uk
+             WHERE uk.project_id = pm.project_id
+               AND uk.owner_user_id = pm.user_id
+             ORDER BY uk.created_at ASC, uk.id ASC
+             LIMIT 1
+         ) member_key ON TRUE
          WHERE pm.project_id = $1 AND pm.id = $2",
     )
     .bind(project_id)
@@ -620,7 +609,7 @@ async fn get_project_member(
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    project_member_from_row(&row)
+    project_member_from_row(state, &row)
 }
 
 async fn ensure_project_exists_in_tx(
@@ -670,6 +659,26 @@ async fn invalidate_project_keys(state: &AppState, project_id: DbId) -> AppResul
     Ok(())
 }
 
+async fn invalidate_project_member_user_keys(
+    state: &AppState,
+    project_id: DbId,
+    user_id: DbId,
+) -> AppResult<()> {
+    let rows = sqlx::query("SELECT id FROM user_key WHERE project_id = $1 AND owner_user_id = $2")
+        .bind(project_id)
+        .bind(user_id)
+        .fetch_all(&state.db.pool)
+        .await?;
+    for row in rows {
+        let id: DbId = row.try_get("id")?;
+        state
+            .cache_invalidator
+            .invalidate(state, crate::cache::InvalidationEvent::UserKey { id })
+            .await;
+    }
+    Ok(())
+}
+
 async fn recover_project_hot_credit_accounts(state: &AppState, project_id: DbId) -> AppResult<()> {
     let rows = sqlx::query(
         "SELECT w.id
@@ -689,6 +698,34 @@ async fn recover_project_hot_credit_accounts(state: &AppState, project_id: DbId)
          WHERE uk.project_id = $1",
     )
     .bind(project_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    for row in rows {
+        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
+    }
+    Ok(())
+}
+
+async fn recover_project_member_user_key_hot_credit_accounts(
+    state: &AppState,
+    project_id: DbId,
+    user_id: DbId,
+) -> AppResult<()> {
+    let rows = sqlx::query(
+        "SELECT w.id
+         FROM user_key uk
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         WHERE uk.project_id = $1 AND uk.owner_user_id = $2
+         UNION ALL
+         SELECT w.id
+         FROM user_key uk
+         JOIN user_key_model ukm ON ukm.user_key_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
+         WHERE uk.project_id = $1 AND uk.owner_user_id = $2",
+    )
+    .bind(project_id)
+    .bind(user_id)
     .fetch_all(&state.db.pool)
     .await?;
 
@@ -785,19 +822,6 @@ fn normalize_project_name(name: &str) -> AppResult<String> {
     Ok(name.to_string())
 }
 
-fn normalize_project_user_key_name(name: &str) -> AppResult<String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("api key name is required".to_string()));
-    }
-    if name.chars().count() > 80 {
-        return Err(AppError::BadRequest(
-            "api key name must be 80 characters or fewer".to_string(),
-        ));
-    }
-    Ok(name.to_string())
-}
-
 fn project_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectRecord> {
     let balance_micro_usd = row.try_get("balance_micro_usd")?;
     let reserved_micro_usd = row.try_get("reserved_micro_usd")?;
@@ -820,7 +844,18 @@ fn project_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectRecord> {
     })
 }
 
-fn project_member_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectMemberRecord> {
+fn project_member_from_row(
+    state: &AppState,
+    row: &sqlx::postgres::PgRow,
+) -> AppResult<ProjectMemberRecord> {
+    let api_key_id: Option<DbId> = row.try_get("api_key_id")?;
+    let api_key_secret_ciphertext: Option<String> = row.try_get("api_key_secret_ciphertext")?;
+    let api_key = match (api_key_id, api_key_secret_ciphertext) {
+        (Some(id), Some(secret_ciphertext)) => {
+            Some(state.secrets.plaintext(id, &secret_ciphertext)?)
+        }
+        _ => None,
+    };
     Ok(ProjectMemberRecord {
         id: row.try_get("id")?,
         project_id: row.try_get("project_id")?,
@@ -829,6 +864,9 @@ fn project_member_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectMemb
         user_username: row.try_get("user_username")?,
         role: row.try_get("role")?,
         user_status: row.try_get("user_status")?,
+        api_key,
+        api_key_prefix: row.try_get("api_key_prefix")?,
+        last_active_at: row.try_get("last_active_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

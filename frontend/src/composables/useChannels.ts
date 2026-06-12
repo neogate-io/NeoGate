@@ -1,6 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import {
   createChannel,
   createChannelKey,
@@ -12,6 +11,7 @@ import {
 } from '../api/channels'
 import { getProviders } from '../api/providers'
 import type { MessageKey } from '../i18n'
+import { confirmAction } from '../utils/confirm'
 import type {
   Channel,
   ChannelEndpoint,
@@ -641,17 +641,13 @@ export function useChannels(t: Translate) {
   }
 
   async function confirmDeleteChannel(row: Channel) {
-    try {
-      await ElMessageBox.confirm(t('deleteChannelConfirm'), t('delete'), {
-        confirmButtonText: t('delete'),
-        cancelButtonText: t('cancel'),
-        confirmButtonClass: 'el-button--danger',
-        customClass: 'admin-confirm-dialog',
-        type: 'warning'
-      })
-    } catch {
-      return
-    }
+    const confirmed = await confirmAction(t('deleteChannelConfirm'), t('delete'), {
+      confirmText: t('delete'),
+      cancelText: t('cancel'),
+      danger: true,
+      type: 'warning'
+    })
+    if (!confirmed) return
 
     deletingId.value = row.id
     try {

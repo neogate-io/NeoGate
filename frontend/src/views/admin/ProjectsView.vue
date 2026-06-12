@@ -16,7 +16,7 @@ import {
   WarningFilled
 } from '@element-plus/icons-vue'
 import { computed, reactive, ref, type Component } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   addProjectMember,
   createProject,
@@ -36,6 +36,7 @@ import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
+import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
 
@@ -291,20 +292,16 @@ async function loadSelectedProjectMembers() {
 async function confirmDialog(
   message: string,
   title: string,
-  confirmButtonText: string,
-  type: 'info' | 'warning'
+  confirmText: string,
+  type: 'info' | 'warning',
+  danger = false
 ) {
-  try {
-    await ElMessageBox.confirm(message, title, {
-      confirmButtonText,
-      cancelButtonText: t('cancel'),
-      customClass: 'admin-confirm-dialog',
-      type
-    })
-    return true
-  } catch {
-    return false
-  }
+  return confirmAction(message, title, {
+    confirmText,
+    cancelText: t('cancel'),
+    danger,
+    type
+  })
 }
 
 async function submitProjectForm() {
@@ -450,7 +447,8 @@ async function confirmDeleteProjectMember(row: ProjectMember) {
     t('deleteProjectMemberConfirm').replace('{email}', row.user_email),
     t('confirmDelete'),
     t('delete'),
-    'warning'
+    'warning',
+    true
   )
   if (!confirmed) return
   deletingMemberId.value = row.id
@@ -486,7 +484,8 @@ async function confirmDeleteProject(row: Project) {
     t('deleteProjectConfirm').replace('{name}', row.name),
     t('confirmDelete'),
     t('delete'),
-    'warning'
+    'warning',
+    true
   )
   if (!confirmed) return
   deletingProjectId.value = row.id

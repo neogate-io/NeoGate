@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DocumentCopy, MoreFilled, Plus } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { computed, ref } from 'vue'
 import {
   createOwnUserKey,
@@ -11,6 +11,7 @@ import {
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { UserKey } from '../../types/admin'
+import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, maskApiKey } from '../../utils/format'
 
@@ -111,15 +112,13 @@ async function createApiKey() {
 }
 
 async function confirmDeleteApiKey(row: UserKey) {
-  try {
-    await ElMessageBox.confirm(t('deleteApiKeyConfirm'), t('delete'), {
-      confirmButtonText: t('delete'),
-      cancelButtonText: t('cancel'),
-      type: 'warning'
-    })
-  } catch {
-    return
-  }
+  const confirmed = await confirmAction(t('deleteApiKeyConfirm'), t('delete'), {
+    confirmText: t('delete'),
+    cancelText: t('cancel'),
+    danger: true,
+    type: 'warning'
+  })
+  if (!confirmed) return
 
   deletingIds.value = new Set(deletingIds.value).add(row.id)
   try {

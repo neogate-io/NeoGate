@@ -9,7 +9,7 @@ import {
   Upload,
   Warning
 } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   deleteCredential,
   disableCredential,
@@ -23,6 +23,7 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Credential, CredentialQuotaWindow } from '../../types/admin'
+import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime } from '../../utils/format'
 
@@ -103,16 +104,13 @@ async function toggleCredential(credential: Credential) {
 }
 
 async function removeCredential(credential: Credential) {
-  try {
-    await ElMessageBox.confirm(t('credentialDeleteConfirm'), t('delete'), {
-      confirmButtonText: t('delete'),
-      cancelButtonText: t('cancel'),
-      customClass: 'admin-confirm-dialog',
-      type: 'warning'
-    })
-  } catch {
-    return
-  }
+  const confirmed = await confirmAction(t('credentialDeleteConfirm'), t('delete'), {
+    confirmText: t('delete'),
+    cancelText: t('cancel'),
+    danger: true,
+    type: 'warning'
+  })
+  if (!confirmed) return
 
   deletingIds.add(credential.id)
   try {

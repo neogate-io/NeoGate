@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
 import { Coin, PriceTag, Search, UserFilled, View } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { getPricingTemplates, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useLocale } from '../../composables/useLocale'
 import type { PricingTemplate } from '../../types/admin'
+import { confirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
 
@@ -133,19 +134,15 @@ async function saveServicePolicy() {
 }
 
 async function syncReferencePrices() {
-  try {
-    await ElMessageBox.confirm(
-      referenceSyncConfirmContent(),
-      t('syncReferencePricesConfirmTitle'),
-      {
-        confirmButtonText: t('syncReferencePricesConfirmButton'),
-        cancelButtonText: t('cancel'),
-        customClass: 'reference-sync-confirm'
-      }
-    )
-  } catch {
-    return
-  }
+  const confirmed = await confirmAction(
+    referenceSyncConfirmContent(),
+    t('syncReferencePricesConfirmTitle'),
+    {
+      confirmText: t('syncReferencePricesConfirmButton'),
+      cancelText: t('cancel')
+    }
+  )
+  if (!confirmed) return
 
   syncingTemplates.value = true
   try {
@@ -288,94 +285,6 @@ onMounted(load)
 </template>
 
 <style scoped>
-:global(.reference-sync-confirm) {
-  border-radius: 8px;
-  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.14);
-  max-width: calc(100vw - 32px);
-  padding: 0;
-  width: 520px;
-}
-
-:global(.reference-sync-confirm .el-message-box__header) {
-  border-bottom: 1px solid var(--admin-border-soft);
-  padding: 18px 22px 14px;
-}
-
-:global(.reference-sync-confirm .el-message-box__title) {
-  color: var(--admin-text);
-  font-size: 18px;
-  font-weight: 760;
-  line-height: 1.25;
-}
-
-:global(.reference-sync-confirm .el-message-box__headerbtn) {
-  right: 18px;
-  top: 16px;
-}
-
-:global(.reference-sync-confirm .el-message-box__content) {
-  padding: 16px 22px 18px;
-}
-
-:global(.reference-sync-confirm .el-message-box__container) {
-  display: block;
-}
-
-:global(.reference-sync-confirm .el-message-box__status) {
-  display: none;
-}
-
-:global(.reference-sync-confirm .el-message-box__message) {
-  color: #4b5563;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.6;
-  margin: 0;
-  padding: 0;
-}
-
-:global(.reference-sync-confirm .el-message-box__message p) {
-  margin: 0;
-}
-
-:global(.reference-sync-confirm .reference-sync-copy) {
-  display: grid;
-  gap: 12px;
-}
-
-:global(.reference-sync-confirm .reference-sync-lead) {
-  color: #374151;
-  font-size: 15px;
-  line-height: 1.65;
-}
-
-:global(.reference-sync-confirm .reference-sync-notes) {
-  background: #f8fafc;
-  border: 1px solid var(--admin-border-soft);
-  border-radius: 8px;
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-}
-
-:global(.reference-sync-confirm .reference-sync-notes p) {
-  color: #64748b;
-  line-height: 1.55;
-}
-
-:global(.reference-sync-confirm .el-message-box__btns) {
-  gap: 10px;
-  padding: 0 22px 20px;
-}
-
-:global(.reference-sync-confirm .el-message-box__btns .el-button) {
-  border-radius: 7px;
-  font-size: 14px;
-  font-weight: 680;
-  min-height: 34px;
-  min-width: 86px;
-}
-
 :global(.reference-prices-dialog) {
   max-width: calc(100vw - 32px);
 }

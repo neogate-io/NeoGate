@@ -17,7 +17,7 @@ import {
   WarningFilled
 } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { getUserGroups, getUserKeys } from '../../api/userKeys'
 import {
   createUser,
@@ -34,6 +34,7 @@ import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
+import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -246,20 +247,16 @@ function openEditDialog(row: User) {
 async function confirmDialog(
   message: string,
   title: string,
-  confirmButtonText: string,
-  type: 'info' | 'warning'
+  confirmText: string,
+  type: 'info' | 'warning',
+  danger = false
 ) {
-  try {
-    await ElMessageBox.confirm(message, title, {
-      confirmButtonText,
-      cancelButtonText: t('cancel'),
-      customClass: 'admin-confirm-dialog',
-      type
-    })
-    return true
-  } catch {
-    return false
-  }
+  return confirmAction(message, title, {
+    confirmText,
+    cancelText: t('cancel'),
+    danger,
+    type
+  })
 }
 
 function userStatusConfirmMessage(email: string, status: UserStatus) {
@@ -396,7 +393,8 @@ async function confirmDeleteUser(row: User) {
     t('deleteUserConfirm').replace('{email}', row.email),
     t('confirmDelete'),
     t('delete'),
-    'warning'
+    'warning',
+    true
   )
   if (!confirmed) return
   deletingUserId.value = row.id

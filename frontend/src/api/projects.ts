@@ -18,11 +18,12 @@ export type CreateProjectPayload = {
 
 export type UpdateProjectPayload = {
   name?: string
+  owner_user_id?: number
   status?: ProjectStatus
 }
 
 export type ProjectMemberRolePayload = {
-  role: 'admin' | 'member' | 'viewer'
+  role: 'admin' | 'member'
 }
 
 export type AddProjectMemberPayload = ProjectMemberRolePayload & {

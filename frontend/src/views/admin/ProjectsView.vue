@@ -27,12 +27,14 @@ import {
   type ProjectPage,
   updateProject
 } from '../../api/projects'
+import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { adjustCredit } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
 import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
 import { readError } from '../../utils/errors'
 import { formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
@@ -44,11 +46,10 @@ defineOptions({
 const { locale, t } = useLocale()
 
 type TranslationKey = Parameters<typeof t>[0]
-type ProjectStatusTone = 'success' | 'neutral'
+type CreditClass = 'is-available' | 'is-unlimited'
 type ProjectStatusMeta = {
   labelKey: TranslationKey
   icon: Component
-  tone: ProjectStatusTone
   confirmType: 'info' | 'warning'
 }
 type ProjectForm = {
@@ -56,7 +57,7 @@ type ProjectForm = {
   ownerUserId: number | null
   status: ProjectStatus
 }
-type EditableProjectMemberRole = Exclude<ProjectMember['role'], 'owner'>
+type EditableProjectMemberRole = Extract<ProjectMember['role'], 'admin' | 'member'>
 type ProjectMemberForm = {
   userId: number | null
   role: EditableProjectMemberRole
@@ -68,23 +69,19 @@ const PROJECT_STATUS_META: Record<ProjectStatus, ProjectStatusMeta> = {
   enabled: {
     labelKey: 'enabled',
     icon: CircleCheckFilled,
-    tone: 'success',
     confirmType: 'info'
   },
   disabled: {
     labelKey: 'disabled',
     icon: WarningFilled,
-    tone: 'neutral',
     confirmType: 'warning'
   }
 }
 
 const search = ref('')
 const statusFilter = ref<ProjectStatus | ''>('')
-const createDialogVisible = ref(false)
-const createSaving = ref(false)
-const editDialogVisible = ref(false)
-const editSaving = ref(false)
+const projectDialogVisible = ref(false)
+const projectSaving = ref(false)
 const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
 const membersDialogVisible = ref(false)
@@ -94,18 +91,16 @@ const memberUserOptions = ref<User[]>([])
 const memberUserSearchLoading = ref(false)
 const deletingMemberId = ref<number | null>(null)
 const deletingProjectId = ref<number | null>(null)
+const togglingProjectIds = useReactiveSet<number>()
 const selectedProject = ref<Project | null>(null)
 const selectedMembers = ref<ProjectMember[]>([])
 const ownerOptions = ref<User[]>([])
 const ownerSearchLoading = ref(false)
 const amountUsd = ref(DEFAULT_RECHARGE_USD)
-const createForm = reactive<ProjectForm>({
+const servicePolicy = ref<ServicePolicy | null>(null)
+const projectForm = reactive<ProjectForm>({
   name: '',
   ownerUserId: null,
-  status: 'enabled'
-})
-const editForm = reactive<Omit<ProjectForm, 'ownerUserId'>>({
-  name: '',
   status: 'enabled'
 })
 const memberForm = reactive<ProjectMemberForm>({
@@ -141,14 +136,23 @@ const rechargePreviewMicroUsd = computed(() => {
   if (!selectedProject.value) return usdToMicroUsd(amountUsd.value)
   return selectedProject.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
 })
+const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
+const isEditingProject = computed(() => Boolean(selectedProject.value))
+const projectDialogTitle = computed(() => t(isEditingProject.value ? 'editProject' : 'addProject'))
+const projectSubmitText = computed(() => t(isEditingProject.value ? 'save' : 'create'))
 
 async function loadProjects() {
-  return getProjects({
-    search: search.value.trim(),
-    status: statusFilter.value,
-    limit: pageSize.value,
-    cursor: currentCursor.value
-  })
+  const [page, policy] = await Promise.all([
+    getProjects({
+      search: search.value.trim(),
+      status: statusFilter.value,
+      limit: pageSize.value,
+      cursor: currentCursor.value
+    }),
+    getAdminServicePolicy()
+  ])
+  servicePolicy.value = policy
+  return page
 }
 
 function resetPagination(page = 1) {
@@ -159,12 +163,12 @@ function projectStatusText(status: ProjectStatus) {
   return t(PROJECT_STATUS_META[status].labelKey)
 }
 
-function projectStatusIcon(status: ProjectStatus) {
-  return PROJECT_STATUS_META[status].icon
+function projectRowClassName({ row }: { row: Project }) {
+  return row.status === 'disabled' ? 'project-row-is-disabled' : ''
 }
 
-function projectStatusTone(status: ProjectStatus): ProjectStatusTone {
-  return PROJECT_STATUS_META[status].tone
+function projectStatusIcon(status: ProjectStatus) {
+  return PROJECT_STATUS_META[status].icon
 }
 
 function creditTooltip(row: Project) {
@@ -175,12 +179,13 @@ function creditTooltip(row: Project) {
   ].join('\n')
 }
 
-function creditCellClass(row: Project) {
-  return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
+function creditCellClass(row: Project): CreditClass {
+  return !isCreditRequired.value && row.available_micro_usd === 0 ? 'is-unlimited' : 'is-available'
 }
 
 function formatAvailableUsd(row: Project) {
-  return row.available_micro_usd <= 0 ? t('creditDepleted') : formatMicroUsd(row.available_micro_usd, 2)
+  if (!isCreditRequired.value && row.available_micro_usd === 0) return t('unlimitedCredit')
+  return formatMicroUsd(row.available_micro_usd, 2)
 }
 
 function memberRoleText(role: ProjectMember['role']) {
@@ -231,22 +236,26 @@ function formatDateTimeParts(value?: string | null) {
 }
 
 function openCreateDialog() {
-  Object.assign(createForm, {
+  selectedProject.value = null
+  Object.assign(projectForm, {
     name: '',
     ownerUserId: null,
     status: 'enabled'
   })
   ownerOptions.value = []
-  createDialogVisible.value = true
+  projectDialogVisible.value = true
 }
 
 function openEditDialog(row: Project) {
   selectedProject.value = row
-  Object.assign(editForm, {
+  Object.assign(projectForm, {
     name: row.name,
+    ownerUserId: row.owner_user_id,
     status: row.status
   })
-  editDialogVisible.value = true
+  ownerOptions.value = []
+  projectDialogVisible.value = true
+  void searchOwnerUsers(row.owner_email)
 }
 
 function openCreditDialog(row: Project) {
@@ -298,30 +307,70 @@ async function confirmDialog(
   }
 }
 
-async function submitCreateProject() {
-  const name = createForm.name.trim()
+async function submitProjectForm() {
+  const name = projectForm.name.trim()
   if (!name) {
     ElMessage.error(t('projectNameRequired'))
     return
   }
-  if (!createForm.ownerUserId) {
+
+  if (!projectForm.ownerUserId) {
     ElMessage.error(t('projectOwnerRequired'))
     return
   }
-  createSaving.value = true
+
+  if (selectedProject.value && selectedProject.value.status !== projectForm.status) {
+    const confirmed = await confirmDialog(
+      t('changeProjectStatusConfirm')
+        .replace('{name}', selectedProject.value.name)
+        .replace('{status}', projectStatusText(projectForm.status)),
+      t('confirmAction'),
+      t('save'),
+      PROJECT_STATUS_META[projectForm.status].confirmType
+    )
+    if (!confirmed) return
+  }
+
+  projectSaving.value = true
   try {
-    await createProject({
-      name,
-      owner_user_id: createForm.ownerUserId,
-      status: createForm.status
-    })
-    ElMessage.success(t('projectCreated'))
-    createDialogVisible.value = false
-    await searchProjects()
+    if (selectedProject.value) {
+      await updateProject(selectedProject.value.id, {
+        name,
+        owner_user_id: projectForm.ownerUserId,
+        status: projectForm.status
+      })
+      ElMessage.success(t('projectUpdated'))
+      await reload()
+    } else {
+      await createProject({
+        name,
+        owner_user_id: projectForm.ownerUserId!,
+        status: projectForm.status
+      })
+      ElMessage.success(t('projectCreated'))
+      await searchProjects()
+    }
+    projectDialogVisible.value = false
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    createSaving.value = false
+    projectSaving.value = false
+  }
+}
+
+async function toggleProjectStatus(row: Project) {
+  if (togglingProjectIds.has(row.id)) return
+
+  const nextStatus: ProjectStatus = row.status === 'enabled' ? 'disabled' : 'enabled'
+  togglingProjectIds.add(row.id)
+  try {
+    await updateProject(row.id, { status: nextStatus })
+    ElMessage.success(t('projectUpdated'))
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    togglingProjectIds.remove(row.id)
   }
 }
 
@@ -414,40 +463,6 @@ async function confirmDeleteProjectMember(row: ProjectMember) {
     ElMessage.error(readError(err))
   } finally {
     deletingMemberId.value = null
-  }
-}
-
-async function submitEditProject() {
-  if (!selectedProject.value) return
-  const name = editForm.name.trim()
-  if (!name) {
-    ElMessage.error(t('projectNameRequired'))
-    return
-  }
-  if (selectedProject.value.status !== editForm.status) {
-    const confirmed = await confirmDialog(
-      t('changeProjectStatusConfirm')
-        .replace('{name}', selectedProject.value.name)
-        .replace('{status}', projectStatusText(editForm.status)),
-      t('confirmAction'),
-      t('save'),
-      PROJECT_STATUS_META[editForm.status].confirmType
-    )
-    if (!confirmed) return
-  }
-  editSaving.value = true
-  try {
-    await updateProject(selectedProject.value.id, {
-      name,
-      status: editForm.status
-    })
-    ElMessage.success(t('projectUpdated'))
-    editDialogVisible.value = false
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    editSaving.value = false
   }
 }
 
@@ -569,6 +584,7 @@ async function handlePageSizeChange(size: number) {
         v-loading="loading"
         class="admin-table service-table project-table"
         :data="projects"
+        :row-class-name="projectRowClassName"
         row-key="id"
         stripe
       >
@@ -644,13 +660,20 @@ async function handlePageSizeChange(size: number) {
           header-align="center"
         >
           <template #default="{ row }">
-            <span
-              class="channel-runtime-status user-status-tag"
-              :class="`is-${projectStatusTone(row.status)}`"
+            <button
+              type="button"
+              class="project-status-switch"
+              :class="`is-${row.status}`"
+              :disabled="togglingProjectIds.has(row.id)"
+              :aria-pressed="row.status === 'enabled'"
+              :aria-label="projectStatusText(row.status)"
+              @click="toggleProjectStatus(row)"
             >
-              <el-icon><component :is="projectStatusIcon(row.status)" /></el-icon>
-              {{ projectStatusText(row.status) }}
-            </span>
+              <span class="project-status-switch-icon">
+                <el-icon><component :is="projectStatusIcon(row.status)" /></el-icon>
+              </span>
+              <span class="project-status-switch-text">{{ projectStatusText(row.status) }}</span>
+            </button>
           </template>
         </el-table-column>
         <el-table-column :label="t('actions')" width="144" align="center" header-align="center">
@@ -680,7 +703,7 @@ async function handlePageSizeChange(size: number) {
                 />
                 <template #dropdown>
                   <el-dropdown-menu class="admin-row-action-menu">
-                    <el-dropdown-item @click="openCreditDialog(row)">
+                    <el-dropdown-item v-if="isCreditRequired" @click="openCreditDialog(row)">
                       <el-icon><Money /></el-icon>
                       <span>{{ t('recharge') }}</span>
                     </el-dropdown-item>
@@ -738,24 +761,24 @@ async function handlePageSizeChange(size: number) {
     </div>
 
     <el-dialog
-      v-model="createDialogVisible"
+      v-model="projectDialogVisible"
       class="user-admin-dialog project-create-dialog"
-      :title="t('addProject')"
+      :title="projectDialogTitle"
       width="560px"
     >
       <div class="project-create-body">
         <el-form
           class="project-create-form"
           label-position="top"
-          @submit.prevent="submitCreateProject"
+          @submit.prevent="submitProjectForm"
         >
           <el-form-item class="project-create-field" :label="t('projectName')">
-            <el-input v-model="createForm.name" :placeholder="t('projectNamePlaceholder')" autofocus />
+            <el-input v-model="projectForm.name" :placeholder="t('projectNamePlaceholder')" autofocus />
           </el-form-item>
           <div class="project-create-field-row">
             <el-form-item class="project-create-field" :label="t('projectOwner')">
               <el-select
-                v-model="createForm.ownerUserId"
+                v-model="projectForm.ownerUserId"
                 class="project-owner-select"
                 filterable
                 remote
@@ -779,7 +802,7 @@ async function handlePageSizeChange(size: number) {
               </el-select>
             </el-form-item>
             <el-form-item class="project-create-field" :label="t('projectStatus')">
-              <el-select v-model="createForm.status" class="project-create-status-select">
+              <el-select v-model="projectForm.status" class="project-create-status-select">
                 <el-option :label="t('enabled')" value="enabled" />
                 <el-option :label="t('disabled')" value="disabled" />
               </el-select>
@@ -789,38 +812,9 @@ async function handlePageSizeChange(size: number) {
       </div>
       <template #footer>
         <div class="admin-dialog-footer user-dialog-footer">
-          <el-button @click="createDialogVisible = false">{{ t('cancel') }}</el-button>
-          <el-button type="primary" :loading="createSaving" @click="submitCreateProject">
-            {{ t('create') }}
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="editDialogVisible"
-      class="user-admin-dialog project-edit-dialog"
-      :title="t('editProject')"
-      width="520px"
-    >
-      <div class="user-dialog-body">
-        <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitEditProject">
-          <el-form-item class="user-dialog-field is-wide" :label="t('projectName')">
-            <el-input v-model="editForm.name" :placeholder="t('projectNamePlaceholder')" />
-          </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('projectStatus')">
-            <el-select v-model="editForm.status" class="user-edit-select">
-              <el-option :label="t('enabled')" value="enabled" />
-              <el-option :label="t('disabled')" value="disabled" />
-            </el-select>
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <div class="admin-dialog-footer user-dialog-footer">
-          <el-button @click="editDialogVisible = false">{{ t('cancel') }}</el-button>
-          <el-button type="primary" :loading="editSaving" @click="submitEditProject">
-            {{ t('save') }}
+          <el-button @click="projectDialogVisible = false">{{ t('cancel') }}</el-button>
+          <el-button type="primary" :loading="projectSaving" @click="submitProjectForm">
+            {{ projectSubmitText }}
           </el-button>
         </div>
       </template>
@@ -1056,6 +1050,37 @@ async function handlePageSizeChange(size: number) {
   font-size: 13px;
 }
 
+.project-table :deep(.project-row-is-disabled td) {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.project-table
+  :deep(
+    .project-row-is-disabled
+      :is(
+        .project-name-text,
+        .project-meta-line,
+        .project-owner-cell,
+        .project-owner-cell .el-icon,
+        .project-count-cell,
+        .user-credit-cell,
+        .user-time-cell,
+        .project-status-switch-text
+      )
+  ) {
+  color: #94a3b8;
+}
+
+.project-table :deep(.project-row-is-disabled :is(.project-avatar, .project-status-switch)) {
+  border-color: #e5e7eb;
+}
+
+.project-table :deep(.project-row-is-disabled .project-avatar) {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
 .project-name-cell,
 .project-owner-cell {
   align-items: center;
@@ -1120,6 +1145,61 @@ async function handlePageSizeChange(size: number) {
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+}
+
+.project-status-switch {
+  align-items: center;
+  appearance: none;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-start;
+  min-height: 34px;
+  min-width: 88px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.project-status-switch:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.project-status-switch.is-enabled {
+  background: #f0fdf4;
+  border-color: #b7eb8f;
+  color: #166534;
+}
+
+.project-status-switch.is-disabled {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.project-status-switch-icon {
+  align-items: center;
+  background: #94a3b8;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.project-status-switch.is-enabled .project-status-switch-icon {
+  background: #22c55e;
+}
+
+.project-status-switch-text {
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .project-create-body {

@@ -84,6 +84,7 @@ pub struct CreateProjectRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
+    pub owner_user_id: Option<DbId>,
     pub status: Option<String>,
 }
 
@@ -282,21 +283,28 @@ pub async fn update_project(
         .as_deref()
         .map(normalize_project_name)
         .transpose()?;
+    let mut tx = state.db.pool.begin().await?;
+    if let Some(owner_user_id) = req.owner_user_id {
+        set_project_admin_in_tx(state, &mut tx, id, owner_user_id).await?;
+    }
     let row = sqlx::query(
         "UPDATE project
          SET name = COALESCE($2, name),
-             status = COALESCE($3, status),
+             owner_user_id = COALESCE($3, owner_user_id),
+             status = COALESCE($4, status),
              updated_at = now()
          WHERE id = $1
          RETURNING id",
     )
     .bind(id)
     .bind(name)
+    .bind(req.owner_user_id)
     .bind(req.status.as_deref())
-    .fetch_optional(&state.db.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
     let project_id: DbId = row.try_get("id")?;
+    tx.commit().await?;
     invalidate_project_keys(state, project_id).await?;
     get_project(state, project_id).await
 }
@@ -393,7 +401,7 @@ pub async fn add_project_member(
     ensure_project_exists_in_tx(&mut tx, project_id).await?;
     ensure_user_exists_in_tx(&mut tx, req.user_id).await?;
     let current = sqlx::query(
-        "SELECT role
+        "SELECT id, role
          FROM project_member
          WHERE project_id = $1 AND user_id = $2
          FOR UPDATE",
@@ -403,12 +411,23 @@ pub async fn add_project_member(
     .fetch_optional(&mut *tx)
     .await?;
     if let Some(row) = current {
+        let member_id: DbId = row.try_get("id")?;
         let role: String = row.try_get("role")?;
         if role == "owner" {
             return Err(AppError::BadRequest(
                 "project owner role cannot be changed".to_string(),
             ));
         }
+        if req.role == "member" && (role == "admin" || role == "member") {
+            tx.commit().await?;
+            return Ok(CreatedProjectMember {
+                record: get_project_member(state, project_id, member_id).await?,
+                key: None,
+            });
+        }
+    }
+    if req.role == "admin" {
+        set_project_admin_in_tx(state, &mut tx, project_id, req.user_id).await?;
     }
     let row = sqlx::query(
         "INSERT INTO project_member (project_id, user_id, role)
@@ -444,6 +463,10 @@ pub async fn update_project_member(
             "project owner role cannot be changed".to_string(),
         ));
     }
+    let mut tx = state.db.pool.begin().await?;
+    if req.role == "admin" {
+        set_project_admin_in_tx(state, &mut tx, project_id, current.user_id).await?;
+    }
     let result = sqlx::query(
         "UPDATE project_member
          SET role = $3, updated_at = now()
@@ -453,11 +476,12 @@ pub async fn update_project_member(
     .bind(project_id)
     .bind(member_id)
     .bind(req.role)
-    .execute(&state.db.pool)
+    .execute(&mut *tx)
     .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    tx.commit().await?;
     get_project_member(state, project_id, member_id).await
 }
 
@@ -576,6 +600,46 @@ async fn ensure_project_member_user_key_in_tx(
     let user_key_id: DbId = row.try_get("id")?;
     account::create_credit_account(tx, CreditAccountType::UserKey, user_key_id).await?;
     Ok(Some(key))
+}
+
+async fn set_project_admin_in_tx(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: DbId,
+    user_id: DbId,
+) -> AppResult<()> {
+    ensure_user_exists_in_tx(tx, user_id).await?;
+    ensure_project_exists_in_tx(tx, project_id).await?;
+    sqlx::query(
+        "UPDATE project_member
+         SET role = 'member', updated_at = now()
+         WHERE project_id = $1 AND user_id <> $2 AND role = 'admin'",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO project_member (project_id, user_id, role)
+         VALUES ($1, $2, 'admin')
+         ON CONFLICT (project_id, user_id)
+         DO UPDATE SET role = 'admin', updated_at = now()",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE project
+         SET owner_user_id = $2, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await?;
+    ensure_project_member_user_key_in_tx(state, tx, project_id, user_id).await?;
+    Ok(())
 }
 
 async fn get_project_member(
@@ -802,7 +866,7 @@ fn validate_project_status(status: &str) -> AppResult<()> {
 
 fn validate_editable_project_member_role(role: &str) -> AppResult<()> {
     match role {
-        "admin" | "member" | "viewer" => Ok(()),
+        "admin" | "member" => Ok(()),
         other => Err(AppError::BadRequest(format!(
             "invalid editable project member role: {other}"
         ))),

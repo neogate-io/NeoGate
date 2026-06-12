@@ -37,6 +37,7 @@ async fn overview(
         r#"
         SELECT
             u.email::TEXT AS email,
+            u.username,
             w.balance_micro_usd,
             w.reserved_micro_usd,
             COALESCE(today.cost_micro_usd, 0)::BIGINT AS today_cost_micro_usd,
@@ -70,12 +71,13 @@ async fn overview(
     .await?;
 
     let email: String = row.try_get("email")?;
+    let username: Option<String> = row.try_get("username")?;
     let balance_micro_usd: i64 = row.try_get("balance_micro_usd")?;
     let reserved_micro_usd: i64 = row.try_get("reserved_micro_usd")?;
     let daily_costs = daily_costs(&state, auth.user_id).await?;
 
     Ok(Json(UserOverview {
-        display_name: display_name_from_email(&email),
+        display_name: username.unwrap_or_else(|| display_name_from_email(&email)),
         email,
         balance_micro_usd,
         reserved_micro_usd,

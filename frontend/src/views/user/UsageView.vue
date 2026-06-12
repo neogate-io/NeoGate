@@ -298,12 +298,6 @@ async function exportUsage() {
       v-if="!usageInitialLoading && (hasUsagePagination || filteredItems.length > 1)"
       class="admin-pagination-bar"
     >
-      <div class="admin-pagination-summary">
-        <span class="admin-result-count">
-          {{ t('currentPageItems') }} {{ filteredItems.length.toLocaleString(locale) }}
-          {{ t('itemsUnit') }}
-        </span>
-      </div>
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
           <span class="admin-page-label">{{ t('pageSize') }}</span>

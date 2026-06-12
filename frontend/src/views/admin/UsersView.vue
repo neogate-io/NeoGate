@@ -8,9 +8,12 @@ import {
   Download,
   Edit,
   Key,
+  Lock,
+  Message,
   MoreFilled,
   Plus,
   Search,
+  User as UserIcon,
   UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
@@ -52,12 +55,14 @@ type ConfirmType = 'info' | 'warning'
 type UserGroupTone = 'default' | 'premium' | 'standard'
 type UserForm = {
   email: string
+  username: string
   status: UserStatus
   userGroupId: number
 }
 type CreateUserForm = UserForm & {
   password: string
 }
+type UserDialogMode = 'create' | 'edit'
 type TranslationKey = Parameters<typeof t>[0]
 type UserStatusMeta = {
   labelKey: TranslationKey
@@ -91,24 +96,19 @@ const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
 
 const emailSearch = ref('')
 const apiKeySearch = ref('')
-const createDialogVisible = ref(false)
-const createSaving = ref(false)
-const editDialogVisible = ref(false)
-const editSaving = ref(false)
+const userDialogVisible = ref(false)
+const userDialogMode = ref<UserDialogMode>('create')
+const userDialogSaving = ref(false)
 const deletingUserId = ref<number | null>(null)
 const approvingUserId = ref<number | null>(null)
 const togglingUserIds = useReactiveSet<number>()
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
 const servicePolicy = ref<ServicePolicy | null>(null)
-const createForm = reactive<CreateUserForm>({
+const userForm = reactive<CreateUserForm>({
   email: '',
+  username: '',
   password: '',
-  status: 'enabled',
-  userGroupId: 0
-})
-const editForm = reactive<UserForm>({
-  email: '',
   status: 'enabled',
   userGroupId: 0
 })
@@ -162,6 +162,9 @@ const defaultUserGroupId = computed(
 const emptyUsersDescription = computed(() =>
   emailSearch.value || apiKeySearch.value ? t('noMatchingUsers') : t('noUsers')
 )
+const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
+const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
+const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
 async function loadUsers() {
   return getUsers({
     email: emailSearch.value.trim(),
@@ -243,23 +246,29 @@ function userRowClassName({ row }: { row: User }) {
 }
 
 function openCreateDialog() {
-  Object.assign(createForm, {
+  selectedUser.value = null
+  userDialogMode.value = 'create'
+  Object.assign(userForm, {
     email: '',
+    username: '',
     password: '',
     status: 'enabled',
     userGroupId: defaultUserGroupId.value
   })
-  createDialogVisible.value = true
+  userDialogVisible.value = true
 }
 
 function openEditDialog(row: User) {
   selectedUser.value = row
-  Object.assign(editForm, {
+  userDialogMode.value = 'edit'
+  Object.assign(userForm, {
     email: row.email,
+    username: row.username ?? '',
+    password: '',
     status: row.status,
     userGroupId: row.user_group_id
   })
-  editDialogVisible.value = true
+  userDialogVisible.value = true
 }
 
 async function confirmDialog(
@@ -300,32 +309,41 @@ function confirmStatusChange(email: string, status: UserStatus) {
   )
 }
 
+async function submitUserDialog() {
+  if (isUserCreateDialog.value) {
+    await submitCreateUser()
+    return
+  }
+  await submitEditUser()
+}
+
 async function submitCreateUser() {
-  if (!createForm.password) {
+  if (!userForm.password) {
     ElMessage.error(t('passwordRequired'))
     return
   }
-  if (createForm.password.length < 8) {
+  if (userForm.password.length < 8) {
     ElMessage.error(t('passwordMinLength'))
     return
   }
-  createSaving.value = true
+  userDialogSaving.value = true
   try {
     const created = await createUser({
-      email: createForm.email.trim(),
-      password: createForm.password,
-      status: createForm.status
+      email: userForm.email.trim(),
+      username: userForm.username.trim() || null,
+      password: userForm.password,
+      status: userForm.status
     })
-    if (createForm.userGroupId && createForm.userGroupId !== created.user_group_id) {
-      await updateUser(created.id, { user_group_id: createForm.userGroupId })
+    if (userForm.userGroupId && userForm.userGroupId !== created.user_group_id) {
+      await updateUser(created.id, { user_group_id: userForm.userGroupId })
     }
     ElMessage.success(t('userCreated'))
-    createDialogVisible.value = false
+    userDialogVisible.value = false
     await searchUsers()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    createSaving.value = false
+    userDialogSaving.value = false
   }
 }
 
@@ -348,20 +366,21 @@ async function copyApiKey(row: UserKey) {
 
 async function submitEditUser() {
   if (!selectedUser.value) return
-  editSaving.value = true
+  userDialogSaving.value = true
   try {
     await updateUser(selectedUser.value.id, {
-      email: editForm.email.trim(),
-      status: editForm.status,
-      user_group_id: editForm.userGroupId
+      email: userForm.email.trim(),
+      username: userForm.username.trim() || null,
+      status: userForm.status,
+      user_group_id: userForm.userGroupId
     })
     ElMessage.success(t('userUpdated'))
-    editDialogVisible.value = false
+    userDialogVisible.value = false
     await reload()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    editSaving.value = false
+    userDialogSaving.value = false
   }
 }
 
@@ -577,6 +596,7 @@ onMounted(() => {
         <span></span>
         <span></span>
         <span></span>
+        <span></span>
       </div>
       <div class="user-table-loading-row"></div>
       <div class="user-table-loading-row"></div>
@@ -606,6 +626,13 @@ onMounted(() => {
               <span class="user-email-stack">
                 <span class="user-email-text">{{ row.email }}</span>
               </span>
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="username" :label="t('username')" min-width="130">
+          <template #default="{ row }">
+            <span class="user-username-text" :class="{ 'is-empty': !row.username }">
+              {{ row.username || '-' }}
             </span>
           </template>
         </el-table-column>
@@ -741,12 +768,6 @@ onMounted(() => {
       v-if="!usersInitialLoading && (hasUserPagination || users.length > 1)"
       class="admin-pagination-bar admin-table-pagination is-compact"
     >
-      <div class="admin-pagination-summary">
-        <span class="admin-result-count">
-          {{ t('currentPageItems') }} {{ users.length.toLocaleString(locale) }}
-          {{ t('itemsUnit') }}
-        </span>
-      </div>
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
           <span class="admin-page-label">{{ t('pageSize') }}</span>
@@ -779,33 +800,50 @@ onMounted(() => {
     </div>
 
     <el-dialog
-      v-model="createDialogVisible"
-      class="user-admin-dialog user-edit-dialog"
-      :title="t('addUser')"
-      width="520px"
+      v-model="userDialogVisible"
+      class="user-admin-dialog user-edit-dialog user-create-dialog"
+      :title="userDialogTitle"
+      width="420px"
     >
       <div class="user-dialog-body">
-        <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitCreateUser">
+        <el-form
+          class="user-dialog-form user-create-form"
+          label-position="top"
+          @submit.prevent="submitUserDialog"
+        >
           <el-form-item class="user-dialog-field is-wide" :label="t('email')">
-            <el-input v-model="createForm.email" type="email" />
+            <el-input v-model="userForm.email" :prefix-icon="Message" type="email" />
           </el-form-item>
-          <el-form-item class="user-dialog-field is-wide" :label="t('loginPassword')">
+          <el-form-item class="user-dialog-field is-wide" :label="t('username')">
             <el-input
-              v-model="createForm.password"
+              v-model="userForm.username"
+              maxlength="80"
+              :prefix-icon="UserIcon"
+              show-word-limit
+            />
+          </el-form-item>
+          <el-form-item
+            v-if="isUserCreateDialog"
+            class="user-dialog-field is-wide"
+            :label="t('loginPassword')"
+          >
+            <el-input
+              v-model="userForm.password"
               autocomplete="new-password"
+              :prefix-icon="Lock"
               show-password
               type="password"
             />
           </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('status')">
-            <el-select v-model="createForm.status" class="user-edit-select">
+          <el-form-item class="user-dialog-field is-compact" :label="t('userStatus')">
+            <el-select v-model="userForm.status" class="user-edit-select">
               <el-option :label="t('enabled')" value="enabled" />
               <el-option :label="t('disabled')" value="disabled" />
               <el-option :label="t('pendingApproval')" value="pending" />
             </el-select>
           </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('userGroup')">
-            <el-select v-model="createForm.userGroupId" class="user-edit-select">
+          <el-form-item class="user-dialog-field is-compact" :label="t('userGroup')">
+            <el-select v-model="userForm.userGroupId" class="user-edit-select">
               <el-option
                 v-for="group in userGroups"
                 :key="group.id"
@@ -820,51 +858,9 @@ onMounted(() => {
       </div>
       <template #footer>
         <div class="admin-dialog-footer user-dialog-footer">
-          <el-button @click="createDialogVisible = false">{{ t('cancel') }}</el-button>
-          <el-button type="primary" :loading="createSaving" @click="submitCreateUser">
-            {{ t('create') }}
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="editDialogVisible"
-      class="user-admin-dialog user-edit-dialog"
-      :title="t('editUser')"
-      width="520px"
-    >
-      <div class="user-dialog-body">
-        <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitEditUser">
-          <el-form-item class="user-dialog-field is-wide" :label="t('email')">
-            <el-input v-model="editForm.email" />
-          </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('status')">
-            <el-select v-model="editForm.status" class="user-edit-select">
-              <el-option :label="t('enabled')" value="enabled" />
-              <el-option :label="t('disabled')" value="disabled" />
-              <el-option :label="t('pendingApproval')" value="pending" />
-            </el-select>
-          </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('userGroup')">
-            <el-select v-model="editForm.userGroupId" class="user-edit-select">
-              <el-option
-                v-for="group in userGroups"
-                :key="group.id"
-                :label="`${group.name} (${group.code})`"
-                :value="group.id"
-                :disabled="!group.enabled"
-              />
-            </el-select>
-          </el-form-item>
-          <button class="hidden-submit" type="submit" />
-        </el-form>
-      </div>
-      <template #footer>
-        <div class="admin-dialog-footer user-dialog-footer">
-          <el-button @click="editDialogVisible = false">{{ t('cancel') }}</el-button>
-          <el-button type="primary" :loading="editSaving" @click="submitEditUser">{{
-            t('save')
+          <el-button @click="userDialogVisible = false">{{ t('cancel') }}</el-button>
+          <el-button type="primary" :loading="userDialogSaving" @click="submitUserDialog">{{
+            userDialogConfirmText
           }}</el-button>
         </div>
       </template>
@@ -938,12 +934,6 @@ onMounted(() => {
         </div>
 
         <div class="admin-pagination-bar user-key-pagination">
-          <div class="admin-pagination-summary">
-            <span class="admin-result-count">
-              {{ t('currentPageItems') }} {{ selectedUserKeys.length.toLocaleString(locale) }}
-              {{ t('itemsUnit') }}
-            </span>
-          </div>
           <div class="admin-pagination-controls">
             <span class="admin-result-count">{{ t('currentPage') }} {{ userKeysCurrentPage }}</span>
             <div class="admin-page-buttons">
@@ -984,9 +974,9 @@ onMounted(() => {
   border-bottom: 1px solid #dfe8f2;
   display: grid;
   gap: 28px;
-  grid-template-columns: 54px minmax(180px, 1fr) 86px 104px 96px;
+  grid-template-columns: 54px minmax(180px, 1fr) 100px 86px 104px 96px;
   height: 48px;
-  min-width: 980px;
+  min-width: 1080px;
   padding: 0 300px 0 14px;
 }
 
@@ -1021,14 +1011,18 @@ onMounted(() => {
   width: 48px;
 }
 
+.user-table-loading-head span:nth-child(6) {
+  width: 64px;
+}
+
 .user-table-loading-row {
   align-items: center;
   border-bottom: 1px solid #edf3f8;
   display: grid;
   gap: 28px;
-  grid-template-columns: 54px minmax(180px, 1fr) 86px 104px 96px;
+  grid-template-columns: 54px minmax(180px, 1fr) 100px 86px 104px 96px;
   height: 62px;
-  min-width: 980px;
+  min-width: 1080px;
   padding: 0 300px 0 14px;
 }
 
@@ -1050,6 +1044,7 @@ onMounted(() => {
 }
 
 .user-table :deep(.el-table__body tr.user-row-is-disabled .user-email-text),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-username-text),
 .user-table :deep(.el-table__body tr.user-row-is-disabled .user-key-count-text),
 .user-table :deep(.el-table__body tr.user-row-is-disabled .user-group-tag),
 .user-table :deep(.el-table__body tr.user-row-is-disabled .user-credit-cell),
@@ -1068,6 +1063,15 @@ onMounted(() => {
   color: #94a3b8;
 }
 
+.user-table.admin-table.el-table {
+  font-size: 13px;
+}
+
+.user-table.admin-table.el-table :deep(.el-table__body .cell) {
+  color: #344054;
+  font-size: 13px;
+}
+
 .user-dialog-body {
   display: grid;
   gap: 16px;
@@ -1083,6 +1087,10 @@ onMounted(() => {
   grid-template-columns: 1fr;
 }
 
+.user-create-form {
+  grid-template-columns: 1fr;
+}
+
 .user-dialog-field {
   margin-bottom: 0;
   min-width: 0;
@@ -1090,6 +1098,10 @@ onMounted(() => {
 
 .user-dialog-field.is-wide {
   grid-column: 1 / -1;
+}
+
+.user-create-form .user-dialog-field.is-compact {
+  max-width: 220px;
 }
 
 .user-dialog-field :deep(.el-form-item__label) {
@@ -1167,18 +1179,34 @@ onMounted(() => {
 
 .user-email-text {
   color: #1d2129;
-  font-size: 14px;
-  font-weight: 680;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.user-username-text {
+  color: #667085;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-username-text.is-empty {
+  color: #98a2b3;
+  font-weight: 400;
+}
+
 .user-key-count-text {
-  color: #86909c;
-  font-size: 12px;
-  font-weight: 560;
-  line-height: 1.15;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .user-group-tag {
@@ -1187,7 +1215,8 @@ onMounted(() => {
   border-radius: 999px;
   display: inline-flex;
   font-size: 12px;
-  font-weight: 720;
+  font-weight: 650;
+  line-height: 1;
   min-height: 28px;
   padding: 0 10px;
   white-space: nowrap;
@@ -1216,9 +1245,9 @@ onMounted(() => {
   border-radius: 999px;
   display: inline-flex;
   font-feature-settings: 'tnum';
-  font-size: 12px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
-  font-weight: 760;
+  font-weight: 650;
   justify-content: flex-end;
   min-height: 28px;
   min-width: 86px;
@@ -1304,19 +1333,40 @@ onMounted(() => {
 }
 
 .user-status-switch-text {
-  font-size: 12px;
-  font-weight: 720;
+  font-size: 12.5px;
+  font-weight: 650;
   line-height: 1;
 }
 
 .user-time-cell {
-  color: #344054;
-  font-size: 13px;
-  font-weight: 560;
+  color: #475467;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .user-time-cell.is-empty {
   color: #98a2b3;
+}
+
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-email-text) {
+  font-weight: 650;
+}
+
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-username-text),
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-key-count-text),
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-time-cell) {
+  font-weight: 500;
+}
+
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-username-text.is-empty) {
+  font-weight: 400;
+}
+
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-group-tag),
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-credit-cell),
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-status-switch-text) {
+  font-weight: 650;
 }
 
 .user-empty-state {
@@ -1367,6 +1417,10 @@ onMounted(() => {
 
 :global(.user-admin-dialog .el-button) {
   border-radius: 7px;
+}
+
+:global(.user-create-dialog) {
+  max-width: calc(100vw - 32px);
 }
 
 :global(.user-keys-dialog .el-dialog__body) {

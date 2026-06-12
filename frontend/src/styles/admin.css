@@ -529,33 +529,92 @@
 }
 
 .admin-pagination-bar.is-compact {
+  align-content: center;
+  align-items: center;
   gap: 8px;
-  padding-top: 2px;
+  flex-wrap: nowrap;
+  padding-top: 0;
 }
 
 .admin-pagination-bar.is-compact .admin-pagination-controls {
+  align-items: center;
+  align-content: center;
+  flex-wrap: nowrap;
   gap: 12px;
+  min-height: 32px;
 }
 
 .admin-pagination-bar.is-compact .admin-page-size-control {
+  align-items: center;
+  align-content: center;
+  flex-wrap: nowrap;
   gap: 4px;
+  height: 32px;
+  min-height: 32px;
 }
 
 .admin-pagination-bar.is-compact .admin-page-size {
+  align-items: center;
+  display: inline-flex;
+  height: 32px;
+  line-height: 32px;
   width: 58px;
 }
 
 .admin-pagination-bar.is-compact .admin-page-size .el-select__wrapper {
+  align-items: center;
   background: transparent;
   border: 0;
   box-shadow: none;
+  display: inline-flex;
+  height: 32px;
+  line-height: 32px;
   min-height: 32px;
   padding: 0 4px;
 }
 
+.admin-pagination-bar.is-compact .admin-page-size .el-select__selection,
+.admin-pagination-bar.is-compact .admin-page-size .el-select__suffix {
+  align-items: center;
+  display: flex;
+  height: 32px;
+  line-height: 32px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__selection {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__selected-item.is-hidden {
+  display: none !important;
+}
+
 .admin-pagination-bar.is-compact .admin-page-size .el-select__placeholder {
-  color: var(--admin-text);
+  align-items: center;
+  color: var(--admin-text-muted);
+  display: flex;
+  flex: 0 1 auto;
   font-weight: 400;
+  height: 32px;
+  line-height: 32px;
+  position: static;
+  transform: none;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__placeholder span {
+  display: inline-block;
+  line-height: 32px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__suffix {
+  flex: 0 0 auto;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-icon {
+  align-items: center;
+  display: inline-flex;
+  height: 32px;
 }
 
 .admin-pagination-bar.is-compact .admin-page-size .el-select__wrapper:hover,
@@ -566,17 +625,33 @@
 
 .admin-pagination-bar.is-compact .admin-page-buttons {
   align-items: center;
+  align-content: center;
   border: 0;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  height: 32px;
   min-height: 32px;
   overflow: visible;
 }
 
 .admin-shell .admin-pagination-bar.is-compact .admin-page-buttons .el-button {
+  align-items: center;
   border-radius: 7px;
+  color: var(--admin-text-muted);
+  display: inline-flex;
   height: 32px;
+  justify-content: center;
   min-height: 32px;
   padding: 0;
   width: 32px;
+}
+
+.admin-shell .admin-pagination-bar.is-compact .admin-page-buttons .el-button .el-icon {
+  align-items: center;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  line-height: 32px;
 }
 
 .admin-page-current {
@@ -584,13 +659,14 @@
   background: transparent;
   border: 0;
   border-radius: 0;
-  color: var(--admin-text);
+  color: var(--admin-text-muted);
   display: inline-flex;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   font-weight: 400;
   height: 32px;
   justify-content: center;
+  line-height: 32px;
   min-width: 28px;
   padding: 0 4px;
 }
@@ -598,8 +674,10 @@
 .admin-page-label,
 .admin-result-count {
   color: var(--admin-text-muted);
+  display: inline-flex;
   font-size: 13px;
   font-weight: 400;
+  line-height: 32px;
 }
 
 .admin-dialog-footer {
@@ -959,7 +1037,7 @@
   border-top-color: var(--admin-border-soft);
   margin-top: -1px;
   min-height: 56px;
-  padding: 10px 14px;
+  padding: 0 14px;
 }
 
 .service-table-panel.has-pagination + .admin-table-pagination {

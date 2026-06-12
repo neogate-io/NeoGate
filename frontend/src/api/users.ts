@@ -12,12 +12,14 @@ export type GetUsersFilters = {
 
 export type CreateUserPayload = {
   email: string
+  username?: string | null
   password: string
   status?: UserStatus
 }
 
 export type UpdateUserPayload = {
   email?: string
+  username?: string | null
   status?: UserStatus
   user_group_id?: number
 }

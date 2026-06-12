@@ -21,6 +21,7 @@ VALUES ('default', '默认', TRUE, TRUE);
 CREATE TABLE "user" (
     id BIGSERIAL PRIMARY KEY,
     email CITEXT NOT NULL,
+    username TEXT,
     status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled', 'pending')),
     password_hash TEXT,
     password_changed_at TIMESTAMPTZ,

@@ -27,6 +27,7 @@ use axum::{
 pub struct UserRecord {
     pub id: DbId,
     pub email: String,
+    pub username: Option<String>,
     pub status: String,
     pub user_group_id: DbId,
     pub user_group_code: String,
@@ -55,6 +56,7 @@ pub struct UserGroupRecord {
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub email: String,
+    pub username: Option<String>,
     pub password: String,
     #[serde(default = "default_enabled_status")]
     pub status: String,
@@ -63,6 +65,7 @@ pub struct CreateUserRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {
     pub email: Option<String>,
+    pub username: Option<Option<String>>,
     pub status: Option<String>,
     pub user_group_id: Option<DbId>,
 }
@@ -214,16 +217,18 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     validate_user_status(&req.status)?;
     validate_user_password_input(&req.password)?;
     let email = normalize_email(&req.email)?;
+    let username = normalize_optional_username(req.username.as_deref())?;
     let password_hash = hash_user_password(&req.password, &state.config.admin_token_secret);
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         r#"
-        INSERT INTO "user" (email, status, user_group_id, password_hash)
-        VALUES ($1, $2, (SELECT id FROM user_group WHERE is_default = TRUE), $3)
+        INSERT INTO "user" (email, username, status, user_group_id, password_hash)
+        VALUES ($1, $2, $3, (SELECT id FROM user_group WHERE is_default = TRUE), $4)
         RETURNING id
         "#,
     )
     .bind(email)
+    .bind(username)
     .bind(req.status)
     .bind(password_hash)
     .fetch_one(&mut *tx)
@@ -265,7 +270,7 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
 
     let mut query_builder = sqlx::QueryBuilder::new(
         r#"WITH page_users AS (
-               SELECT u.id, u.email, u.status, u.user_group_id,
+               SELECT u.id, u.email, u.username, u.status, u.user_group_id,
                       u.last_active_at, u.created_at, u.updated_at
                FROM "user" u"#,
     );
@@ -302,7 +307,7 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
         .push(
             r#"
            )
-           SELECT u.id, u.email, u.status,
+           SELECT u.id, u.email, u.username, u.status,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
                   COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
@@ -356,6 +361,13 @@ pub async fn update_user(
         ensure_user_group_exists(state, user_group_id).await?;
     }
     let email = req.email.as_deref().map(normalize_email).transpose()?;
+    let username_provided = req.username.is_some();
+    let username = req
+        .username
+        .as_ref()
+        .map(|value| value.as_deref().map(normalize_username).transpose())
+        .transpose()?
+        .flatten();
     let disabling = matches!(req.status.as_deref(), Some("disabled"));
     let row = sqlx::query(
         r#"
@@ -363,6 +375,7 @@ pub async fn update_user(
         SET email = COALESCE($2, email),
             status = COALESCE($3, status),
             user_group_id = COALESCE($4, user_group_id),
+            username = CASE WHEN $5 THEN $6 ELSE username END,
             updated_at = now()
         WHERE id = $1
         RETURNING id
@@ -372,6 +385,8 @@ pub async fn update_user(
     .bind(email)
     .bind(req.status)
     .bind(req.user_group_id)
+    .bind(username_provided)
+    .bind(username)
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -422,7 +437,7 @@ pub async fn delete_user(state: &AppState, id: DbId) -> AppResult<()> {
 
 async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
     let row = sqlx::query(
-        r#"SELECT u.id, u.email, u.status,
+        r#"SELECT u.id, u.email, u.username, u.status,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
                   COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
@@ -847,6 +862,27 @@ fn normalize_email(email: &str) -> AppResult<String> {
     Ok(email)
 }
 
+fn normalize_username(username: &str) -> AppResult<String> {
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(AppError::BadRequest("username is required".to_string()));
+    }
+    if username.chars().count() > 80 {
+        return Err(AppError::BadRequest(
+            "username must be at most 80 characters".to_string(),
+        ));
+    }
+    Ok(username.to_string())
+}
+
+fn normalize_optional_username(username: Option<&str>) -> AppResult<Option<String>> {
+    username
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_username)
+        .transpose()
+}
+
 fn normalize_user_key_name(name: &str) -> AppResult<String> {
     let name = name.trim();
     if name.is_empty() {
@@ -1203,6 +1239,7 @@ pub fn user_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UserRecord> {
     Ok(UserRecord {
         id: row.try_get("id")?,
         email: row.try_get("email")?,
+        username: row.try_get("username")?,
         status: row.try_get("status")?,
         user_group_id: row.try_get("user_group_id")?,
         user_group_code: row.try_get("user_group_code")?,

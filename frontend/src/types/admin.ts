@@ -48,6 +48,7 @@ export type UserGroup = {
 export type User = CreditBalance & {
   id: number
   email: string
+  username?: string | null
   status: UserStatus
   user_group_id: number
   user_group_code: string

@@ -298,12 +298,6 @@ async function handlePageSizeChange(size: number) {
       v-if="!usageInitialLoading && (hasUsagePagination || usageItems.length > 1)"
       class="admin-pagination-bar"
     >
-      <div class="admin-pagination-summary">
-        <span class="admin-result-count">
-          {{ t('currentPageItems') }} {{ usageItems.length.toLocaleString(locale) }}
-          {{ t('itemsUnit') }}
-        </span>
-      </div>
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
           <span class="admin-page-label">{{ t('pageSize') }}</span>

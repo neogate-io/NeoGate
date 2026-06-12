@@ -48,9 +48,11 @@ use self::{
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
     project::{
-        create_project, delete_project, list_project_members, list_projects, update_project,
-        CreateProjectRequest, ListProjectsQuery, ProjectMemberRecord, ProjectPage, ProjectRecord,
-        UpdateProjectRequest,
+        add_project_member, create_project, create_project_user_key, delete_project,
+        delete_project_member, list_project_members, list_projects, update_project,
+        update_project_member, CreateProjectRequest, CreateProjectUserKeyRequest,
+        ListProjectsQuery, ProjectMemberRecord, ProjectPage, ProjectRecord,
+        UpdateProjectMemberRequest, UpdateProjectRequest, UpsertProjectMemberRequest,
     },
     provider::{
         ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
@@ -104,7 +106,18 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/admin/projects/{id}",
             patch(update_project_handler).delete(delete_project_handler),
         )
-        .route("/api/admin/projects/{id}/members", get(project_members))
+        .route(
+            "/api/admin/projects/{id}/members",
+            get(project_members).post(add_project_member_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/members/{member_id}",
+            patch(update_project_member_handler).delete(delete_project_member_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/user-keys",
+            post(create_project_user_key_handler),
+        )
         .route("/api/admin/credits", post(adjust_credit_handler))
         .route(
             "/api/admin/channels",
@@ -304,7 +317,6 @@ async fn adjust_credit_handler(
     Json(req): Json<AdjustCreditRequest>,
 ) -> AppResult<Json<AdjustCreditResponse>> {
     let credit_account_type = match req.credit_account_type.as_str() {
-        "user" => CreditAccountType::User,
         "project" => CreditAccountType::Project,
         "user_key" => CreditAccountType::UserKey,
         "user_key_model" => CreditAccountType::UserKeyModel,
@@ -381,6 +393,44 @@ async fn project_members(
     Path(id): Path<DbId>,
 ) -> AppResult<Json<Vec<ProjectMemberRecord>>> {
     Ok(Json(list_project_members(&state, id).await?))
+}
+
+async fn add_project_member_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<UpsertProjectMemberRequest>,
+) -> AppResult<Json<ProjectMemberRecord>> {
+    Ok(Json(add_project_member(&state, id, req).await?))
+}
+
+async fn update_project_member_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, member_id)): Path<(DbId, DbId)>,
+    Json(req): Json<UpdateProjectMemberRequest>,
+) -> AppResult<Json<ProjectMemberRecord>> {
+    Ok(Json(
+        update_project_member(&state, id, member_id, req).await?,
+    ))
+}
+
+async fn delete_project_member_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, member_id)): Path<(DbId, DbId)>,
+) -> AppResult<Json<Value>> {
+    delete_project_member(&state, id, member_id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn create_project_user_key_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<CreateProjectUserKeyRequest>,
+) -> AppResult<Json<CreatedUserKey>> {
+    Ok(Json(create_project_user_key(&state, id, req).await?))
 }
 
 async fn channels(

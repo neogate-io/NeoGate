@@ -4,39 +4,40 @@ import {
   ArrowRight,
   CircleCheckFilled,
   Delete,
-  Download,
+  DocumentCopy,
   Edit,
   FolderOpened,
+  Key,
+  MoreFilled,
   Money,
   Plus,
   Search,
+  User as UserIcon,
   UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
 import { computed, reactive, ref, type Component } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  addProjectMember,
   createProject,
   deleteProject,
+  deleteProjectMember,
   getProjectMembers,
   getProjects,
   type ProjectPage,
+  updateProjectMember,
   updateProject
 } from '../../api/projects'
-import { adjustCredit } from '../../api/userKeys'
+import { adjustCredit, createProjectUserKey, getUserKeys } from '../../api/userKeys'
+import { getUsers } from '../../api/users'
 import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
-import type { Project, ProjectMember, ProjectStatus } from '../../types/admin'
+import type { Project, ProjectMember, ProjectStatus, User, UserKey } from '../../types/admin'
 import { readError } from '../../utils/errors'
-import {
-  downloadCsv,
-  formatCompactDateTime,
-  formatDateTime,
-  formatMicroUsd,
-  usdToMicroUsd
-} from '../../utils/format'
+import { formatCompactDateTime, formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
 
 defineOptions({
   name: 'ProjectsView'
@@ -56,6 +57,15 @@ type ProjectForm = {
   name: string
   ownerUserId: number | null
   status: ProjectStatus
+}
+type ProjectKeyForm = {
+  scope: 'shared' | 'member'
+  memberUserId: number | null
+}
+type EditableProjectMemberRole = Exclude<ProjectMember['role'], 'owner'>
+type ProjectMemberForm = {
+  userId: number | null
+  role: EditableProjectMemberRole
 }
 
 const DEFAULT_PAGE_SIZE = 50
@@ -85,9 +95,21 @@ const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
 const membersDialogVisible = ref(false)
 const membersLoading = ref(false)
+const memberSaving = ref(false)
+const memberUserOptions = ref<User[]>([])
+const memberUserSearchLoading = ref(false)
+const updatingMemberId = ref<number | null>(null)
+const deletingMemberId = ref<number | null>(null)
+const projectKeysDialogVisible = ref(false)
+const projectKeysLoading = ref(false)
+const projectKeyCreateSaving = ref(false)
 const deletingProjectId = ref<number | null>(null)
 const selectedProject = ref<Project | null>(null)
 const selectedMembers = ref<ProjectMember[]>([])
+const selectedProjectKeys = ref<UserKey[]>([])
+const createdProjectKey = ref('')
+const ownerOptions = ref<User[]>([])
+const ownerSearchLoading = ref(false)
 const amountUsd = ref(DEFAULT_RECHARGE_USD)
 const createForm = reactive<ProjectForm>({
   name: '',
@@ -97,6 +119,14 @@ const createForm = reactive<ProjectForm>({
 const editForm = reactive<Omit<ProjectForm, 'ownerUserId'>>({
   name: '',
   status: 'enabled'
+})
+const projectKeyForm = reactive<ProjectKeyForm>({
+  scope: 'shared',
+  memberUserId: null
+})
+const memberForm = reactive<ProjectMemberForm>({
+  userId: null,
+  role: 'member'
 })
 const {
   currentPage,
@@ -179,12 +209,25 @@ function memberRoleText(role: ProjectMember['role']) {
   return t(keys[role])
 }
 
+const editableMemberRoleOptions = computed<Array<{ label: string; value: EditableProjectMemberRole }>>(() => [
+  { label: memberRoleText('admin'), value: 'admin' },
+  { label: memberRoleText('member'), value: 'member' },
+  { label: memberRoleText('viewer'), value: 'viewer' }
+])
+
+function projectKeyOwnerText(row: UserKey) {
+  if (row.owner_user_id == null) return t('sharedProjectKey')
+  const member = selectedMembers.value.find((item) => item.user_id === row.owner_user_id)
+  return member ? member.user_email : `ID ${row.owner_user_id}`
+}
+
 function openCreateDialog() {
   Object.assign(createForm, {
     name: '',
     ownerUserId: null,
     status: 'enabled'
   })
+  ownerOptions.value = []
   createDialogVisible.value = true
 }
 
@@ -203,17 +246,54 @@ function openCreditDialog(row: Project) {
   creditDialogVisible.value = true
 }
 
+async function openProjectKeysDialog(row: Project) {
+  selectedProject.value = row
+  projectKeysDialogVisible.value = true
+  createdProjectKey.value = ''
+  Object.assign(projectKeyForm, {
+    scope: 'shared',
+    memberUserId: null
+  })
+  await Promise.all([loadSelectedProjectMembers(), loadSelectedProjectKeys()])
+}
+
 async function openMembersDialog(row: Project) {
   selectedProject.value = row
   membersDialogVisible.value = true
   selectedMembers.value = []
+  memberUserOptions.value = []
+  Object.assign(memberForm, {
+    userId: null,
+    role: 'member'
+  })
   membersLoading.value = true
   try {
-    selectedMembers.value = await getProjectMembers(row.id)
+    await loadSelectedProjectMembers()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
     membersLoading.value = false
+  }
+}
+
+async function loadSelectedProjectMembers() {
+  if (!selectedProject.value) return
+  selectedMembers.value = await getProjectMembers(selectedProject.value.id)
+}
+
+async function loadSelectedProjectKeys() {
+  if (!selectedProject.value) return
+  projectKeysLoading.value = true
+  try {
+    const page = await getUserKeys({
+      projectId: selectedProject.value.id,
+      limit: 200
+    })
+    selectedProjectKeys.value = page.items
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    projectKeysLoading.value = false
   }
 }
 
@@ -260,6 +340,139 @@ async function submitCreateProject() {
     ElMessage.error(readError(err))
   } finally {
     createSaving.value = false
+  }
+}
+
+async function submitCreateProjectKey() {
+  if (!selectedProject.value) return
+  if (projectKeyForm.scope === 'member' && !projectKeyForm.memberUserId) {
+    ElMessage.error(t('projectKeyMemberRequired'))
+    return
+  }
+  projectKeyCreateSaving.value = true
+  try {
+    const created = await createProjectUserKey(selectedProject.value.id, {
+      owner_user_id: projectKeyForm.scope === 'member' ? projectKeyForm.memberUserId : null
+    })
+    createdProjectKey.value = created.key
+    Object.assign(projectKeyForm, {
+      scope: 'shared',
+      memberUserId: null
+    })
+    ElMessage.success(t('apiKeyCreated'))
+    await loadSelectedProjectKeys()
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    projectKeyCreateSaving.value = false
+  }
+}
+
+async function copyApiKeyValue(value: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    ElMessage.success(t('apiKeyCopied'))
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
+}
+
+async function searchOwnerUsers(query: string) {
+  const email = query.trim()
+  if (!email) {
+    ownerOptions.value = []
+    return
+  }
+  ownerSearchLoading.value = true
+  try {
+    const page = await getUsers({ email, limit: 20 })
+    ownerOptions.value = page.items
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    ownerSearchLoading.value = false
+  }
+}
+
+async function searchMemberUsers(query: string) {
+  const email = query.trim()
+  if (!email) {
+    memberUserOptions.value = []
+    return
+  }
+  memberUserSearchLoading.value = true
+  try {
+    const page = await getUsers({ email, limit: 20 })
+    memberUserOptions.value = page.items
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    memberUserSearchLoading.value = false
+  }
+}
+
+async function submitAddProjectMember() {
+  if (!selectedProject.value) return
+  if (!memberForm.userId) {
+    ElMessage.error(t('projectMemberRequired'))
+    return
+  }
+  memberSaving.value = true
+  try {
+    await addProjectMember(selectedProject.value.id, {
+      user_id: memberForm.userId,
+      role: memberForm.role
+    })
+    ElMessage.success(t('projectMemberAdded'))
+    Object.assign(memberForm, {
+      userId: null,
+      role: 'member'
+    })
+    memberUserOptions.value = []
+    await loadSelectedProjectMembers()
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    memberSaving.value = false
+  }
+}
+
+async function changeProjectMemberRole(row: ProjectMember, role: EditableProjectMemberRole) {
+  if (!selectedProject.value || row.role === 'owner') return
+  updatingMemberId.value = row.id
+  try {
+    await updateProjectMember(selectedProject.value.id, row.id, { role })
+    ElMessage.success(t('projectMemberUpdated'))
+    await loadSelectedProjectMembers()
+  } catch (err) {
+    ElMessage.error(readError(err))
+    await loadSelectedProjectMembers()
+  } finally {
+    updatingMemberId.value = null
+  }
+}
+
+async function confirmDeleteProjectMember(row: ProjectMember) {
+  if (!selectedProject.value || row.role === 'owner') return
+  const confirmed = await confirmDialog(
+    t('deleteProjectMemberConfirm').replace('{email}', row.user_email),
+    t('confirmDelete'),
+    t('delete'),
+    'warning'
+  )
+  if (!confirmed) return
+  deletingMemberId.value = row.id
+  try {
+    await deleteProjectMember(selectedProject.value.id, row.id)
+    ElMessage.success(t('projectMemberRemoved'))
+    await loadSelectedProjectMembers()
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    deletingMemberId.value = null
   }
 }
 
@@ -354,35 +567,6 @@ async function handlePageSizeChange(size: number) {
   await reload()
 }
 
-function exportProjects() {
-  const header = [
-    'id',
-    'name',
-    'owner_email',
-    'status',
-    'is_default',
-    'member_count',
-    'user_key_count',
-    'balance_micro_usd',
-    'reserved_micro_usd',
-    'available_micro_usd',
-    'created_at'
-  ]
-  const rows = projects.value.map((project) => [
-    project.id,
-    project.name,
-    project.owner_email,
-    project.status,
-    project.is_default ? 'true' : 'false',
-    project.member_count,
-    project.user_key_count,
-    project.balance_micro_usd,
-    project.reserved_micro_usd,
-    project.available_micro_usd,
-    project.created_at
-  ])
-  downloadCsv(`projects-page-${currentPage.value}.csv`, [header, ...rows])
-}
 </script>
 
 <template>
@@ -418,9 +602,6 @@ function exportProjects() {
         </el-button>
       </div>
       <div class="user-toolbar-actions">
-        <el-button class="admin-action-button" :icon="Download" @click="exportProjects">
-          {{ t('exportProjects') }}
-        </el-button>
         <el-button
           class="admin-action-button"
           type="primary"
@@ -438,7 +619,11 @@ function exportProjects() {
       <div class="project-loading-row" />
     </div>
 
-    <div v-else class="service-table-panel">
+    <div
+      v-else
+      class="service-table-panel"
+      :class="{ 'has-pagination': hasPagination || projects.length > 1 }"
+    >
       <el-table
         v-loading="loading"
         class="admin-table service-table project-table"
@@ -516,11 +701,19 @@ function exportProjects() {
         <el-table-column :label="t('actions')" width="184" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
+              <AdminActionTooltip :content="t('projectApiKeys')">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  :aria-label="t('projectApiKeys')"
+                  :icon="Key"
+                  @click="openProjectKeysDialog(row)"
+                />
+              </AdminActionTooltip>
               <AdminActionTooltip :content="t('viewProjectMembers')">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewProjectMembers')"
-                  :icon="UserFilled"
+                  :icon="UserIcon"
                   @click="openMembersDialog(row)"
                 />
               </AdminActionTooltip>
@@ -532,25 +725,29 @@ function exportProjects() {
                   @click="openEditDialog(row)"
                 />
               </AdminActionTooltip>
-              <AdminActionTooltip :content="t('recharge')">
+              <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
-                  class="admin-action-button icon-only-action user-recharge-action"
-                  :aria-label="t('recharge')"
-                  :icon="Money"
-                  @click="openCreditDialog(row)"
+                  class="admin-action-button icon-only-action action-more-button"
+                  :aria-label="t('moreActions')"
+                  :icon="MoreFilled"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('delete')">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  type="danger"
-                  :aria-label="t('delete')"
-                  :disabled="row.is_default || row.user_key_count > 0"
-                  :icon="Delete"
-                  :loading="deletingProjectId === row.id"
-                  @click="confirmDeleteProject(row)"
-                />
-              </AdminActionTooltip>
+                <template #dropdown>
+                  <el-dropdown-menu class="admin-row-action-menu">
+                    <el-dropdown-item @click="openCreditDialog(row)">
+                      <el-icon><Money /></el-icon>
+                      <span>{{ t('recharge') }}</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      class="is-danger"
+                      :disabled="row.is_default || row.user_key_count > 0 || deletingProjectId === row.id"
+                      @click="confirmDeleteProject(row)"
+                    >
+                      <el-icon><Delete /></el-icon>
+                      <span>{{ t('delete') }}</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </template>
         </el-table-column>
@@ -568,7 +765,7 @@ function exportProjects() {
 
     <div
       v-if="!initialLoading && (hasPagination || projects.length > 1)"
-      class="admin-pagination-bar is-compact"
+      class="admin-pagination-bar admin-table-pagination is-compact"
     >
       <div class="admin-pagination-summary">
         <span class="admin-result-count">
@@ -605,25 +802,52 @@ function exportProjects() {
 
     <el-dialog
       v-model="createDialogVisible"
-      class="user-admin-dialog project-edit-dialog"
+      class="user-admin-dialog project-create-dialog"
       :title="t('addProject')"
-      width="520px"
+      width="560px"
     >
-      <div class="user-dialog-body">
-        <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitCreateProject">
-          <el-form-item class="user-dialog-field is-wide" :label="t('projectName')">
-            <el-input v-model="createForm.name" />
+      <div class="project-create-body">
+        <el-form
+          class="project-create-form"
+          label-position="top"
+          @submit.prevent="submitCreateProject"
+        >
+          <el-form-item class="project-create-field" :label="t('projectName')">
+            <el-input v-model="createForm.name" autofocus />
           </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('ownerUserId')">
-            <el-input-number v-model="createForm.ownerUserId" :min="1" :precision="0" />
-          </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('status')">
-            <el-select v-model="createForm.status" class="user-edit-select">
-              <el-option :label="t('enabled')" value="enabled" />
-              <el-option :label="t('disabled')" value="disabled" />
-            </el-select>
-          </el-form-item>
-          <button class="hidden-submit" type="submit" />
+          <div class="project-create-field-row">
+            <el-form-item class="project-create-field" :label="t('projectOwner')">
+              <el-select
+                v-model="createForm.ownerUserId"
+                class="project-owner-select"
+                filterable
+                remote
+                clearable
+                :loading="ownerSearchLoading"
+                :placeholder="t('projectOwnerPlaceholder')"
+                :remote-method="searchOwnerUsers"
+              >
+                <el-option
+                  v-for="user in ownerOptions"
+                  :key="user.id"
+                  :label="user.email"
+                  :value="user.id"
+                  :disabled="user.status === 'disabled'"
+                >
+                  <span class="project-owner-option">
+                    <span>{{ user.email }}</span>
+                    <span>ID {{ user.id }}</span>
+                  </span>
+                </el-option>
+              </el-select>
+            </el-form-item>
+            <el-form-item class="project-create-field" :label="t('status')">
+              <el-select v-model="createForm.status" class="project-create-status-select">
+                <el-option :label="t('enabled')" value="enabled" />
+                <el-option :label="t('disabled')" value="disabled" />
+              </el-select>
+            </el-form-item>
+          </div>
         </el-form>
       </div>
       <template #footer>
@@ -653,7 +877,6 @@ function exportProjects() {
               <el-option :label="t('disabled')" value="disabled" />
             </el-select>
           </el-form-item>
-          <button class="hidden-submit" type="submit" />
         </el-form>
       </div>
       <template #footer>
@@ -664,6 +887,131 @@ function exportProjects() {
           </el-button>
         </div>
       </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="projectKeysDialogVisible"
+      class="user-admin-dialog project-keys-dialog"
+      :title="t('projectApiKeys')"
+      width="900px"
+    >
+      <div class="project-keys-dialog-body">
+        <el-form
+          class="project-key-create-form"
+          label-position="top"
+          @submit.prevent="submitCreateProjectKey"
+        >
+          <el-form-item class="project-create-field" :label="t('projectKeyScope')">
+            <el-select v-model="projectKeyForm.scope">
+              <el-option :label="t('sharedProjectKey')" value="shared" />
+              <el-option :label="t('memberPersonalKey')" value="member" />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            v-if="projectKeyForm.scope === 'member'"
+            class="project-create-field"
+            :label="t('projectMember')"
+          >
+            <el-select
+              v-model="projectKeyForm.memberUserId"
+              filterable
+              :placeholder="t('projectMemberPlaceholder')"
+            >
+              <el-option
+                v-for="member in selectedMembers"
+                :key="member.user_id"
+                :label="member.user_email"
+                :value="member.user_id"
+                :disabled="member.user_status === 'disabled'"
+              >
+                <span class="project-owner-option">
+                  <span>{{ member.user_email }}</span>
+                  <span>{{ memberRoleText(member.role) }}</span>
+                </span>
+              </el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item class="project-key-create-action">
+            <el-button
+              class="admin-action-button"
+              type="primary"
+              :icon="Plus"
+              :loading="projectKeyCreateSaving"
+              @click="submitCreateProjectKey"
+            >
+              {{ t('createApiKey') }}
+            </el-button>
+          </el-form-item>
+        </el-form>
+
+        <div v-if="createdProjectKey" class="project-created-key">
+          <div>
+            <span>{{ t('newApiKey') }}</span>
+            <code>{{ createdProjectKey }}</code>
+          </div>
+          <el-button
+            class="admin-action-button"
+            :icon="DocumentCopy"
+            @click="copyApiKeyValue(createdProjectKey)"
+          >
+            {{ t('copy') }}
+          </el-button>
+        </div>
+
+        <div class="service-table-panel project-key-detail-panel">
+          <el-table
+            v-loading="projectKeysLoading"
+            class="admin-table service-table"
+            :data="selectedProjectKeys"
+            row-key="id"
+            stripe
+          >
+            <el-table-column :label="t('apiKey')" min-width="220">
+              <template #default="{ row }">
+                <div class="user-key-cell">
+                  <code class="user-key-value">{{ maskApiKey(row.key) }}</code>
+                  <el-tooltip :content="t('copy')" placement="top">
+                    <el-button
+                      class="user-key-copy-button"
+                      :aria-label="t('copy')"
+                      :icon="DocumentCopy"
+                      @click="copyApiKeyValue(row.key)"
+                    />
+                  </el-tooltip>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('keyOwner')" min-width="132">
+              <template #default="{ row }">
+                {{ projectKeyOwnerText(row) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              :label="t('availableCredit')"
+              width="96"
+              align="center"
+              header-align="center"
+            >
+              <template #default="{ row }">{{ formatMicroUsd(row.available_micro_usd, 2) }}</template>
+            </el-table-column>
+            <el-table-column :label="t('status')" width="92" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-tag class="static-state-tag" :type="row.status === 'enabled' ? 'success' : 'info'">
+                  {{ row.status === 'enabled' ? t('enabled') : t('disabled') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('createdAt')" min-width="126">
+              <template #default="{ row }">
+                <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty :description="t('noApiKeys')" />
+            </template>
+          </el-table>
+        </div>
+      </div>
     </el-dialog>
 
     <el-dialog
@@ -710,6 +1058,47 @@ function exportProjects() {
       width="760px"
     >
       <div class="service-table-panel project-member-panel">
+        <el-form class="project-member-add-form" @submit.prevent="submitAddProjectMember">
+          <el-form-item :label="t('projectMember')" class="project-member-user-field">
+            <el-select
+              v-model="memberForm.userId"
+              filterable
+              remote
+              clearable
+              :remote-method="searchMemberUsers"
+              :loading="memberUserSearchLoading"
+              :placeholder="t('projectMemberPlaceholder')"
+            >
+              <el-option
+                v-for="user in memberUserOptions"
+                :key="user.id"
+                :label="user.email"
+                :value="user.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="t('memberRole')" class="project-member-role-field">
+            <el-select v-model="memberForm.role">
+              <el-option
+                v-for="option in editableMemberRoleOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item class="project-member-add-action">
+            <el-button
+              class="admin-action-button"
+              type="primary"
+              native-type="submit"
+              :icon="Plus"
+              :loading="memberSaving"
+            >
+              {{ t('addProjectMember') }}
+            </el-button>
+          </el-form-item>
+        </el-form>
         <el-table
           v-loading="membersLoading"
           class="admin-table service-table"
@@ -725,9 +1114,24 @@ function exportProjects() {
               </span>
             </template>
           </el-table-column>
-          <el-table-column :label="t('memberRole')" width="120">
+          <el-table-column :label="t('memberRole')" width="150">
             <template #default="{ row }">
-              <el-tag effect="plain">{{ memberRoleText(row.role) }}</el-tag>
+              <el-tag v-if="row.role === 'owner'" effect="plain">{{ memberRoleText(row.role) }}</el-tag>
+              <el-select
+                v-else
+                class="project-member-role-select"
+                :model-value="row.role"
+                size="small"
+                :loading="updatingMemberId === row.id"
+                @change="(role: EditableProjectMemberRole) => changeProjectMemberRole(row, role)"
+              >
+                <el-option
+                  v-for="option in editableMemberRoleOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
             </template>
           </el-table-column>
           <el-table-column :label="t('status')" width="112" align="center" header-align="center">
@@ -740,6 +1144,27 @@ function exportProjects() {
           <el-table-column :label="t('createdAt')" min-width="140">
             <template #default="{ row }">
               <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            :label="t('actions')"
+            width="96"
+            align="center"
+            header-align="center"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <AdminActionTooltip v-if="row.role !== 'owner'" :content="t('delete')">
+                <el-button
+                  class="admin-icon-action danger"
+                  :aria-label="t('delete')"
+                  :icon="Delete"
+                  :loading="deletingMemberId === row.id"
+                  circle
+                  text
+                  @click="confirmDeleteProjectMember(row)"
+                />
+              </AdminActionTooltip>
             </template>
           </el-table-column>
           <template #empty>
@@ -860,14 +1285,233 @@ function exportProjects() {
   font-weight: 700;
 }
 
+.project-create-body {
+  padding-top: 2px;
+}
+
+:global(.project-create-dialog .el-dialog__header) {
+  border-bottom: 0;
+  padding-bottom: 10px;
+}
+
+:global(.project-create-dialog .el-dialog__body) {
+  padding-top: 8px;
+}
+
+:global(.project-create-dialog .el-dialog__footer) {
+  background: transparent;
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.project-create-form {
+  display: grid;
+  gap: 18px;
+}
+
+.project-create-field-row {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.72fr);
+}
+
+.project-create-field {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.project-create-field :deep(.el-form-item__label) {
+  color: #3f4a5c;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.2;
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.project-create-field :deep(.el-input),
+.project-create-field :deep(.el-input-number),
+.project-create-field :deep(.el-select) {
+  width: 100%;
+}
+
+.project-create-field :deep(.el-input__wrapper),
+.project-create-field :deep(.el-input-number),
+.project-create-field :deep(.el-select__wrapper) {
+  border-radius: 7px;
+  min-height: 40px;
+}
+
+.project-owner-option {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.project-owner-option span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-owner-option span:last-child {
+  color: #8a98aa;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.project-keys-dialog-body {
+  display: grid;
+  gap: 14px;
+}
+
+.project-key-create-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(190px, 240px) minmax(260px, 1fr) auto;
+}
+
+.project-key-create-form .project-create-field {
+  min-width: 0;
+}
+
+.project-key-create-action {
+  margin-bottom: 0;
+}
+
+.project-key-create-action :deep(.el-form-item__content) {
+  align-items: end;
+}
+
+.project-created-key {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.project-created-key div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-created-key span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.project-created-key code,
+.user-key-value {
+  background: #eef3f8;
+  border: 1px solid #dbe4ef;
+  border-radius: 6px;
+  color: #1d2939;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 4px 7px;
+}
+
+.project-created-key code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-key-detail-panel {
+  max-height: min(52dvh, 480px);
+}
+
+.user-key-cell {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.user-key-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .project-member-panel {
+  display: grid;
+  gap: 14px;
   max-height: min(58dvh, 520px);
+}
+
+.project-member-add-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1fr) 150px max-content;
+  padding: 4px 4px 0;
+}
+
+.project-member-add-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.project-member-user-field :deep(.el-select),
+.project-member-role-field :deep(.el-select),
+.project-member-role-select {
+  width: 100%;
+}
+
+.project-member-add-action :deep(.el-form-item__content) {
+  align-items: end;
+}
+
+.project-member-add-action .admin-action-button {
+  min-width: 112px;
+}
+
+:global(.project-members-dialog .el-tag),
+:global(.project-members-dialog .el-tag *) {
+  transition: none !important;
+}
+
+:global(.project-members-dialog .el-zoom-in-center-enter-active),
+:global(.project-members-dialog .el-zoom-in-center-leave-active),
+:global(.project-members-dialog .el-fade-in-enter-active),
+:global(.project-members-dialog .el-fade-in-leave-active) {
+  animation: none !important;
+  transition: none !important;
 }
 
 @media (max-width: 720px) {
   .project-search-input,
   .project-status-filter {
     width: 100%;
+  }
+
+  .project-create-field-row {
+    grid-template-columns: 1fr;
+  }
+
+  .project-key-create-form {
+    grid-template-columns: 1fr;
+  }
+
+  .project-member-add-form {
+    grid-template-columns: 1fr;
+  }
+
+  .project-created-key {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

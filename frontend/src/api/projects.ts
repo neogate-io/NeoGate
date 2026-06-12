@@ -21,6 +21,14 @@ export type UpdateProjectPayload = {
   status?: ProjectStatus
 }
 
+export type ProjectMemberRolePayload = {
+  role: 'admin' | 'member' | 'viewer'
+}
+
+export type AddProjectMemberPayload = ProjectMemberRolePayload & {
+  user_id: number
+}
+
 export function getProjects(filters: GetProjectsFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.search) searchParams.set('search', filters.search)
@@ -54,4 +62,28 @@ export function deleteProject(id: number) {
 
 export function getProjectMembers(id: number) {
   return adminRequest<ProjectMember[]>(`/api/admin/projects/${id}/members`)
+}
+
+export function addProjectMember(id: number, payload: AddProjectMemberPayload) {
+  return adminRequest<ProjectMember>(`/api/admin/projects/${id}/members`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function updateProjectMember(
+  projectId: number,
+  memberId: number,
+  payload: ProjectMemberRolePayload
+) {
+  return adminRequest<ProjectMember>(`/api/admin/projects/${projectId}/members/${memberId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function deleteProjectMember(projectId: number, memberId: number) {
+  return adminRequest<{ ok: boolean }>(`/api/admin/projects/${projectId}/members/${memberId}`, {
+    method: 'DELETE'
+  })
 }

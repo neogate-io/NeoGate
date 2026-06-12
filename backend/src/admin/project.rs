@@ -3,11 +3,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Row};
 
 use crate::{
+    auth::{generate_user_key, key_prefix},
     billing::{account, CreditAccountType},
     error::{AppError, AppResult},
     id::DbId,
     AppState,
 };
+
+use super::user::{user_key_from_row, validate_user_key_status, CreatedUserKey};
 
 #[derive(Debug, Serialize)]
 pub struct ProjectRecord {
@@ -68,8 +71,34 @@ pub struct UpdateProjectRequest {
     pub status: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpsertProjectMemberRequest {
+    pub user_id: DbId,
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProjectMemberRequest {
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateProjectUserKeyRequest {
+    #[serde(default = "default_project_user_key_name")]
+    pub name: String,
+    #[serde(default = "default_enabled_status")]
+    pub status: String,
+    pub owner_user_id: Option<DbId>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub model_limits: Option<Vec<String>>,
+}
+
 fn default_enabled_status() -> String {
     "enabled".to_string()
+}
+
+fn default_project_user_key_name() -> String {
+    "Project API Key".to_string()
 }
 
 pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppResult<ProjectPage> {
@@ -303,6 +332,196 @@ pub async fn list_project_members(
         .collect::<Result<_, _>>()?)
 }
 
+pub async fn add_project_member(
+    state: &AppState,
+    project_id: DbId,
+    req: UpsertProjectMemberRequest,
+) -> AppResult<ProjectMemberRecord> {
+    validate_editable_project_member_role(&req.role)?;
+    let mut tx = state.db.pool.begin().await?;
+    ensure_project_exists_in_tx(&mut tx, project_id).await?;
+    ensure_user_exists_in_tx(&mut tx, req.user_id).await?;
+    let current = sqlx::query(
+        "SELECT role
+         FROM project_member
+         WHERE project_id = $1 AND user_id = $2
+         FOR UPDATE",
+    )
+    .bind(project_id)
+    .bind(req.user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(row) = current {
+        let role: String = row.try_get("role")?;
+        if role == "owner" {
+            return Err(AppError::BadRequest(
+                "project owner role cannot be changed".to_string(),
+            ));
+        }
+    }
+    let row = sqlx::query(
+        "INSERT INTO project_member (project_id, user_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (project_id, user_id)
+         DO UPDATE SET role = EXCLUDED.role, updated_at = now()
+         RETURNING id",
+    )
+    .bind(project_id)
+    .bind(req.user_id)
+    .bind(req.role)
+    .fetch_one(&mut *tx)
+    .await?;
+    let member_id: DbId = row.try_get("id")?;
+    tx.commit().await?;
+    get_project_member(state, project_id, member_id).await
+}
+
+pub async fn update_project_member(
+    state: &AppState,
+    project_id: DbId,
+    member_id: DbId,
+    req: UpdateProjectMemberRequest,
+) -> AppResult<ProjectMemberRecord> {
+    validate_editable_project_member_role(&req.role)?;
+    let current = get_project_member(state, project_id, member_id).await?;
+    if current.role == "owner" {
+        return Err(AppError::BadRequest(
+            "project owner role cannot be changed".to_string(),
+        ));
+    }
+    let result = sqlx::query(
+        "UPDATE project_member
+         SET role = $3, updated_at = now()
+         WHERE project_id = $1 AND id = $2
+           AND role <> 'owner'",
+    )
+    .bind(project_id)
+    .bind(member_id)
+    .bind(req.role)
+    .execute(&state.db.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    get_project_member(state, project_id, member_id).await
+}
+
+pub async fn delete_project_member(
+    state: &AppState,
+    project_id: DbId,
+    member_id: DbId,
+) -> AppResult<()> {
+    let current = get_project_member(state, project_id, member_id).await?;
+    if current.role == "owner" {
+        return Err(AppError::BadRequest(
+            "project owner cannot be removed".to_string(),
+        ));
+    }
+    let result = sqlx::query(
+        "DELETE FROM project_member
+         WHERE project_id = $1 AND id = $2
+           AND role <> 'owner'",
+    )
+    .bind(project_id)
+    .bind(member_id)
+    .execute(&state.db.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+pub async fn create_project_user_key(
+    state: &AppState,
+    project_id: DbId,
+    req: CreateProjectUserKeyRequest,
+) -> AppResult<CreatedUserKey> {
+    validate_user_key_status(&req.status)?;
+    let name = normalize_project_user_key_name(&req.name)?;
+    let mut tx = state.db.pool.begin().await?;
+    let project = sqlx::query(
+        "SELECT id, owner_user_id
+         FROM project
+         WHERE id = $1
+         FOR KEY SHARE",
+    )
+    .bind(project_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let project_owner_user_id: DbId = project.try_get("owner_user_id")?;
+
+    if let Some(owner_user_id) = req.owner_user_id {
+        let is_member = sqlx::query(
+            "SELECT id
+             FROM project_member
+             WHERE project_id = $1 AND user_id = $2
+             FOR KEY SHARE",
+        )
+        .bind(project_id)
+        .bind(owner_user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if !is_member {
+            return Err(AppError::BadRequest(
+                "key owner must be a project member".to_string(),
+            ));
+        }
+    }
+
+    let key = generate_user_key();
+    let secret_ciphertext = state.secrets.encrypt(&key)?;
+    let compatibility_user_id = req.owner_user_id.unwrap_or(project_owner_user_id);
+    let row = sqlx::query(
+        "INSERT INTO user_key
+            (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status, expires_at, model_limits)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id",
+    )
+    .bind(compatibility_user_id)
+    .bind(project_id)
+    .bind(req.owner_user_id)
+    .bind(name)
+    .bind(key_prefix(&key))
+    .bind(secret_ciphertext)
+    .bind(req.status)
+    .bind(req.expires_at)
+    .bind(req.model_limits)
+    .fetch_one(&mut *tx)
+    .await?;
+    let user_key_id: DbId = row.try_get("id")?;
+    account::create_credit_account(&mut tx, CreditAccountType::UserKey, user_key_id).await?;
+    tx.commit().await?;
+
+    Ok(CreatedUserKey {
+        record: get_project_user_key(state, user_key_id).await?,
+        key,
+    })
+}
+
+async fn get_project_user_key(
+    state: &AppState,
+    user_key_id: DbId,
+) -> AppResult<super::user::UserKeyRecord> {
+    let row = sqlx::query(
+        "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
+                uk.name, uk.key_prefix, uk.secret_ciphertext,
+                uk.status, uk.last_active_at, uk.expires_at,
+                uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
+                uk.created_at, uk.updated_at
+         FROM user_key uk
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         WHERE uk.id = $1",
+    )
+    .bind(user_key_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    user_key_from_row(state, &row)
+}
+
 async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
     let row = sqlx::query(
         "SELECT p.id, p.name, p.owner_user_id, owner.email AS owner_email,
@@ -332,6 +551,41 @@ async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
     .await?
     .ok_or(AppError::NotFound)?;
     project_from_row(&row)
+}
+
+async fn get_project_member(
+    state: &AppState,
+    project_id: DbId,
+    member_id: DbId,
+) -> AppResult<ProjectMemberRecord> {
+    let row = sqlx::query(
+        "SELECT pm.id, pm.project_id, pm.user_id, u.email AS user_email,
+                pm.role, u.status AS user_status, pm.created_at, pm.updated_at
+         FROM project_member pm
+         JOIN \"user\" u ON u.id = pm.user_id
+         WHERE pm.project_id = $1 AND pm.id = $2",
+    )
+    .bind(project_id)
+    .bind(member_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    project_member_from_row(&row)
+}
+
+async fn ensure_project_exists_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: DbId,
+) -> AppResult<()> {
+    let exists = sqlx::query("SELECT id FROM project WHERE id = $1 FOR KEY SHARE")
+        .bind(project_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .is_some();
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
 }
 
 async fn ensure_user_exists_in_tx(
@@ -395,6 +649,15 @@ fn validate_project_status(status: &str) -> AppResult<()> {
     }
 }
 
+fn validate_editable_project_member_role(role: &str) -> AppResult<()> {
+    match role {
+        "admin" | "member" | "viewer" => Ok(()),
+        other => Err(AppError::BadRequest(format!(
+            "invalid editable project member role: {other}"
+        ))),
+    }
+}
+
 fn normalize_project_name(name: &str) -> AppResult<String> {
     let name = name.trim();
     if name.is_empty() {
@@ -403,6 +666,19 @@ fn normalize_project_name(name: &str) -> AppResult<String> {
     if name.chars().count() > 80 {
         return Err(AppError::BadRequest(
             "project name must be 80 characters or fewer".to_string(),
+        ));
+    }
+    Ok(name.to_string())
+}
+
+fn normalize_project_user_key_name(name: &str) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("api key name is required".to_string()));
+    }
+    if name.chars().count() > 80 {
+        return Err(AppError::BadRequest(
+            "api key name must be 80 characters or fewer".to_string(),
         ));
     }
     Ok(name.to_string())

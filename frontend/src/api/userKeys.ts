@@ -5,24 +5,46 @@ export type UserKeyPage = CursorPage<UserKey>
 
 export type GetUserKeysFilters = {
   userId?: number
+  projectId?: number
   limit?: number
   cursor?: string
 }
 
-export type CreditAccountType = 'user' | 'project' | 'user_key' | 'user_key_model'
+export type CreditAccountType = 'project' | 'user_key' | 'user_key_model'
 
 export type AdjustCreditResponse = {
   balance_micro_usd: number
 }
 
+export type CreateProjectUserKeyPayload = {
+  name?: string
+  status?: UserKeyStatus
+  owner_user_id?: number | null
+  expires_at?: string | null
+  model_limits?: string[] | null
+}
+
+export type CreatedUserKey = {
+  record: UserKey
+  key: string
+}
+
 export function getUserKeys(filters: GetUserKeysFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.userId != null) searchParams.set('user_id', String(filters.userId))
+  if (filters.projectId != null) searchParams.set('project_id', String(filters.projectId))
   if (filters.limit) searchParams.set('limit', String(filters.limit))
   if (filters.cursor) searchParams.set('cursor', filters.cursor)
 
   const query = searchParams.toString()
   return adminRequest<UserKeyPage>(`/api/admin/user-keys${query ? `?${query}` : ''}`)
+}
+
+export function createProjectUserKey(projectId: number, payload: CreateProjectUserKeyPayload) {
+  return adminRequest<CreatedUserKey>(`/api/admin/projects/${projectId}/user-keys`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
 }
 
 export function getUserGroups() {

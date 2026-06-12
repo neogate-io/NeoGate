@@ -20,6 +20,8 @@ export type CreditBalance = {
 export type UserKey = CreditBalance & {
   id: number
   user_id: number
+  project_id: number
+  owner_user_id?: number | null
   name: string
   key: string
   key_prefix: string

@@ -71,6 +71,8 @@ pub struct UpdateUserRequest {
 pub struct UserKeyRecord {
     pub id: DbId,
     pub user_id: DbId,
+    pub project_id: DbId,
+    pub owner_user_id: Option<DbId>,
     pub name: String,
     pub key: String,
     pub key_prefix: String,
@@ -167,6 +169,7 @@ pub struct ListUsersQuery {
 #[derive(Debug, Deserialize)]
 pub struct ListUserKeysQuery {
     pub user_id: Option<DbId>,
+    pub project_id: Option<DbId>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -226,7 +229,6 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     .fetch_one(&mut *tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;
-    account::create_credit_account(&mut tx, CreditAccountType::User, user_id).await?;
     project::create_default_project_for_user(&mut tx, user_id).await?;
     tx.commit().await?;
     get_user(state, user_id).await
@@ -303,8 +305,8 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
            SELECT u.id, u.email, u.status,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
-                  COALESCE(pw.balance_micro_usd, 0) + COALESCE(ukw.balance_micro_usd, 0) AS balance_micro_usd,
-                  COALESCE(pw.reserved_micro_usd, 0) + COALESCE(ukw.reserved_micro_usd, 0) AS reserved_micro_usd,
+                  COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
+                  COALESCE(pw.reserved_micro_usd, 0) AS reserved_micro_usd,
                   u.last_active_at, u.created_at, u.updated_at
            FROM page_users u
            JOIN user_group ug ON ug.id = u.user_group_id
@@ -313,7 +315,7 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
                       COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM project p
                JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
-               WHERE p.owner_user_id = u.id
+               WHERE p.owner_user_id = u.id AND p.is_default = TRUE
            ) pw ON TRUE
            LEFT JOIN LATERAL (
                SELECT count(uk.id) AS user_key_count,
@@ -423,8 +425,8 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
         r#"SELECT u.id, u.email, u.status,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
-                  COALESCE(pw.balance_micro_usd, 0) + COALESCE(ukw.balance_micro_usd, 0) AS balance_micro_usd,
-                  COALESCE(pw.reserved_micro_usd, 0) + COALESCE(ukw.reserved_micro_usd, 0) AS reserved_micro_usd,
+                  COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
+                  COALESCE(pw.reserved_micro_usd, 0) AS reserved_micro_usd,
                   u.last_active_at, u.created_at, u.updated_at
            FROM "user" u
            JOIN user_group ug ON ug.id = u.user_group_id
@@ -433,7 +435,7 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
                       COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM project p
                JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
-               WHERE p.owner_user_id = u.id
+               WHERE p.owner_user_id = u.id AND p.is_default = TRUE
            ) pw ON TRUE
            LEFT JOIN (
                SELECT uk.user_id,
@@ -657,7 +659,8 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
     let mut query_builder = sqlx::QueryBuilder::new(
-        "SELECT uk.id, uk.user_id, uk.name, uk.key_prefix, uk.secret_ciphertext,
+        "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
+                uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
@@ -669,6 +672,14 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
     if let Some(user_id) = query.user_id {
         query_builder.push(" WHERE uk.user_id = ");
         query_builder.push_bind(user_id);
+        has_where = true;
+    }
+
+    if let Some(project_id) = query.project_id {
+        query_builder
+            .push(if has_where { " AND " } else { " WHERE " })
+            .push("uk.project_id = ");
+        query_builder.push_bind(project_id);
         has_where = true;
     }
 
@@ -792,7 +803,8 @@ pub async fn delete_user_key(state: &AppState, id: DbId) -> AppResult<()> {
 
 async fn get_user_key(state: &AppState, id: DbId) -> AppResult<UserKeyRecord> {
     let row = sqlx::query(
-        "SELECT uk.id, uk.user_id, uk.name, uk.key_prefix, uk.secret_ciphertext,
+        "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
+                uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
@@ -954,7 +966,6 @@ async fn create_user_by_email_with_status(
     .fetch_one(&mut **tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;
-    account::create_credit_account(tx, CreditAccountType::User, user_id).await?;
     project::create_default_project_for_user(tx, user_id).await?;
     Ok(user_id)
 }
@@ -1079,10 +1090,6 @@ async fn recover_hot_credit_account(
 async fn recover_user_hot_credit_accounts(state: &AppState, user_id: DbId) -> AppResult<()> {
     let rows = sqlx::query(
         "SELECT w.id
-         FROM credit_account w
-         WHERE w.owner_type = 'user' AND w.owner_id = $1
-         UNION ALL
-         SELECT w.id
          FROM project p
          JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
          WHERE p.owner_user_id = $1
@@ -1233,6 +1240,8 @@ pub fn user_key_from_row(
     Ok(UserKeyRecord {
         id,
         user_id: row.try_get("user_id")?,
+        project_id: row.try_get("project_id")?,
+        owner_user_id: row.try_get("owner_user_id")?,
         name: row.try_get("name")?,
         key: state.secrets.plaintext(id, &secret_ciphertext)?,
         key_prefix: row.try_get("key_prefix")?,

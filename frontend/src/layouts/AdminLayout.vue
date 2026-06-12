@@ -29,8 +29,8 @@ type SettingNavItem = { path: string; key: MessageKey }
 const navItems: AdminNavItem[] = [
   { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
   { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
-  { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened },
   { path: '/admin/keys', key: 'userManagement', icon: User },
+  { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened },
   { path: '/admin/usage', key: 'usage', icon: Monitor }
 ] as const
 

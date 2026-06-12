@@ -8,7 +8,7 @@ import {
   Download,
   Edit,
   Key,
-  Money,
+  MoreFilled,
   Plus,
   Search,
   UserFilled,
@@ -16,7 +16,7 @@ import {
 } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adjustCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
+import { getUserGroups, getUserKeys } from '../../api/userKeys'
 import {
   createUser,
   deleteUser,
@@ -38,8 +38,7 @@ import {
   formatDateTime,
   downloadCsv,
   formatMicroUsd,
-  maskApiKey,
-  usdToMicroUsd
+  maskApiKey
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
@@ -67,7 +66,6 @@ type UserStatusMeta = {
 
 const DEFAULT_USER_PAGE_SIZE = 50
 const DEFAULT_USER_KEY_PAGE_SIZE = 100
-const DEFAULT_RECHARGE_USD = 100
 const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
 const RELATIVE_TIME_UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
   ['year', 60 * 60 * 24 * 365],
@@ -93,8 +91,6 @@ const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
 
 const emailSearch = ref('')
 const apiKeySearch = ref('')
-const creditDialogVisible = ref(false)
-const creditSaving = ref(false)
 const createDialogVisible = ref(false)
 const createSaving = ref(false)
 const editDialogVisible = ref(false)
@@ -105,7 +101,6 @@ const togglingUserIds = useReactiveSet<number>()
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
 const servicePolicy = ref<ServicePolicy | null>(null)
-const amountUsd = ref(DEFAULT_RECHARGE_USD)
 const createForm = reactive<CreateUserForm>({
   email: '',
   password: '',
@@ -155,6 +150,9 @@ const hasUserPagination = computed(
   () => usersCurrentPage.value > 1 || Boolean(usersPage.value.has_more)
 )
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
+const showAccountBalance = computed(() =>
+  Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
+)
 const relativeTimeFormatter = computed(
   () => new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
 )
@@ -164,11 +162,6 @@ const defaultUserGroupId = computed(
 const emptyUsersDescription = computed(() =>
   emailSearch.value || apiKeySearch.value ? t('noMatchingUsers') : t('noUsers')
 )
-const rechargePreviewMicroUsd = computed(() => {
-  if (!selectedUser.value) return usdToMicroUsd(amountUsd.value)
-  return selectedUser.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
-})
-
 async function loadUsers() {
   return getUsers({
     email: emailSearch.value.trim(),
@@ -188,9 +181,22 @@ function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
   return formatMicroUsd(row.available_micro_usd, 2)
 }
 
+function formatAccountBalance(row: Pick<CreditBalance, 'available_micro_usd'>) {
+  if (row.available_micro_usd <= 0) return t('creditDepleted')
+  return formatMicroUsd(row.available_micro_usd, 2)
+}
+
 function creditCellClass(row: Pick<CreditBalance, 'available_micro_usd'>): CreditClass {
   if (!isCreditRequired.value) return 'is-unlimited'
   return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
+}
+
+function accountBalanceTooltip(row: CreditBalance) {
+  return [
+    `${t('accountBalance')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
+    `${t('reservedBalance')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
+    `${t('availableBalance')}: ${formatMicroUsd(row.available_micro_usd, 2)}`
+  ].join('\n')
 }
 
 function creditTooltip(row: CreditBalance) {
@@ -244,12 +250,6 @@ function openCreateDialog() {
     userGroupId: defaultUserGroupId.value
   })
   createDialogVisible.value = true
-}
-
-function openCreditDialog(row: User) {
-  selectedUser.value = row
-  amountUsd.value = DEFAULT_RECHARGE_USD
-  creditDialogVisible.value = true
 }
 
 function openEditDialog(row: User) {
@@ -343,21 +343,6 @@ async function copyApiKey(row: UserKey) {
     ElMessage.success(t('apiKeyCopied'))
   } catch (err) {
     ElMessage.error(readError(err))
-  }
-}
-
-async function submitCredit() {
-  if (!selectedUser.value) return
-  creditSaving.value = true
-  try {
-    await adjustCredit('user', selectedUser.value.id, usdToMicroUsd(amountUsd.value))
-    ElMessage.success(t('creditUpdated'))
-    creditDialogVisible.value = false
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    creditSaving.value = false
   }
 }
 
@@ -598,7 +583,11 @@ onMounted(() => {
       <div class="user-table-loading-row"></div>
     </div>
 
-    <div v-else class="service-table-panel">
+    <div
+      v-else
+      class="service-table-panel"
+      :class="{ 'has-pagination': hasUserPagination || users.length > 1 }"
+    >
       <el-table
         v-loading="loading"
         class="admin-table service-table user-table"
@@ -616,9 +605,6 @@ onMounted(() => {
               </span>
               <span class="user-email-stack">
                 <span class="user-email-text">{{ row.email }}</span>
-                <span class="user-key-count-text">
-                  {{ row.user_key_count.toLocaleString(locale) }} {{ t('apiKey') }}
-                </span>
               </span>
             </span>
           </template>
@@ -630,18 +616,38 @@ onMounted(() => {
             </span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('userApiKeyCount')" min-width="112" align="center" header-align="center">
+          <template #default="{ row }">
+            <span class="user-key-count-text">
+              {{ row.user_key_count.toLocaleString(locale) }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column
-          :label="t('availableCredit')"
+          v-if="showAccountBalance"
+          :label="t('accountBalance')"
           min-width="132"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
-            <el-tooltip :content="creditTooltip(row)" placement="top">
+            <el-tooltip :content="accountBalanceTooltip(row)" placement="top">
               <span class="user-credit-cell" :class="creditCellClass(row)">
-                {{ formatAvailableUsd(row) }}
+                {{ formatAccountBalance(row) }}
               </span>
             </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('createdAt')" min-width="160">
+          <template #default="{ row }">
+            <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('lastActiveAt')" min-width="190">
+          <template #default="{ row }">
+            <span class="user-time-cell" :class="{ 'is-empty': !row.last_active_at }">
+              {{ formatLastActiveAt(row.last_active_at) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column
@@ -670,19 +676,7 @@ onMounted(() => {
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('createdAt')" min-width="160">
-          <template #default="{ row }">
-            <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('lastActiveAt')" min-width="190">
-          <template #default="{ row }">
-            <span class="user-time-cell" :class="{ 'is-empty': !row.last_active_at }">
-              {{ formatLastActiveAt(row.last_active_at) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('actions')" width="204" align="center" header-align="center">
+        <el-table-column :label="t('actions')" width="152" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -709,24 +703,25 @@ onMounted(() => {
                   @click="openEditDialog(row)"
                 />
               </AdminActionTooltip>
-              <AdminActionTooltip :content="t('recharge')">
+              <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
-                  class="admin-action-button icon-only-action user-recharge-action"
-                  :aria-label="t('recharge')"
-                  :icon="Money"
-                  @click="openCreditDialog(row)"
+                  class="admin-action-button icon-only-action action-more-button"
+                  :aria-label="t('moreActions')"
+                  :icon="MoreFilled"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('delete')">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  type="danger"
-                  :aria-label="t('delete')"
-                  :icon="Delete"
-                  :loading="deletingUserId === row.id"
-                  @click="confirmDeleteUser(row)"
-                />
-              </AdminActionTooltip>
+                <template #dropdown>
+                  <el-dropdown-menu class="admin-row-action-menu">
+                    <el-dropdown-item
+                      class="is-danger"
+                      :disabled="deletingUserId === row.id"
+                      @click="confirmDeleteUser(row)"
+                    >
+                      <el-icon><Delete /></el-icon>
+                      <span>{{ t('delete') }}</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </template>
         </el-table-column>
@@ -744,7 +739,7 @@ onMounted(() => {
 
     <div
       v-if="!usersInitialLoading && (hasUserPagination || users.length > 1)"
-      class="admin-pagination-bar is-compact"
+      class="admin-pagination-bar admin-table-pagination is-compact"
     >
       <div class="admin-pagination-summary">
         <span class="admin-result-count">
@@ -876,46 +871,9 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog
-      v-model="creditDialogVisible"
-      class="user-admin-dialog user-credit-dialog"
-      :title="t('recharge')"
-      width="460px"
-    >
-      <div class="user-dialog-body">
-        <div v-if="selectedUser" class="user-credit-summary">
-          <div>
-            <span>{{ t('currentBalance') }}</span>
-            <strong>{{ formatMicroUsd(selectedUser.balance_micro_usd, 2) }}</strong>
-          </div>
-          <div>
-            <span>{{ t('reservedCredit') }}</span>
-            <strong>{{ formatMicroUsd(selectedUser.reserved_micro_usd, 2) }}</strong>
-          </div>
-          <div>
-            <span>{{ t('afterRecharge') }}</span>
-            <strong>{{ formatMicroUsd(rechargePreviewMicroUsd, 2) }}</strong>
-          </div>
-        </div>
-        <el-form class="user-dialog-form is-single" label-position="top">
-          <el-form-item class="user-dialog-field user-credit-amount-field" :label="t('amountUsd')">
-            <el-input-number v-model="amountUsd" :min="-100000" :precision="2" :step="1" />
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <div class="admin-dialog-footer user-dialog-footer">
-          <el-button @click="creditDialogVisible = false">{{ t('cancel') }}</el-button>
-          <el-button type="primary" :loading="creditSaving" @click="submitCredit">{{
-            t('save')
-          }}</el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <el-dialog
       v-model="userKeysDialogVisible"
       class="user-admin-dialog user-keys-dialog"
-      :title="t('apiKeyDetails')"
+      :title="t('userRelatedApiKeys')"
       width="860px"
     >
       <div class="user-dialog-body user-keys-dialog-body">
@@ -1156,10 +1114,6 @@ onMounted(() => {
   min-height: 36px;
 }
 
-.user-credit-amount-field :deep(.el-input-number) {
-  width: 180px;
-}
-
 .user-dialog-footer {
   margin: 0;
 }
@@ -1369,40 +1323,6 @@ onMounted(() => {
   padding: 30px 0 34px;
 }
 
-.user-credit-summary {
-  background: #f8fafc;
-  border: 1px solid #dbe4ef;
-  border-radius: 8px;
-  display: grid;
-  gap: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  overflow: hidden;
-}
-
-.user-credit-summary div {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-}
-
-.user-credit-summary div + div {
-  border-left: 1px solid #e3ebf4;
-}
-
-.user-credit-summary span {
-  color: #667085;
-  font-size: 12px;
-  font-weight: 640;
-}
-
-.user-credit-summary strong {
-  color: #1d2939;
-  font-feature-settings: 'tnum';
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 760;
-}
-
 .hidden-submit {
   display: none;
 }
@@ -1449,10 +1369,6 @@ onMounted(() => {
   border-radius: 7px;
 }
 
-:global(.user-credit-dialog .el-dialog__body) {
-  padding-bottom: 20px;
-}
-
 :global(.user-keys-dialog .el-dialog__body) {
   padding: 16px 18px 18px;
 }
@@ -1473,19 +1389,6 @@ onMounted(() => {
   .user-dialog-footer .el-button {
     flex: 1 1 0;
     min-width: 0;
-  }
-
-  .user-credit-amount-field :deep(.el-input-number) {
-    width: 100%;
-  }
-
-  .user-credit-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .user-credit-summary div + div {
-    border-left: 0;
-    border-top: 1px solid #e3ebf4;
   }
 
   .user-key-detail-panel {

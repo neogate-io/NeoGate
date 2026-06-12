@@ -107,7 +107,7 @@ CREATE TABLE user_key_model (
 
 CREATE TABLE credit_account (
     id BIGSERIAL PRIMARY KEY,
-    owner_type TEXT NOT NULL CHECK (owner_type IN ('user', 'project', 'user_key', 'user_key_model')),
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('project', 'user_key', 'user_key_model')),
     owner_id BIGINT NOT NULL,
     balance_micro_usd BIGINT NOT NULL DEFAULT 0,
     reserved_micro_usd BIGINT NOT NULL DEFAULT 0,

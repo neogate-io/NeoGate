@@ -111,16 +111,16 @@ export const router = createRouter({
         },
         { path: 'credentials/openai', redirect: '/admin/credentials' },
         {
-          path: 'projects',
-          name: 'projects',
-          component: () => import('../views/admin/ProjectsView.vue'),
-          meta: { messageKey: 'projectManagement' }
-        },
-        {
           path: 'keys',
           name: 'keys',
           component: () => import('../views/admin/UsersView.vue'),
           meta: { messageKey: 'userManagement' }
+        },
+        {
+          path: 'projects',
+          name: 'projects',
+          component: () => import('../views/admin/ProjectsView.vue'),
+          meta: { messageKey: 'projectManagement' }
         },
         {
           path: 'channels',

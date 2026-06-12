@@ -387,6 +387,10 @@
   --el-button-hover-text-color: var(--brand-blue);
 }
 
+.table-row-actions {
+  flex-wrap: nowrap;
+}
+
 .admin-shell .table-row-actions .price-config-action,
 .admin-shell .table-row-actions .user-recharge-action {
   --el-button-bg-color: var(--brand-blue-soft);
@@ -401,6 +405,12 @@
   --el-button-hover-bg-color: #dcfce7;
   --el-button-hover-border-color: #86efac;
   --el-button-hover-text-color: #15803d;
+}
+
+.admin-shell .table-row-actions .action-more-button {
+  --el-button-bg-color: #f4f7fb;
+  --el-button-border-color: #dbe5f0;
+  --el-button-text-color: #64748b;
 }
 
 .admin-shell .table-row-actions .el-button--danger {
@@ -424,6 +434,20 @@
 .admin-shell .table-row-actions .el-button:not(.is-disabled):hover {
   box-shadow: none !important;
   color: var(--brand-blue);
+}
+
+.admin-row-action-menu .el-dropdown-menu__item {
+  gap: 8px;
+  min-width: 118px;
+}
+
+.admin-row-action-menu .el-dropdown-menu__item.is-danger {
+  color: #dc2626;
+}
+
+.admin-row-action-menu .el-dropdown-menu__item.is-danger:not(.is-disabled):hover {
+  background: #fff1f2;
+  color: #be123c;
 }
 
 .admin-pagination-bar {
@@ -467,34 +491,37 @@
 }
 
 .admin-page-buttons {
-  gap: 8px;
+  background: transparent;
+  border-radius: 0;
+  gap: 6px;
+  padding: 0;
 }
 
 .admin-shell .admin-page-buttons .el-button {
-  --el-button-bg-color: #e1e9f3;
+  --el-button-bg-color: #edf3f9;
   --el-button-border-color: transparent;
-  --el-button-hover-bg-color: #d6e1ee;
+  --el-button-hover-bg-color: #e2ebf5;
   --el-button-hover-border-color: transparent;
   --el-button-hover-text-color: var(--brand-blue);
-  --el-button-active-bg-color: #cad8e8;
+  --el-button-active-bg-color: #d5e2f0;
   --el-button-active-border-color: transparent;
-  background-color: #e1e9f3 !important;
+  background-color: #edf3f9 !important;
   border-color: transparent !important;
   color: var(--admin-text);
 }
 
 .admin-shell .admin-page-buttons .el-button:not(.is-disabled):hover {
-  background-color: #d6e1ee !important;
+  background-color: #e2ebf5 !important;
 }
 
 .admin-shell .admin-page-buttons .el-button:not(.is-disabled):active {
-  background-color: #cad8e8 !important;
+  background-color: #d5e2f0 !important;
 }
 
 .admin-shell .admin-page-buttons .el-button.is-disabled {
-  background-color: #e8eef6 !important;
+  background-color: #f1f5f9 !important;
   border-color: transparent !important;
-  opacity: 0.55;
+  opacity: 0.68;
 }
 
 .admin-page-buttons .el-button + .el-button {
@@ -507,7 +534,7 @@
 }
 
 .admin-pagination-bar.is-compact .admin-pagination-controls {
-  gap: 14px;
+  gap: 12px;
 }
 
 .admin-pagination-bar.is-compact .admin-page-size-control {
@@ -522,7 +549,7 @@
   background: transparent;
   border: 0;
   box-shadow: none;
-  min-height: 30px;
+  min-height: 32px;
   padding: 0 4px;
 }
 
@@ -539,20 +566,17 @@
 
 .admin-pagination-bar.is-compact .admin-page-buttons {
   align-items: center;
-  background: transparent;
   border: 0;
-  border-radius: 0;
-  gap: 4px;
   min-height: 32px;
   overflow: visible;
 }
 
 .admin-shell .admin-pagination-bar.is-compact .admin-page-buttons .el-button {
-  border-radius: 6px;
-  height: 30px;
-  min-height: 30px;
+  border-radius: 7px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
-  width: 34px;
+  width: 32px;
 }
 
 .admin-page-current {
@@ -565,9 +589,9 @@
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   font-weight: 400;
-  height: 30px;
+  height: 32px;
   justify-content: center;
-  min-width: 24px;
+  min-width: 28px;
   padding: 0 4px;
 }
 
@@ -920,6 +944,26 @@
   min-width: 0;
   overflow-x: auto;
   width: 100%;
+}
+
+.service-table-panel.has-pagination {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.admin-table-pagination {
+  align-items: center;
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: 0 0 var(--admin-radius) var(--admin-radius);
+  border-top-color: var(--admin-border-soft);
+  margin-top: -1px;
+  min-height: 56px;
+  padding: 10px 14px;
+}
+
+.service-table-panel.has-pagination + .admin-table-pagination {
+  margin-top: -15px;
 }
 
 .service-table.admin-table.el-table .el-table__header-wrapper th,

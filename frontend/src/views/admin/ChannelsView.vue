@@ -1229,13 +1229,15 @@ onMounted(loadInitialData)
 }
 
 .channel-runtime-switch.is-enabled {
+  background: #f0fdf4;
   border-color: #b7eb8f;
   color: #166534;
 }
 
 .channel-runtime-switch.is-disabled {
-  border-color: #f7d37a;
-  color: #a16207;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
 }
 
 .channel-runtime-switch-icon {
@@ -1255,7 +1257,7 @@ onMounted(loadInitialData)
 }
 
 .channel-runtime-switch.is-disabled .channel-runtime-switch-icon {
-  background: #f0b400;
+  background: #94a3b8;
 }
 
 .channel-runtime-switch-text {

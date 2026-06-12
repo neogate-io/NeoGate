@@ -2,6 +2,7 @@ export type ChannelProvider = string
 export type EndpointProtocol = 'openai' | 'openai_oauth' | 'anthropic'
 export type UserStatus = 'enabled' | 'disabled' | 'pending'
 export type UserKeyStatus = 'enabled' | 'disabled'
+export type ProjectStatus = 'enabled' | 'disabled'
 
 export type CursorPage<T> = {
   items: T[]
@@ -51,6 +52,30 @@ export type User = CreditBalance & {
   user_group_name: string
   user_key_count: number
   last_active_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type Project = CreditBalance & {
+  id: number
+  name: string
+  owner_user_id: number
+  owner_email: string
+  status: ProjectStatus
+  is_default: boolean
+  member_count: number
+  user_key_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectMember = {
+  id: number
+  project_id: number
+  user_id: number
+  user_email: string
+  role: 'owner' | 'admin' | 'member' | 'viewer'
+  user_status: UserStatus
   created_at: string
   updated_at: string
 }

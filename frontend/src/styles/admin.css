@@ -470,15 +470,112 @@
   gap: 8px;
 }
 
+.admin-shell .admin-page-buttons .el-button {
+  --el-button-bg-color: #e1e9f3;
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: #d6e1ee;
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--brand-blue);
+  --el-button-active-bg-color: #cad8e8;
+  --el-button-active-border-color: transparent;
+  background-color: #e1e9f3 !important;
+  border-color: transparent !important;
+  color: var(--admin-text);
+}
+
+.admin-shell .admin-page-buttons .el-button:not(.is-disabled):hover {
+  background-color: #d6e1ee !important;
+}
+
+.admin-shell .admin-page-buttons .el-button:not(.is-disabled):active {
+  background-color: #cad8e8 !important;
+}
+
+.admin-shell .admin-page-buttons .el-button.is-disabled {
+  background-color: #e8eef6 !important;
+  border-color: transparent !important;
+  opacity: 0.55;
+}
+
 .admin-page-buttons .el-button + .el-button {
   margin-left: 0;
+}
+
+.admin-pagination-bar.is-compact {
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.admin-pagination-bar.is-compact .admin-pagination-controls {
+  gap: 14px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size-control {
+  gap: 4px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size {
+  width: 58px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__wrapper {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  min-height: 30px;
+  padding: 0 4px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__placeholder {
+  color: var(--admin-text);
+  font-weight: 400;
+}
+
+.admin-pagination-bar.is-compact .admin-page-size .el-select__wrapper:hover,
+.admin-pagination-bar.is-compact .admin-page-size .el-select__wrapper.is-focused {
+  background: transparent;
+  box-shadow: none;
+}
+
+.admin-pagination-bar.is-compact .admin-page-buttons {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  gap: 4px;
+  min-height: 32px;
+  overflow: visible;
+}
+
+.admin-shell .admin-pagination-bar.is-compact .admin-page-buttons .el-button {
+  border-radius: 6px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  width: 34px;
+}
+
+.admin-page-current {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--admin-text);
+  display: inline-flex;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  height: 30px;
+  justify-content: center;
+  min-width: 24px;
+  padding: 0 4px;
 }
 
 .admin-page-label,
 .admin-result-count {
   color: var(--admin-text-muted);
   font-size: 13px;
-  font-weight: 620;
+  font-weight: 400;
 }
 
 .admin-dialog-footer {

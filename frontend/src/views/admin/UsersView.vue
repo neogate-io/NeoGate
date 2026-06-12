@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import {
+  ArrowLeft,
+  ArrowRight,
   CircleCheckFilled,
   Delete,
   DocumentCopy,
@@ -12,7 +14,7 @@ import {
   UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
-import { computed, onMounted, reactive, ref, type Component } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adjustCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
 import {
@@ -28,6 +30,7 @@ import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
 import { readError } from '../../utils/errors'
 import {
@@ -48,7 +51,6 @@ defineOptions({
 type CreditClass = 'is-available' | 'is-depleted' | 'is-unlimited'
 type ConfirmType = 'info' | 'warning'
 type UserGroupTone = 'default' | 'premium' | 'standard'
-type UserStatusTone = 'success' | 'warning' | 'neutral'
 type UserForm = {
   email: string
   status: UserStatus
@@ -60,8 +62,6 @@ type CreateUserForm = UserForm & {
 type TranslationKey = Parameters<typeof t>[0]
 type UserStatusMeta = {
   labelKey: TranslationKey
-  icon: Component
-  tone: UserStatusTone
   confirmType: ConfirmType
 }
 
@@ -79,20 +79,14 @@ const RELATIVE_TIME_UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> 
 const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
   enabled: {
     labelKey: 'enabled',
-    icon: CircleCheckFilled,
-    tone: 'success',
     confirmType: 'info'
   },
   pending: {
     labelKey: 'pendingApproval',
-    icon: WarningFilled,
-    tone: 'warning',
     confirmType: 'info'
   },
   disabled: {
     labelKey: 'disabled',
-    icon: WarningFilled,
-    tone: 'neutral',
     confirmType: 'warning'
   }
 }
@@ -107,11 +101,11 @@ const editDialogVisible = ref(false)
 const editSaving = ref(false)
 const deletingUserId = ref<number | null>(null)
 const approvingUserId = ref<number | null>(null)
+const togglingUserIds = useReactiveSet<number>()
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
 const servicePolicy = ref<ServicePolicy | null>(null)
 const amountUsd = ref(DEFAULT_RECHARGE_USD)
-const jumpTargetPage = ref(1)
 const createForm = reactive<CreateUserForm>({
   email: '',
   password: '',
@@ -186,7 +180,6 @@ async function loadUsers() {
 
 function resetUsersPagination(page = 1) {
   resetUsersCursorPagination(page)
-  jumpTargetPage.value = page
 }
 
 function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
@@ -231,20 +224,16 @@ function userStatusText(status: UserStatus) {
   return t(USER_STATUS_META[status].labelKey)
 }
 
-function userStatusIcon(status: UserStatus) {
-  return USER_STATUS_META[status].icon
-}
-
-function userStatusTone(status: UserStatus): UserStatusTone {
-  return USER_STATUS_META[status].tone
-}
-
 function userGroupTone(row: User): UserGroupTone {
   if (row.user_group_code === 'default') return 'default'
   if (PREMIUM_GROUP_PATTERN.test(`${row.user_group_code} ${row.user_group_name}`)) {
     return 'premium'
   }
   return 'standard'
+}
+
+function userRowClassName({ row }: { row: User }) {
+  return row.status === 'disabled' ? 'user-row-is-disabled' : ''
 }
 
 function openCreateDialog() {
@@ -374,10 +363,6 @@ async function submitCredit() {
 
 async function submitEditUser() {
   if (!selectedUser.value) return
-  if (selectedUser.value.status !== editForm.status) {
-    const confirmed = await confirmStatusChange(selectedUser.value.email, editForm.status)
-    if (!confirmed) return
-  }
   editSaving.value = true
   try {
     await updateUser(selectedUser.value.id, {
@@ -415,6 +400,22 @@ async function confirmUserStatusChange(row: User, status: UserStatus) {
   }
 }
 
+async function toggleUserStatus(row: User) {
+  if (togglingUserIds.has(row.id)) return
+
+  const nextStatus: UserStatus = row.status === 'enabled' ? 'disabled' : 'enabled'
+  togglingUserIds.add(row.id)
+  try {
+    await updateUserStatus(row.id, nextStatus)
+    ElMessage.success(nextStatus === 'enabled' ? t('userApproved') : t('userUpdated'))
+    await reload()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    togglingUserIds.remove(row.id)
+  }
+}
+
 async function confirmDeleteUser(row: User) {
   const confirmed = await confirmDialog(
     t('deleteUserConfirm').replace('{email}', row.email),
@@ -443,13 +444,11 @@ async function searchUsers() {
 async function nextUsersPage() {
   if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
   goToNextUsersPage(usersPage.value.next_cursor)
-  jumpTargetPage.value = usersCurrentPage.value
   await reload()
 }
 
 async function previousUsersPage() {
   if (!goToPreviousUsersPage()) return
-  jumpTargetPage.value = usersCurrentPage.value
   await reload()
 }
 
@@ -457,26 +456,6 @@ async function handleUsersPageSizeChange(size: number) {
   usersPageSize.value = size
   resetUsersPagination()
   await reload()
-}
-
-async function jumpUsersPage() {
-  const target = Math.max(1, Math.floor(jumpTargetPage.value || 1))
-  jumpTargetPage.value = target
-  if (target === usersCurrentPage.value) return
-  if (target < usersCurrentPage.value) {
-    usersCurrentPage.value = target
-    await reload()
-    return
-  }
-
-  while (usersCurrentPage.value < target) {
-    if (!usersPage.value.has_more || !usersPage.value.next_cursor) {
-      jumpTargetPage.value = usersCurrentPage.value
-      ElMessage.warning(t('targetPageUnavailable'))
-      return
-    }
-    await nextUsersPage()
-  }
 }
 
 function exportUsers() {
@@ -624,6 +603,7 @@ onMounted(() => {
         v-loading="loading"
         class="admin-table service-table user-table"
         :data="users"
+        :row-class-name="userRowClassName"
         row-key="id"
         stripe
       >
@@ -664,15 +644,30 @@ onMounted(() => {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('status')" min-width="128" align="center" header-align="center">
+        <el-table-column
+          :label="t('userStatus')"
+          min-width="128"
+          align="center"
+          header-align="center"
+        >
           <template #default="{ row }">
-            <span
-              class="channel-runtime-status user-status-tag"
-              :class="`is-${userStatusTone(row.status)}`"
+            <button
+              type="button"
+              class="user-status-switch"
+              :class="`is-${row.status}`"
+              :disabled="togglingUserIds.has(row.id)"
+              :aria-pressed="row.status === 'enabled'"
+              :aria-label="userStatusText(row.status)"
+              @click="toggleUserStatus(row)"
             >
-              <el-icon><component :is="userStatusIcon(row.status)" /></el-icon>
-              {{ userStatusText(row.status) }}
-            </span>
+              <span class="user-status-switch-icon">
+                <el-icon>
+                  <CircleCheckFilled v-if="row.status === 'enabled'" />
+                  <WarningFilled v-else />
+                </el-icon>
+              </span>
+              <span class="user-status-switch-text">{{ userStatusText(row.status) }}</span>
+            </button>
           </template>
         </el-table-column>
         <el-table-column :label="t('createdAt')" min-width="160">
@@ -749,7 +744,7 @@ onMounted(() => {
 
     <div
       v-if="!usersInitialLoading && (hasUserPagination || users.length > 1)"
-      class="admin-pagination-bar"
+      class="admin-pagination-bar is-compact"
     >
       <div class="admin-pagination-summary">
         <span class="admin-result-count">
@@ -770,26 +765,20 @@ onMounted(() => {
             <el-option :value="100" label="100" />
           </el-select>
         </div>
-        <span class="admin-result-count">{{ t('currentPage') }} {{ usersCurrentPage }}</span>
         <div class="admin-page-buttons">
-          <el-button :disabled="usersCurrentPage <= 1 || loading" @click="previousUsersPage">
-            {{ t('previousPage') }}
-          </el-button>
-          <el-button :disabled="!usersPage.has_more || loading" @click="nextUsersPage">
-            {{ t('nextPage') }}
-          </el-button>
-        </div>
-        <div class="admin-page-jump-control">
-          <span class="admin-page-label">{{ t('jumpToPage') }}</span>
-          <el-input-number
-            v-model="jumpTargetPage"
-            :min="1"
-            :precision="0"
-            :controls="false"
-            class="admin-page-jump"
-            @keyup.enter="jumpUsersPage"
+          <el-button
+            :aria-label="t('previousPage')"
+            :disabled="usersCurrentPage <= 1 || loading"
+            :icon="ArrowLeft"
+            @click="previousUsersPage"
           />
-          <el-button :disabled="loading" @click="jumpUsersPage">{{ t('go') }}</el-button>
+          <span class="admin-page-current">{{ usersCurrentPage }}</span>
+          <el-button
+            :aria-label="t('nextPage')"
+            :disabled="!usersPage.has_more || loading"
+            :icon="ArrowRight"
+            @click="nextUsersPage"
+          />
         </div>
       </div>
     </div>
@@ -1097,6 +1086,30 @@ onMounted(() => {
   width: 64px;
 }
 
+.user-table :deep(.el-table__body tr.user-row-is-disabled td) {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-email-text),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-key-count-text),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-group-tag),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-credit-cell),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-time-cell),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-status-switch-text) {
+  color: #94a3b8;
+}
+
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-avatar),
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-status-switch) {
+  border-color: #e5e7eb;
+}
+
+.user-table :deep(.el-table__body tr.user-row-is-disabled .user-avatar) {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
 .user-dialog-body {
   display: grid;
   gap: 16px;
@@ -1276,6 +1289,70 @@ onMounted(() => {
   border-color: #fed7aa;
   color: #c2410c;
   justify-content: center;
+}
+
+.user-status-switch {
+  align-items: center;
+  appearance: none;
+  background: #ffffff;
+  border: 1px solid #ffd65c;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-start;
+  min-height: 34px;
+  min-width: 88px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.user-status-switch.is-enabled {
+  background: #f0fdf4;
+  border-color: #b7eb8f;
+  color: #166534;
+}
+
+.user-status-switch.is-disabled {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.user-status-switch.is-pending {
+  background: #fffbeb;
+  border-color: #f7d37a;
+  color: #a16207;
+}
+
+.user-status-switch-icon {
+  align-items: center;
+  background: #f0b400;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.user-status-switch.is-enabled .user-status-switch-icon {
+  background: #22c55e;
+}
+
+.user-status-switch.is-disabled .user-status-switch-icon {
+  background: #94a3b8;
+}
+
+.user-status-switch.is-pending .user-status-switch-icon {
+  background: #f0b400;
+}
+
+.user-status-switch-text {
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1;
 }
 
 .user-time-cell {

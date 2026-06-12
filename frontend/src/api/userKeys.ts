@@ -9,7 +9,7 @@ export type GetUserKeysFilters = {
   cursor?: string
 }
 
-export type CreditAccountType = 'user' | 'user_key' | 'user_key_model'
+export type CreditAccountType = 'user' | 'project' | 'user_key' | 'user_key_model'
 
 export type AdjustCreditResponse = {
   balance_micro_usd: number

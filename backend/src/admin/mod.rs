@@ -2,6 +2,7 @@ pub(crate) mod channel;
 pub(crate) mod credentials;
 mod openai;
 pub(crate) mod price;
+pub(crate) mod project;
 pub(crate) mod provider;
 pub(crate) mod setting;
 mod user;
@@ -45,6 +46,11 @@ use self::{
         sync_pricing_templates, upsert_pricing_policy, upsert_provider_price, PricingPolicyRecord,
         PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
+    },
+    project::{
+        create_project, delete_project, list_project_members, list_projects, update_project,
+        CreateProjectRequest, ListProjectsQuery, ProjectMemberRecord, ProjectPage, ProjectRecord,
+        UpdateProjectRequest,
     },
     provider::{
         ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
@@ -90,6 +96,15 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/admin/user-key-model-credits",
             post(adjust_user_key_model_credit_handler),
         )
+        .route(
+            "/api/admin/projects",
+            get(projects).post(create_project_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}",
+            patch(update_project_handler).delete(delete_project_handler),
+        )
+        .route("/api/admin/projects/{id}/members", get(project_members))
         .route("/api/admin/credits", post(adjust_credit_handler))
         .route(
             "/api/admin/channels",
@@ -324,6 +339,48 @@ async fn adjust_user_key_model_credit_handler(
     )
     .await?;
     Ok(Json(record))
+}
+
+async fn projects(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ListProjectsQuery>,
+    _admin: AdminAuth,
+) -> AppResult<Json<ProjectPage>> {
+    Ok(Json(list_projects(&state, query).await?))
+}
+
+async fn create_project_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<CreateProjectRequest>,
+) -> AppResult<Json<ProjectRecord>> {
+    Ok(Json(create_project(&state, req).await?))
+}
+
+async fn update_project_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<UpdateProjectRequest>,
+) -> AppResult<Json<ProjectRecord>> {
+    Ok(Json(update_project(&state, id, req).await?))
+}
+
+async fn delete_project_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+) -> AppResult<Json<Value>> {
+    delete_project(&state, id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn project_members(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+) -> AppResult<Json<Vec<ProjectMemberRecord>>> {
+    Ok(Json(list_project_members(&state, id).await?))
 }
 
 async fn channels(

@@ -1,42 +1,77 @@
+<div align="center">
+
 # NeoGate
 
-[中文文档](README.md)
+🚀 **An LLM API gateway built for maximum performance, simple operation, and enterprise private deployment**
 
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="README.md">中文</a> |
+  <strong>English</strong>
+</p>
 
-NeoGate is a lightweight LLM API gateway built with Rust. It is designed for high-performance request forwarding while staying simple to deploy and use. Built for enterprise private deployment, it helps teams bring multiple model providers behind one unified entry point for access keys, model routing, project usage, and cost attribution.
+[![License](https://img.shields.io/badge/license-AGPL--3.0-brightgreen.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/neogate-io/NeoGate?color=brightgreen&include_prereleases)](https://github.com/neogate-io/NeoGate/releases/latest)
+[![Rust](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](backend/Cargo.toml)
+[![Docker](https://img.shields.io/badge/docker-compose-blue.svg)](docker-compose.yml)
+
+<p align="center">
+  <a href="#-key-features">Key Features</a> •
+  <a href="#-quick-start">Quick Start</a> •
+  <a href="#-deployment-modes">Deployment Modes</a> •
+  <a href="#-production-checklist">Production Checklist</a> •
+  <a href="#-help">Help</a>
+</p>
+
+</div>
+
+---
+
+## 📝 Project Introduction
+
+NeoGate is an LLM API gateway built with Rust for enterprise private deployment. It is designed for maximum request forwarding performance while remaining simple to deploy and use. NeoGate helps teams bring multiple model providers behind one unified entry point for access keys, model routing, project usage, and cost attribution.
 
 Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
-## 1. What You Can Do
+> [!IMPORTANT]
+> NeoGate is intended for lawful and authorized AI API gateway, enterprise authentication, multi-model management, usage analytics, cost attribution, and private deployment scenarios. Users should lawfully obtain upstream API keys, accounts, model services, and API permissions, and comply with upstream terms of service and applicable laws and regulations.
 
-- Deploy a privately controlled enterprise LLM API entry point that centralizes upstream credentials and access policies for multiple model providers.
-- Use projects as business applications, internal projects, or cost units, with unified management for members, API keys, model permissions, budgets, and usage attribution.
-- Issue independent API keys to teams, projects, customers, or internal apps, with permissions, quota, and cost isolation by project and API key.
-- Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight.
-- Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect to the enterprise gateway with minimal changes.
-- Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing.
-- Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support.
-- Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure.
+---
 
-## 2. Service Modes
+## ✨ Key Features
+
+| Capability | Description |
+| --- | --- |
+| 🏢 Enterprise gateway | Deploy a privately controlled enterprise LLM API entry point that centralizes upstream credentials and access policies for multiple model providers. |
+| 🧩 Project management | Use projects as business applications, internal projects, or cost units, with unified management for members, API keys, model permissions, budgets, and usage attribution. |
+| 🔑 Independent API keys | Issue independent API keys to teams, projects, customers, or internal apps, with permissions, quota, and cost isolation by project and API key. |
+| 🧭 Model routing | Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight. |
+| 🔌 Compatible APIs | Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect to the enterprise gateway with minimal changes. |
+| 📊 Usage records | Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing. |
+| 💳 Service billing | Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support. |
+| 🛡️ Failover | Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure. |
+
+---
+
+## 🧭 Service Modes
 
 NeoGate asks you to choose internal mode or billing mode during first-run setup. Both modes provide a unified entry point, centralized upstream credential management, model routing, and usage records. The main difference is whether users need credit balance and whether payment gateways are enabled.
 
-- Internal mode: for company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members. By default, users can call without available credit; NeoGate still records usage and cost for analysis and internal management.
-- Billing mode: for paid access offered to customers, developers, or external users. Users need available credit before calls and can recharge through a payment gateway. Before going live, configure model prices, recharge plans, and the payment gateway.
+| Mode | Scenario | Call restriction | Configuration focus |
+| --- | --- | --- | --- |
+| 🏠 Internal mode | Company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members. | By default, users can call without available credit. | NeoGate still records usage and cost for analysis and internal management. |
+| 💰 Billing mode | Paid access offered to customers, developers, or external users. | Users need available credit before calls. | Configure model prices, recharge plans, and the payment gateway before going live. |
 
-## 3. Quick Start
+---
 
-### 1. Docker Installation
+## 🚀 Quick Start
+
+### 🐳 Docker Installation
 
 Docker installation is split into standalone deployment and clustered deployment. Neither path requires Rust, Node.js, or pnpm on the host.
 
 #### Standalone Deployment
 
 Standalone deployment is suitable for most starting scenarios. Compose starts frontend Nginx, the backend, and PostgreSQL together, so you do not need to prepare PostgreSQL or Redis separately.
-
-Start directly:
 
 ```bash
 docker compose up -d --build
@@ -53,20 +88,23 @@ cp deploy/env/cluster.env.example .env.cluster
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --build
 ```
 
-Before production use, replace default passwords, domains, and shared secrets in `.env.cluster`. In standalone deployments, missing backend secrets can be generated by the first-run wizard and written into the backend config volume.
+> [!WARNING]
+> Before production use, replace default passwords, domains, and shared secrets in `.env.cluster`. In standalone deployments, missing backend secrets can be generated by the first-run wizard and written into the backend config volume.
 
-### 2. Local Source Run
+### 🧑‍💻 Local Source Run
 
-Running from source is split into development deployment and production deployment. Development deployment is for debugging or trying the first-run flow; production deployment is for users who want to build from source and manage the backend process and Nginx themselves. For production environments, the Docker Compose path above is still recommended first.
+Running from source is split into development deployment and production deployment. Development deployment is for debugging or trying the first-run flow; production deployment is for users who want to build from source and manage the backend process and Nginx themselves. For production environments, Docker Compose is still recommended first.
 
 #### Shared Preparation
 
 Prepare these dependencies on the server first:
 
-- PostgreSQL 16 or a compatible version
-- Rust 1.94 or newer
-- Node.js 20 or a compatible version
-- pnpm
+| Dependency | Recommended version |
+| --- | --- |
+| PostgreSQL | 16 or a compatible version |
+| Rust | 1.94 or newer |
+| Node.js | 20 or a compatible version |
+| pnpm | A version compatible with the frontend project |
 
 Verify that these commands are available:
 
@@ -77,7 +115,8 @@ node --version
 pnpm --version
 ```
 
-If `cargo --version` shows an older version such as 1.75, upgrade the Rust toolchain before starting the backend; older Cargo versions cannot build some dependencies.
+> [!TIP]
+> If `cargo --version` shows an older version such as 1.75, upgrade the Rust toolchain before starting the backend; older Cargo versions cannot build some dependencies.
 
 Create a dedicated NeoGate database user and database:
 
@@ -105,26 +144,10 @@ On first startup, if runtime configuration is incomplete, the backend enters boo
 
 Development deployment uses the Rust debug build and the Vite dev server. Use it for local development, debugging, and trying the first-run flow.
 
-Start the backend:
-
-```bash
-cd backend
-cargo run
-```
-
-The backend listens on:
-
-```text
-http://127.0.0.1:8080
-```
-
-Open another terminal, enter the project root, and start the frontend:
-
-```bash
-cd frontend
-pnpm install
-pnpm dev --host 0.0.0.0
-```
+| Service | Command | Default URL |
+| --- | --- | --- |
+| Backend | `cd backend && cargo run` | `http://127.0.0.1:8080` |
+| Frontend | `cd frontend && pnpm install && pnpm dev --host 0.0.0.0` | `http://SERVER_IP:5173` |
 
 Open `http://SERVER_IP:5173`; the app redirects to the first-run wizard automatically. Complete the runtime configuration, admin account, service mode, initial upstream, and optional SMTP settings. If the page asks for a restart after saving runtime configuration, restart the backend and refresh the page.
 
@@ -154,8 +177,11 @@ Description=NeoGate backend
 [Service]
 WorkingDirectory=/opt/neogate/backend
 Environment=BIND_ADDR=127.0.0.1:8080
+Environment=RUST_LOG=info
 ExecStart=/opt/neogate/backend/target/release/neogate
 Restart=always
+StandardOutput=append:/var/log/neogate/backend.log
+StandardError=append:/var/log/neogate/error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -164,9 +190,25 @@ WantedBy=multi-user.target
 Save it as `/etc/systemd/system/neogate.service`, then start it:
 
 ```bash
+sudo mkdir -p /var/log/neogate
 sudo systemctl daemon-reload
 sudo systemctl enable --now neogate
 sudo systemctl status neogate
+```
+
+Add logrotate for backend logs to avoid unbounded log file growth:
+
+```bash
+sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
+/var/log/neogate/*.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
 ```
 
 Build the frontend:
@@ -189,30 +231,42 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 4. Deployment Modes
+---
+
+## 🏗️ Deployment Modes
 
 NeoGate can run as a single-node deployment or a clustered deployment. For most teams, single-node deployment is enough to start with: it does not require Redis, keeps configuration simple, and is easier to operate and troubleshoot.
 
-- Single-node deployment: the default mode. No `RUNTIME_MODE` configuration is required. Suitable for personal projects, small teams, and early production deployments. `docker-compose.yml` starts frontend Nginx, backend, and PostgreSQL.
-- Clustered deployment: set `RUNTIME_MODE=distributed`, where multiple backend API/worker replicas share PostgreSQL and Redis. Use this when you clearly need multiple replicas and horizontal scaling. `docker-compose.cluster.yml` does not include PostgreSQL or Redis.
+| Deployment | Configuration | Best for | Components |
+| --- | --- | --- | --- |
+| 🧱 Single-node deployment | Default mode. No `RUNTIME_MODE` configuration is required. | Personal projects, small teams, and early production deployments. | `docker-compose.yml` starts frontend Nginx, backend, and PostgreSQL. |
+| 🌐 Clustered deployment | Set `RUNTIME_MODE=distributed`. | Scenarios that clearly need multiple replicas and horizontal scaling. | Multiple backend API/worker replicas share PostgreSQL and Redis; `docker-compose.cluster.yml` does not include PostgreSQL or Redis. |
 
-If you do not clearly need multiple backend replicas, prefer single-node deployment first.
+> [!TIP]
+> If you do not clearly need multiple backend replicas, prefer single-node deployment first.
 
-## 5. Production Checklist
+---
+
+## ✅ Production Checklist
 
 Before going live:
 
-- Create the admin account in the first-run wizard and avoid weak passwords.
-- Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node.
-- Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links.
-- Set `SITE_NAME` in the first-run wizard or environment configuration for page, email, and payment gateway display.
-- If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration.
-- If you proxy image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; by default it follows `REQUEST_TIMEOUT_SECONDS`, usually 600 seconds.
-- Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims.
-- For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console.
-- For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode.
+| Check | Recommendation |
+| --- | --- |
+| 👤 Admin account | Create the admin account in the first-run wizard and avoid weak passwords. |
+| 🔐 System secrets | Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node. |
+| 🌍 Public URL | Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links. |
+| 🏷️ Site name | Set `SITE_NAME` in the first-run wizard or environment configuration for page, email, and payment gateway display. |
+| 🔁 CORS | If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration. |
+| 📦 Body size limit | If you proxy image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. |
+| ⏱️ Timeout | For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; by default it follows `REQUEST_TIMEOUT_SECONDS`, usually 600 seconds. |
+| ✉️ SMTP | Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims. |
+| 💳 Billing | For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console. |
+| 🌐 Cluster | For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode. |
 
-## 6. License
+---
+
+## 📄 License
 
 NeoGate Community Edition is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
 
@@ -220,7 +274,11 @@ NeoGate also offers tiered commercial licensing: ordinary companies may request 
 
 The NeoGate name, logo, and related marks are not licensed under AGPL. Their use is governed by [TRADEMARKS.md](TRADEMARKS.md).
 
-## 7. Help
+---
 
-- Issues: [GitHub Issues](https://github.com/neogate-io/NeoGate/issues)
-- Contributions: [Pull Requests](https://github.com/neogate-io/NeoGate/pulls)
+## 🙋 Help
+
+| Type | Link |
+| --- | --- |
+| 🐛 Issues | [GitHub Issues](https://github.com/neogate-io/NeoGate/issues) |
+| 🤝 Contributions | [Pull Requests](https://github.com/neogate-io/NeoGate/pulls) |

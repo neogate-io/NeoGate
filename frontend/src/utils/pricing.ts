@@ -1,4 +1,4 @@
-import type { PricingTemplate } from '../types/admin'
+import type { PricingTemplate, ProviderPrice } from '../types/admin'
 
 const CONFIRMED_PRICE_SOURCE = 'confirmed_price'
 const MANUAL_BASE_URL_PROVIDERS = new Set(['custom', 'newapi'])
@@ -9,6 +9,14 @@ export function priceKey(provider: string, model: string) {
 
 export function derivedCacheReadPrice(inputPrice: number) {
   return Math.round(inputPrice / 10)
+}
+
+export function isProviderPriceConfigured(price?: ProviderPrice) {
+  return Boolean(price && price.input_price_usd_micros > 0 && price.output_price_usd_micros > 0)
+}
+
+export function isProviderPriceReady(price?: ProviderPrice) {
+  return Boolean(price?.enabled && isProviderPriceConfigured(price))
 }
 
 export function findPricingTemplate(templates: PricingTemplate[], provider: string, model: string) {

@@ -35,7 +35,7 @@ import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
-import type { ProviderRecord } from '../../types/admin'
+import type { PricingTemplate, ProviderRecord } from '../../types/admin'
 import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { ApiError, readError, readModelFetchError, readSmtpTestError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
@@ -79,6 +79,7 @@ const reviewingRuntimeConfig = ref(false)
 const runtimeDatabaseChangeEnabled = ref(false)
 const fetchedModels = ref<string[]>([])
 const selectedFetchedModels = ref<string[]>([])
+const pricingTemplates = ref<PricingTemplate[]>([])
 
 const bootstrapForm = reactive({
   databaseHost: 'localhost',
@@ -475,9 +476,11 @@ function syncSelectedModelsToInput() {
 async function syncAndApplyReferencePrices() {
   try {
     const { templates } = await syncSetupPricingTemplates()
+    pricingTemplates.value = templates
     let applied = 0
     for (const price of prices.value) {
       const template = findPricingTemplate(templates, setupForm.provider, price.model)
+      price.enabled = Boolean(template)
       if (!template) continue
       price.inputUsd = microUsdToUsd(template.input_price_usd_micros)
       price.outputUsd = microUsdToUsd(template.output_price_usd_micros)
@@ -873,7 +876,9 @@ function syncPriceRows() {
     model,
     inputUsd: existing.get(model)?.inputUsd ?? 0,
     outputUsd: existing.get(model)?.outputUsd ?? 0,
-    enabled: existing.get(model)?.enabled ?? true
+    enabled:
+      existing.get(model)?.enabled ??
+      Boolean(findPricingTemplate(pricingTemplates.value, setupForm.provider, model))
   }))
 }
 

@@ -18,6 +18,7 @@ import {
   syncPricingTemplates,
   upsertProviderPrice
 } from '../../api/prices'
+import { updateChannel } from '../../api/channels'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelPriceDialog, {
   type ChannelPriceForm
@@ -27,11 +28,18 @@ import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
+import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Channel, ChannelKey, PricingTemplate, ProviderPrice } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
 import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
-import { derivedCacheReadPrice, findPricingTemplate, priceKey } from '../../utils/pricing'
+import {
+  derivedCacheReadPrice,
+  findPricingTemplate,
+  isProviderPriceConfigured,
+  isProviderPriceReady,
+  priceKey
+} from '../../utils/pricing'
 
 const { t } = useLocale()
 
@@ -84,6 +92,8 @@ const pricingLoading = ref(true)
 const channelsLoaded = ref(false)
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
+const togglingRuntimeKeys = useReactiveSet<string>()
+const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
 const channelStatusFilter = ref<'all' | 'normal' | 'attention' | 'disabled'>('all')
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
@@ -95,7 +105,7 @@ const priceByModel = computed(
 const filteredChannels = computed(() => {
   const keyword = channelSearch.value.trim().toLowerCase()
   return channels.value.filter((channel) => {
-    const runtimeStatus = channelRuntimeSummary(channel).status
+    const runtimeStatus = channelRuntimeStatus(channel)
     const matchesStatus =
       channelStatusFilter.value === 'all' || runtimeStatus === channelStatusFilter.value
     const matchesKeyword =
@@ -123,7 +133,7 @@ function channelPriceStatus(row: Channel) {
   }
 
   const missing = models.filter(
-    (model) => !priceByModel.value.get(priceKey(row.provider, model))?.enabled
+    (model) => !isProviderPriceConfigured(priceByModel.value.get(priceKey(row.provider, model)))
   ).length
   if (missing === 0) {
     return { missing, total: models.length, type: 'success' as const, label: t('priceReady') }
@@ -176,11 +186,14 @@ function channelPriceRows(row: Channel) {
         ? '$0'
         : formatUsdPerMillion(microUsdToUsd(cacheWriteMicros as number))
       : t('priceMissing')
-    const hasEnabledPrice = Boolean(price?.enabled)
+    const hasConfiguredPrice = isProviderPriceConfigured(price)
+    const runtimeEnabled = isProviderPriceReady(price)
     return {
       model,
       disabled: Boolean(price && !price.enabled),
-      missing: !hasEnabledPrice,
+      missing: !hasConfiguredPrice,
+      runtimeToggleDisabled: !hasConfiguredPrice || isRuntimeToggling(row.provider, model),
+      runtimeEnabled,
       inputPrice,
       outputPrice,
       cacheReadPrice,
@@ -198,58 +211,25 @@ function channelPriceOverflowCount(row: Channel) {
   return Math.max(channelModelList(row).length - channelPricePreviewRows(row).length, 0)
 }
 
-function channelHealthSummary(row: Channel) {
-  const endpoints = row.endpoints
-  if (endpoints.length === 0) {
-    return { label: '-', type: 'info' as const, title: '' }
-  }
-
-  const healthyCount = endpoints.filter((endpoint) => endpoint.healthy).length
-  const errorTitle = endpoints
-    .filter((endpoint) => !endpoint.healthy && endpoint.last_error)
-    .map((endpoint) => endpoint.last_error)
-    .join('\n')
-
-  if (healthyCount === endpoints.length) {
-    return { label: t('healthy'), type: 'success' as const, title: '' }
-  }
-
-  if (healthyCount > 0) {
-    return { label: t('partialHealthy'), type: 'warning' as const, title: errorTitle }
-  }
-
-  return { label: t('unhealthy'), type: 'danger' as const, title: errorTitle }
+function isRuntimeToggling(provider: string, model: string) {
+  return togglingRuntimeKeys.has(priceKey(provider, model))
 }
 
-function channelRuntimeSummary(row: Channel) {
+function isChannelToggling(channelId: number) {
+  return togglingChannelIds.has(channelId)
+}
+
+function channelRuntimeStatus(row: Channel) {
   if (!row.enabled) {
-    return {
-      status: 'disabled' as const,
-      label: t('channelStopped'),
-      icon: VideoPause,
-      tone: 'neutral',
-      title: ''
-    }
+    return 'disabled'
   }
+  return row.endpoints.length > 0 && row.endpoints.every((endpoint) => endpoint.healthy)
+    ? 'normal'
+    : 'attention'
+}
 
-  const health = channelHealthSummary(row)
-  if (health.type === 'success') {
-    return {
-      status: 'normal' as const,
-      label: t('channelRunningNormal'),
-      icon: CircleCheckFilled,
-      tone: 'success',
-      title: health.title
-    }
-  }
-
-  return {
-    status: 'attention' as const,
-    label: health.type === 'warning' ? t('channelRunningDegraded') : t('channelServiceError'),
-    icon: WarningFilled,
-    tone: health.type === 'warning' ? 'warning' : 'danger',
-    title: health.title
-  }
+function channelRowClassName({ row }: { row: Channel }) {
+  return row.enabled ? '' : 'channel-row-is-disabled'
 }
 
 function channelCredentialSummary(row: Channel) {
@@ -459,6 +439,57 @@ async function saveChannelPrices() {
   }
 }
 
+async function toggleChannelModelRuntime(provider: string, model: string, enabled: boolean) {
+  const price = priceByModel.value.get(priceKey(provider, model))
+  if (!price || !isProviderPriceConfigured(price) || isRuntimeToggling(provider, model)) return
+
+  togglingRuntimeKeys.add(priceKey(provider, model))
+  try {
+    await upsertProviderPrice({
+      provider,
+      model,
+      input_price_usd_micros: price.input_price_usd_micros,
+      output_price_usd_micros: price.output_price_usd_micros,
+      cache_read_price_usd_micros: price.cache_read_price_usd_micros ?? null,
+      cache_write_price_usd_micros: price.cache_write_price_usd_micros ?? null,
+      enabled
+    })
+    await loadPricingData()
+    await loadChannels()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    togglingRuntimeKeys.remove(priceKey(provider, model))
+  }
+}
+
+async function toggleChannelRuntime(row: Channel, enabled: boolean) {
+  if (row.enabled === enabled || isChannelToggling(row.id)) return
+
+  togglingChannelIds.add(row.id)
+  try {
+    await updateChannel(row.id, {
+      name: row.name,
+      endpoints: row.endpoints.map((endpoint) => ({
+        protocol: endpoint.protocol,
+        base_url: endpoint.base_url,
+        models: endpoint.models,
+        enabled: endpoint.enabled
+      })),
+      enabled,
+      priority: row.priority,
+      weight: row.weight,
+      key_selection_mode: row.key_selection_mode,
+      use_credentials: row.use_credentials
+    })
+    await loadChannels()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    togglingChannelIds.remove(row.id)
+  }
+}
+
 async function applyReferencePrices() {
   const targetForms = Object.values(priceForms).filter(hasReferencePrice)
   if (targetForms.length === 0) {
@@ -504,9 +535,6 @@ async function submitEditChannel() {
   const channel = await submitEditChannelBase()
   if (!channel) return
   await loadPricingData()
-  if (channelPriceStatus(channel).missing > 0) {
-    openPriceDialog(channel)
-  }
 }
 
 async function loadInitialData() {
@@ -566,6 +594,7 @@ onMounted(loadInitialData)
         v-loading="loading"
         class="admin-table service-table channel-table"
         :data="filteredChannels"
+        :row-class-name="channelRowClassName"
         row-key="id"
         stripe
       >
@@ -593,6 +622,7 @@ onMounted(loadInitialData)
                   <span class="channel-head-label">{{ t('cacheReadPrice') }}</span>
                   <span class="channel-head-label">{{ t('cacheWritePrice') }}</span>
                   <span>{{ t('priceStatus') }}</span>
+                  <span>{{ t('channelStatus') }}</span>
                 </div>
                 <div
                   v-for="item in channelPriceRows(row)"
@@ -616,6 +646,19 @@ onMounted(loadInitialData)
                       <WarningFilled v-if="item.missing" />
                       <CircleCheckFilled v-else />
                     </el-icon>
+                  </span>
+                  <span
+                    class="channel-detail-runtime-switch"
+                    :aria-label="item.runtimeEnabled ? t('enabled') : t('disabled')"
+                  >
+                    <el-switch
+                      :model-value="item.runtimeEnabled"
+                      :disabled="item.runtimeToggleDisabled"
+                      size="small"
+                      @change="
+                        toggleChannelModelRuntime(row.provider, item.model, Boolean($event))
+                      "
+                    />
                   </span>
                 </div>
               </div>
@@ -677,15 +720,30 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelStatus')"
-          min-width="150"
+          min-width="190"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
-            <span class="channel-runtime-status" :class="`is-${channelRuntimeSummary(row).tone}`">
-              <el-icon><component :is="channelRuntimeSummary(row).icon" /></el-icon>
-              {{ channelRuntimeSummary(row).label }}
-            </span>
+            <button
+              type="button"
+              class="channel-runtime-switch"
+              :class="{ 'is-enabled': row.enabled, 'is-disabled': !row.enabled }"
+              :disabled="isChannelToggling(row.id)"
+              :aria-pressed="row.enabled"
+              :aria-label="row.enabled ? t('enabled') : t('disabled')"
+              @click="toggleChannelRuntime(row, !row.enabled)"
+            >
+              <span class="channel-runtime-switch-icon">
+                <el-icon>
+                  <CircleCheckFilled v-if="row.enabled" />
+                  <VideoPause v-else />
+                </el-icon>
+              </span>
+              <span class="channel-runtime-switch-text">
+                {{ row.enabled ? t('enabled') : t('disabled') }}
+              </span>
+            </button>
           </template>
         </el-table-column>
         <el-table-column :label="t('actions')" width="164" align="center" header-align="center">
@@ -907,6 +965,28 @@ onMounted(loadInitialData)
   padding: 12px 0;
 }
 
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled td) {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-name-text),
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-provider-text),
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-price-model),
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-price-value),
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-key-count),
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch-text) {
+  color: #94a3b8;
+}
+
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch) {
+  border-color: #e5e7eb;
+}
+
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch-icon) {
+  background: #cbd5e1;
+}
+
 .channel-table :deep(.el-table__expanded-cell) {
   background: #f6f9fc;
   padding: 0;
@@ -973,6 +1053,7 @@ onMounted(loadInitialData)
 }
 
 .price-status-tag.el-tag {
+  animation: none;
   border: 1px solid #dbe4ef;
   border-radius: 8px;
   color: #4e5969;
@@ -983,10 +1064,12 @@ onMounted(loadInitialData)
   height: 34px;
   min-width: 0;
   padding: 0 13px 0 8px;
+  transition: none;
 }
 
 .price-status-tag.el-tag .el-icon {
   align-items: center;
+  animation: none;
   background: #94a3b8;
   border-radius: 999px;
   color: #ffffff;
@@ -994,6 +1077,7 @@ onMounted(loadInitialData)
   font-size: 13px;
   height: 22px;
   justify-content: center;
+  transition: none;
   width: 22px;
 }
 
@@ -1128,6 +1212,58 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
+.channel-runtime-switch {
+  align-items: center;
+  appearance: none;
+  background: #ffffff;
+  border: 1px solid #ffd65c;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-start;
+  min-height: 34px;
+  min-width: 88px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.channel-runtime-switch.is-enabled {
+  border-color: #b7eb8f;
+  color: #166534;
+}
+
+.channel-runtime-switch.is-disabled {
+  border-color: #f7d37a;
+  color: #a16207;
+}
+
+.channel-runtime-switch-icon {
+  align-items: center;
+  background: #f0b400;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.channel-runtime-switch.is-enabled .channel-runtime-switch-icon {
+  background: #22c55e;
+}
+
+.channel-runtime-switch.is-disabled .channel-runtime-switch-icon {
+  background: #f0b400;
+}
+
+.channel-runtime-switch-text {
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1;
+}
+
 .channel-expand-panel {
   animation: channel-expand-in 180ms ease-out;
   display: grid;
@@ -1192,15 +1328,16 @@ onMounted(loadInitialData)
   display: grid;
   gap: 10px;
   grid-template-columns:
-    minmax(96px, 0.5fr)
-    minmax(112px, 0.52fr)
-    minmax(112px, 0.52fr)
-    minmax(112px, 0.52fr)
-    minmax(112px, 0.52fr)
-    96px;
+    minmax(180px, 1.25fr)
+    minmax(132px, 0.78fr)
+    minmax(132px, 0.78fr)
+    minmax(150px, 0.9fr)
+    minmax(164px, 0.92fr)
+    84px
+    84px;
   min-height: 46px;
-  min-width: 660px;
-  padding: 0 14px;
+  min-width: 912px;
+  padding: 0 16px;
 }
 
 .channel-expand-price-row + .channel-expand-price-row {
@@ -1235,7 +1372,11 @@ onMounted(loadInitialData)
 }
 
 .channel-expand-price-row.is-head span:nth-child(6) {
-  padding-left: 40px;
+  padding-left: 20px;
+  text-align: center;
+}
+
+.channel-expand-price-row.is-head span:nth-child(7) {
   text-align: center;
 }
 
@@ -1243,8 +1384,23 @@ onMounted(loadInitialData)
   background: #fffaf3;
 }
 
+.channel-expand-price-row.is-disabled:not(.is-missing) {
+  background: #f8fafc;
+}
+
 .channel-expand-price-row.is-missing .channel-price-model {
   color: #c2410c;
+}
+
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-price-model,
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-price,
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status,
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-switch {
+  color: #94a3b8;
+}
+
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status .el-icon {
+  background: #cbd5e1;
 }
 
 .channel-expand-price-row .channel-price-model {
@@ -1278,7 +1434,7 @@ onMounted(loadInitialData)
   align-items: center;
   display: inline-flex;
   justify-content: center;
-  padding-left: 40px;
+  padding-left: 20px;
 }
 
 .channel-detail-status .el-icon {
@@ -1297,13 +1453,20 @@ onMounted(loadInitialData)
   background: #f97316;
 }
 
+.channel-detail-runtime-switch {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.channel-detail-runtime-switch :deep(.el-switch) {
+  --el-switch-on-color: #22c55e;
+  --el-switch-off-color: #94a3b8;
+}
+
 .channel-expand-price-row.is-missing .channel-detail-price,
 .channel-expand-price-row.is-missing .channel-detail-status {
   color: #c2410c;
-}
-
-.channel-expand-price-row.is-disabled {
-  opacity: 0.56;
 }
 
 .channel-empty-state {

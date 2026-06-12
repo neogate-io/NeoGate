@@ -1052,35 +1052,6 @@ onMounted(loadInitialData)
   min-width: 0;
 }
 
-.price-status-tag.el-tag {
-  animation: none;
-  border: 1px solid #dbe4ef;
-  border-radius: 8px;
-  color: #4e5969;
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 720;
-  gap: 6px;
-  height: 34px;
-  min-width: 0;
-  padding: 0 13px 0 8px;
-  transition: none;
-}
-
-.price-status-tag.el-tag .el-icon {
-  align-items: center;
-  animation: none;
-  background: #94a3b8;
-  border-radius: 999px;
-  color: #ffffff;
-  display: inline-flex;
-  font-size: 13px;
-  height: 22px;
-  justify-content: center;
-  transition: none;
-  width: 22px;
-}
-
 .price-status-tag.is-success {
   background: #f0fdf4;
   border-color: #bbf7d0;
@@ -1212,22 +1183,6 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
-.channel-runtime-switch {
-  align-items: center;
-  appearance: none;
-  background: #ffffff;
-  border: 1px solid #ffd65c;
-  border-radius: 8px;
-  cursor: pointer;
-  display: inline-flex;
-  gap: 6px;
-  justify-content: flex-start;
-  min-height: 34px;
-  min-width: 88px;
-  padding: 0 8px;
-  white-space: nowrap;
-}
-
 .channel-runtime-switch.is-enabled {
   background: #f0fdf4;
   border-color: #b7eb8f;
@@ -1240,30 +1195,12 @@ onMounted(loadInitialData)
   color: #64748b;
 }
 
-.channel-runtime-switch-icon {
-  align-items: center;
-  background: #f0b400;
-  border-radius: 999px;
-  color: #ffffff;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 22px;
-  justify-content: center;
-  width: 22px;
-}
-
 .channel-runtime-switch.is-enabled .channel-runtime-switch-icon {
   background: #22c55e;
 }
 
 .channel-runtime-switch.is-disabled .channel-runtime-switch-icon {
   background: #94a3b8;
-}
-
-.channel-runtime-switch-text {
-  font-size: 12px;
-  font-weight: 720;
-  line-height: 1;
 }
 
 .channel-expand-panel {

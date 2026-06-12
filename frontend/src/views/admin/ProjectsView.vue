@@ -1146,27 +1146,6 @@ async function handlePageSizeChange(size: number) {
   font-weight: 700;
 }
 
-.project-status-switch {
-  align-items: center;
-  appearance: none;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  display: inline-flex;
-  gap: 6px;
-  justify-content: flex-start;
-  min-height: 34px;
-  min-width: 88px;
-  padding: 0 8px;
-  white-space: nowrap;
-}
-
-.project-status-switch:disabled {
-  cursor: default;
-  opacity: 0.72;
-}
-
 .project-status-switch.is-enabled {
   background: #f0fdf4;
   border-color: #b7eb8f;
@@ -1179,26 +1158,8 @@ async function handlePageSizeChange(size: number) {
   color: #64748b;
 }
 
-.project-status-switch-icon {
-  align-items: center;
-  background: #94a3b8;
-  border-radius: 999px;
-  color: #ffffff;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 22px;
-  justify-content: center;
-  width: 22px;
-}
-
 .project-status-switch.is-enabled .project-status-switch-icon {
   background: #22c55e;
-}
-
-.project-status-switch-text {
-  font-size: 12.5px;
-  font-weight: 650;
-  line-height: 1;
 }
 
 .project-create-body {

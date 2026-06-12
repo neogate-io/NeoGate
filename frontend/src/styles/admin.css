@@ -379,6 +379,70 @@
   background: #94a3b8;
 }
 
+:is(.user-status-switch, .project-status-switch, .channel-runtime-switch, .price-status-tag.el-tag) {
+  align-items: center;
+  border-radius: 7px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 650;
+  gap: 5px;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+:is(.user-status-switch, .project-status-switch, .channel-runtime-switch) {
+  appearance: none;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  justify-content: flex-start;
+  min-width: 72px;
+  padding: 0 7px;
+}
+
+:is(.user-status-switch, .project-status-switch, .channel-runtime-switch):disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+:is(
+    .user-status-switch-icon,
+    .project-status-switch-icon,
+    .channel-runtime-switch-icon,
+    .price-status-tag.el-tag .el-icon
+  ) {
+  align-items: center;
+  background: #94a3b8;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+:is(.user-status-switch-text, .project-status-switch-text, .channel-runtime-switch-text) {
+  line-height: 1;
+}
+
+.price-status-tag.el-tag {
+  animation: none;
+  border: 1px solid #dbe4ef;
+  color: #4e5969;
+  flex: 0 0 auto;
+  height: 28px;
+  min-width: 0;
+  padding: 0 9px 0 7px;
+  transition: none;
+}
+
+.price-status-tag.el-tag .el-icon {
+  animation: none;
+  transition: none;
+}
+
 .admin-shell .table-row-actions .el-button:not(.el-button--danger) {
   --el-button-bg-color: #fbfdff;
   --el-button-border-color: #d5e0ec;

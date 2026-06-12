@@ -169,7 +169,6 @@ function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
 }
 
 function formatAccountBalance(row: Pick<CreditBalance, 'available_micro_usd'>) {
-  if (row.available_micro_usd <= 0) return t('creditDepleted')
   return formatMicroUsd(row.available_micro_usd, 2)
 }
 
@@ -1175,54 +1174,23 @@ onMounted(() => {
 }
 
 .user-credit-cell {
-  align-items: center;
-  border: 1px solid #dbe4ef;
-  border-radius: 999px;
-  display: inline-flex;
   font-feature-settings: 'tnum';
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  justify-content: flex-end;
-  min-height: 28px;
-  min-width: 86px;
-  padding: 0 10px;
+  font-weight: 400;
   white-space: nowrap;
 }
 
 .user-credit-cell.is-available {
-  background: #f8fafc;
   color: #1d2939;
 }
 
 .user-credit-cell.is-unlimited {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
   color: #15803d;
-  justify-content: center;
 }
 
 .user-credit-cell.is-depleted {
-  background: #fff7ed;
-  border-color: #fed7aa;
-  color: #c2410c;
-  justify-content: center;
-}
-
-.user-status-switch {
-  align-items: center;
-  appearance: none;
-  background: #ffffff;
-  border: 1px solid #ffd65c;
-  border-radius: 8px;
-  cursor: pointer;
-  display: inline-flex;
-  gap: 6px;
-  justify-content: flex-start;
-  min-height: 34px;
-  min-width: 88px;
-  padding: 0 8px;
-  white-space: nowrap;
+  color: #1d2939;
 }
 
 .user-status-switch.is-enabled {
@@ -1243,18 +1211,6 @@ onMounted(() => {
   color: #a16207;
 }
 
-.user-status-switch-icon {
-  align-items: center;
-  background: #f0b400;
-  border-radius: 999px;
-  color: #ffffff;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 22px;
-  justify-content: center;
-  width: 22px;
-}
-
 .user-status-switch.is-enabled .user-status-switch-icon {
   background: #22c55e;
 }
@@ -1265,12 +1221,6 @@ onMounted(() => {
 
 .user-status-switch.is-pending .user-status-switch-icon {
   background: #f0b400;
-}
-
-.user-status-switch-text {
-  font-size: 12.5px;
-  font-weight: 650;
-  line-height: 1;
 }
 
 .user-time-cell {
@@ -1301,9 +1251,7 @@ onMounted(() => {
   font-weight: 400;
 }
 
-.user-table.admin-table.el-table :deep(.el-table__body .cell .user-group-tag),
-.user-table.admin-table.el-table :deep(.el-table__body .cell .user-credit-cell),
-.user-table.admin-table.el-table :deep(.el-table__body .cell .user-status-switch-text) {
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-group-tag) {
   font-weight: 650;
 }
 

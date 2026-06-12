@@ -35,7 +35,7 @@ import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
 import { readError } from '../../utils/errors'
-import { formatCompactDateTime, formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
+import { formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
 
 defineOptions({
   name: 'ProjectsView'
@@ -207,7 +207,27 @@ function projectMemberDisplayName(member: ProjectMember) {
 }
 
 function formatLastActiveAt(value?: string | null) {
-  return value ? formatCompactDateTime(value) : t('neverActive')
+  return value ? formatDateTimeParts(value) : null
+}
+
+function formatDateTimePart(value: string | null | undefined, part: 'date' | 'time') {
+  return formatDateTimeParts(value)?.[part] || '-'
+}
+
+function formatDateTimeParts(value?: string | null) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  const second = String(date.getSeconds()).padStart(2, '0')
+  return {
+    date: `${year}/${month}/${day}`,
+    time: `${hour}:${minute}:${second}`
+  }
 }
 
 function openCreateDialog() {
@@ -847,7 +867,7 @@ async function handlePageSizeChange(size: number) {
       v-model="membersDialogVisible"
       class="user-admin-dialog project-members-dialog"
       :title="t('projectMembers')"
-      width="720px"
+      width="860px"
     >
       <div class="project-keys-dialog-body project-member-panel">
         <el-form class="project-member-add-form" @submit.prevent="submitAddProjectMember">
@@ -910,7 +930,7 @@ async function handlePageSizeChange(size: number) {
             row-key="id"
             stripe
           >
-            <el-table-column :label="t('username')" min-width="168">
+            <el-table-column :label="t('username')" width="112">
               <template #default="{ row }">
                 <span class="project-owner-cell">
                   <el-icon><UserFilled /></el-icon>
@@ -918,14 +938,14 @@ async function handlePageSizeChange(size: number) {
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('memberRole')" width="92" align="center" header-align="center">
+            <el-table-column :label="t('memberRole')" width="88" align="center" header-align="center">
               <template #default="{ row }">
                 <el-tag class="static-state-tag" effect="plain">
                   {{ memberRoleText(row.role) }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('apiKey')" min-width="190">
+            <el-table-column :label="t('apiKey')" min-width="250">
               <template #default="{ row }">
                 <div v-if="row.api_key" class="user-key-cell project-member-key-cell">
                   <code class="user-key-value">{{ maskApiKey(row.api_key) }}</code>
@@ -941,17 +961,29 @@ async function handlePageSizeChange(size: number) {
                 <span v-else class="user-time-cell is-empty">-</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('time')" min-width="154">
+            <el-table-column :label="t('createdAt')" width="116">
               <template #default="{ row }">
-                <span class="project-member-time-cell">
-                  <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
-                  <span class="user-time-cell" :class="{ 'is-empty': !row.last_active_at }">
-                    {{ formatLastActiveAt(row.last_active_at) }}
-                  </span>
+                <span v-if="formatDateTimeParts(row.created_at)" class="project-member-time-cell">
+                  <span class="user-time-cell">{{ formatDateTimePart(row.created_at, 'date') }}</span>
+                  <span class="user-time-cell">{{ formatDateTimePart(row.created_at, 'time') }}</span>
+                </span>
+                <span v-else class="user-time-cell project-member-empty-time is-empty">
+                  -
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('actions')" width="64" align="center" header-align="center">
+            <el-table-column :label="t('lastActiveAt')" width="116">
+              <template #default="{ row }">
+                <span v-if="formatLastActiveAt(row.last_active_at)" class="project-member-time-cell">
+                  <span class="user-time-cell">{{ formatDateTimePart(row.last_active_at, 'date') }}</span>
+                  <span class="user-time-cell">{{ formatDateTimePart(row.last_active_at, 'time') }}</span>
+                </span>
+                <span v-else class="user-time-cell project-member-empty-time is-empty">
+                  {{ t('neverActive') }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('actions')" width="76" align="center" header-align="center">
               <template #default="{ row }">
                 <AdminActionTooltip v-if="row.role !== 'owner'" :content="t('delete')">
                   <el-button
@@ -1017,6 +1049,11 @@ async function handlePageSizeChange(size: number) {
 .project-loading-row::after {
   left: 112px;
   width: min(320px, 40%);
+}
+
+.project-table,
+.project-member-detail-panel {
+  font-size: 13px;
 }
 
 .project-name-cell,
@@ -1265,6 +1302,12 @@ async function handlePageSizeChange(size: number) {
   padding-right: 8px;
 }
 
+.project-member-detail-panel :deep(.el-table__header-wrapper .cell) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .project-member-detail-panel .project-owner-cell {
   max-width: 100%;
 }
@@ -1281,7 +1324,7 @@ async function handlePageSizeChange(size: number) {
 
 .project-member-key-cell .user-key-value {
   flex: 1 1 auto;
-  max-width: 136px;
+  max-width: 178px;
   min-width: 0;
 }
 
@@ -1291,11 +1334,17 @@ async function handlePageSizeChange(size: number) {
   min-width: 0;
 }
 
-.project-member-time-cell .user-time-cell {
+.project-member-time-cell .user-time-cell,
+.project-member-empty-time {
+  font-size: 12px;
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-member-empty-time {
+  display: block;
 }
 
 .project-member-add-form {

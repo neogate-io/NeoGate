@@ -380,11 +380,11 @@ async fn login_or_create_user(
         .fetch_one(&mut *tx)
         .await?;
         let user_id: DbId = row.try_get("id")?;
-        project::create_default_project_for_user(&mut tx, user_id).await?;
         if service_mode == ServiceMode::Internal {
             tx.commit().await?;
             return Err(AppError::BadRequest("account pending approval".to_string()));
         }
+        project::create_default_project_for_user(&mut tx, user_id).await?;
         UserLogin {
             user_id,
             requires_password_change: false,

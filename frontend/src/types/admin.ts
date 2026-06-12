@@ -21,6 +21,7 @@ export type UserKey = CreditBalance & {
   id: number
   user_id: number
   project_id: number
+  project_name: string
   owner_user_id?: number | null
   name: string
   key: string
@@ -64,6 +65,8 @@ export type Project = CreditBalance & {
   name: string
   owner_user_id: number
   owner_email: string
+  owner_username?: string | null
+  admin_display_names: string[]
   status: ProjectStatus
   is_default: boolean
   member_count: number
@@ -77,6 +80,7 @@ export type ProjectMember = {
   project_id: number
   user_id: number
   user_email: string
+  user_username?: string | null
   role: 'owner' | 'admin' | 'member' | 'viewer'
   user_status: UserStatus
   created_at: string

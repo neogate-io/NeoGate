@@ -4,6 +4,7 @@ import { adminRequest } from './request'
 export type UserPage = CursorPage<User>
 
 export type GetUsersFilters = {
+  search?: string
   email?: string
   apiKey?: string
   limit?: number
@@ -26,6 +27,7 @@ export type UpdateUserPayload = {
 
 export function getUsers(filters: GetUsersFilters = {}) {
   const searchParams = new URLSearchParams()
+  if (filters.search) searchParams.set('search', filters.search)
   if (filters.email) searchParams.set('email', filters.email)
   if (filters.apiKey) searchParams.set('api_key', filters.apiKey)
   if (filters.limit) searchParams.set('limit', String(filters.limit))

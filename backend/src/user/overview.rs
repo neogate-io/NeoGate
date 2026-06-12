@@ -38,14 +38,22 @@ async fn overview(
         SELECT
             u.email::TEXT AS email,
             u.username,
-            w.balance_micro_usd,
-            w.reserved_micro_usd,
+            COALESCE(pw.balance_micro_usd, 0)::BIGINT AS balance_micro_usd,
+            COALESCE(pw.reserved_micro_usd, 0)::BIGINT AS reserved_micro_usd,
             COALESCE(today.cost_micro_usd, 0)::BIGINT AS today_cost_micro_usd,
             COALESCE(month.cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
             COALESCE(total.request_count, 0)::BIGINT AS request_count
         FROM "user" u
-        JOIN project p ON p.owner_user_id = u.id AND p.is_default = TRUE
-        JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+        LEFT JOIN LATERAL (
+            SELECT w.balance_micro_usd, w.reserved_micro_usd
+            FROM project p
+            JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+            WHERE p.owner_user_id = u.id
+              AND p.is_default = TRUE
+              AND p.status = 'enabled'
+            ORDER BY p.id ASC
+            LIMIT 1
+        ) pw ON TRUE
         LEFT JOIN LATERAL (
             SELECT SUM(cost_micro_usd) AS cost_micro_usd
             FROM usage_daily

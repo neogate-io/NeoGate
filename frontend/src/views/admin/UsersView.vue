@@ -14,7 +14,6 @@ import {
   Plus,
   Search,
   User as UserIcon,
-  UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -56,11 +55,9 @@ type UserGroupTone = 'default' | 'premium' | 'standard'
 type UserForm = {
   email: string
   username: string
+  password: string
   status: UserStatus
   userGroupId: number
-}
-type CreateUserForm = UserForm & {
-  password: string
 }
 type UserDialogMode = 'create' | 'edit'
 type TranslationKey = Parameters<typeof t>[0]
@@ -70,7 +67,7 @@ type UserStatusMeta = {
 }
 
 const DEFAULT_USER_PAGE_SIZE = 50
-const DEFAULT_USER_KEY_PAGE_SIZE = 100
+const USER_KEY_DIALOG_LIMIT = 100
 const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
 const RELATIVE_TIME_UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
   ['year', 60 * 60 * 24 * 365],
@@ -105,7 +102,7 @@ const togglingUserIds = useReactiveSet<number>()
 const selectedUser = ref<User | null>(null)
 const userGroups = ref<UserGroup[]>([])
 const servicePolicy = ref<ServicePolicy | null>(null)
-const userForm = reactive<CreateUserForm>({
+const userForm = reactive<UserForm>({
   email: '',
   username: '',
   password: '',
@@ -123,16 +120,6 @@ const {
   goToNext: goToNextUsersPage,
   goToPrevious: goToPreviousUsersPage
 } = useCursorPagination(DEFAULT_USER_PAGE_SIZE)
-const {
-  currentPage: userKeysCurrentPage,
-  pageSize: userKeysPageSize,
-  currentCursor: userKeysCurrentCursor,
-  reset: resetUserKeysPagination,
-  goToNext: goToNextUserKeysPage,
-  goToPrevious: goToPreviousUserKeysPage
-} = useCursorPagination(DEFAULT_USER_KEY_PAGE_SIZE)
-const userKeysHasMore = ref(false)
-const userKeysNextCursor = ref<string | null | undefined>(undefined)
 const {
   data: usersPage,
   loading,
@@ -174,10 +161,6 @@ async function loadUsers() {
   })
 }
 
-function resetUsersPagination(page = 1) {
-  resetUsersCursorPagination(page)
-}
-
 function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
   if (!isCreditRequired.value) return t('unlimitedCredit')
   if (row.available_micro_usd <= 0) return t('creditDepleted')
@@ -199,15 +182,6 @@ function accountBalanceTooltip(row: CreditBalance) {
     `${t('accountBalance')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
     `${t('reservedBalance')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
     `${t('availableBalance')}: ${formatMicroUsd(row.available_micro_usd, 2)}`
-  ].join('\n')
-}
-
-function creditTooltip(row: CreditBalance) {
-  if (!isCreditRequired.value) return t('creditUnlimitedTooltip')
-  return [
-    `${t('totalCredit')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
-    `${t('reservedCredit')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
-    `${t('remainingCredit')}: ${formatMicroUsd(row.available_micro_usd, 2)}`
   ].join('\n')
 }
 
@@ -245,29 +219,27 @@ function userRowClassName({ row }: { row: User }) {
   return row.status === 'disabled' ? 'user-row-is-disabled' : ''
 }
 
+function fillUserForm(row?: User) {
+  Object.assign(userForm, {
+    email: row?.email ?? '',
+    username: row?.username ?? '',
+    password: '',
+    status: row?.status ?? 'enabled',
+    userGroupId: row?.user_group_id ?? defaultUserGroupId.value
+  })
+}
+
 function openCreateDialog() {
   selectedUser.value = null
   userDialogMode.value = 'create'
-  Object.assign(userForm, {
-    email: '',
-    username: '',
-    password: '',
-    status: 'enabled',
-    userGroupId: defaultUserGroupId.value
-  })
+  fillUserForm()
   userDialogVisible.value = true
 }
 
 function openEditDialog(row: User) {
   selectedUser.value = row
   userDialogMode.value = 'edit'
-  Object.assign(userForm, {
-    email: row.email,
-    username: row.username ?? '',
-    password: '',
-    status: row.status,
-    userGroupId: row.user_group_id
-  })
+  fillUserForm(row)
   userDialogVisible.value = true
 }
 
@@ -351,7 +323,6 @@ async function openUserKeysDialog(row: User) {
   selectedUser.value = row
   userKeysDialogVisible.value = true
   selectedUserKeys.value = []
-  resetUserKeysPagination()
   await withUserKeysLoading(loadSelectedUserKeys)
 }
 
@@ -441,7 +412,7 @@ async function confirmDeleteUser(row: User) {
 }
 
 async function searchUsers() {
-  resetUsersPagination()
+  resetUsersCursorPagination()
   await reload()
 }
 
@@ -458,7 +429,7 @@ async function previousUsersPage() {
 
 async function handleUsersPageSizeChange(size: number) {
   usersPageSize.value = size
-  resetUsersPagination()
+  resetUsersCursorPagination()
   await reload()
 }
 
@@ -492,12 +463,9 @@ async function loadSelectedUserKeys() {
   if (!selectedUser.value) return
   const page = await getUserKeys({
     userId: selectedUser.value.id,
-    limit: userKeysPageSize.value,
-    cursor: userKeysCurrentCursor.value
+    limit: USER_KEY_DIALOG_LIMIT
   })
   selectedUserKeys.value = page.items
-  userKeysHasMore.value = Boolean(page.has_more)
-  userKeysNextCursor.value = page.next_cursor
 }
 
 async function withUserKeysLoading(task: () => Promise<void>) {
@@ -509,17 +477,6 @@ async function withUserKeysLoading(task: () => Promise<void>) {
   } finally {
     userKeysLoading.value = false
   }
-}
-
-async function nextUserKeysPage() {
-  if (!userKeysHasMore.value || !userKeysNextCursor.value) return
-  goToNextUserKeysPage(userKeysNextCursor.value)
-  await withUserKeysLoading(loadSelectedUserKeys)
-}
-
-async function previousUserKeysPage() {
-  if (!goToPreviousUserKeysPage()) return
-  await withUserKeysLoading(loadSelectedUserKeys)
 }
 
 async function loadUserGroups() {
@@ -617,23 +574,21 @@ onMounted(() => {
         stripe
       >
         <el-table-column prop="id" label="ID" width="76" align="right" header-align="right" />
-        <el-table-column prop="email" :label="t('email')" min-width="220">
+        <el-table-column prop="username" :label="t('username')" min-width="130">
           <template #default="{ row }">
             <span class="user-email-cell">
               <span class="user-avatar">
-                <el-icon><UserFilled /></el-icon>
+                <el-icon><UserIcon /></el-icon>
               </span>
-              <span class="user-email-stack">
-                <span class="user-email-text">{{ row.email }}</span>
+              <span class="user-username-text" :class="{ 'is-empty': !row.username }">
+                {{ row.username || '-' }}
               </span>
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="username" :label="t('username')" min-width="130">
+        <el-table-column prop="email" :label="t('email')" min-width="220">
           <template #default="{ row }">
-            <span class="user-username-text" :class="{ 'is-empty': !row.username }">
-              {{ row.username || '-' }}
-            </span>
+            <span class="user-email-text">{{ row.email }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('userGroup')" min-width="130">
@@ -812,12 +767,18 @@ onMounted(() => {
           @submit.prevent="submitUserDialog"
         >
           <el-form-item class="user-dialog-field is-wide" :label="t('email')">
-            <el-input v-model="userForm.email" :prefix-icon="Message" type="email" />
+            <el-input
+              v-model="userForm.email"
+              :placeholder="t('emailPlaceholder')"
+              :prefix-icon="Message"
+              type="email"
+            />
           </el-form-item>
           <el-form-item class="user-dialog-field is-wide" :label="t('username')">
             <el-input
               v-model="userForm.username"
               maxlength="80"
+              :placeholder="t('usernamePlaceholder')"
               :prefix-icon="UserIcon"
               show-word-limit
             />
@@ -830,6 +791,7 @@ onMounted(() => {
             <el-input
               v-model="userForm.password"
               autocomplete="new-password"
+              :placeholder="t('loginPasswordPlaceholder')"
               :prefix-icon="Lock"
               show-password
               type="password"
@@ -869,7 +831,7 @@ onMounted(() => {
     <el-dialog
       v-model="userKeysDialogVisible"
       class="user-admin-dialog user-keys-dialog"
-      :title="t('userRelatedApiKeys')"
+      :title="t('userPassword')"
       width="860px"
     >
       <div class="user-dialog-body user-keys-dialog-body">
@@ -881,9 +843,6 @@ onMounted(() => {
             row-key="id"
             stripe
           >
-            <el-table-column :label="t('name')" min-width="112">
-              <template #default="{ row }">{{ row.name }}</template>
-            </el-table-column>
             <el-table-column :label="t('apiKey')" min-width="220">
               <template #default="{ row }">
                 <div class="user-key-cell">
@@ -897,6 +856,11 @@ onMounted(() => {
                     />
                   </el-tooltip>
                 </div>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('projectName')" min-width="128">
+              <template #default="{ row }">
+                <span class="user-key-project-name">{{ row.project_name }}</span>
               </template>
             </el-table-column>
             <el-table-column
@@ -931,23 +895,6 @@ onMounted(() => {
               <el-empty :description="t('noApiKeys')" />
             </template>
           </el-table>
-        </div>
-
-        <div class="admin-pagination-bar user-key-pagination">
-          <div class="admin-pagination-controls">
-            <span class="admin-result-count">{{ t('currentPage') }} {{ userKeysCurrentPage }}</span>
-            <div class="admin-page-buttons">
-              <el-button
-                :disabled="userKeysCurrentPage <= 1 || userKeysLoading"
-                @click="previousUserKeysPage"
-              >
-                {{ t('previousPage') }}
-              </el-button>
-              <el-button :disabled="!userKeysHasMore || userKeysLoading" @click="nextUserKeysPage">
-                {{ t('nextPage') }}
-              </el-button>
-            </div>
-          </div>
         </div>
       </div>
     </el-dialog>
@@ -1083,10 +1030,6 @@ onMounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.user-dialog-form.is-single {
-  grid-template-columns: 1fr;
-}
-
 .user-create-form {
   grid-template-columns: 1fr;
 }
@@ -1142,8 +1085,18 @@ onMounted(() => {
   min-width: 100%;
 }
 
-.user-key-pagination {
-  padding-top: 2px;
+.user-key-project-name {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.user-email-text,
+.user-username-text,
+.user-key-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-edit-select {
@@ -1171,30 +1124,18 @@ onMounted(() => {
   width: 30px;
 }
 
-.user-email-stack {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
 .user-email-text {
   color: #1d2129;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .user-username-text {
   color: #667085;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 650;
   line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .user-username-text.is-empty {
@@ -1350,13 +1291,16 @@ onMounted(() => {
 }
 
 .user-table.admin-table.el-table :deep(.el-table__body .cell .user-email-text) {
-  font-weight: 650;
+  font-weight: 400;
 }
 
-.user-table.admin-table.el-table :deep(.el-table__body .cell .user-username-text),
 .user-table.admin-table.el-table :deep(.el-table__body .cell .user-key-count-text),
 .user-table.admin-table.el-table :deep(.el-table__body .cell .user-time-cell) {
   font-weight: 500;
+}
+
+.user-table.admin-table.el-table :deep(.el-table__body .cell .user-username-text) {
+  font-weight: 650;
 }
 
 .user-table.admin-table.el-table :deep(.el-table__body .cell .user-username-text.is-empty) {
@@ -1447,21 +1391,6 @@ onMounted(() => {
 
   .user-key-detail-panel {
     max-height: 54dvh;
-  }
-
-  .user-key-pagination {
-    align-items: stretch;
-  }
-
-  .user-key-pagination .admin-pagination-controls,
-  .user-key-pagination .admin-page-buttons {
-    justify-content: stretch;
-    width: 100%;
-  }
-
-  .user-key-pagination .admin-page-buttons .el-button {
-    flex: 1 1 0;
-    min-width: 0;
   }
 
   :global(.user-admin-dialog .el-dialog__header) {

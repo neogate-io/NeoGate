@@ -209,16 +209,27 @@ function memberRoleText(role: ProjectMember['role']) {
   return t(keys[role])
 }
 
+function userSelectLabel(user: User) {
+  return user.username ? `${user.username} / ${user.email}` : user.email
+}
+
 const editableMemberRoleOptions = computed<Array<{ label: string; value: EditableProjectMemberRole }>>(() => [
   { label: memberRoleText('admin'), value: 'admin' },
-  { label: memberRoleText('member'), value: 'member' },
-  { label: memberRoleText('viewer'), value: 'viewer' }
+  { label: memberRoleText('member'), value: 'member' }
 ])
 
 function projectKeyOwnerText(row: UserKey) {
   if (row.owner_user_id == null) return t('sharedProjectKey')
   const member = selectedMembers.value.find((item) => item.user_id === row.owner_user_id)
-  return member ? member.user_email : `ID ${row.owner_user_id}`
+  return member ? projectMemberDisplayName(member) : `ID ${row.owner_user_id}`
+}
+
+function projectMemberDisplayName(member: ProjectMember) {
+  return member.user_username || member.user_email
+}
+
+function projectMemberSelectLabel(member: ProjectMember) {
+  return member.user_username ? `${member.user_username} / ${member.user_email}` : member.user_email
 }
 
 function openCreateDialog() {
@@ -379,14 +390,14 @@ async function copyApiKeyValue(value: string) {
 }
 
 async function searchOwnerUsers(query: string) {
-  const email = query.trim()
-  if (!email) {
+  const search = query.trim()
+  if (!search) {
     ownerOptions.value = []
     return
   }
   ownerSearchLoading.value = true
   try {
-    const page = await getUsers({ email, limit: 20 })
+    const page = await getUsers({ search, limit: 20 })
     ownerOptions.value = page.items
   } catch (err) {
     ElMessage.error(readError(err))
@@ -396,14 +407,14 @@ async function searchOwnerUsers(query: string) {
 }
 
 async function searchMemberUsers(query: string) {
-  const email = query.trim()
-  if (!email) {
+  const search = query.trim()
+  if (!search) {
     memberUserOptions.value = []
     return
   }
   memberUserSearchLoading.value = true
   try {
-    const page = await getUsers({ email, limit: 20 })
+    const page = await getUsers({ search, limit: 20 })
     memberUserOptions.value = page.items
   } catch (err) {
     ElMessage.error(readError(err))
@@ -632,7 +643,7 @@ async function handlePageSizeChange(size: number) {
         stripe
       >
         <el-table-column prop="id" label="ID" width="76" align="right" header-align="right" />
-        <el-table-column prop="name" :label="t('project')" min-width="220">
+        <el-table-column prop="name" :label="t('projectName')" min-width="220">
           <template #default="{ row }">
             <span class="project-name-cell">
               <span class="project-avatar">
@@ -640,11 +651,10 @@ async function handlePageSizeChange(size: number) {
               </span>
               <span class="project-name-stack">
                 <span class="project-name-text">{{ row.name }}</span>
-                <span class="project-meta-line">
-                  <el-tag v-if="row.is_default" size="small" effect="plain">
+                <span v-if="row.is_default" class="project-meta-line">
+                  <el-tag size="small" effect="plain">
                     {{ t('defaultProject') }}
                   </el-tag>
-                  <span>{{ row.user_key_count.toLocaleString(locale) }} {{ t('apiKey') }}</span>
                 </span>
               </span>
             </span>
@@ -654,8 +664,28 @@ async function handlePageSizeChange(size: number) {
           <template #default="{ row }">
             <span class="project-owner-cell">
               <el-icon><UserFilled /></el-icon>
-              <span>{{ row.owner_email }}</span>
+              <span>{{ row.admin_display_names.length ? row.admin_display_names.join(', ') : '-' }}</span>
             </span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('projectMembers')"
+          min-width="96"
+          align="center"
+          header-align="center"
+        >
+          <template #default="{ row }">
+            <span class="project-count-cell">{{ row.member_count.toLocaleString(locale) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('userApiKeyCount')"
+          min-width="96"
+          align="center"
+          header-align="center"
+        >
+          <template #default="{ row }">
+            <span class="project-count-cell">{{ row.user_key_count.toLocaleString(locale) }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -672,17 +702,17 @@ async function handlePageSizeChange(size: number) {
             </el-tooltip>
           </template>
         </el-table-column>
+        <el-table-column :label="t('createdAt')" min-width="160">
+          <template #default="{ row }">
+            <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column
-          :label="t('projectMembers')"
-          min-width="96"
+          :label="t('projectStatus')"
+          min-width="128"
           align="center"
           header-align="center"
         >
-          <template #default="{ row }">
-            <span class="project-count-cell">{{ row.member_count.toLocaleString(locale) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('status')" min-width="128" align="center" header-align="center">
           <template #default="{ row }">
             <span
               class="channel-runtime-status user-status-tag"
@@ -693,28 +723,23 @@ async function handlePageSizeChange(size: number) {
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('createdAt')" min-width="160">
-          <template #default="{ row }">
-            <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
-          </template>
-        </el-table-column>
         <el-table-column :label="t('actions')" width="184" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
-              <AdminActionTooltip :content="t('projectApiKeys')">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  :aria-label="t('projectApiKeys')"
-                  :icon="Key"
-                  @click="openProjectKeysDialog(row)"
-                />
-              </AdminActionTooltip>
               <AdminActionTooltip :content="t('viewProjectMembers')">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewProjectMembers')"
                   :icon="UserIcon"
                   @click="openMembersDialog(row)"
+                />
+              </AdminActionTooltip>
+              <AdminActionTooltip :content="t('projectApiKeys')">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  :aria-label="t('projectApiKeys')"
+                  :icon="Key"
+                  @click="openProjectKeysDialog(row)"
                 />
               </AdminActionTooltip>
               <AdminActionTooltip :content="t('edit')">
@@ -739,7 +764,7 @@ async function handlePageSizeChange(size: number) {
                     </el-dropdown-item>
                     <el-dropdown-item
                       class="is-danger"
-                      :disabled="row.is_default || row.user_key_count > 0 || deletingProjectId === row.id"
+                      :disabled="row.is_default || deletingProjectId === row.id"
                       @click="confirmDeleteProject(row)"
                     >
                       <el-icon><Delete /></el-icon>
@@ -807,7 +832,7 @@ async function handlePageSizeChange(size: number) {
           @submit.prevent="submitCreateProject"
         >
           <el-form-item class="project-create-field" :label="t('projectName')">
-            <el-input v-model="createForm.name" autofocus />
+            <el-input v-model="createForm.name" :placeholder="t('projectNamePlaceholder')" autofocus />
           </el-form-item>
           <div class="project-create-field-row">
             <el-form-item class="project-create-field" :label="t('projectOwner')">
@@ -824,18 +849,18 @@ async function handlePageSizeChange(size: number) {
                 <el-option
                   v-for="user in ownerOptions"
                   :key="user.id"
-                  :label="user.email"
+                  :label="userSelectLabel(user)"
                   :value="user.id"
                   :disabled="user.status === 'disabled'"
                 >
                   <span class="project-owner-option">
                     <span>{{ user.email }}</span>
-                    <span>ID {{ user.id }}</span>
+                    <span>{{ user.username || `ID ${user.id}` }}</span>
                   </span>
                 </el-option>
               </el-select>
             </el-form-item>
-            <el-form-item class="project-create-field" :label="t('status')">
+            <el-form-item class="project-create-field" :label="t('projectStatus')">
               <el-select v-model="createForm.status" class="project-create-status-select">
                 <el-option :label="t('enabled')" value="enabled" />
                 <el-option :label="t('disabled')" value="disabled" />
@@ -863,9 +888,9 @@ async function handlePageSizeChange(size: number) {
       <div class="user-dialog-body">
         <el-form class="user-dialog-form" label-position="top" @submit.prevent="submitEditProject">
           <el-form-item class="user-dialog-field is-wide" :label="t('projectName')">
-            <el-input v-model="editForm.name" />
+            <el-input v-model="editForm.name" :placeholder="t('projectNamePlaceholder')" />
           </el-form-item>
-          <el-form-item class="user-dialog-field" :label="t('status')">
+          <el-form-item class="user-dialog-field" :label="t('projectStatus')">
             <el-select v-model="editForm.status" class="user-edit-select">
               <el-option :label="t('enabled')" value="enabled" />
               <el-option :label="t('disabled')" value="disabled" />
@@ -914,13 +939,13 @@ async function handlePageSizeChange(size: number) {
               <el-option
                 v-for="member in selectedMembers"
                 :key="member.user_id"
-                :label="member.user_email"
+                :label="projectMemberSelectLabel(member)"
                 :value="member.user_id"
                 :disabled="member.user_status === 'disabled'"
               >
                 <span class="project-owner-option">
-                  <span>{{ member.user_email }}</span>
-                  <span>{{ memberRoleText(member.role) }}</span>
+                  <span>{{ projectMemberDisplayName(member) }}</span>
+                  <span>{{ member.user_username ? member.user_email : memberRoleText(member.role) }}</span>
                 </span>
               </el-option>
             </el-select>
@@ -1051,9 +1076,25 @@ async function handlePageSizeChange(size: number) {
       :title="t('projectMembers')"
       width="760px"
     >
-      <div class="service-table-panel project-member-panel">
+      <div class="project-keys-dialog-body project-member-panel">
         <el-form class="project-member-add-form" @submit.prevent="submitAddProjectMember">
-          <el-form-item :label="t('projectMember')" class="project-member-user-field">
+          <el-form-item
+            :label="t('memberRole')"
+            class="project-create-field project-member-role-field"
+          >
+            <el-select v-model="memberForm.role">
+              <el-option
+                v-for="option in editableMemberRoleOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            :label="t('projectMember')"
+            class="project-create-field project-member-user-field"
+          >
             <el-select
               v-model="memberForm.userId"
               filterable
@@ -1066,19 +1107,14 @@ async function handlePageSizeChange(size: number) {
               <el-option
                 v-for="user in memberUserOptions"
                 :key="user.id"
-                :label="user.email"
+                :label="userSelectLabel(user)"
                 :value="user.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="t('memberRole')" class="project-member-role-field">
-            <el-select v-model="memberForm.role">
-              <el-option
-                v-for="option in editableMemberRoleOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
+              >
+                <span class="project-owner-option">
+                  <span>{{ user.username || user.email }}</span>
+                  <span>{{ user.username ? user.email : `ID ${user.id}` }}</span>
+                </span>
+              </el-option>
             </el-select>
           </el-form-item>
           <el-form-item class="project-member-add-action">
@@ -1093,78 +1129,79 @@ async function handlePageSizeChange(size: number) {
             </el-button>
           </el-form-item>
         </el-form>
-        <el-table
-          v-loading="membersLoading"
-          class="admin-table service-table"
-          :data="selectedMembers"
-          row-key="id"
-          stripe
-        >
-          <el-table-column :label="t('email')" min-width="220">
-            <template #default="{ row }">
-              <span class="project-owner-cell">
-                <el-icon><UserFilled /></el-icon>
-                <span>{{ row.user_email }}</span>
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('memberRole')" width="150">
-            <template #default="{ row }">
-              <el-tag v-if="row.role === 'owner'" effect="plain">{{ memberRoleText(row.role) }}</el-tag>
-              <el-select
-                v-else
-                class="project-member-role-select"
-                :model-value="row.role"
-                size="small"
-                :loading="updatingMemberId === row.id"
-                @change="(role: EditableProjectMemberRole) => changeProjectMemberRole(row, role)"
-              >
-                <el-option
-                  v-for="option in editableMemberRoleOptions"
-                  :key="option.value"
-                  :label="option.label"
-                  :value="option.value"
-                />
-              </el-select>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('status')" width="112" align="center" header-align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.user_status === 'enabled' ? 'success' : 'info'" effect="plain">
-                {{ row.user_status === 'enabled' ? t('enabled') : t('disabled') }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('createdAt')" min-width="140">
-            <template #default="{ row }">
-              <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            :label="t('actions')"
-            width="96"
-            align="center"
-            header-align="center"
-            fixed="right"
+        <div class="service-table-panel project-member-detail-panel">
+          <el-table
+            v-loading="membersLoading"
+            class="admin-table service-table"
+            :data="selectedMembers"
+            row-key="id"
+            stripe
           >
-            <template #default="{ row }">
-              <AdminActionTooltip v-if="row.role !== 'owner'" :content="t('delete')">
-                <el-button
-                  class="admin-icon-action danger"
-                  :aria-label="t('delete')"
-                  :icon="Delete"
-                  :loading="deletingMemberId === row.id"
-                  circle
-                  text
-                  @click="confirmDeleteProjectMember(row)"
-                />
-              </AdminActionTooltip>
+            <el-table-column :label="t('username')" min-width="220">
+              <template #default="{ row }">
+                <span class="project-owner-cell">
+                  <el-icon><UserFilled /></el-icon>
+                  <span>{{ projectMemberDisplayName(row) }}</span>
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('memberRole')" width="150">
+              <template #default="{ row }">
+                <el-tag v-if="row.role === 'owner'" class="static-state-tag" effect="plain">
+                  {{ memberRoleText(row.role) }}
+                </el-tag>
+                <el-select
+                  v-else
+                  class="project-member-role-select"
+                  :model-value="row.role"
+                  size="small"
+                  :loading="updatingMemberId === row.id"
+                  @change="(role: EditableProjectMemberRole) => changeProjectMemberRole(row, role)"
+                >
+                  <el-option
+                    v-for="option in editableMemberRoleOptions"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('status')" width="92" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-tag
+                  class="static-state-tag"
+                  :type="row.user_status === 'enabled' ? 'success' : 'info'"
+                >
+                  {{ row.user_status === 'enabled' ? t('enabled') : t('disabled') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('createdAt')" min-width="126">
+              <template #default="{ row }">
+                <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('actions')" width="96" align="center" header-align="center">
+              <template #default="{ row }">
+                <AdminActionTooltip v-if="row.role !== 'owner'" :content="t('delete')">
+                  <el-button
+                    class="admin-icon-action danger"
+                    :aria-label="t('delete')"
+                    :icon="Delete"
+                    :loading="deletingMemberId === row.id"
+                    circle
+                    text
+                    @click="confirmDeleteProjectMember(row)"
+                  />
+                </AdminActionTooltip>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty :description="t('noProjectMembers')" />
             </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noProjectMembers')" />
-          </template>
-        </el-table>
+          </el-table>
+        </div>
       </div>
     </el-dialog>
   </section>
@@ -1366,7 +1403,7 @@ async function handlePageSizeChange(size: number) {
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(190px, 240px) minmax(260px, 1fr) auto;
+  grid-template-columns: 168px minmax(260px, 1fr) auto;
 }
 
 .project-key-create-form .project-create-field {
@@ -1379,6 +1416,11 @@ async function handlePageSizeChange(size: number) {
 
 .project-key-create-action :deep(.el-form-item__content) {
   align-items: end;
+}
+
+.project-key-create-action .admin-action-button {
+  height: 40px;
+  min-height: 40px;
 }
 
 .project-created-key {
@@ -1443,15 +1485,18 @@ async function handlePageSizeChange(size: number) {
 .project-member-panel {
   display: grid;
   gap: 14px;
-  max-height: min(58dvh, 520px);
+}
+
+.project-member-detail-panel {
+  max-height: min(52dvh, 480px);
 }
 
 .project-member-add-form {
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(220px, 1fr) 150px max-content;
-  padding: 4px 4px 0;
+  grid-template-columns: 116px 260px auto;
+  justify-content: start;
 }
 
 .project-member-add-form :deep(.el-form-item) {
@@ -1469,7 +1514,9 @@ async function handlePageSizeChange(size: number) {
 }
 
 .project-member-add-action .admin-action-button {
+  height: 40px;
   min-width: 112px;
+  min-height: 40px;
 }
 
 :global(.project-members-dialog .el-tag),

@@ -14,7 +14,7 @@ use crate::{
     email::{smtp_config_error, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
-    policy::{registration_policy, ServiceMode},
+    policy::{registration_policy, service_mode, ServiceMode},
     project, AppState,
 };
 use axum::{
@@ -75,6 +75,7 @@ pub struct UserKeyRecord {
     pub id: DbId,
     pub user_id: DbId,
     pub project_id: DbId,
+    pub project_name: String,
     pub owner_user_id: Option<DbId>,
     pub name: String,
     pub key: String,
@@ -163,6 +164,7 @@ pub struct UpdateUserKeyRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ListUsersQuery {
+    pub search: Option<String>,
     pub email: Option<String>,
     pub api_key: Option<String>,
     pub limit: Option<i64>,
@@ -217,8 +219,9 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     validate_user_status(&req.status)?;
     validate_user_password_input(&req.password)?;
     let email = normalize_email(&req.email)?;
-    let username = normalize_optional_username(req.username.as_deref())?;
     let password_hash = hash_user_password(&req.password, &state.config.admin_token_secret);
+    let service_mode = service_mode(state).await?;
+    let username = create_user_username(req.username.as_deref(), &email, service_mode)?;
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         r#"
@@ -234,7 +237,9 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     .fetch_one(&mut *tx)
     .await?;
     let user_id: DbId = row.try_get("id")?;
-    project::create_default_project_for_user(&mut tx, user_id).await?;
+    if service_mode == ServiceMode::Paid {
+        project::create_default_project_for_user(&mut tx, user_id).await?;
+    }
     tx.commit().await?;
     get_user(state, user_id).await
 }
@@ -242,6 +247,12 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
 pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<UserPage> {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
+    let user_search = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
     let email = query
         .email
         .as_deref()
@@ -276,9 +287,21 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
     );
 
     let mut has_where = false;
+    if let Some(search) = user_search {
+        let pattern = format!("%{search}%");
+        query_builder
+            .push(" WHERE (u.email::TEXT ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR u.username ILIKE ")
+            .push_bind(pattern)
+            .push(")");
+        has_where = true;
+    }
+
     if let Some(email) = email {
         query_builder
-            .push(" WHERE u.email::TEXT ILIKE ")
+            .push(if has_where { " AND " } else { " WHERE " })
+            .push("u.email::TEXT ILIKE ")
             .push_bind(format!("%{email}%"));
         has_where = true;
     }
@@ -586,7 +609,7 @@ pub async fn claim_public_user_key(
         )
     };
     if created_user {
-        let project_id = project::default_project_for_user(&mut tx, user_id).await?;
+        let project_id = project::create_default_project_for_user(&mut tx, user_id).await?;
         let credit_account = account::owner_credit_account_for_update(
             &mut tx,
             CreditAccountType::Project,
@@ -675,11 +698,13 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
     let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
     let mut query_builder = sqlx::QueryBuilder::new(
         "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
+                p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
+         JOIN project p ON p.id = uk.project_id
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id",
     );
 
@@ -819,11 +844,13 @@ pub async fn delete_user_key(state: &AppState, id: DbId) -> AppResult<()> {
 async fn get_user_key(state: &AppState, id: DbId) -> AppResult<UserKeyRecord> {
     let row = sqlx::query(
         "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
+                p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
+         JOIN project p ON p.id = uk.project_id
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.id = $1",
     )
@@ -881,6 +908,21 @@ fn normalize_optional_username(username: Option<&str>) -> AppResult<Option<Strin
         .filter(|value| !value.is_empty())
         .map(normalize_username)
         .transpose()
+}
+
+fn create_user_username(
+    username: Option<&str>,
+    email: &str,
+    service_mode: ServiceMode,
+) -> AppResult<Option<String>> {
+    let username = normalize_optional_username(username)?;
+    if username.is_some() || service_mode != ServiceMode::Internal {
+        return Ok(username);
+    }
+
+    let email_prefix = email.split('@').next().unwrap_or(email);
+    let derived = email_prefix.chars().take(80).collect::<String>();
+    Ok(Some(normalize_username(&derived)?))
 }
 
 fn normalize_user_key_name(name: &str) -> AppResult<String> {
@@ -1001,9 +1043,7 @@ async fn create_user_by_email_with_status(
     .bind(status)
     .fetch_one(&mut **tx)
     .await?;
-    let user_id: DbId = row.try_get("id")?;
-    project::create_default_project_for_user(tx, user_id).await?;
-    Ok(user_id)
+    Ok(row.try_get("id")?)
 }
 
 pub async fn adjust_credit(
@@ -1278,6 +1318,7 @@ pub fn user_key_from_row(
         id,
         user_id: row.try_get("user_id")?,
         project_id: row.try_get("project_id")?,
+        project_name: row.try_get("project_name")?,
         owner_user_id: row.try_get("owner_user_id")?,
         name: row.try_get("name")?,
         key: state.secrets.plaintext(id, &secret_ciphertext)?,

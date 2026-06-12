@@ -4,7 +4,7 @@ use sqlx::{QueryBuilder, Row};
 
 use crate::{
     auth::{generate_user_key, key_prefix},
-    billing::{account, CreditAccountType},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart},
     error::{AppError, AppResult},
     id::DbId,
     AppState,
@@ -18,6 +18,8 @@ pub struct ProjectRecord {
     pub name: String,
     pub owner_user_id: DbId,
     pub owner_email: String,
+    pub owner_username: Option<String>,
+    pub admin_display_names: Vec<String>,
     pub status: String,
     pub is_default: bool,
     pub member_count: i64,
@@ -35,6 +37,7 @@ pub struct ProjectMemberRecord {
     pub project_id: DbId,
     pub user_id: DbId,
     pub user_email: String,
+    pub user_username: Option<String>,
     pub role: String,
     pub user_status: String,
     pub created_at: DateTime<Utc>,
@@ -124,17 +127,28 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
         r#"WITH page_projects AS (
                SELECT p.id, p.name, p.owner_user_id, p.status, p.is_default,
                       p.created_at, p.updated_at
-               FROM project p
-               JOIN "user" owner ON owner.id = p.owner_user_id"#,
+               FROM project p"#,
     );
 
-    let mut has_where = false;
+    let mut has_where = true;
+    query_builder.push(" WHERE p.deleted_at IS NULL");
     if let Some(search) = search {
         query_builder
-            .push(" WHERE (p.name ILIKE ")
+            .push(" AND (p.name ILIKE ")
             .push_bind(format!("%{search}%"))
-            .push(" OR owner.email::TEXT ILIKE ")
+            .push(
+                r#" OR EXISTS (
+                    SELECT 1
+                    FROM project_member admin_member
+                    JOIN "user" admin_user ON admin_user.id = admin_member.user_id
+                    WHERE admin_member.project_id = p.id
+                      AND admin_member.role = 'admin'
+                      AND (admin_user.email::TEXT ILIKE "#,
+            )
             .push_bind(format!("%{search}%"))
+            .push(" OR admin_user.username ILIKE ")
+            .push_bind(format!("%{search}%"))
+            .push("))")
             .push(")");
         has_where = true;
     }
@@ -163,7 +177,9 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
         .push(
             r#"
            )
-           SELECT p.id, p.name, p.owner_user_id, owner.email AS owner_email,
+           SELECT p.id, p.name, p.owner_user_id,
+                  owner.email AS owner_email, owner.username AS owner_username,
+                  COALESCE(admins.admin_display_names, ARRAY[]::TEXT[]) AS admin_display_names,
                   p.status, p.is_default,
                   COALESCE(pm.member_count, 0) AS member_count,
                   COALESCE(uk.user_key_count, 0) AS user_key_count,
@@ -173,6 +189,16 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
            FROM page_projects p
            JOIN "user" owner ON owner.id = p.owner_user_id
            LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+           LEFT JOIN LATERAL (
+               SELECT array_agg(
+                          COALESCE(NULLIF(admin_user.username, ''), admin_user.email::TEXT)
+                          ORDER BY admin_member.created_at ASC, admin_user.id ASC
+                      ) AS admin_display_names
+               FROM project_member admin_member
+               JOIN "user" admin_user ON admin_user.id = admin_member.user_id
+               WHERE admin_member.project_id = p.id
+                 AND admin_member.role = 'admin'
+           ) admins ON TRUE
            LEFT JOIN LATERAL (
                SELECT count(*) AS member_count
                FROM project_member member
@@ -227,9 +253,9 @@ pub async fn create_project(
     let project_id: DbId = row.try_get("id")?;
     sqlx::query(
         "INSERT INTO project_member (project_id, user_id, role)
-         VALUES ($1, $2, 'owner')
+         VALUES ($1, $2, 'admin')
          ON CONFLICT (project_id, user_id)
-         DO UPDATE SET role = 'owner', updated_at = now()",
+         DO UPDATE SET role = 'admin', updated_at = now()",
     )
     .bind(project_id)
     .bind(req.owner_user_id)
@@ -274,10 +300,9 @@ pub async fn update_project(
 
 pub async fn delete_project(state: &AppState, id: DbId) -> AppResult<()> {
     let row = sqlx::query(
-        "SELECT p.is_default,
-                EXISTS(SELECT 1 FROM user_key uk WHERE uk.project_id = p.id) AS has_keys
+        "SELECT p.is_default
          FROM project p
-         WHERE p.id = $1",
+         WHERE p.id = $1 AND p.deleted_at IS NULL",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)
@@ -288,15 +313,24 @@ pub async fn delete_project(state: &AppState, id: DbId) -> AppResult<()> {
             "default project cannot be deleted".to_string(),
         ));
     }
-    if row.try_get::<bool, _>("has_keys")? {
-        return Err(AppError::BadRequest(
-            "project with api keys cannot be deleted".to_string(),
-        ));
-    }
-    let result = sqlx::query("DELETE FROM project WHERE id = $1")
+
+    recover_project_hot_credit_accounts(state, id).await?;
+    invalidate_project_keys(state, id).await?;
+
+    let mut tx = state.db.pool.begin().await?;
+    sqlx::query("DELETE FROM project_member WHERE project_id = $1")
         .bind(id)
-        .execute(&state.db.pool)
+        .execute(&mut *tx)
         .await?;
+    let result = sqlx::query(
+        "UPDATE project
+         SET status = 'disabled', deleted_at = now(), updated_at = now()
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
@@ -308,7 +342,8 @@ pub async fn list_project_members(
     project_id: DbId,
 ) -> AppResult<Vec<ProjectMemberRecord>> {
     let rows = sqlx::query(
-        "SELECT pm.id, pm.project_id, pm.user_id, u.email AS user_email,
+        "SELECT pm.id, pm.project_id, pm.user_id,
+                u.email AS user_email, u.username AS user_username,
                 pm.role, u.status AS user_status, pm.created_at, pm.updated_at
          FROM project_member pm
          JOIN \"user\" u ON u.id = pm.user_id
@@ -507,11 +542,13 @@ async fn get_project_user_key(
 ) -> AppResult<super::user::UserKeyRecord> {
     let row = sqlx::query(
         "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
+                p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
                 uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
+         JOIN project p ON p.id = uk.project_id
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.id = $1",
     )
@@ -524,7 +561,9 @@ async fn get_project_user_key(
 
 async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
     let row = sqlx::query(
-        "SELECT p.id, p.name, p.owner_user_id, owner.email AS owner_email,
+        "SELECT p.id, p.name, p.owner_user_id,
+                owner.email AS owner_email, owner.username AS owner_username,
+                COALESCE(admins.admin_display_names, ARRAY[]::TEXT[]) AS admin_display_names,
                 p.status, p.is_default,
                 COALESCE(pm.member_count, 0) AS member_count,
                 COALESCE(uk.user_key_count, 0) AS user_key_count,
@@ -534,6 +573,16 @@ async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
          FROM project p
          JOIN \"user\" owner ON owner.id = p.owner_user_id
          LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+         LEFT JOIN LATERAL (
+             SELECT array_agg(
+                        COALESCE(NULLIF(admin_user.username, ''), admin_user.email::TEXT)
+                        ORDER BY admin_member.created_at ASC, admin_user.id ASC
+                    ) AS admin_display_names
+             FROM project_member admin_member
+             JOIN \"user\" admin_user ON admin_user.id = admin_member.user_id
+             WHERE admin_member.project_id = p.id
+               AND admin_member.role = 'admin'
+         ) admins ON TRUE
          LEFT JOIN LATERAL (
              SELECT count(*) AS member_count
              FROM project_member member
@@ -559,7 +608,8 @@ async fn get_project_member(
     member_id: DbId,
 ) -> AppResult<ProjectMemberRecord> {
     let row = sqlx::query(
-        "SELECT pm.id, pm.project_id, pm.user_id, u.email AS user_email,
+        "SELECT pm.id, pm.project_id, pm.user_id,
+                u.email AS user_email, u.username AS user_username,
                 pm.role, u.status AS user_status, pm.created_at, pm.updated_at
          FROM project_member pm
          JOIN \"user\" u ON u.id = pm.user_id
@@ -599,7 +649,7 @@ async fn ensure_user_exists_in_tx(
         .is_some();
     if !exists {
         return Err(AppError::BadRequest(
-            "owner user does not exist".to_string(),
+            "project admin user does not exist".to_string(),
         ));
     }
     Ok(())
@@ -617,6 +667,70 @@ async fn invalidate_project_keys(state: &AppState, project_id: DbId) -> AppResul
             .invalidate(state, crate::cache::InvalidationEvent::UserKey { id })
             .await;
     }
+    Ok(())
+}
+
+async fn recover_project_hot_credit_accounts(state: &AppState, project_id: DbId) -> AppResult<()> {
+    let rows = sqlx::query(
+        "SELECT w.id
+         FROM project p
+         JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+         WHERE p.id = $1
+         UNION ALL
+         SELECT w.id
+         FROM user_key uk
+         JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
+         WHERE uk.project_id = $1
+         UNION ALL
+         SELECT w.id
+         FROM user_key uk
+         JOIN user_key_model ukm ON ukm.user_key_id = uk.id
+         JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
+         WHERE uk.project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    for row in rows {
+        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
+    }
+    Ok(())
+}
+
+async fn recover_hot_credit_account(
+    state: &AppState,
+    credit_account: CreditAccountId,
+) -> AppResult<()> {
+    let mut tx = state.db.pool.begin().await?;
+    account::lock_for_update(&mut tx, &credit_account).await?;
+    let recovered = state
+        .billing
+        .drain_hot_credit_account(&credit_account)
+        .await?;
+    recover_hot_credit_in_tx(&mut tx, &recovered).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn recover_hot_credit_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    parts: &[DebitPart],
+) -> AppResult<()> {
+    let total = parts.iter().map(|part| part.amount_micro_usd).sum::<i64>();
+    if total <= 0 {
+        return Ok(());
+    }
+    let Some(credit_account) = parts.first().map(|part| &part.credit_account) else {
+        return Ok(());
+    };
+
+    account::decrement_reserved(tx, credit_account, total).await?;
+
+    for part in parts {
+        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+    }
+
     Ok(())
 }
 
@@ -692,6 +806,8 @@ fn project_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectRecord> {
         name: row.try_get("name")?,
         owner_user_id: row.try_get("owner_user_id")?,
         owner_email: row.try_get("owner_email")?,
+        owner_username: row.try_get("owner_username")?,
+        admin_display_names: row.try_get("admin_display_names")?,
         status: row.try_get("status")?,
         is_default: row.try_get("is_default")?,
         member_count: row.try_get("member_count")?,
@@ -710,6 +826,7 @@ fn project_member_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectMemb
         project_id: row.try_get("project_id")?,
         user_id: row.try_get("user_id")?,
         user_email: row.try_get("user_email")?,
+        user_username: row.try_get("user_username")?,
         role: row.try_get("role")?,
         user_status: row.try_get("user_status")?,
         created_at: row.try_get("created_at")?,

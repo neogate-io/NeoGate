@@ -32,11 +32,12 @@ import {
   type ServicePolicy
 } from '../../api/policy'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
+import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import type { ProviderRecord } from '../../types/admin'
 import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
-import { ApiError, readError, readSmtpTestError } from '../../utils/errors'
+import { ApiError, readError, readModelFetchError, readSmtpTestError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
@@ -61,6 +62,7 @@ const { t } = useLocale()
 const loading = ref(false)
 const saving = ref(false)
 const fetchingModels = ref(false)
+const modelPickerDialogOpen = ref(false)
 const configuringPrices = ref(false)
 const testingSmtp = ref(false)
 const generatingTemplate = ref(false)
@@ -75,6 +77,8 @@ const currentBusinessStep = ref<BusinessSetupStep>('admin-password')
 const includeUpstream = ref(true)
 const reviewingRuntimeConfig = ref(false)
 const runtimeDatabaseChangeEnabled = ref(false)
+const fetchedModels = ref<string[]>([])
+const selectedFetchedModels = ref<string[]>([])
 
 const bootstrapForm = reactive({
   databaseHost: 'localhost',
@@ -271,6 +275,10 @@ const passwordChecks = computed(() => [
   }
 ])
 const passwordReady = computed(() => passwordChecks.value.every((item) => item.passed))
+const hasFetchedModels = computed(() => fetchedModels.value.length > 0)
+const allFetchedModelsSelected = computed(
+  () => hasFetchedModels.value && selectedFetchedModels.value.length === fetchedModels.value.length
+)
 
 watch(
   () => setupForm.provider,
@@ -281,6 +289,8 @@ watch(
   () => setupForm.models,
   () => syncPriceRows()
 )
+
+watch(selectedFetchedModels, syncSelectedModelsToInput, { deep: true })
 
 watch(
   () => setupForm.serviceMode,
@@ -420,6 +430,9 @@ async function fetchModels() {
     ElMessage.error(t('upstreamKeyRequired'))
     return
   }
+  const shouldKeepAllSelected = allFetchedModelsSelected.value
+  const existingModels = splitCommaList(setupForm.models)
+
   fetchingModels.value = true
   try {
     const result = await fetchSetupUpstreamModels({
@@ -428,14 +441,35 @@ async function fetchModels() {
       base_url: endpoint.base_url,
       secret: setupForm.secret
     })
-    setupForm.models = result.models.join(', ')
-    syncPriceRows()
+    if (result.models.length === 0) {
+      ElMessage.warning(t('modelsFetchEmpty'))
+      return
+    }
+
+    fetchedModels.value = result.models
+    selectedFetchedModels.value =
+      shouldKeepAllSelected || existingModels.length === 0
+        ? result.models
+        : result.models.filter((model) => existingModels.includes(model))
+    syncSelectedModelsToInput()
+    modelPickerDialogOpen.value = true
     ElMessage.success(t('modelsFetched'))
   } catch (err) {
-    ElMessage.error(readError(err))
+    ElMessage.error(readModelFetchError(err, t))
   } finally {
     fetchingModels.value = false
   }
+}
+
+function toggleAllFetchedModels(checked: boolean) {
+  selectedFetchedModels.value = checked ? [...fetchedModels.value] : []
+  syncSelectedModelsToInput()
+}
+
+function syncSelectedModelsToInput() {
+  if (!hasFetchedModels.value) return
+  setupForm.models = selectedFetchedModels.value.join(', ')
+  syncPriceRows()
 }
 
 async function syncAndApplyReferencePrices() {
@@ -1438,6 +1472,14 @@ onMounted(load)
         </el-form>
       </section>
     </section>
+
+    <ModelPickerDialog
+      v-model:open="modelPickerDialogOpen"
+      v-model:selected-models="selectedFetchedModels"
+      :models="fetchedModels"
+      :all-selected="allFetchedModelsSelected"
+      @toggle-all="toggleAllFetchedModels"
+    />
   </main>
 </template>
 

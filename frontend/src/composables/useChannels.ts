@@ -29,7 +29,7 @@ import {
   withManualProvidersFirst,
   type ChannelProviderOption
 } from '../utils/channel'
-import { readError } from '../utils/errors'
+import { readError, readModelFetchError } from '../utils/errors'
 
 type Translate = (key: MessageKey) => string
 type ModelPickerTarget = {
@@ -336,7 +336,7 @@ export function useChannels(t: Translate) {
       modelPickerDialogOpen.value = true
       ElMessage.success(t('modelsFetched'))
     } catch (err) {
-      ElMessage.error(readError(err))
+      ElMessage.error(readModelFetchError(err, t))
     } finally {
       fetchingModels.value = false
     }

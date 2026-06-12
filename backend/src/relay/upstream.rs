@@ -319,7 +319,7 @@ where
                     if attempt < UPSTREAM_MAX_TRANSPORT_ATTEMPTS
                         && should_retry_transport_error(&err) =>
                 {
-                    let kind = classify_reqwest_error(&err);
+                    let kind = UpstreamErrorKind::from_reqwest(&err);
                     tracing::warn!(
                         "{}",
                         format_upstream_transport_retry_log(
@@ -355,10 +355,9 @@ where
 
 pub(crate) fn relay_upstream_error(ctx: &RelayContext, err: AppError) -> AppError {
     match err {
-        AppError::Reqwest(err) => AppError::UpstreamRequest(UpstreamRequestError::new(
-            classify_reqwest_error(&err),
+        AppError::Reqwest(err) => AppError::UpstreamRequest(UpstreamRequestError::from_reqwest(
             ctx.upstream.provider.clone(),
-            format!("{err:?}"),
+            &err,
         )),
         err => err,
     }
@@ -485,23 +484,6 @@ fn should_retry_transport_error(err: &reqwest::Error) -> bool {
         || details.contains("unexpectedeof")
         || details.contains("connection reset")
         || details.contains("connection closed")
-}
-
-fn classify_reqwest_error(err: &reqwest::Error) -> UpstreamErrorKind {
-    if err.is_timeout() {
-        return UpstreamErrorKind::Timeout;
-    }
-
-    let details = format!("{err:?}").to_ascii_lowercase();
-    if details.contains("tls") {
-        UpstreamErrorKind::Tls
-    } else if details.contains("dns") || details.contains("resolve") {
-        UpstreamErrorKind::Dns
-    } else if err.is_connect() {
-        UpstreamErrorKind::Connect
-    } else {
-        UpstreamErrorKind::Request
-    }
 }
 
 pub(crate) fn upstream_url(base_url: &str, path: &str) -> String {

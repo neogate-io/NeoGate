@@ -11,6 +11,10 @@ const messages = {
   'zh-CN': {
     appTitle: 'NeoGate 管理后台',
     appName: 'NeoGate',
+    genericServerError: '服务暂时异常，请稍后重试；如果持续出现，请联系管理员查看后端日志。',
+    genericNetworkError: '网络请求失败，请检查网络连接或服务是否正在运行。',
+    genericUpstreamError: '上游服务暂时不可用，请稍后重试或检查上游配置。',
+    genericRequestError: '请求失败，请稍后重试。',
     home: '首页',
     tagline: 'NeoGate - 简单好用的大模型 API 网关',
     docs: '文档',
@@ -85,7 +89,7 @@ const messages = {
     setupInternalMode: '内部模式',
     setupInternalModeDescription:
       '默认不需要额度即可调用，适合团队自用；仍会记录用量、Token、费用和延迟。',
-    setupPaidMode: '收费服务模式',
+    setupPaidMode: '收费模式',
     setupPaidModeDescription: '用户需要可用额度才能调用，充值到账户余额后名下 API Key 共享使用。',
     passwordLengthCheck: '至少 8 位',
     passwordMatchCheck: '两次密码一致',
@@ -163,23 +167,23 @@ const messages = {
     servicePolicyHint: '服务模式在首次运行时确定；内部模式可调整是否要求额度。',
     serviceMode: '服务模式',
     internalServiceMode: '内部模式',
-    paidServiceMode: '收费服务模式',
+    paidServiceMode: '收费模式',
     creditRequired: '调用需要额度',
     creditRequiredEnabledDescription:
       '已开启额度校验。用户和 API Key 需要有可用额度；额度不足时，请求会被拒绝。',
     creditRequiredDisabledDescription:
       '已关闭额度校验。团队成员无需预设额度即可调用；系统仍会记录Token的使用量。',
     creditRequiredPaidDescription:
-      '收费服务模式始终需要额度。用户需先充值或获赠额度，然后才能调用网关。',
+      '收费模式始终需要额度。用户需先充值或获赠额度，然后才能调用网关。',
     creditRequiredInternalHint: '关闭后，用户没有额度也可以调用，但仍记录用量。',
-    creditRequiredPaidHint: '收费服务模式固定需要额度。',
+    creditRequiredPaidHint: '收费模式固定需要额度。',
     registrationEnabled: '开放用户注册',
     registrationDisabledDescription:
       '已关闭用户注册，公开首页不会显示邮箱领取 API Key 入口，新邮箱也不能注册。',
     registrationInternalEnabledDescription:
       '已开放注册。内部模式下，新用户注册后需管理员审核通过才能登录和使用。',
     registrationPaidEnabledDescription:
-      '已开放注册。收费服务模式下，新用户注册后会自动启用，无需管理员审核。',
+      '已开放注册。收费模式下，新用户注册后会自动启用，无需管理员审核。',
     servicePolicySaved: '服务策略已保存。',
     logout: '退出登录',
     logoutConfirmTitle: '确认退出登录',
@@ -579,6 +583,10 @@ const messages = {
     modelsFetchRequired: '先获取上游模型',
     modelsFetched: '模型列表已获取',
     modelsFetchEmpty: '未获取到模型',
+    modelsFetchUpstreamUnavailable: '连接上游服务失败，请检查 Base URL、网络连通性和代理设置。',
+    modelsFetchUpstreamTimeout: '连接上游服务超时，请稍后重试，或检查 Base URL 和网络连通性。',
+    modelsFetchUpstreamDnsError: '无法解析上游服务域名，请检查 Base URL 是否正确。',
+    modelsFetchUpstreamTlsError: '上游服务 TLS 握手失败，请检查 Base URL 的 HTTPS 配置。',
     apiKeyOrJson: '输入API Key',
     provider: '供应商',
     protocol: '协议',
@@ -662,6 +670,13 @@ const messages = {
   'en-US': {
     appTitle: 'NeoGate Admin',
     appName: 'NeoGate',
+    genericServerError:
+      'The service is temporarily unavailable. Retry later, or ask an admin to check backend logs.',
+    genericNetworkError:
+      'Network request failed. Check your connection or whether the service is running.',
+    genericUpstreamError:
+      'The upstream service is temporarily unavailable. Retry later or check the upstream configuration.',
+    genericRequestError: 'The request failed. Please retry later.',
     home: 'Home',
     tagline: 'NeoGate - A simple LLM API gateway',
     docs: 'Docs',
@@ -1246,6 +1261,13 @@ const messages = {
     modelsFetchRequired: 'Fetch upstream models first',
     modelsFetched: 'Models fetched',
     modelsFetchEmpty: 'No models returned',
+    modelsFetchUpstreamUnavailable:
+      'Failed to connect to the upstream service. Check the Base URL, network, and proxy settings.',
+    modelsFetchUpstreamTimeout:
+      'The upstream service timed out. Retry later, or check the Base URL and network.',
+    modelsFetchUpstreamDnsError: 'Could not resolve the upstream domain. Check the Base URL.',
+    modelsFetchUpstreamTlsError:
+      'The upstream TLS handshake failed. Check the HTTPS configuration for the Base URL.',
     apiKeyOrJson: 'Enter API key',
     provider: 'Provider',
     protocol: 'Protocol',

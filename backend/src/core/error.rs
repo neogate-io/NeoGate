@@ -15,6 +15,23 @@ pub enum UpstreamErrorKind {
 }
 
 impl UpstreamErrorKind {
+    pub(crate) fn from_reqwest(err: &reqwest::Error) -> Self {
+        if err.is_timeout() {
+            return Self::Timeout;
+        }
+
+        let details = format!("{err:?}").to_ascii_lowercase();
+        if details.contains("tls") {
+            Self::Tls
+        } else if details.contains("dns") || details.contains("resolve") {
+            Self::Dns
+        } else if err.is_connect() {
+            Self::Connect
+        } else {
+            Self::Request
+        }
+    }
+
     pub fn status(self) -> StatusCode {
         match self {
             Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
@@ -68,6 +85,14 @@ impl UpstreamRequestError {
 
     pub fn status(&self) -> StatusCode {
         self.kind.status()
+    }
+
+    pub(crate) fn from_reqwest(provider: impl Into<String>, err: &reqwest::Error) -> Self {
+        Self::new(
+            UpstreamErrorKind::from_reqwest(err),
+            provider,
+            format!("{err:?}"),
+        )
     }
 }
 

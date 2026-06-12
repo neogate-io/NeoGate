@@ -22,7 +22,7 @@ use crate::{
     auth::{self, AdminAuth},
     billing::CreditAccountType,
     cache::InvalidationEvent,
-    error::{AppError, AppResult},
+    error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
     AppState,
 };
@@ -510,7 +510,10 @@ pub(crate) async fn fetch_upstream_models(
         request = request.bearer_auth(secret);
     }
 
-    let response = request.send().await?;
+    let response = request
+        .send()
+        .await
+        .map_err(|err| upstream_models_request_error(base_url, err))?;
     let status = response.status();
     if !status.is_success() {
         return Err(AppError::BadRequest(upstream_models_error_message(
@@ -518,13 +521,31 @@ pub(crate) async fn fetch_upstream_models(
         )));
     }
 
-    let value = response.json::<Value>().await?;
+    let value = response
+        .json::<Value>()
+        .await
+        .map_err(|_| AppError::BadRequest("上游模型列表响应格式无效".to_string()))?;
     let models = extract_model_ids(&value);
     if models.is_empty() {
         return Err(AppError::BadRequest("no models returned".to_string()));
     }
 
     Ok(models)
+}
+
+fn upstream_models_request_error(base_url: &str, err: reqwest::Error) -> AppError {
+    AppError::UpstreamRequest(UpstreamRequestError::from_reqwest(
+        upstream_models_error_provider(base_url),
+        &err,
+    ))
+}
+
+fn upstream_models_error_provider(base_url: &str) -> String {
+    base_url
+        .parse::<reqwest::Url>()
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| "upstream".to_string())
 }
 
 fn extract_model_ids(value: &Value) -> Vec<String> {

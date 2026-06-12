@@ -1,17 +1,20 @@
 use std::{
     fmt::{self, Write as _},
     sync::Arc,
+    time::Instant,
 };
 
 use axum::{
-    extract::DefaultBodyLimit,
-    http::{header, HeaderName, HeaderValue, Method, Request},
+    body::{to_bytes, Body},
+    extract::{DefaultBodyLimit, State},
+    http::{header, HeaderName, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::Response,
     Router,
 };
 use chrono::{SecondsFormat, Utc};
 use reqwest::Client;
+use serde_json::Value;
 use tokio::sync::watch;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{
@@ -24,7 +27,6 @@ use tracing_subscriber::{
     registry::LookupSpan,
     util::SubscriberInitExt,
 };
-use uuid::Uuid;
 
 use crate::{
     admin, auth,
@@ -34,6 +36,7 @@ use crate::{
     db::Db,
     email::EmailService,
     health::{self, RuntimeHealth},
+    id::DbId,
     payment, policy,
     relay::{self, selector::Selector},
     secrets::SecretStore,
@@ -42,8 +45,6 @@ use crate::{
     usage::{ActivityRecorder, UsageDailyRecorder, UsageRecorder},
     user,
 };
-
-const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -78,7 +79,7 @@ pub async fn run() -> anyhow::Result<()> {
             .merge(install::bootstrap_router())
             .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
             .layer(cors_layer_from_origins(&["*".to_string()])?)
-            .layer(middleware::from_fn(log_http_request));
+            .layer(middleware::from_fn(log_bootstrap_http_request));
         let listener = tokio::net::TcpListener::bind(&probe.bind_addr).await?;
         tracing::info!(
             "neogate bootstrap listener running on {} because runtime configuration is incomplete",
@@ -106,7 +107,10 @@ pub async fn run() -> anyhow::Result<()> {
     let app = router(state)
         .layer(DefaultBodyLimit::max(config.relay_body_limit_bytes))
         .layer(cors_layer(&config)?)
-        .layer(middleware::from_fn(log_http_request));
+        .layer(middleware::from_fn_with_state(
+            config.admin_token_secret.clone(),
+            log_http_request,
+        ));
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
@@ -125,40 +129,147 @@ fn init_tracing() {
         .init();
 }
 
-async fn log_http_request(mut request: Request<axum::body::Body>, next: Next) -> Response {
-    let method = request.method().clone();
-    let path = request
-        .uri()
-        .path_and_query()
-        .map(|value| value.as_str().to_string())
-        .unwrap_or_else(|| request.uri().path().to_string());
-    let request_id = request_id_from_request(&request);
-    request.extensions_mut().insert(request_id.clone());
+const ERROR_LOG_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
-    let mut response = next.run(request).await;
+async fn log_bootstrap_http_request(request: Request<Body>, next: Next) -> Response {
+    log_http_response(request, next, "none".to_string(), None).await
+}
+
+async fn log_http_request(
+    State(admin_token_secret): State<String>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let (auth, user_id) = request_auth_context(&request, &admin_token_secret);
+    log_http_response(request, next, auth, user_id).await
+}
+
+async fn log_http_response(
+    request: Request<Body>,
+    next: Next,
+    auth: String,
+    user_id: Option<DbId>,
+) -> Response {
+    let started = Instant::now();
+    let request_line = format!("{} {}", request.method(), request.uri().path());
+
+    let response = next.run(request).await;
     let status = response.status();
-    if let Ok(value) = HeaderValue::from_str(&request_id) {
-        response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    let (response, error_code, error_message) = response_error_for_log(response).await;
+    let elapsed_ms = started.elapsed().as_millis();
+    let user_id = user_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    if let Some(error_message) = error_message {
+        tracing::info!(
+            request = %request_line,
+            status = %status.as_u16(),
+            elapsed_ms = %elapsed_ms,
+            auth = %auth,
+            user_id = %user_id,
+            error_code = %error_code.unwrap_or_else(|| "-".to_string()),
+            error_message = %error_message,
+            "http request"
+        );
+    } else {
+        tracing::info!(
+            request = %request_line,
+            status = %status.as_u16(),
+            elapsed_ms = %elapsed_ms,
+            auth = %auth,
+            user_id = %user_id,
+            "http request"
+        );
     }
-    tracing::info!(
-        method = %method,
-        path = %path,
-        status = %status.as_u16(),
-        request_id = %request_id,
-        "http request"
-    );
     response
 }
 
-fn request_id_from_request(request: &Request<axum::body::Body>) -> String {
-    request
-        .headers()
-        .get(&REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
+fn request_auth_context(
+    request: &Request<Body>,
+    admin_token_secret: &str,
+) -> (String, Option<DbId>) {
+    let Some(token) = auth::bearer(request.headers()) else {
+        return ("none".to_string(), None);
+    };
+    if auth::validate_admin_token(token, admin_token_secret) {
+        return ("admin".to_string(), None);
+    }
+    if let Some(user_id) = auth::validate_user_session_token(token, admin_token_secret) {
+        return ("user".to_string(), Some(user_id));
+    }
+    ("token".to_string(), None)
+}
+
+async fn response_error_for_log(response: Response) -> (Response, Option<String>, Option<String>) {
+    if response.status().is_success() {
+        return (response, None, None);
+    }
+
+    let status = response.status();
+    let (parts, body) = response.into_parts();
+    let bytes = match to_bytes(body, ERROR_LOG_BODY_LIMIT_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return (
+                Response::from_parts(parts, Body::empty()),
+                None,
+                Some(format!("failed to read error response body: {err}")),
+            );
+        }
+    };
+    let error = parse_error_body_for_log(status, &bytes);
+    (
+        Response::from_parts(parts, Body::from(bytes)),
+        error.0,
+        error.1,
+    )
+}
+
+fn parse_error_body_for_log(status: StatusCode, bytes: &[u8]) -> (Option<String>, Option<String>) {
+    if bytes.is_empty() {
+        return (
+            None,
+            Some(status.canonical_reason().unwrap_or("error").to_string()),
+        );
+    }
+
+    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+        if let Some(error) = value.get("error") {
+            let code = error
+                .get("code")
+                .and_then(Value::as_str)
+                .or_else(|| error.get("type").and_then(Value::as_str))
+                .map(str::to_string);
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(truncate_log_value);
+            if code.is_some() || message.is_some() {
+                return (code, message);
+            }
+        }
+    }
+
+    let message = std::str::from_utf8(bytes)
+        .ok()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| Uuid::new_v4().simple().to_string())
+        .map(truncate_log_value)
+        .unwrap_or_else(|| status.canonical_reason().unwrap_or("error").to_string());
+    (None, Some(message))
+}
+
+fn truncate_log_value(value: &str) -> String {
+    const MAX_CHARS: usize = 240;
+    let mut result = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if index >= MAX_CHARS {
+            result.push('…');
+            break;
+        }
+        result.push(ch);
+    }
+    result
 }
 
 struct NeogateLogFormat;

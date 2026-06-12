@@ -1,10 +1,61 @@
-import type { MessageKey } from '../i18n'
+import { defaultLocale, isLocale, translate, type MessageKey } from '../i18n'
 
 export function readError(err: unknown) {
-  return err instanceof Error ? err.message : String(err)
+  if (err instanceof ApiError) {
+    const mapped = readMappedApiError(err, generalApiErrorMessageKeys)
+    if (mapped) return mapped
+    if (err.status >= 500 || isGenericServerMessage(err.message)) {
+      return tError('genericServerError')
+    }
+
+    return err.message || tError('genericRequestError')
+  }
+
+  if (err instanceof TypeError && isNetworkErrorMessage(err.message)) {
+    return tError('genericNetworkError')
+  }
+
+  if (err instanceof Error) {
+    return isNetworkErrorMessage(err.message) ? tError('genericNetworkError') : err.message
+  }
+
+  return String(err || tError('genericRequestError'))
 }
 
 type Translate = (key: MessageKey) => string
+
+const localeStorageKey = 'neogate_locale'
+
+const generalApiErrorMessageKeys = {
+  internal_server_error: 'genericServerError',
+  upstream_timeout: 'genericUpstreamError',
+  upstream_tls_error: 'genericUpstreamError',
+  upstream_dns_error: 'genericUpstreamError',
+  upstream_connect_error: 'genericUpstreamError',
+  upstream_request_error: 'genericUpstreamError',
+  upstream_unavailable: 'genericUpstreamError'
+} as Record<string, MessageKey>
+
+function tError(key: MessageKey) {
+  const locale =
+    typeof localStorage === 'undefined' ? defaultLocale : localStorage.getItem(localeStorageKey)
+  return translate(isLocale(locale) ? locale : defaultLocale, key)
+}
+
+function isGenericServerMessage(message: string) {
+  const normalized = message.trim().toLowerCase().replace(/[_-]+/g, ' ')
+  return normalized === 'internal server error' || normalized === 'server error'
+}
+
+function isNetworkErrorMessage(message: string) {
+  const normalized = message.trim().toLowerCase()
+  return (
+    normalized === 'failed to fetch' ||
+    normalized === 'load failed' ||
+    normalized.includes('networkerror') ||
+    normalized.includes('network request failed')
+  )
+}
 
 const smtpTestErrorMessageKeys = {
   smtp_authentication_failed: 'smtpAuthenticationFailed',
@@ -13,12 +64,37 @@ const smtpTestErrorMessageKeys = {
 } as Record<string, MessageKey>
 
 export function readSmtpTestError(err: unknown, t: Translate) {
-  if (err instanceof ApiError && err.code) {
-    const key = smtpTestErrorMessageKeys[err.code]
-    if (key) return t(key)
-  }
+  const mapped = readMappedApiError(err, smtpTestErrorMessageKeys, t)
+  if (mapped) return mapped
 
   return readError(err)
+}
+
+const modelFetchErrorMessageKeys = {
+  upstream_timeout: 'modelsFetchUpstreamTimeout',
+  upstream_tls_error: 'modelsFetchUpstreamTlsError',
+  upstream_dns_error: 'modelsFetchUpstreamDnsError',
+  upstream_connect_error: 'modelsFetchUpstreamUnavailable',
+  upstream_request_error: 'modelsFetchUpstreamUnavailable',
+  upstream_unavailable: 'modelsFetchUpstreamUnavailable',
+  internal_server_error: 'modelsFetchUpstreamUnavailable'
+} as Record<string, MessageKey>
+
+export function readModelFetchError(err: unknown, t: Translate) {
+  const mapped = readMappedApiError(err, modelFetchErrorMessageKeys, t)
+  if (mapped) return mapped
+
+  return readError(err)
+}
+
+function readMappedApiError(
+  err: unknown,
+  messages: Record<string, MessageKey>,
+  t: Translate = tError
+) {
+  if (!(err instanceof ApiError) || !err.code) return ''
+  const key = messages[err.code]
+  return key ? t(key) : ''
 }
 
 export function isSmtpConfigError(err: unknown) {

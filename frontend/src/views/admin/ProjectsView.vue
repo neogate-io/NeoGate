@@ -7,8 +7,8 @@ import {
   DocumentCopy,
   Edit,
   FolderOpened,
-  MoreFilled,
   Money,
+  MoreFilled,
   Plus,
   Search,
   User as UserIcon,
@@ -129,6 +129,11 @@ const {
 } satisfies ProjectPage)
 const projects = computed(() => projectsPage.value.items)
 const initialLoading = computed(() => !loaded.value)
+const showProjectsPagination = computed(
+  () =>
+    !initialLoading.value &&
+    (projects.value.length > 0 || currentPage.value > 1 || projectsPage.value.has_more)
+)
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
 )
@@ -200,6 +205,14 @@ function memberRoleText(role: ProjectMember['role']) {
 
 function userSelectLabel(user: User) {
   return user.username ? `${user.username} / ${user.email}` : user.email
+}
+
+function userOptionPrimary(user: User) {
+  return user.username || user.email
+}
+
+function userOptionSecondary(user: User) {
+  return user.username ? user.email : `ID ${user.id}`
 }
 
 const editableMemberRoleOptions = computed<
@@ -588,7 +601,7 @@ async function handlePageSizeChange(size: number) {
       <div class="project-table-loading-row"></div>
     </div>
 
-    <div v-else class="service-table-panel has-pagination">
+    <div v-else class="service-table-panel" :class="{ 'has-pagination': showProjectsPagination }">
       <el-table
         v-loading="loading"
         class="admin-table service-table project-table"
@@ -741,7 +754,10 @@ async function handlePageSizeChange(size: number) {
       </el-table>
     </div>
 
-    <div v-if="!initialLoading" class="admin-pagination-bar admin-table-pagination is-compact">
+    <div
+      v-if="showProjectsPagination"
+      class="admin-pagination-bar admin-table-pagination is-compact"
+    >
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
           <span class="admin-page-label">{{ t('pageSize') }}</span>
@@ -808,8 +824,8 @@ async function handlePageSizeChange(size: number) {
                   :disabled="user.status === 'disabled'"
                 >
                   <span class="project-owner-option">
-                    <span>{{ user.email }}</span>
-                    <span>{{ user.username || `ID ${user.id}` }}</span>
+                    <span>{{ userOptionPrimary(user) }}</span>
+                    <span>{{ userOptionSecondary(user) }}</span>
                   </span>
                 </el-option>
               </el-select>
@@ -835,30 +851,39 @@ async function handlePageSizeChange(size: number) {
 
     <el-dialog
       v-model="creditDialogVisible"
-      class="user-admin-dialog user-credit-dialog"
+      class="user-admin-dialog user-credit-dialog project-credit-dialog"
       :title="t('projectBalance')"
-      width="460px"
+      width="440px"
     >
-      <div class="user-dialog-body">
-        <div v-if="selectedProject" class="user-credit-summary">
-          <div>
-            <span>{{ t('currentBalance') }}</span>
-            <strong>{{ formatMicroUsd(selectedProject.balance_micro_usd, 2) }}</strong>
-          </div>
-          <div>
-            <span>{{ t('reservedCredit') }}</span>
-            <strong>{{ formatMicroUsd(selectedProject.reserved_micro_usd, 2) }}</strong>
-          </div>
-          <div>
-            <span>{{ t('afterRecharge') }}</span>
-            <strong>{{ formatMicroUsd(rechargePreviewMicroUsd, 2) }}</strong>
-          </div>
+      <div v-if="selectedProject" class="project-credit-dialog-body">
+        <div class="project-credit-project-name">
+          <span>{{ t('project') }}</span>
+          <strong>{{ selectedProject.name }}</strong>
         </div>
-        <el-form class="user-dialog-form is-single" label-position="top">
-          <el-form-item class="user-dialog-field user-credit-amount-field" :label="t('amountUsd')">
-            <el-input-number v-model="amountUsd" :min="-100000" :precision="2" :step="1" />
-          </el-form-item>
-        </el-form>
+
+        <section class="project-credit-balance-card">
+          <div class="project-credit-balance-row">
+            <span>{{ t('availableBalance') }}</span>
+            <strong>{{ formatMicroUsd(selectedProject.available_micro_usd, 2) }}</strong>
+          </div>
+        </section>
+
+        <div class="project-credit-amount-section">
+          <label class="project-credit-amount-label">{{ t('amountUsd') }}</label>
+          <el-input-number
+            v-model="amountUsd"
+            :controls="false"
+            :min="-100000"
+            :precision="2"
+            :step="1"
+          />
+          <p class="project-credit-hint">{{ t('projectCreditAdjustHint') }}</p>
+        </div>
+
+        <div class="project-credit-result-card">
+          <span>{{ t('afterAdjustment') }}</span>
+          <strong>{{ formatMicroUsd(rechargePreviewMicroUsd, 2) }}</strong>
+        </div>
       </div>
       <template #footer>
         <div class="admin-dialog-footer user-dialog-footer">
@@ -911,8 +936,8 @@ async function handlePageSizeChange(size: number) {
                 :value="user.id"
               >
                 <span class="project-owner-option">
-                  <span>{{ user.username || user.email }}</span>
-                  <span>{{ user.username ? user.email : `ID ${user.id}` }}</span>
+                  <span>{{ userOptionPrimary(user) }}</span>
+                  <span>{{ userOptionSecondary(user) }}</span>
                 </span>
               </el-option>
             </el-select>
@@ -1303,6 +1328,144 @@ async function handlePageSizeChange(size: number) {
   font-size: 12px;
 }
 
+:global(.project-credit-dialog .el-dialog__body) {
+  padding-top: 8px;
+}
+
+:global(.project-credit-dialog .el-dialog__footer) {
+  padding-top: 8px;
+}
+
+:global(.project-credit-dialog .admin-dialog-footer) {
+  border-top: 0;
+}
+
+.project-credit-dialog-body {
+  display: grid;
+  gap: 16px;
+}
+
+/* Project name row */
+.project-credit-project-name {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-credit-project-name span {
+  color: #667085;
+  font-size: 12.5px;
+  font-weight: 600;
+  flex: 0 0 auto;
+  line-height: 1.2;
+}
+
+.project-credit-project-name strong {
+  color: #1d2939;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Balance card */
+.project-credit-balance-card {
+  background: #f8f9fb;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.project-credit-balance-row {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.project-credit-balance-row span {
+  color: #667085;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.project-credit-balance-row strong {
+  color: #1d2939;
+  font-feature-settings: 'tnum';
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: right;
+}
+
+/* Amount input section */
+.project-credit-amount-section {
+  display: grid;
+  gap: 6px;
+}
+
+.project-credit-amount-label {
+  color: #3f4a5c;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.project-credit-amount-section :deep(.el-input-number) {
+  width: 100%;
+}
+
+.project-credit-amount-section :deep(.el-input__wrapper) {
+  border-radius: 7px;
+  min-height: 40px;
+}
+
+.project-credit-amount-section :deep(.el-input__inner) {
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.project-credit-hint {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Result highlight card */
+.project-credit-result-card {
+  align-items: center;
+  background: #f0f7ff;
+  border: 1px solid #b9d9f5;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.project-credit-result-card span {
+  color: #3f4a5c;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.project-credit-result-card strong {
+  color: #0f76b8;
+  font-feature-settings: 'tnum';
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .project-keys-dialog-body {
   display: grid;
   gap: 14px;
@@ -1505,6 +1668,19 @@ async function handlePageSizeChange(size: number) {
   }
 
   .project-member-add-form {
+    grid-template-columns: 1fr;
+  }
+
+  .project-credit-header {
+    display: grid;
+    gap: 10px;
+  }
+
+  .project-credit-result {
+    text-align: left;
+  }
+
+  .project-credit-details {
     grid-template-columns: 1fr;
   }
 

@@ -10,3 +10,4 @@ frontend/.env.*.local
 scripts/
 output/
 __pycache__/
+.claude/

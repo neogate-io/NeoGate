@@ -122,6 +122,11 @@ pub enum AppError {
     PaymentRequired,
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("conflict: {message}")]
+    ConflictWithCode {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
     #[error("not found")]
@@ -190,7 +195,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::PasswordChangeRequired => StatusCode::FORBIDDEN,
             AppError::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
-            AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::Conflict(_) | AppError::ConflictWithCode { .. } => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) | AppError::BadRequestWithCode { .. } => {
@@ -217,7 +222,9 @@ impl IntoResponse for AppError {
             );
         } else if matches!(
             self,
-            AppError::BadRequest(_)
+            AppError::Conflict(_)
+                | AppError::ConflictWithCode { .. }
+                | AppError::BadRequest(_)
                 | AppError::BadRequestWithCode { .. }
                 | AppError::PayloadTooLarge(_)
                 | AppError::RateLimited(_)
@@ -254,6 +261,7 @@ impl AppError {
             AppError::PasswordChangeRequired => "password_change_required",
             AppError::PaymentRequired => "payment_required",
             AppError::Conflict(_) => "conflict",
+            AppError::ConflictWithCode { code, .. } => code,
             AppError::PayloadTooLarge(_) => "payload_too_large",
             AppError::NotFound => "not_found",
             AppError::BadRequest(_) => "bad_request",
@@ -284,6 +292,7 @@ impl AppError {
             | AppError::PayloadTooLarge(message)
             | AppError::BadRequest(message)
             | AppError::RateLimited(message) => message.clone(),
+            AppError::ConflictWithCode { message, .. } => (*message).to_string(),
             AppError::BadRequestWithCode { message, .. } => (*message).to_string(),
             _ => self.to_string(),
         }
@@ -334,6 +343,21 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"]["code"], "smtp_authentication_failed");
         assert_eq!(value["error"]["message"], "SMTP authentication failed");
+    }
+
+    #[tokio::test]
+    async fn coded_conflicts_return_structured_payload() {
+        let response = AppError::ConflictWithCode {
+            code: "user_email_exists",
+            message: "user email already exists",
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "user_email_exists");
+        assert_eq!(value["error"]["message"], "user email already exists");
     }
 
     #[tokio::test]

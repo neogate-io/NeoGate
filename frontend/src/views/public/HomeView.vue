@@ -26,11 +26,14 @@ const homeKeyLoading = ref(false)
 const homeKeySubmitting = ref(false)
 const homeKeySent = ref(false)
 const dashboardLink = computed(() => (auth.isAdmin ? '/admin' : '/home/overview'))
-const registrationEnabled = computed(() => servicePolicy.value?.registration_enabled === true)
+const publicKeyClaimEnabled = computed(() => {
+  const policy = servicePolicy.value
+  return policy?.service_mode === 'paid' && policy.registration_enabled === true
+})
 let draftRequestId = 0
 
 function openApiKeyDialog() {
-  if (!registrationEnabled.value) return
+  if (!publicKeyClaimEnabled.value) return
   resetHomeApiKey()
   apiKeyDialogOpen.value = true
   void prepareHomeApiKey()
@@ -150,7 +153,7 @@ function resetHomeApiKey() {
         <h1>{{ t('tagline') }}</h1>
       </div>
 
-      <div v-if="registrationEnabled" class="home-actions">
+      <div v-if="publicKeyClaimEnabled" class="home-actions">
         <el-button :icon="Key" size="large" type="primary" @click="openApiKeyDialog">
           {{ t('createApiKey') }}
         </el-button>
@@ -158,7 +161,7 @@ function resetHomeApiKey() {
       </div>
 
       <el-dialog
-        v-if="registrationEnabled"
+        v-if="publicKeyClaimEnabled"
         v-model="apiKeyDialogOpen"
         class="api-key-dialog"
         :title="t('apiKeyDialogTitle')"

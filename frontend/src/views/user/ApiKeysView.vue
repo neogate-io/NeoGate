@@ -8,6 +8,7 @@ import {
   getOwnUserKeys,
   updateOwnUserKeyStatus
 } from '../../api/userKeys'
+import { getUserServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { UserKey } from '../../types/admin'
@@ -25,6 +26,8 @@ const newKeyDialogVisible = ref(false)
 const newKey = ref('')
 const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const keySkeletonCount = 3
+const { data: servicePolicy } = useAsyncData(() => getUserServicePolicy(), null)
+const canCreateDefaultApiKey = computed(() => servicePolicy.value?.service_mode === 'paid')
 const {
   data: apiKeys,
   loading,
@@ -226,6 +229,7 @@ async function confirmDeleteApiKey(row: UserKey) {
       </article>
 
       <button
+        v-if="canCreateDefaultApiKey"
         class="user-panel key-create-card"
         type="button"
         role="listitem"

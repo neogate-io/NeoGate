@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use axum::{body::Body, http::header, response::Response};
+use axum::{
+    body::Body,
+    http::{header, StatusCode},
+    response::Response,
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::Utc;
@@ -18,7 +22,7 @@ use crate::{
     error::{AppError, AppResult},
     id::DbId,
     relay::{
-        forward_openai,
+        describe_upstream_http_failure, forward_openai, read_upstream_error_body,
         selector::{SelectedUpstream, UpstreamProtocol},
     },
     task::{billing as task_billing, upstream},
@@ -240,6 +244,22 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
             task_billing::finalize_polled(state, updated, upstream, result.usage).await?;
         }
         Err(err) => {
+            tracing::warn!(
+                task_id = task.id,
+                response_id = %task.upstream_task_id,
+                user_id = task.user_id,
+                project_id = task.project_id,
+                user_key_id = task.user_key_id,
+                channel_id = task.channel_id,
+                channel_endpoint_id = task.channel_endpoint_id,
+                channel_key_id = ?task.channel_key_id,
+                credential_id = ?task.credential_id,
+                provider = %task.provider,
+                model = %task.model.as_deref().unwrap_or(""),
+                upstream = %task.upstream_base_url,
+                error = %err,
+                "neogate async response failed"
+            );
             metadata.error = Some(json!({
                 "code": "neogate_response_failed",
                 "message": err.to_string(),
@@ -309,10 +329,11 @@ async fn run_streamed_response(
     )
     .await?;
     if !response.status().is_success() {
-        return Err(AppError::BadRequest(format!(
-            "upstream returned status {}",
-            response.status()
-        )));
+        let status = StatusCode::from_u16(response.status().as_u16())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = read_upstream_error_body(response).await;
+        let failure = describe_upstream_http_failure(status, &body);
+        return Err(AppError::BadRequest(failure.summary));
     }
     let mut collector = NeogateResponseSseCollector::default();
     let mut stream = response.bytes_stream();

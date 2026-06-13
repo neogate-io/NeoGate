@@ -288,12 +288,11 @@ async function handlePageSizeChange(size: number) {
               :disabled="row.status_code == null"
               placement="top"
             >
-              <span
-                class="channel-runtime-status usage-status-tag"
-                :class="`is-${usageStatusTone(row.status_code)}`"
-              >
-                <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
-                {{ usageStatusLabel(row.status_code) }}
+              <span class="usage-status-switch" :class="`is-${usageStatusTone(row.status_code)}`">
+                <span class="usage-status-switch-icon">
+                  <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
+                </span>
+                <span class="usage-status-switch-text">{{ usageStatusLabel(row.status_code) }}</span>
               </span>
             </el-tooltip>
           </template>
@@ -327,7 +326,6 @@ async function handlePageSizeChange(size: number) {
             <el-option :value="100" label="100" />
           </el-select>
         </div>
-        <span class="admin-result-count">{{ t('currentPage') }} {{ currentPage }}</span>
         <div class="admin-page-buttons">
           <el-button
             :aria-label="t('previousPage')"
@@ -456,10 +454,10 @@ async function handlePageSizeChange(size: number) {
 .usage-table .usage-latency-tag {
   align-items: center;
   animation: none;
-  background: #eef8f2;
-  border: 1px solid #d7eadf;
+  background: var(--admin-success-bg);
+  border: 1px solid var(--admin-success-border);
   border-radius: 999px;
-  color: #3f7a55;
+  color: var(--admin-success);
   display: inline-flex;
   font-feature-settings: 'tnum';
   font-size: 12px;

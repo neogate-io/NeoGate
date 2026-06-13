@@ -586,7 +586,9 @@ async fn ensure_project_member_user_key_in_tx(
     let row = sqlx::query(
         "INSERT INTO user_key
             (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status)
-         VALUES ($1, $2, $3, 'Project member API Key', $4, $5, 'enabled')
+         SELECT $1, $2, $3, p.name, $4, $5, 'enabled'
+         FROM project p
+         WHERE p.id = $2
          RETURNING id",
     )
     .bind(user_id)

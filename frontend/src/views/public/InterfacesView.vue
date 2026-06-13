@@ -102,7 +102,12 @@ const openAiResponseImageGeneration = computed(
     "model": "gpt-5.5",
     "input": "生成一张赛博朋克风格的白猫坐在霓虹灯下的图片",
     "tools": [
-      { "type": "image_generation" }
+      {
+        "type": "image_generation",
+        "model": "gpt-image-2",
+        "action": "generate",
+        "size": "1024x1024"
+      }
     ],
     "background": true,
     "store": true
@@ -121,7 +126,12 @@ curl ${openAiBaseUrl.value}/responses \\
   "background": true,
   "store": true,
   "tools": [
-    { "type": "image_generation" }
+    {
+      "type": "image_generation",
+      "model": "gpt-image-2",
+      "action": "edit",
+      "size": "1024x1024"
+    }
   ],
   "input": [
     {
@@ -669,6 +679,164 @@ const content = computed(() => {
       imageAsyncTitle: '图片生成（异步）',
       openAiImageAsync:
         '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
+      requestParamsTitle: '调用参数',
+      responseParamsTitle: '返回参数',
+      paramFieldHeaders: ['参数', '类型 / 示例', '说明'],
+      textRequestParams: [
+        [
+          'model',
+          'string，必填',
+          '模型名称，例如 gpt-5.5；会按 NeoGate 的模型权限、渠道选择和计费策略处理。'
+        ],
+        [
+          'messages[]',
+          'array，Chat Completions 必填',
+          'Chat Completions 对话消息列表，包含 role 与 content。'
+        ],
+        [
+          'input',
+          'string | array，Responses 必填',
+          'Responses 输入内容，可传字符串、消息数组或多模态内容。'
+        ],
+        ['instructions', 'string', 'Responses 的系统级指令，适合放置长期行为约束。'],
+        ['stream', 'boolean', '设置为 true 时返回 text/event-stream，用于流式输出增量文本。'],
+        ['temperature', 'number', '采样温度；数值越高输出越发散，越低越稳定。'],
+        ['top_p', 'number', '核采样参数；通常不要和 temperature 同时大幅调整。'],
+        ['max_completion_tokens', 'integer', 'Chat Completions 最大生成 Token 数。'],
+        ['max_output_tokens', 'integer', 'Responses 最大输出 Token 数。'],
+        ['tools / tool_choice', 'array | object', '工具定义和工具选择策略；按官方结构透传。'],
+        [
+          'response_format / text.format',
+          'object',
+          '结构化输出设置；Chat Completions 使用 response_format，Responses 使用 text.format。'
+        ],
+        ['metadata', 'object', '可附加到请求的元数据，便于上游或后续查询识别。']
+      ],
+      textResponseParams: [
+        ['id', 'string', '响应 ID，可用于日志排查或后续关联。'],
+        ['object', 'string', '对象类型，例如 chat.completion、chat.completion.chunk 或 response。'],
+        ['created / created_at', 'integer', '响应创建时间，Unix 秒级时间戳。'],
+        ['model', 'string', '实际返回的模型名称。'],
+        ['choices[]', 'array', 'Chat Completions 的候选结果列表。'],
+        ['choices[].message.content', 'string', '非流式 Chat Completions 的文本结果。'],
+        ['choices[].delta.content', 'string', '流式 Chat Completions 的增量文本片段。'],
+        ['choices[].finish_reason', 'string', '生成结束原因，例如 stop、length 或 tool_calls。'],
+        ['output[]', 'array', 'Responses 的输出项列表，通常包含 message、tool_call 等类型。'],
+        ['output[].content[].text', 'string', 'Responses 文本输出内容。'],
+        ['status', 'string', 'Responses 状态，例如 completed、failed 或 incomplete。'],
+        ['error', 'object | null', 'Responses 失败时的错误信息；成功时通常为空。'],
+        ['usage', 'object | null', 'Token 用量，NeoGate 会用于用量记录和结算。']
+      ],
+      textAsyncRequestParams: [
+        ['model', 'string，必填', 'Responses 主模型，例如 gpt-5.5。'],
+        ['input', 'string | array，必填', '后台任务的输入内容。'],
+        ['instructions', 'string', '系统级指令，适合放置任务要求或输出约束。'],
+        ['background', 'boolean，必填 true', '设置为 true 创建后台 Response。'],
+        ['store', 'boolean', 'background=true 时需要保存响应；NeoGate 要求 store 不能为 false。'],
+        [
+          'stream',
+          'boolean',
+          '创建后台任务时不要设置为 true；查询接口可追加 ?stream=true 恢复流式结果。'
+        ],
+        ['max_output_tokens', 'integer', '限制后台任务最多输出的 Token 数。'],
+        ['temperature / top_p', 'number', '采样控制参数，影响输出随机性。'],
+        ['tools / tool_choice', 'array | object', '工具定义和选择策略；后台任务会按官方字段透传。'],
+        ['metadata', 'object', '附加元数据，便于任务追踪和排查。']
+      ],
+      textAsyncResponseParams: [
+        ['id', 'string', 'Response ID，例如 resp_123；用于查询、恢复流式结果或取消。'],
+        ['object', '"response"', '返回对象类型。'],
+        ['created_at', 'integer', 'Response 创建时间，Unix 秒级时间戳。'],
+        ['background', 'boolean', '是否为后台任务。'],
+        [
+          'status',
+          'string',
+          '任务状态，例如 queued、in_progress、completed、failed、cancelled 或 incomplete。'
+        ],
+        ['output[]', 'array', '完成后包含模型输出；文本通常在 message 输出项中。'],
+        ['output[].type', 'string', '输出项类型，例如 message、function_call 或 tool 调用结果。'],
+        ['output[].content[].type', '"output_text"', '文本内容项类型。'],
+        ['output[].content[].text', 'string', '后台任务完成后的文本结果。'],
+        ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
+        ['usage', 'object | null', '终态返回的 Token 用量，NeoGate 会用于记录和结算。']
+      ],
+      imageRequestParams: [
+        [
+          'model',
+          'string，必填',
+          '图片模型，例如 gpt-image-2；会按 NeoGate 模型权限和渠道能力转发。'
+        ],
+        ['prompt', 'string，必填', '用于生成图片的文本描述。'],
+        [
+          'size',
+          'string',
+          '图片尺寸，例如 1024x1024、1536x1024、1024x1536 或 auto；可用尺寸以所选模型和上游为准。'
+        ],
+        ['quality', 'string', '图片质量，例如 auto、low、medium、high；会影响延迟、费用和细节。'],
+        ['n', 'integer', '生成图片数量；部分图片模型只支持 1。'],
+        ['output_format', 'string', '输出格式，例如 png、jpeg 或 webp。'],
+        ['output_compression', 'integer', '输出压缩质量，0-100；通常只对 jpeg/webp 生效。'],
+        ['stream', 'boolean', '设置为 true 时返回 text/event-stream，用于接收生成过程中的事件。'],
+        ['partial_images', 'integer', '流式图片生成时请求返回的中间预览图数量。']
+      ],
+      imageResponseParams: [
+        ['created', 'integer', '响应创建时间，Unix 秒级时间戳。'],
+        ['data[]', 'array', '图片结果列表；每个元素代表一张生成图片。'],
+        ['data[].b64_json', 'string', 'Base64 编码的图片内容，客户端可解码保存或展示。'],
+        ['data[].url', 'string', '当上游返回 URL 形式图片时透传。'],
+        ['data[].revised_prompt', 'string', '上游可能返回的改写后提示词。'],
+        ['usage', 'object', '上游返回的图片生成用量信息，NeoGate 会用于用量记录和结算。'],
+        [
+          'stream event',
+          'text/event-stream',
+          'stream=true 时返回 partial image、completed、error 等事件。'
+        ]
+      ],
+      imageAsyncRequestParams: [
+        [
+          'model',
+          'string，必填',
+          'Responses 主模型，例如 gpt-5.5；负责理解输入并调用 image_generation 工具。'
+        ],
+        [
+          'input',
+          'string | array，必填',
+          '文生图可直接传字符串；图生图/编辑可传 input_text 与 input_image 组成的消息内容。'
+        ],
+        ['tools[].type', '"image_generation"，必填', '启用 Responses 的图片生成工具。'],
+        ['tools[].model', 'string', '图片模型，例如 gpt-image-2；按上游工具能力转发。'],
+        ['tools[].action', 'generate | edit | auto', '控制生成、编辑或由模型自动决定动作。'],
+        ['tools[].size', 'string', '图片尺寸，例如 1024x1024、1536x1024、1024x1536 或 auto。'],
+        ['tools[].quality', 'string', '图片质量，例如 auto、low、medium、high。'],
+        ['tools[].output_format', 'string', '图片输出格式，例如 png、jpeg 或 webp。'],
+        [
+          'background',
+          'boolean',
+          '设置为 true 创建后台 Response；NeoGate 的图片异步任务使用该模式。'
+        ],
+        ['store', 'boolean', 'background=true 时需要保存响应；NeoGate 要求 store 不能为 false。'],
+        [
+          'stream',
+          'boolean',
+          '创建后台任务时不要设置为 true；需要流式结果时在查询接口追加 ?stream=true。'
+        ]
+      ],
+      imageAsyncResponseParams: [
+        ['id', 'string', 'Response ID，例如 resp_123；用于查询、恢复流式结果或取消。'],
+        ['object', '"response"', '返回对象类型。'],
+        ['created_at', 'integer', 'Response 创建时间，Unix 秒级时间戳。'],
+        ['background', 'boolean', '是否为后台任务。'],
+        [
+          'status',
+          'string',
+          '任务状态，例如 queued、in_progress、completed、failed 或 cancelled。'
+        ],
+        ['output[]', 'array', '完成后包含模型输出；图片结果位于 image_generation_call 项中。'],
+        ['output[].type', '"image_generation_call"', '标识该输出项来自图片生成工具。'],
+        ['output[].result', 'string', '完成时返回 Base64 图片内容。'],
+        ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
+        ['usage', 'object | null', '终态返回的用量信息，NeoGate 会用于记录和结算。']
+      ],
       embeddingTitle: '向量嵌入',
       openAiEmbeddings:
         'Embeddings 接口按 OpenAI 官方 JSON 请求体转发，适合 RAG、语义搜索、去重和召回场景。请求中的 model 会走 NeoGate 的模型权限、渠道选择、计费和用量记录。',
@@ -1163,6 +1331,256 @@ const content = computed(() => {
     imageAsyncTitle: 'Image generation async',
     openAiImageAsync:
       'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
+    requestParamsTitle: 'Request parameters',
+    responseParamsTitle: 'Response parameters',
+    paramFieldHeaders: ['Parameter', 'Type / example', 'Description'],
+    textRequestParams: [
+      [
+        'model',
+        'string, required',
+        'Model name, for example gpt-5.5. NeoGate applies model permissions, routing, and billing policy.'
+      ],
+      [
+        'messages[]',
+        'array, required for Chat Completions',
+        'Chat Completions conversation messages with role and content.'
+      ],
+      [
+        'input',
+        'string | array, required for Responses',
+        'Responses input content, which can be a string, message array, or multimodal content.'
+      ],
+      ['instructions', 'string', 'System-level instructions for Responses.'],
+      ['stream', 'boolean', 'Set true to receive incremental text over text/event-stream.'],
+      [
+        'temperature',
+        'number',
+        'Sampling temperature. Higher values are more varied; lower values are steadier.'
+      ],
+      [
+        'top_p',
+        'number',
+        'Nucleus sampling value; usually avoid changing it heavily with temperature.'
+      ],
+      ['max_completion_tokens', 'integer', 'Maximum generated tokens for Chat Completions.'],
+      ['max_output_tokens', 'integer', 'Maximum output tokens for Responses.'],
+      [
+        'tools / tool_choice',
+        'array | object',
+        'Tool definitions and tool selection policy, passed through.'
+      ],
+      [
+        'response_format / text.format',
+        'object',
+        'Structured output settings. Chat Completions uses response_format; Responses uses text.format.'
+      ],
+      [
+        'metadata',
+        'object',
+        'Optional metadata attached to the request for upstream or later lookup.'
+      ]
+    ],
+    textResponseParams: [
+      ['id', 'string', 'Response ID for diagnostics or later correlation.'],
+      [
+        'object',
+        'string',
+        'Object type, such as chat.completion, chat.completion.chunk, or response.'
+      ],
+      ['created / created_at', 'integer', 'Unix timestamp for when the response was created.'],
+      ['model', 'string', 'Model name returned by the upstream.'],
+      ['choices[]', 'array', 'Chat Completions candidate result list.'],
+      ['choices[].message.content', 'string', 'Text result for non-streaming Chat Completions.'],
+      ['choices[].delta.content', 'string', 'Incremental text for streaming Chat Completions.'],
+      [
+        'choices[].finish_reason',
+        'string',
+        'Why generation stopped, such as stop, length, or tool_calls.'
+      ],
+      [
+        'output[]',
+        'array',
+        'Responses output item list, usually including message, tool_call, and related items.'
+      ],
+      ['output[].content[].text', 'string', 'Text output content from Responses.'],
+      ['status', 'string', 'Responses status, such as completed, failed, or incomplete.'],
+      [
+        'error',
+        'object | null',
+        'Responses error information on failure; usually null on success.'
+      ],
+      ['usage', 'object | null', 'Token usage used by NeoGate for records and settlement.']
+    ],
+    textAsyncRequestParams: [
+      ['model', 'string, required', 'Responses model, for example gpt-5.5.'],
+      ['input', 'string | array, required', 'Input content for the background task.'],
+      [
+        'instructions',
+        'string',
+        'System-level instructions for task requirements or output constraints.'
+      ],
+      ['background', 'boolean, required true', 'Set true to create a background Response.'],
+      [
+        'store',
+        'boolean',
+        'Required for background responses; NeoGate does not allow store=false.'
+      ],
+      [
+        'stream',
+        'boolean',
+        'Do not set true during background creation; retrieve with ?stream=true to resume streamed results.'
+      ],
+      ['max_output_tokens', 'integer', 'Limits the maximum output tokens for the background task.'],
+      ['temperature / top_p', 'number', 'Sampling controls that affect output randomness.'],
+      [
+        'tools / tool_choice',
+        'array | object',
+        'Tool definitions and selection policy passed through.'
+      ],
+      ['metadata', 'object', 'Optional metadata for task tracing and diagnostics.']
+    ],
+    textAsyncResponseParams: [
+      [
+        'id',
+        'string',
+        'Response ID, for example resp_123, used to retrieve, resume streaming, or cancel.'
+      ],
+      ['object', '"response"', 'Object type returned by the Responses API.'],
+      ['created_at', 'integer', 'Unix timestamp for when the Response was created.'],
+      ['background', 'boolean', 'Whether this is a background task.'],
+      [
+        'status',
+        'string',
+        'Task status, such as queued, in_progress, completed, failed, cancelled, or incomplete.'
+      ],
+      [
+        'output[]',
+        'array',
+        'Completed model output; text usually appears in message output items.'
+      ],
+      [
+        'output[].type',
+        'string',
+        'Output item type, such as message, function_call, or tool result.'
+      ],
+      ['output[].content[].type', '"output_text"', 'Text content item type.'],
+      ['output[].content[].text', 'string', 'Text result after the background task completes.'],
+      ['error', 'object | null', 'On failure, includes code and message; usually null on success.'],
+      ['usage', 'object | null', 'Final token usage used by NeoGate for records and settlement.']
+    ],
+    imageRequestParams: [
+      [
+        'model',
+        'string, required',
+        'Image model, for example gpt-image-2. NeoGate still applies model permissions and upstream routing.'
+      ],
+      ['prompt', 'string, required', 'Text prompt describing the image to generate.'],
+      [
+        'size',
+        'string',
+        'Image size, for example 1024x1024, 1536x1024, 1024x1536, or auto. Availability depends on the model and upstream.'
+      ],
+      ['quality', 'string', 'Image quality, such as auto, low, medium, or high.'],
+      ['n', 'integer', 'Number of images to generate; some image models only support 1.'],
+      ['output_format', 'string', 'Output image format, such as png, jpeg, or webp.'],
+      ['output_compression', 'integer', 'Compression quality from 0-100, usually for jpeg/webp.'],
+      ['stream', 'boolean', 'Set true to receive generation events over text/event-stream.'],
+      ['partial_images', 'integer', 'Number of partial preview images requested during streaming.']
+    ],
+    imageResponseParams: [
+      ['created', 'integer', 'Unix timestamp for when the response was created.'],
+      ['data[]', 'array', 'Image result list; each item represents one generated image.'],
+      ['data[].b64_json', 'string', 'Base64-encoded image content for display or storage.'],
+      ['data[].url', 'string', 'Passed through when the upstream returns image URLs.'],
+      [
+        'data[].revised_prompt',
+        'string',
+        'Prompt revision returned by the upstream when available.'
+      ],
+      [
+        'usage',
+        'object',
+        'Image generation usage returned by the upstream and used for NeoGate billing records.'
+      ],
+      [
+        'stream event',
+        'text/event-stream',
+        'With stream=true, events include partial image, completed, and error states.'
+      ]
+    ],
+    imageAsyncRequestParams: [
+      [
+        'model',
+        'string, required',
+        'Responses model, for example gpt-5.5. It interprets the input and calls the image_generation tool.'
+      ],
+      [
+        'input',
+        'string | array, required',
+        'Use a string for text-to-image, or message content with input_text and input_image for image-to-image/editing.'
+      ],
+      [
+        'tools[].type',
+        '"image_generation", required',
+        'Enables the Responses image generation tool.'
+      ],
+      [
+        'tools[].model',
+        'string',
+        'Image model, for example gpt-image-2, passed through when supported.'
+      ],
+      [
+        'tools[].action',
+        'generate | edit | auto',
+        'Controls generation, editing, or automatic action selection.'
+      ],
+      ['tools[].size', 'string', 'Image size, such as 1024x1024, 1536x1024, 1024x1536, or auto.'],
+      ['tools[].quality', 'string', 'Image quality, such as auto, low, medium, or high.'],
+      ['tools[].output_format', 'string', 'Output image format, such as png, jpeg, or webp.'],
+      [
+        'background',
+        'boolean',
+        'Set true to create a background Response; NeoGate async image tasks use this mode.'
+      ],
+      [
+        'store',
+        'boolean',
+        'Required for background responses; NeoGate does not allow store=false.'
+      ],
+      [
+        'stream',
+        'boolean',
+        'Do not set true during background creation; retrieve with ?stream=true to resume streamed results.'
+      ]
+    ],
+    imageAsyncResponseParams: [
+      [
+        'id',
+        'string',
+        'Response ID, for example resp_123, used to retrieve, resume streaming, or cancel.'
+      ],
+      ['object', '"response"', 'Object type returned by the Responses API.'],
+      ['created_at', 'integer', 'Unix timestamp for when the Response was created.'],
+      ['background', 'boolean', 'Whether this is a background task.'],
+      [
+        'status',
+        'string',
+        'Task status, such as queued, in_progress, completed, failed, or cancelled.'
+      ],
+      [
+        'output[]',
+        'array',
+        'Completed model output; image results appear in image_generation_call items.'
+      ],
+      [
+        'output[].type',
+        '"image_generation_call"',
+        'Identifies output produced by the image generation tool.'
+      ],
+      ['output[].result', 'string', 'Base64 image content returned when generation completes.'],
+      ['error', 'object | null', 'On failure, includes code and message; usually null on success.'],
+      ['usage', 'object | null', 'Final usage data used by NeoGate for records and settlement.']
+    ],
     embeddingTitle: 'Embeddings',
     openAiEmbeddings:
       'Embeddings are forwarded with the official OpenAI JSON request body and are useful for RAG, semantic search, deduplication, and retrieval. The requested model still uses NeoGate model permissions, routing, billing, and usage records.',
@@ -1461,6 +1879,58 @@ const content = computed(() => {
                   <h2>{{ content.menu[3][2] }}</h2>
                   <p>{{ content.openAiText }}</p>
                 </div>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.requestParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.textRequestParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.responseParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.textResponseParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
                 <article class="docs-step-card">
                   <h3>Responses Create</h3>
                   <div class="docs-copy-block">
@@ -1510,6 +1980,58 @@ const content = computed(() => {
                   <h2>{{ content.menu[4][2] }}</h2>
                   <p>{{ content.openAiTextAsync }}</p>
                 </div>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.requestParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.textAsyncRequestParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.responseParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.textAsyncResponseParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
                 <article class="docs-step-card">
                   <h3>Create Background Response</h3>
                   <div class="docs-copy-block">
@@ -1573,6 +2095,58 @@ const content = computed(() => {
                   <h2>{{ content.menu[5][2] }}</h2>
                   <p>{{ content.openAiImage }}</p>
                 </div>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.requestParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.imageRequestParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.responseParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.imageResponseParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
                 <article class="docs-step-card">
                   <h3>Generations</h3>
                   <div class="docs-copy-block">
@@ -1650,6 +2224,58 @@ const content = computed(() => {
                   <h2>{{ content.menu[6][2] }}</h2>
                   <p>{{ content.openAiImageAsync }}</p>
                 </div>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.requestParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.imageAsyncRequestParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.responseParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.imageAsyncResponseParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
                 <article class="docs-step-card">
                   <h3>Background Text to Image</h3>
                   <div class="docs-copy-block">

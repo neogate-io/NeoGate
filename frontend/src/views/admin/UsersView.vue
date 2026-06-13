@@ -127,6 +127,11 @@ const {
 } satisfies UserPage)
 const users = computed(() => usersPage.value.items)
 const usersInitialLoading = computed(() => !usersLoaded.value)
+const showUsersPagination = computed(
+  () =>
+    !usersInitialLoading.value &&
+    (users.value.length > 0 || usersCurrentPage.value > 1 || usersPage.value.has_more)
+)
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
 const showAccountBalance = computed(() =>
   Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
@@ -536,7 +541,7 @@ onMounted(() => {
       <div class="user-table-loading-row"></div>
     </div>
 
-    <div v-else class="service-table-panel has-pagination">
+    <div v-else class="service-table-panel" :class="{ 'has-pagination': showUsersPagination }">
       <el-table
         v-loading="loading"
         class="admin-table service-table user-table"
@@ -750,10 +755,7 @@ onMounted(() => {
       </el-table>
     </div>
 
-    <div
-      v-if="!usersInitialLoading"
-      class="admin-pagination-bar admin-table-pagination is-compact"
-    >
+    <div v-if="showUsersPagination" class="admin-pagination-bar admin-table-pagination is-compact">
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
           <span class="admin-page-label">{{ t('pageSize') }}</span>

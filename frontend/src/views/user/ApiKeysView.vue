@@ -26,7 +26,10 @@ const newKeyDialogVisible = ref(false)
 const newKey = ref('')
 const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const keySkeletonCount = 3
-const { data: servicePolicy } = useAsyncData(() => getUserServicePolicy(), null)
+const { data: servicePolicy, loaded: servicePolicyLoaded } = useAsyncData(
+  () => getUserServicePolicy(),
+  null
+)
 const canCreateDefaultApiKey = computed(() => servicePolicy.value?.service_mode === 'paid')
 const {
   data: apiKeys,
@@ -34,6 +37,9 @@ const {
   loaded: keysLoaded,
   reload
 } = useAsyncData(() => getOwnUserKeys(), [])
+const showApiKeyEmptyState = computed(
+  () => servicePolicyLoaded.value && apiKeys.value.length === 0 && !canCreateDefaultApiKey.value
+)
 
 function formatLastActiveAt(value?: string | null) {
   return value ? formatCompactDateTime(value) : t('neverUsed')
@@ -228,6 +234,12 @@ async function confirmDeleteApiKey(row: UserKey) {
         </dl>
       </article>
 
+      <article v-if="showApiKeyEmptyState" class="user-panel key-empty-state" role="listitem">
+        <el-empty :description="t('noApiKeys')">
+          <p class="key-empty-hint">{{ t('apiKeysInternalEmptyHint') }}</p>
+        </el-empty>
+      </article>
+
       <button
         v-if="canCreateDefaultApiKey"
         class="user-panel key-create-card"
@@ -305,7 +317,7 @@ async function confirmDeleteApiKey(row: UserKey) {
   color: #64748b;
   flex: 0 0 auto;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1;
   text-transform: uppercase;
@@ -323,7 +335,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 .api-base-url-row code {
   color: #0f172a;
   font-size: 14px;
-  font-weight: 760;
+  font-weight: 500;
   letter-spacing: 0;
   min-width: 0;
   overflow: hidden;
@@ -398,7 +410,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 .key-list-name-row strong {
   color: #111827;
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -421,7 +433,7 @@ async function confirmDeleteApiKey(row: UserKey) {
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 12px;
-  font-weight: 760;
+  font-weight: 600;
   gap: 6px;
   line-height: 1;
   padding: 6px 9px;
@@ -462,7 +474,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 .key-list-secret span {
   color: #64748b;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1;
   text-transform: uppercase;
@@ -482,7 +494,7 @@ async function confirmDeleteApiKey(row: UserKey) {
   color: #0f172a;
   flex: 1 1 auto;
   font-size: 16px;
-  font-weight: 780;
+  font-weight: 500;
   letter-spacing: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -523,14 +535,14 @@ async function confirmDeleteApiKey(row: UserKey) {
 .key-card-meta dt {
   color: #94a3b8;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.2;
 }
 
 .key-card-meta dd {
   color: #64748b;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.25;
   margin: 0;
   overflow: hidden;
@@ -569,9 +581,31 @@ async function confirmDeleteApiKey(row: UserKey) {
   min-height: 132px;
 }
 
+.key-empty-state {
+  align-items: center;
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: center;
+  min-height: 188px;
+  padding: 24px;
+}
+
+.key-empty-state :deep(.el-empty) {
+  padding: 0;
+}
+
+.key-empty-hint {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 auto;
+  max-width: 420px;
+  text-align: center;
+}
+
 .key-create-card strong {
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .key-create-icon {

@@ -92,6 +92,18 @@ const bootstrapForm = reactive({
   publicBaseUrl: defaultPublicBaseUrl()
 })
 
+const databasePortInput = computed({
+  get: () => (bootstrapForm.databasePort > 0 ? String(bootstrapForm.databasePort) : ''),
+  set: (value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 5)
+    if (!digits) {
+      bootstrapForm.databasePort = 0
+      return
+    }
+    bootstrapForm.databasePort = Math.min(Number(digits), 65535)
+  }
+})
+
 const setupForm = reactive({
   adminUsername: 'admin',
   adminPassword: '',
@@ -817,9 +829,7 @@ function setupEndpointsForSubmit(models: string[]) {
   for (const endpoint of provider.default_endpoints) {
     if (endpoint.protocol !== 'openai' && endpoint.protocol !== 'anthropic') continue
     const baseUrl =
-      endpoint.protocol === setupForm.protocol
-        ? setupForm.baseUrl.trim()
-        : endpoint.base_url.trim()
+      endpoint.protocol === setupForm.protocol ? setupForm.baseUrl.trim() : endpoint.base_url.trim()
     if (!baseUrl) continue
     endpoints.push({
       protocol: endpoint.protocol,
@@ -1070,8 +1080,13 @@ onMounted(load)
                 <el-form-item :label="t('databaseHostLabel')">
                   <el-input v-model="bootstrapForm.databaseHost" />
                 </el-form-item>
-                <el-form-item :label="t('databasePortLabel')">
-                  <el-input-number v-model="bootstrapForm.databasePort" :min="1" :max="65535" />
+                <el-form-item class="setup-database-port-field" :label="t('databasePortLabel')">
+                  <el-input
+                    v-model="databasePortInput"
+                    autocomplete="off"
+                    inputmode="numeric"
+                    placeholder="5432"
+                  />
                 </el-form-item>
                 <el-form-item :label="t('databaseNameLabel')">
                   <el-input v-model="bootstrapForm.databaseName" />
@@ -1861,6 +1876,11 @@ onMounted(load)
 .setup-grid .el-input-number,
 .setup-grid .el-select {
   width: 100%;
+}
+
+.setup-database-port-field :deep(.el-form-item__content),
+.setup-database-port-field :deep(.el-input) {
+  width: 86px;
 }
 
 .admin-credentials-grid {

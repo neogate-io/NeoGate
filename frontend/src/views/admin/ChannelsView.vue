@@ -847,16 +847,7 @@ onMounted(loadInitialData)
           <div class="channel-empty-state">
             <el-empty
               :description="hasChannelSearchCriteria ? t('noMatchingChannels') : t('noChannels')"
-            >
-              <el-button
-                v-if="!hasChannelSearchCriteria"
-                type="primary"
-                :icon="Plus"
-                @click="openCreateDialog"
-              >
-                {{ t('addChannel') }}
-              </el-button>
-            </el-empty>
+            />
           </div>
         </template>
       </el-table>

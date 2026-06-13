@@ -38,6 +38,7 @@ CREATE TABLE project (
     owner_user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled')),
     is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -51,6 +52,7 @@ CREATE TABLE project_member (
     project_id BIGINT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
     role TEXT NOT NULL DEFAULT 'owner' CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
+    last_active_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (project_id, user_id)
@@ -507,6 +509,8 @@ CREATE INDEX idx_user_user_group ON "user"(user_group_id);
 CREATE INDEX idx_user_created_id ON "user"(created_at DESC, id DESC);
 CREATE INDEX idx_user_email_trgm ON "user" USING GIN ((email::TEXT) gin_trgm_ops);
 CREATE INDEX idx_project_owner_created ON project(owner_user_id, created_at DESC, id DESC);
+CREATE INDEX idx_project_deleted_created
+    ON project(deleted_at, created_at DESC, id DESC);
 CREATE INDEX idx_project_member_user ON project_member(user_id, project_id);
 CREATE INDEX idx_admin_status ON admin(status);
 CREATE INDEX idx_user_code_email_active

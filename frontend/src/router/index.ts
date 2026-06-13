@@ -30,12 +30,6 @@ export const router = createRouter({
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/services',
-      name: 'services',
-      component: () => import('../views/public/ServicesView.vue'),
-      meta: { messageKey: 'services' }
-    },
-    {
       path: '/login',
       name: 'login',
       component: () => import('../views/auth/LoginView.vue'),

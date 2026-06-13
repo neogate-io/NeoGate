@@ -383,7 +383,8 @@
 .usage-toolbar-actions,
 .project-toolbar-filters,
 .project-toolbar-actions,
-.channel-toolbar-actions {
+.channel-toolbar-actions,
+.admin-page-toolbar-actions {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
@@ -466,22 +467,7 @@
   box-shadow: none;
 }
 
-.channel-runtime-status,
-.user-status-tag {
-  align-items: center;
-  background: #f8fafc;
-  border: 1px solid #dbe4ef;
-  border-radius: 8px;
-  color: #4e5969;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 720;
-  gap: 7px;
-  min-height: 34px;
-  padding: 0 13px 0 8px;
-  white-space: nowrap;
-}
-
+/* Status-tag base layout overridden below; keep .el-icon rules intact */
 .channel-runtime-status .el-icon,
 .user-status-tag .el-icon {
   align-items: center;
@@ -1379,6 +1365,7 @@
   min-width: 700px;
 }
 
+/* Admin dialog chrome — shared across all management dialogs */
 :is(
   .channel-dialog,
   .model-picker-dialog,
@@ -1386,8 +1373,9 @@
   .user-admin-dialog,
   .reference-prices-dialog
 ) {
+  border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
-  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.14);
+  box-shadow: var(--admin-shadow-raised);
   overflow: hidden;
 }
 
@@ -1399,6 +1387,7 @@
     .reference-prices-dialog
   )
   .el-dialog__header {
+  background: var(--admin-surface);
   border-bottom: 1px solid var(--admin-border-soft);
   margin: 0;
   padding: 18px 22px 14px;
@@ -1440,6 +1429,7 @@
     .reference-prices-dialog
   )
   .el-dialog__body {
+  color: var(--admin-text);
   padding: 18px 22px;
 }
 
@@ -1451,7 +1441,7 @@
     .reference-prices-dialog
   )
   .el-dialog__footer {
-  background: #fbfdff;
+  background: var(--admin-surface);
   border-top: 1px solid var(--admin-border-soft);
   padding: 14px 22px 18px;
 }
@@ -1696,15 +1686,6 @@
   font-weight: 680;
 }
 
-.admin-shell .el-button--primary {
-  --el-button-bg-color: var(--brand-blue);
-  --el-button-border-color: var(--brand-blue);
-  --el-button-hover-bg-color: var(--brand-blue-hover);
-  --el-button-hover-border-color: var(--brand-blue-hover);
-  --el-button-active-bg-color: #0c669f;
-  --el-button-active-border-color: #0c669f;
-}
-
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
@@ -1726,18 +1707,6 @@
 .project-toolbar,
 .admin-page-toolbar {
   min-height: 42px;
-}
-
-.channel-toolbar-filters,
-.user-toolbar-filters,
-.usage-toolbar-filters,
-.user-toolbar-actions,
-.usage-toolbar-actions,
-.project-toolbar-filters,
-.project-toolbar-actions,
-.channel-toolbar-actions,
-.admin-page-toolbar-actions {
-  gap: 10px;
 }
 
 .admin-filter-field {
@@ -2025,26 +1994,12 @@
     min-width: 0;
   }
 
-  .user-table.admin-table.el-table colgroup col:nth-child(1),
-  .user-table.admin-table.el-table colgroup col:nth-child(3),
-  .user-table.admin-table.el-table colgroup col:nth-child(4),
-  .user-table.admin-table.el-table colgroup col:nth-child(5),
-  .user-table.admin-table.el-table colgroup col:nth-child(6),
-  .user-table.admin-table.el-table colgroup col:nth-child(7),
-  .user-table.admin-table.el-table colgroup col:nth-child(8),
-  .user-table.admin-table.el-table colgroup col:nth-child(9) {
+  .user-table.admin-table.el-table colgroup col:not(:nth-child(2)) {
     display: none;
     width: 0 !important;
   }
 
-  .user-table.admin-table.el-table :is(th, td):nth-child(1),
-  .user-table.admin-table.el-table :is(th, td):nth-child(3),
-  .user-table.admin-table.el-table :is(th, td):nth-child(4),
-  .user-table.admin-table.el-table :is(th, td):nth-child(5),
-  .user-table.admin-table.el-table :is(th, td):nth-child(6),
-  .user-table.admin-table.el-table :is(th, td):nth-child(7),
-  .user-table.admin-table.el-table :is(th, td):nth-child(8),
-  .user-table.admin-table.el-table :is(th, td):nth-child(9) {
+  .user-table.admin-table.el-table :is(th, td):not(:nth-child(2)) {
     display: none !important;
   }
 
@@ -2102,14 +2057,6 @@
 }
 
 .admin-shell .page-header,
-.channel-toolbar,
-.user-toolbar,
-.usage-toolbar,
-.project-toolbar,
-.admin-page-toolbar,
-.admin-filter-bar.el-form,
-.user-filter-bar.el-form,
-.inline-admin-form,
 .admin-settings-panel,
 .admin-settings-form,
 .service-table-panel,
@@ -2468,57 +2415,6 @@
 
 .admin-pagination-bar.is-compact .admin-page-buttons .el-button {
   margin: 0;
-}
-
-:is(
-  .channel-dialog,
-  .model-picker-dialog,
-  .settings-dialog,
-  .user-admin-dialog,
-  .reference-prices-dialog
-) {
-  border: 1px solid var(--admin-border);
-  box-shadow: var(--admin-shadow-raised);
-}
-
-:is(
-    .channel-dialog,
-    .model-picker-dialog,
-    .settings-dialog,
-    .user-admin-dialog,
-    .reference-prices-dialog
-  )
-  .el-dialog__header,
-:is(
-    .channel-dialog,
-    .model-picker-dialog,
-    .settings-dialog,
-    .user-admin-dialog,
-    .reference-prices-dialog
-  )
-  .el-dialog__footer {
-  background: var(--admin-surface);
-}
-
-:is(
-    .channel-dialog,
-    .model-picker-dialog,
-    .settings-dialog,
-    .user-admin-dialog,
-    .reference-prices-dialog
-  )
-  .el-dialog__body {
-  color: var(--admin-text);
-}
-
-.el-message-box {
-  border-color: var(--admin-border);
-  box-shadow: var(--admin-shadow-raised);
-}
-
-.el-message-box__btns,
-.el-message-box__footer {
-  background: var(--admin-surface);
 }
 
 @media (prefers-reduced-motion: reduce) {

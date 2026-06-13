@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { DocumentCopy, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { computed, ref } from 'vue'
+import { computed, inject, ref, type Ref } from 'vue'
 import {
   createOwnUserKey,
   deleteOwnUserKey,
   getOwnUserKeys,
   updateOwnUserKeyStatus
 } from '../../api/userKeys'
-import { getUserServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { UserKey } from '../../types/admin'
+import type { ServicePolicy } from '../../api/policy'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, maskApiKey } from '../../utils/format'
@@ -26,10 +26,7 @@ const newKeyDialogVisible = ref(false)
 const newKey = ref('')
 const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const keySkeletonCount = 3
-const { data: servicePolicy, loaded: servicePolicyLoaded } = useAsyncData(
-  () => getUserServicePolicy(),
-  null
-)
+const servicePolicy = inject<Ref<ServicePolicy | null>>('servicePolicy')!
 const canCreateDefaultApiKey = computed(() => servicePolicy.value?.service_mode === 'paid')
 const {
   data: apiKeys,
@@ -38,7 +35,7 @@ const {
   reload
 } = useAsyncData(() => getOwnUserKeys(), [])
 const showApiKeyEmptyState = computed(
-  () => servicePolicyLoaded.value && apiKeys.value.length === 0 && !canCreateDefaultApiKey.value
+  () => keysLoaded.value && apiKeys.value.length === 0 && !canCreateDefaultApiKey.value
 )
 
 function formatLastActiveAt(value?: string | null) {
@@ -370,7 +367,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-card-skeleton span {
-  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background: var(--skeleton-gradient);
   background-size: 220% 100%;
   border-radius: 999px;
   display: block;

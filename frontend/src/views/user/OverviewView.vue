@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref, type Ref } from 'vue'
 import { Calendar, DataLine, Document, Key, Monitor, Wallet } from '@element-plus/icons-vue'
 import { RouterLink } from 'vue-router'
 import { getUserOverview } from '../../api/overview'
-import { getUserServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import { formatMicroUsd, toDateKey } from '../../utils/format'
+import type { ServicePolicy } from '../../api/policy'
 
 const { t } = useLocale()
 const {
@@ -14,13 +14,9 @@ const {
   loading,
   loaded: overviewLoaded
 } = useAsyncData(() => getUserOverview(), null)
-const {
-  data: servicePolicy,
-  loading: policyLoading,
-  loaded: policyLoaded
-} = useAsyncData(() => getUserServicePolicy(), null)
+const servicePolicy = inject<Ref<ServicePolicy | null>>('servicePolicy')!
 const hoveredChartIndex = ref<number | null>(null)
-const overviewInitialLoading = computed(() => !overviewLoaded.value || !policyLoaded.value)
+const overviewInitialLoading = computed(() => !overviewLoaded.value)
 const showBalance = computed(() =>
   Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
 )
@@ -221,7 +217,7 @@ function getCostForDate(date: Date) {
     </div>
     <div
       v-else
-      v-loading="loading || policyLoading"
+      v-loading="loading"
       class="overview-summary-grid"
       :class="{ 'without-balance': !showBalance }"
     >
@@ -399,7 +395,7 @@ function getCostForDate(date: Date) {
 .overview-trend-skeleton span,
 .overview-trend-skeleton strong,
 .overview-trend-skeleton i {
-  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background: var(--skeleton-gradient);
   background-size: 220% 100%;
   border-radius: 999px;
   display: block;

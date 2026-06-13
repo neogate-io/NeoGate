@@ -288,3 +288,8 @@ NeoGate 名称、Logo 及相关标识不随 AGPL 授权，使用边界见 [TRADE
 | --- | --- |
 | 🐛 问题反馈 | [GitHub Issues](https://github.com/neogate-io/NeoGate/issues) |
 | 🤝 代码贡献 | [Pull Requests](https://github.com/neogate-io/NeoGate/pulls) |
+| 💬 官方 QQ 群 | 群号：`1179649618` |
+
+<p align="left">
+  <img src="frontend/public/qrcode.png" alt="NeoGate 官方 QQ 群二维码" width="220" />
+</p>

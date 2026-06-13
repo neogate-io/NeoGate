@@ -160,10 +160,6 @@ function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
   return formatMicroUsd(row.available_micro_usd, 2)
 }
 
-function formatAccountBalance(row: Pick<CreditBalance, 'available_micro_usd'>) {
-  return formatMicroUsd(row.available_micro_usd, 2)
-}
-
 function creditCellClass(row: Pick<CreditBalance, 'available_micro_usd'>): CreditClass {
   if (!isCreditRequired.value) return 'is-unlimited'
   return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
@@ -649,7 +645,7 @@ onMounted(() => {
           <template #default="{ row }">
             <el-tooltip :content="accountBalanceTooltip(row)" placement="top">
               <span class="user-credit-cell" :class="creditCellClass(row)">
-                {{ formatAccountBalance(row) }}
+                {{ formatMicroUsd(row.available_micro_usd, 2) }}
               </span>
             </el-tooltip>
           </template>

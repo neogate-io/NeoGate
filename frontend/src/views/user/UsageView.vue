@@ -440,7 +440,7 @@ async function exportUsage() {
 }
 
 .usage-loading-rows i {
-  background: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
+  background: var(--skeleton-gradient);
   background-size: 220% 100%;
   border-radius: 999px;
   display: block;

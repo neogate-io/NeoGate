@@ -11,7 +11,9 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
-ENV_FILE = Path(__file__).parent / "../.env"
+TESTS_DIR = Path(__file__).resolve().parents[1]
+BACKEND_DIR = TESTS_DIR.parent
+ENV_FILE = BACKEND_DIR / ".env"
 MODEL = "gpt-image-2"
 RESPONSE_MODEL = "gpt-5.5"
 DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1"
@@ -19,8 +21,8 @@ DEFAULT_IMAGE_SIZE = "1536x1024"
 REQUEST_TIMEOUT_SECONDS = 600
 RESPONSE_POLL_TIMEOUT_SECONDS = 900
 RESPONSE_POLL_INTERVAL_SECONDS = 5
-OUTPUT_DIR = Path(__file__).parent / "output"
-TEST_IMAGE_PATH = Path(__file__).parent / "test.png"
+OUTPUT_DIR = TESTS_DIR / "output" / "openai_image"
+TEST_IMAGE_PATH = TESTS_DIR / "fixtures" / "test.png"
 
 
 def load_env_file(path):

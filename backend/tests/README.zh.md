@@ -1,43 +1,42 @@
-# Backend Tests
+# 后端测试
 
-Chinese version: [README.zh.md](README.zh.md)
+英文版本：[README.md](README.md)
 
-This directory keeps backend test helpers grouped by purpose:
+本目录按用途整理后端测试和压测辅助文件：
 
-- `smoke/`: smoke tests that call a running NeoGate instance.
-- `benchmarks/`: local benchmark tools and mock upstreams.
-- `fixtures/`: shared input assets used by tests.
-- `output/`: generated test artifacts. This directory is ignored by git.
+- `smoke/`：需要连接运行中的 NeoGate 实例的冒烟测试。
+- `benchmarks/`：本地压测工具和 mock 上游服务。
+- `fixtures/`：测试共享的输入素材。
+- `output/`：测试生成的输出文件，该目录已被 git 忽略。
 
-## OpenAI Image Smoke Tests
+## OpenAI 图片冒烟测试
 
-The OpenAI image smoke tests live in `smoke/test_openai_image.py`. They read
-defaults from `backend/.env`; environment variables override values from that
-file.
+OpenAI 图片冒烟测试位于 `smoke/test_openai_image.py`。测试会读取
+`backend/.env` 中的默认配置；同名环境变量优先级更高。
 
-Required:
+必填：
 
 ```bash
 NEOGATE_API_KEY=your_neogate_api_key
 ```
 
-Optional:
+可选：
 
 ```bash
 NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
 NEOGATE_IMAGE_SIZE=1536x1024
 ```
 
-The image model is fixed to `gpt-image-2`, and generated images are saved under
-`tests/output/openai_image/`.
+图片模型固定为 `gpt-image-2`，生成的图片会保存到
+`tests/output/openai_image/`。
 
-Run all image smoke tests from `backend/`:
+在 `backend/` 目录下运行全部图片冒烟测试：
 
 ```bash
 python -m unittest tests.smoke.test_openai_image
 ```
 
-Run one test from `backend/`:
+在 `backend/` 目录下运行单个测试：
 
 ```bash
 python -m unittest tests.smoke.test_openai_image.test_images_generation_json
@@ -48,45 +47,45 @@ python -m unittest tests.smoke.test_openai_image.test_images_variation
 python -m unittest tests.smoke.test_openai_image.test_responses_image_generation_background
 ```
 
-## Relay Benchmark
+## Relay 压测
 
-The relay benchmark tools provide a local OpenAI-compatible mock upstream for
-measuring NeoGate relay overhead without calling a real model provider.
+Relay 压测工具提供一个本地 OpenAI 兼容 mock 上游服务，用于测量 NeoGate
+转发开销，不需要调用真实模型供应商。
 
-Start the mock upstream from `backend/`:
+在 `backend/` 目录下启动 mock 上游：
 
 ```bash
 python3 tests/benchmarks/relay_bench_mock.py --quiet
 ```
 
-The default upstream base URL is:
+默认上游地址：
 
 ```text
 http://127.0.0.1:18080
 ```
 
-For payload-size experiments:
+调整响应体大小：
 
 ```bash
 python3 tests/benchmarks/relay_bench_mock.py --quiet --output-bytes 4096
 ```
 
-For upstream-latency experiments:
+模拟上游延迟：
 
 ```bash
 python3 tests/benchmarks/relay_bench_mock.py --quiet --delay-ms 20
 ```
 
-Configure a test channel in NeoGate:
+在 NeoGate 中配置一个测试渠道：
 
-- protocol: `openai`
-- base URL: `http://127.0.0.1:18080`
-- model: `bench-model`
-- key: any non-empty value, for example `bench-key`
+- protocol：`openai`
+- base URL：`http://127.0.0.1:18080`
+- model：`bench-model`
+- key：任意非空值，例如 `bench-key`
 
-Create a NeoGate user API key with permission for `bench-model`.
+然后创建一个拥有 `bench-model` 权限的 NeoGate 用户 API Key。
 
-Run a non-streaming benchmark:
+运行非流式压测：
 
 ```bash
 export NEOGATE_API_KEY='your-neogate-key'
@@ -102,8 +101,8 @@ LUA
   http://127.0.0.1:8080/v1/chat/completions
 ```
 
-Or use the wrapper script, which can also sample NeoGate RSS/CPU when
-`NEOGATE_PID` is set:
+也可以使用封装脚本；设置 `NEOGATE_PID` 后，脚本会同时采样 NeoGate 的
+RSS 和 CPU：
 
 ```bash
 NEOGATE_API_KEY='your-neogate-key' \
@@ -111,7 +110,7 @@ NEOGATE_PID="$(pgrep -n neogate)" \
 python3 tests/benchmarks/relay_bench.py --duration 30s --connections 128 --threads 4
 ```
 
-Run a streaming benchmark:
+运行流式压测：
 
 ```bash
 wrk -t4 -c128 -d30s --latency \
@@ -125,7 +124,7 @@ LUA
   http://127.0.0.1:8080/v1/chat/completions
 ```
 
-Wrapper equivalent:
+对应的封装脚本命令：
 
 ```bash
 NEOGATE_API_KEY='your-neogate-key' \
@@ -133,11 +132,11 @@ NEOGATE_PID="$(pgrep -n neogate)" \
 python3 tests/benchmarks/relay_bench.py --stream --duration 30s --connections 128 --threads 4
 ```
 
-Track at least:
+至少记录以下指标：
 
 - requests/sec
 - transfer/sec
 - p50/p95/p99 latency
 - NeoGate RSS
 - NeoGate CPU
-- database CPU and connection saturation
+- 数据库 CPU 和连接数饱和情况

@@ -88,9 +88,7 @@ impl ServicePolicyCache {
     pub fn get(&self) -> Option<ServicePolicyRecord> {
         let now = Instant::now();
         let mut cached = self.inner.lock().expect("service policy cache poisoned");
-        let Some(entry) = cached.as_ref() else {
-            return None;
-        };
+        let entry = cached.as_ref()?;
         if entry.expires_at > now {
             return Some(entry.record.clone());
         }

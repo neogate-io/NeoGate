@@ -206,6 +206,24 @@ async fn response_error_for_log(response: Response) -> (Response, Option<String>
     }
 
     let status = response.status();
+    if response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|length| length > ERROR_LOG_BODY_LIMIT_BYTES)
+    {
+        return (
+            response,
+            None,
+            Some(format!(
+                "{} response body omitted from log because content-length exceeds {} bytes",
+                status.canonical_reason().unwrap_or("error"),
+                ERROR_LOG_BODY_LIMIT_BYTES
+            )),
+        );
+    }
+
     let (parts, body) = response.into_parts();
     let bytes = match to_bytes(body, ERROR_LOG_BODY_LIMIT_BYTES).await {
         Ok(bytes) => bytes,
@@ -612,7 +630,7 @@ pub(crate) mod tests {
     use std::{sync::Arc, time::Duration};
 
     use axum::{
-        body::Body,
+        body::{to_bytes, Body},
         http::{Request, StatusCode},
         routing::get,
         Router,
@@ -653,6 +671,7 @@ pub(crate) mod tests {
                 upstream_connect_timeout: Duration::from_secs(10),
                 upstream_timeout: Duration::from_secs(30),
                 relay_body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
+                relay_usage_buffer_limit_bytes: config::DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
                 credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                 http_pool_max_idle_per_host: 100,
                 http_pool_idle_timeout: Duration::from_secs(90),
@@ -826,5 +845,27 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn large_error_response_log_keeps_body_unread() {
+        let body = "x".repeat(ERROR_LOG_BODY_LIMIT_BYTES + 1);
+        let response = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_LENGTH, body.len().to_string())
+            .body(Body::from(body.clone()))
+            .unwrap();
+
+        let (response, code, message) = response_error_for_log(response).await;
+
+        assert!(code.is_none());
+        assert!(message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("omitted from log"));
+        let bytes = to_bytes(response.into_body(), body.len() + 1)
+            .await
+            .unwrap();
+        assert_eq!(bytes.len(), body.len());
     }
 }

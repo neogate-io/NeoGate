@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 
 pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-production";
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
@@ -30,6 +31,7 @@ pub struct Config {
     pub upstream_connect_timeout: Duration,
     pub upstream_timeout: Duration,
     pub relay_body_limit_bytes: usize,
+    pub relay_usage_buffer_limit_bytes: usize,
     pub credential_upload_limit_bytes: usize,
     pub http_pool_max_idle_per_host: usize,
     pub http_pool_idle_timeout: Duration,
@@ -187,6 +189,10 @@ impl Config {
                 "RELAY_BODY_LIMIT_BYTES",
                 DEFAULT_RELAY_BODY_LIMIT_BYTES,
             ),
+            relay_usage_buffer_limit_bytes: parse_usize(
+                "RELAY_USAGE_BUFFER_LIMIT_BYTES",
+                DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
+            ),
             credential_upload_limit_bytes: parse_usize(
                 "CREDENTIAL_UPLOAD_LIMIT_BYTES",
                 DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
@@ -285,6 +291,9 @@ impl Config {
         }
         if self.relay_body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");
+        }
+        if self.relay_usage_buffer_limit_bytes == 0 {
+            anyhow::bail!("RELAY_USAGE_BUFFER_LIMIT_BYTES must be positive");
         }
         if self.credential_upload_limit_bytes == 0 {
             anyhow::bail!("CREDENTIAL_UPLOAD_LIMIT_BYTES must be positive");

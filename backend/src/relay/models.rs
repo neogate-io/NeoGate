@@ -176,7 +176,7 @@ async fn available_models(
         "#,
     )
     .bind(protocol.as_str())
-    .bind(auth.model_limits.as_deref())
+    .bind(auth.model_limits.as_ref().map(|limits| limits.as_slice()))
     .fetch_all(&state.db.pool)
     .await?;
 

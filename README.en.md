@@ -259,6 +259,7 @@ Before going live:
 | 🏷️ Site name | Set `SITE_NAME` in the first-run wizard or environment configuration for page, email, and payment gateway display. |
 | 🔁 CORS | If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration. |
 | 📦 Body size limit | If you proxy image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. |
+| 🧾 Usage parse buffer | `RELAY_USAGE_BUFFER_LIMIT_BYTES` defaults to 16 MiB for non-streaming JSON and SSE usage parsing; keep the default in billing mode unless load tests prove a different limit still preserves usage extraction. |
 | ⏱️ Timeout | For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; by default it follows `REQUEST_TIMEOUT_SECONDS`, usually 600 seconds. |
 | ✉️ SMTP | Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims. |
 | 💳 Billing | For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console. |

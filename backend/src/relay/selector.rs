@@ -156,23 +156,23 @@ struct PlanModel {
 
 struct ModelBlockLookup<'a> {
     persisted: &'a HashMap<ModelBlockKey, DateTime<Utc>>,
-    local: &'a HashMap<ModelBlockKey, DateTime<Utc>>,
+    local: &'a ModelBlockCache,
 }
 
 impl<'a> ModelBlockLookup<'a> {
     fn new(
         persisted: &'a HashMap<ModelBlockKey, DateTime<Utc>>,
-        local: &'a HashMap<ModelBlockKey, DateTime<Utc>>,
+        local: &'a ModelBlockCache,
     ) -> Self {
         Self { persisted, local }
     }
 
     fn contains_active(&self, key: &ModelBlockKey, now: DateTime<Utc>) -> bool {
-        self.local
+        self.persisted
             .get(key)
-            .or_else(|| self.persisted.get(key))
             .map(|blocked_until| *blocked_until > now)
             .unwrap_or(false)
+            || self.local.contains_active(key, now)
     }
 
     fn is_empty(&self) -> bool {
@@ -213,8 +213,7 @@ impl Selector {
     ) -> AppResult<SelectedUpstream> {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
-        let local_model_blocks = self.model_blocks.snapshot(now);
-        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &local_model_blocks);
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
         let channel = choose_channel_for_request(&snapshot, protocol, model, now, &model_blocks)
             .ok_or_else(|| {
                 AppError::UpstreamUnavailable(unavailable_channel_message(
@@ -417,10 +416,26 @@ impl ModelBlockCache {
         entries.insert(key, blocked_until);
     }
 
-    fn snapshot(&self, now: DateTime<Utc>) -> HashMap<ModelBlockKey, DateTime<Utc>> {
-        let mut entries = self.entries.write().expect("model block cache poisoned");
-        entries.retain(|_, until| *until > now);
-        entries.clone()
+    fn contains_active(&self, key: &ModelBlockKey, now: DateTime<Utc>) -> bool {
+        let expired = {
+            let entries = self.entries.read().expect("model block cache poisoned");
+            match entries.get(key) {
+                Some(blocked_until) if *blocked_until > now => return true,
+                Some(_) => true,
+                None => return false,
+            }
+        };
+        if expired {
+            self.clear_expired(now);
+        }
+        false
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries
+            .read()
+            .expect("model block cache poisoned")
+            .is_empty()
     }
 
     fn clear_expired(&self, now: DateTime<Utc>) {
@@ -978,9 +993,10 @@ mod tests {
 
     static EMPTY_BLOCKS: LazyLock<HashMap<ModelBlockKey, DateTime<Utc>>> =
         LazyLock::new(HashMap::new);
+    static EMPTY_LOCAL_BLOCKS: LazyLock<ModelBlockCache> = LazyLock::new(ModelBlockCache::default);
 
     fn empty_block_lookup() -> ModelBlockLookup<'static> {
-        ModelBlockLookup::new(&EMPTY_BLOCKS, &EMPTY_BLOCKS)
+        ModelBlockLookup::new(&EMPTY_BLOCKS, &EMPTY_LOCAL_BLOCKS)
     }
 
     fn candidate(name: &str, priority: i32, weight: i32, models: Vec<&str>) -> ChannelCandidate {
@@ -1258,8 +1274,8 @@ mod tests {
             },
             now + chrono::Duration::hours(1),
         );
-        let empty_blocks = HashMap::new();
-        let model_blocks = ModelBlockLookup::new(&model_blocks, &empty_blocks);
+        let local_blocks = ModelBlockCache::default();
+        let model_blocks = ModelBlockLookup::new(&model_blocks, &local_blocks);
 
         assert_eq!(
             choose_key(&channel, &keys, "gpt-5.4", now, &model_blocks)

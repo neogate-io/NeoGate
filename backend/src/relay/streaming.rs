@@ -21,9 +21,6 @@ use super::{
     usage_from_context,
 };
 
-const MAX_JSON_USAGE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
-const MAX_SSE_USAGE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
-
 pub(crate) struct RelayContext {
     pub(crate) state: Arc<AppState>,
     pub(crate) auth: UserAuth,
@@ -45,10 +42,12 @@ pub(crate) fn body(
     upstream_response: reqwest::Response,
 ) -> Body {
     let content_length = upstream_response.content_length();
+    let usage_buffer_limit_bytes = ctx.state.config.relay_usage_buffer_limit_bytes;
     body_from_stream(
         ctx,
         status,
         content_length,
+        usage_buffer_limit_bytes,
         upstream_response
             .bytes_stream()
             .map(|chunk| chunk.map_err(|err| err.to_string()))
@@ -60,6 +59,7 @@ fn body_from_stream(
     ctx: RelayContext,
     status: StatusCode,
     content_length: Option<u64>,
+    usage_buffer_limit_bytes: usize,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
 ) -> Body {
     let streamed = ctx.streamed;
@@ -68,7 +68,13 @@ fn body_from_stream(
         ctx: Some(ctx),
         status,
         stream,
-        usage: ResponseUsageParser::for_response(status, streamed, path, content_length),
+        usage: ResponseUsageParser::for_response(
+            status,
+            streamed,
+            path,
+            content_length,
+            usage_buffer_limit_bytes,
+        ),
         first_response_ms: None,
     };
 
@@ -271,7 +277,10 @@ impl Drop for StreamingRelay {
 
 enum ResponseUsageParser {
     Sse(StreamUsageParser),
-    Json(Option<Vec<u8>>),
+    Json {
+        buffer: Option<Vec<u8>>,
+        limit_bytes: usize,
+    },
     Disabled,
 }
 
@@ -281,29 +290,36 @@ impl ResponseUsageParser {
         streamed: bool,
         path: &str,
         content_length: Option<u64>,
+        limit_bytes: usize,
     ) -> Self {
-        if !status.is_success() {
-            Self::Disabled
-        } else if path.starts_with("/v1/images/") {
+        if !status.is_success() || path.starts_with("/v1/images/") {
             Self::Disabled
         } else if streamed {
-            Self::Sse(StreamUsageParser::default())
+            Self::Sse(StreamUsageParser::new(limit_bytes))
         } else {
-            Self::Json(Some(Vec::with_capacity(json_usage_buffer_capacity(
-                content_length,
-            ))))
+            Self::Json {
+                buffer: Some(Vec::with_capacity(json_usage_buffer_capacity(
+                    content_length,
+                    limit_bytes,
+                ))),
+                limit_bytes,
+            }
         }
     }
 
     fn observe(&mut self, chunk: &[u8]) {
         match self {
             Self::Sse(parser) => parser.observe(chunk),
-            Self::Json(buffer) => {
+            Self::Json {
+                buffer,
+                limit_bytes,
+            } => {
                 if let Some(bytes) = buffer {
-                    if bytes.len().saturating_add(chunk.len()) <= MAX_JSON_USAGE_BUFFER_BYTES {
+                    if bytes.len().saturating_add(chunk.len()) <= *limit_bytes {
                         bytes.extend_from_slice(chunk);
                     } else {
                         tracing::warn!(
+                            limit_bytes,
                             "non-streamed relay response exceeded usage parse buffer; skipping usage parse"
                         );
                         *buffer = None;
@@ -317,7 +333,7 @@ impl ResponseUsageParser {
     fn finish(&mut self) -> Option<TokenUsage> {
         match self {
             Self::Sse(parser) => parser.finish(),
-            Self::Json(buffer) => buffer
+            Self::Json { buffer, .. } => buffer
                 .as_deref()
                 .and_then(|bytes| parse_usage_from_bytes(bytes, false)),
             Self::Disabled => None,
@@ -325,70 +341,37 @@ impl ResponseUsageParser {
     }
 }
 
-fn json_usage_buffer_capacity(content_length: Option<u64>) -> usize {
+fn json_usage_buffer_capacity(content_length: Option<u64>, limit_bytes: usize) -> usize {
     content_length
         .and_then(|length| usize::try_from(length).ok())
-        .map(|length| length.min(MAX_JSON_USAGE_BUFFER_BYTES))
+        .map(|length| length.min(limit_bytes))
         .unwrap_or(0)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn successful_stream_body_errors_do_not_cool_down_key() {
-        assert!(!should_cooldown_key_for_stream_error(StatusCode::OK));
-    }
-
-    #[test]
-    fn upstream_error_stream_body_errors_cool_down_key() {
-        assert!(should_cooldown_key_for_stream_error(
-            StatusCode::TOO_MANY_REQUESTS
-        ));
-    }
-
-    #[test]
-    fn stream_usage_parser_caps_unterminated_buffer() {
-        let mut parser = StreamUsageParser::default();
-
-        parser.observe(&vec![b'a'; MAX_SSE_USAGE_BUFFER_BYTES + 1]);
-
-        assert!(parser.disabled);
-        assert!(parser.buffered.is_empty());
-        assert!(parser.finish().is_none());
-    }
-
-    #[test]
-    fn stream_usage_parser_keeps_latest_before_cap() {
-        let mut parser = StreamUsageParser::default();
-        parser.observe(
-            br#"data: {"usage":{"input_tokens":10,"output_tokens":3}}
-"#,
-        );
-
-        parser.observe(&vec![b'a'; MAX_SSE_USAGE_BUFFER_BYTES + 1]);
-
-        let usage = parser.finish().expect("latest usage should be retained");
-        assert_eq!(usage.input_tokens, 10);
-        assert_eq!(usage.output_tokens, 3);
-    }
-}
-
-#[derive(Default)]
 struct StreamUsageParser {
     buffered: Vec<u8>,
     latest: Option<TokenUsage>,
     disabled: bool,
+    limit_bytes: usize,
 }
 
 impl StreamUsageParser {
+    fn new(limit_bytes: usize) -> Self {
+        Self {
+            buffered: Vec::new(),
+            latest: None,
+            disabled: false,
+            limit_bytes,
+        }
+    }
+
     fn observe(&mut self, chunk: &[u8]) {
         if self.disabled {
             return;
         }
-        if self.buffered.len().saturating_add(chunk.len()) > MAX_SSE_USAGE_BUFFER_BYTES {
+        if self.buffered.len().saturating_add(chunk.len()) > self.limit_bytes {
             tracing::warn!(
+                limit_bytes = self.limit_bytes,
                 "streamed relay response exceeded usage parse buffer; skipping usage parse"
             );
             self.buffered.clear();
@@ -440,5 +423,48 @@ impl StreamUsageParser {
             }
         }
         self.latest
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_stream_body_errors_do_not_cool_down_key() {
+        assert!(!should_cooldown_key_for_stream_error(StatusCode::OK));
+    }
+
+    #[test]
+    fn upstream_error_stream_body_errors_cool_down_key() {
+        assert!(should_cooldown_key_for_stream_error(
+            StatusCode::TOO_MANY_REQUESTS
+        ));
+    }
+
+    #[test]
+    fn stream_usage_parser_caps_unterminated_buffer() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(&vec![b'a'; 1025]);
+
+        assert!(parser.disabled);
+        assert!(parser.buffered.is_empty());
+        assert!(parser.finish().is_none());
+    }
+
+    #[test]
+    fn stream_usage_parser_keeps_latest_before_cap() {
+        let mut parser = StreamUsageParser::new(1024);
+        parser.observe(
+            br#"data: {"usage":{"input_tokens":10,"output_tokens":3}}
+"#,
+        );
+
+        parser.observe(&vec![b'a'; 1025]);
+
+        let usage = parser.finish().expect("latest usage should be retained");
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 3);
     }
 }

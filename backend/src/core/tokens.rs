@@ -202,7 +202,7 @@ pub struct UserAuth {
     pub user_key_credit_account: CreditAccountId,
     pub user_key_model_credit_accounts: Arc<HashMap<String, CreditAccountId>>,
     pub user_group: String,
-    pub model_limits: Option<Vec<String>>,
+    pub model_limits: Option<Arc<Vec<String>>>,
 }
 
 #[derive(Clone)]
@@ -401,7 +401,9 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             )
             .await?,
             user_group: row.try_get("user_group")?,
-            model_limits: row.try_get("model_limits")?,
+            model_limits: row
+                .try_get::<Option<Vec<String>>, _>("model_limits")?
+                .map(Arc::new),
         };
         state
             .user_auth_cache
@@ -723,7 +725,7 @@ mod tests {
             user_key_credit_account: CreditAccountId::new(101),
             user_key_model_credit_accounts: Arc::new(HashMap::new()),
             user_group: "default".to_string(),
-            model_limits: Some(vec!["gpt-4.1".to_string()]),
+            model_limits: Some(Arc::new(vec!["gpt-4.1".to_string()])),
         };
         assert!(auth.ensure_model_allowed("gpt-4.1").is_ok());
         assert!(auth.ensure_model_allowed("claude-3-5-sonnet").is_err());

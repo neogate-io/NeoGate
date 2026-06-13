@@ -211,7 +211,10 @@ async fn claim_public_user_key_handler(
 async fn verify_user_key_handler(auth: UserAuth) -> Json<UserKeyVerifyResponse> {
     Json(UserKeyVerifyResponse {
         ok: true,
-        model_limits: auth.model_limits,
+        model_limits: auth
+            .model_limits
+            .as_ref()
+            .map(|limits| limits.as_ref().clone()),
     })
 }
 

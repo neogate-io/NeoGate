@@ -1070,8 +1070,8 @@ async fn usage(
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(20).clamp(1, 500);
-    let start = params.start.clone();
-    let end = params.end.clone();
+    let start = params.start;
+    let end = params.end;
     let query = params
         .query
         .as_deref()

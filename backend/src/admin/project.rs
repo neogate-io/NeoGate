@@ -385,10 +385,9 @@ pub async fn list_project_members(
     .bind(project_id)
     .fetch_all(&state.db.pool)
     .await?;
-    Ok(rows
-        .iter()
+    rows.iter()
         .map(|row| project_member_from_row(state, row))
-        .collect::<Result<_, _>>()?)
+        .collect::<Result<_, _>>()
 }
 
 pub async fn add_project_member(

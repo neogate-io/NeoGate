@@ -55,6 +55,15 @@ LUA
   http://127.0.0.1:8080/v1/chat/completions
 ```
 
+Or use the wrapper script, which can also sample NeoGate RSS/CPU when
+`NEOGATE_PID` is set:
+
+```bash
+NEOGATE_API_KEY='your-neogate-key' \
+NEOGATE_PID="$(pgrep -n neogate)" \
+python3 tests/relay_bench.py --duration 30s --connections 128 --threads 4
+```
+
 ## Run a streaming benchmark
 
 ```bash
@@ -67,6 +76,14 @@ wrk.body = '{"model":"bench-model","messages":[{"role":"user","content":"ping"}]
 LUA
 ) \
   http://127.0.0.1:8080/v1/chat/completions
+```
+
+Wrapper equivalent:
+
+```bash
+NEOGATE_API_KEY='your-neogate-key' \
+NEOGATE_PID="$(pgrep -n neogate)" \
+python3 tests/relay_bench.py --stream --duration 30s --connections 128 --threads 4
 ```
 
 Track at least:

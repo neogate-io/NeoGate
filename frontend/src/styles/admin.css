@@ -796,7 +796,7 @@
   align-items: center;
   gap: 8px;
   flex-wrap: nowrap;
-  padding-top: 0;
+  padding: 10px 14px;
 }
 
 .admin-pagination-bar.is-compact .admin-pagination-controls {

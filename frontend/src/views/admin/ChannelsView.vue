@@ -95,6 +95,7 @@ const savingPrices = ref(false)
 const togglingRuntimeKeys = useReactiveSet<string>()
 const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
+const appliedChannelSearch = ref('')
 const channelStatusFilter = ref<'all' | 'normal' | 'attention' | 'disabled'>('all')
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 
@@ -103,7 +104,7 @@ const priceByModel = computed(
 )
 
 const filteredChannels = computed(() => {
-  const keyword = channelSearch.value.trim().toLowerCase()
+  const keyword = appliedChannelSearch.value.trim().toLowerCase()
   return channels.value.filter((channel) => {
     const runtimeStatus = channelRuntimeStatus(channel)
     const matchesStatus =
@@ -116,6 +117,19 @@ const filteredChannels = computed(() => {
     return matchesStatus && matchesKeyword
   })
 })
+
+const hasChannelSearchCriteria = computed(
+  () => appliedChannelSearch.value.trim().length > 0 || channelStatusFilter.value !== 'all'
+)
+
+function searchChannels() {
+  appliedChannelSearch.value = channelSearch.value.trim()
+}
+
+function clearChannelSearch() {
+  channelSearch.value = ''
+  appliedChannelSearch.value = ''
+}
 
 function channelModelList(row: Channel) {
   const models = row.endpoints.flatMap((endpoint) => endpoint.models)
@@ -552,14 +566,16 @@ onMounted(loadInitialData)
   <section class="grid channel-management-view">
     <div class="channel-toolbar">
       <div class="channel-toolbar-filters">
-        <label class="admin-filter-field">
-          <span>{{ t('providerOrModel') }}</span>
+        <label class="admin-filter-field channel-search-field">
+          <span>{{ t('name') }}</span>
           <el-input
             v-model="channelSearch"
             class="channel-search-input"
             clearable
             :placeholder="t('channelSearchPlaceholder')"
             :prefix-icon="Search"
+            @clear="clearChannelSearch"
+            @keyup.enter="searchChannels"
           />
         </label>
         <label class="admin-filter-field">
@@ -571,6 +587,14 @@ onMounted(loadInitialData)
             <el-option :label="t('channelStopped')" value="disabled" />
           </el-select>
         </label>
+        <el-button
+          class="admin-action-button channel-search-action"
+          type="primary"
+          :icon="Search"
+          @click="searchChannels"
+        >
+          {{ t('search') }}
+        </el-button>
       </div>
       <el-button
         class="admin-action-button add-channel-action"
@@ -784,8 +808,15 @@ onMounted(loadInitialData)
         </el-table-column>
         <template #empty>
           <div class="channel-empty-state">
-            <el-empty :description="channelSearch ? t('noMatchingChannels') : t('noChannels')">
-              <el-button type="primary" :icon="Plus" @click="openCreateDialog">
+            <el-empty
+              :description="hasChannelSearchCriteria ? t('noMatchingChannels') : t('noChannels')"
+            >
+              <el-button
+                v-if="!hasChannelSearchCriteria"
+                type="primary"
+                :icon="Plus"
+                @click="openCreateDialog"
+              >
                 {{ t('addChannel') }}
               </el-button>
             </el-empty>
@@ -855,7 +886,16 @@ onMounted(loadInitialData)
 
 <style scoped>
 .channel-search-input {
-  width: min(280px, 100%);
+  flex: 0 0 min(260px, 100%);
+  width: min(260px, 100%);
+}
+
+.channel-search-field {
+  flex: 0 1 310px;
+}
+
+.channel-search-action {
+  flex: 0 0 auto;
 }
 
 .channel-status-filter {

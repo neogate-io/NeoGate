@@ -1241,18 +1241,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.user-credit-cell.is-available {
-  color: #1d2939;
-}
-
-.user-credit-cell.is-unlimited {
-  color: #15803d;
-}
-
-.user-credit-cell.is-depleted {
-  color: #1d2939;
-}
-
 .user-status-switch.is-enabled {
   background: #f0fdf4;
   border-color: #b7eb8f;

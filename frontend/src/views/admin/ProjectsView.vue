@@ -1128,9 +1128,9 @@ async function handlePageSizeChange(size: number) {
 }
 
 .project-name-text {
-  color: #1d2129;
-  font-size: 14px;
-  font-weight: 700;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 650 !important;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1152,6 +1152,11 @@ async function handlePageSizeChange(size: number) {
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+}
+
+.project-table .user-credit-cell,
+.project-table .user-time-cell {
+  font-size: 12.5px;
 }
 
 .project-status-switch.is-enabled {

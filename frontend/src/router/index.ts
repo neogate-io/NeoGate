@@ -107,64 +107,64 @@ export const router = createRouter({
           path: 'credentials',
           name: 'credentials',
           component: () => import('../views/admin/CredentialsView.vue'),
-          meta: { messageKey: 'credentialManagement' }
+          meta: { messageKey: 'credentialManagement', subtitleKey: 'adminCredentialsSubtitle' }
         },
         { path: 'credentials/openai', redirect: '/admin/credentials' },
         {
           path: 'keys',
           name: 'keys',
           component: () => import('../views/admin/UsersView.vue'),
-          meta: { messageKey: 'userManagement' }
+          meta: { messageKey: 'userManagement', subtitleKey: 'adminUsersSubtitle' }
         },
         {
           path: 'projects',
           name: 'projects',
           component: () => import('../views/admin/ProjectsView.vue'),
-          meta: { messageKey: 'projectManagement' }
+          meta: { messageKey: 'projectManagement', subtitleKey: 'adminProjectsSubtitle' }
         },
         {
           path: 'channels',
           name: 'upstreamChannels',
           component: () => import('../views/admin/ChannelsView.vue'),
-          meta: { messageKey: 'upstreamChannels' }
+          meta: { messageKey: 'upstreamChannels', subtitleKey: 'adminChannelsSubtitle' }
         },
         { path: 'prices', redirect: '/admin/channels' },
         {
           path: 'usage',
           name: 'usage',
           component: () => import('../views/admin/UsageView.vue'),
-          meta: { messageKey: 'usage' }
+          meta: { messageKey: 'usage', subtitleKey: 'adminUsageSubtitle' }
         },
         { path: 'settings', redirect: '/admin/settings/pricing-policies' },
         {
           path: 'settings/pricing-policies',
           name: 'pricingPolicy',
           component: () => import('../views/admin/PricingSettingsView.vue'),
-          meta: { messageKey: 'pricingPolicy' }
+          meta: { messageKey: 'pricingPolicy', subtitleKey: 'adminPricingSubtitle' }
         },
         {
           path: 'settings/smtp',
           name: 'smtpSettings',
           component: () => import('../views/admin/SmtpSettingsView.vue'),
-          meta: { messageKey: 'smtpSettings' }
+          meta: { messageKey: 'smtpSettings', subtitleKey: 'adminSmtpSubtitle' }
         },
         {
           path: 'settings/payment',
           name: 'paymentSettings',
           component: () => import('../views/admin/PaymentSettingsView.vue'),
-          meta: { messageKey: 'paymentSettings' }
+          meta: { messageKey: 'paymentSettings', subtitleKey: 'adminPaymentSubtitle' }
         },
         {
           path: 'settings/other',
           name: 'otherSettings',
           component: () => import('../views/admin/OtherSettingsView.vue'),
-          meta: { messageKey: 'otherSettings' }
+          meta: { messageKey: 'otherSettings', subtitleKey: 'adminOtherSettingsSubtitle' }
         },
         {
           path: 'settings/admin-password',
           name: 'adminPasswordSettings',
           component: () => import('../views/admin/PasswordSettingsView.vue'),
-          meta: { messageKey: 'adminPasswordSettings' }
+          meta: { messageKey: 'adminPasswordSettings', subtitleKey: 'adminPasswordSubtitle' }
         }
       ]
     },

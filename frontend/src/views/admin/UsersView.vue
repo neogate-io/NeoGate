@@ -595,7 +595,12 @@ onMounted(() => {
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('userApiKeyCount')" min-width="112" align="center" header-align="center">
+        <el-table-column
+          :label="t('userApiKeyCount')"
+          min-width="112"
+          align="center"
+          header-align="center"
+        >
           <template #default="{ row }">
             <span class="user-key-count-text">
               {{ row.user_key_count.toLocaleString(locale) }}

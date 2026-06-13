@@ -133,7 +133,9 @@ const { t } = useLocale()
         </label>
         <p class="credential-source-hint">
           {{
-            form.use_credentials ? t('credentialFilesEnabledHint') : t('credentialFilesDisabledHint')
+            form.use_credentials
+              ? t('credentialFilesEnabledHint')
+              : t('credentialFilesDisabledHint')
           }}
         </p>
       </div>

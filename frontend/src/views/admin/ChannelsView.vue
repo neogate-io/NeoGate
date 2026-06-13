@@ -655,9 +655,7 @@ onMounted(loadInitialData)
                       :model-value="item.runtimeEnabled"
                       :disabled="item.runtimeToggleDisabled"
                       size="small"
-                      @change="
-                        toggleChannelModelRuntime(row.provider, item.model, Boolean($event))
-                      "
+                      @change="toggleChannelModelRuntime(row.provider, item.model, Boolean($event))"
                     />
                   </span>
                 </div>

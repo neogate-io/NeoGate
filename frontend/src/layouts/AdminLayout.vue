@@ -25,14 +25,25 @@ const { data: servicePolicy } = useAsyncData(() => getAdminServicePolicy(), null
 const adminMenuOpen = ref(false)
 type AdminNavItem = { path: string; key: MessageKey; icon: Component }
 type SettingNavItem = { path: string; key: MessageKey }
+type AdminNavGroup = { key: MessageKey; items: AdminNavItem[] }
 
-const navItems: AdminNavItem[] = [
-  { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
-  { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
-  { path: '/admin/keys', key: 'userManagement', icon: User },
-  { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened },
-  { path: '/admin/usage', key: 'usage', icon: Monitor }
-] as const
+const navGroups = [
+  {
+    key: 'adminNavOperations',
+    items: [
+      { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
+      { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
+      { path: '/admin/usage', key: 'usage', icon: Monitor }
+    ]
+  },
+  {
+    key: 'adminNavAccounts',
+    items: [
+      { path: '/admin/keys', key: 'userManagement', icon: User },
+      { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened }
+    ]
+  }
+] satisfies AdminNavGroup[]
 
 const settingItems = computed(() => {
   const items: SettingNavItem[] = [
@@ -53,6 +64,10 @@ const openMenus = computed(() => (settingsOpen.value ? ['settings'] : []))
 const activeRouteLabel = computed(() => {
   const messageKey = route.meta.messageKey
   return t(isMessageKey(messageKey) ? messageKey : 'userManagement')
+})
+const activeRouteSubtitle = computed(() => {
+  const subtitleKey = route.meta.subtitleKey
+  return t(isMessageKey(subtitleKey) ? subtitleKey : 'adminConsoleSubtitle')
 })
 
 watch(
@@ -80,10 +95,14 @@ watch(
         unique-opened
         @select="adminMenuOpen = false"
       >
-        <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ t(item.key) }}</span>
-        </el-menu-item>
+        <template v-for="group in navGroups" :key="group.key">
+          <li class="admin-nav-group-label">{{ t(group.key) }}</li>
+          <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ t(item.key) }}</span>
+          </el-menu-item>
+        </template>
+        <li class="admin-nav-group-label">{{ t('adminNavSystem') }}</li>
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
@@ -111,7 +130,15 @@ watch(
           :icon="Menu"
           @click="adminMenuOpen = true"
         />
-        <h2>{{ activeRouteLabel }}</h2>
+        <div class="page-title-block">
+          <nav class="page-breadcrumb" :aria-label="t('admin')">
+            <span>{{ t('admin') }}</span>
+            <span aria-hidden="true">/</span>
+            <span>{{ settingsOpen ? t('settings') : t('adminNavOperations') }}</span>
+          </nav>
+          <h2>{{ activeRouteLabel }}</h2>
+          <span>{{ activeRouteSubtitle }}</span>
+        </div>
         <div class="header-actions">
           <el-tooltip :content="t('language')" placement="bottom">
             <LocaleToggleButton class="header-utility-button header-language-button" />

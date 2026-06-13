@@ -10,6 +10,20 @@ User -- Project -- UserKey
 
 Project becomes the main resource, quota, permission, and usage attribution unit. This supports both internal mode and billing mode with one shared data model.
 
+## Model Flow
+
+```mermaid
+flowchart LR
+    U["User"] --> M["project_member"]
+    M --> P["Project"]
+    P --> K["UserKey"]
+    K --> R["Gateway request"]
+    R --> G["Usage"]
+    P --> Q["Quota and budget"]
+    P --> A["Model permissions"]
+    G --> C["Cost analysis"]
+```
+
 ## Core Concepts
 
 ### User

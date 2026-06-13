@@ -355,8 +355,8 @@ async fn finish_batch_create(
             hold: &hold,
             upstream_metadata: value,
         },
-        state.config.task_upstream_poll_interval,
-        state.config.task_upstream_retention,
+        state.config.task.upstream_poll_interval,
+        state.config.task.upstream_retention,
     )
     .await
     {

@@ -39,18 +39,21 @@ async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let redis_ok = redis_status.unwrap_or(true);
     let write_status = state.billing_outbox.write_status();
     let outbox_status = if db_ok {
-        outbox::backlog_status(&state.db.pool, state.config.billing_outbox_max_pending)
-            .await
-            .ok()
+        outbox::backlog_status(
+            &state.db.pool,
+            state.config.health.billing_outbox_max_pending,
+        )
+        .await
+        .ok()
     } else {
         None
     };
     let backlog_ok = outbox_status
         .as_ref()
         .map(|status| {
-            status.pending_count <= state.config.billing_outbox_max_pending
+            status.pending_count <= state.config.health.billing_outbox_max_pending
                 && status.oldest_pending_age_seconds
-                    <= state.config.billing_outbox_max_age.as_secs() as i64
+                    <= state.config.health.billing_outbox_max_age.as_secs() as i64
         })
         .unwrap_or(false);
     let billing_outbox_ok = write_status.healthy && backlog_ok;

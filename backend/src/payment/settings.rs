@@ -53,7 +53,8 @@ pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRe
         .fetch_optional(&state.db.pool)
         .await?
     else {
-        return Ok(record_from_config(&state.config.payment, false, None));
+        let config = PaymentConfig::default_for_site(&state.config.site_name);
+        return Ok(record_from_config(&config, false, None));
     };
 
     let value: serde_json::Value = row.try_get("value")?;
@@ -127,7 +128,7 @@ pub async fn upsert_payment_setting(
 
 pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig> {
     let Some(setting) = existing_payment_setting(state).await? else {
-        return Ok(state.config.payment.clone());
+        return Ok(PaymentConfig::default_for_site(&state.config.site_name));
     };
 
     let secret_key = setting

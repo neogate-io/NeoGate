@@ -5,6 +5,7 @@ use tokio::time::Duration;
 
 use crate::{
     admin::credentials::refresh_openai_runtime_credential,
+    config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind, UpstreamRequestError},
     AppState,
 };
@@ -232,7 +233,7 @@ pub(crate) async fn forward_anthropic(
     let anthropic_version = headers
         .get("anthropic-version")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or(&state.config.anthropic_version)
+        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
         .to_string();
     let anthropic_beta = headers
         .get("anthropic-beta")
@@ -275,7 +276,7 @@ pub(crate) async fn forward_anthropic_bound(
     let anthropic_version = headers
         .get("anthropic-version")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or(&state.config.anthropic_version)
+        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
         .to_string();
     let anthropic_beta = headers
         .get("anthropic-beta")
@@ -339,7 +340,7 @@ where
         unreachable!("upstream attempt loop always returns")
     };
 
-    match tokio::time::timeout(state.config.upstream_timeout, send).await {
+    match tokio::time::timeout(state.config.http.upstream_timeout, send).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(err)) => Err(AppError::Reqwest(err)),
         Err(_) => Err(AppError::UpstreamRequest(UpstreamRequestError::new(
@@ -347,7 +348,7 @@ where
             upstream.provider.clone(),
             format!(
                 "response headers were not received within {} seconds",
-                state.config.upstream_timeout.as_secs()
+                state.config.http.upstream_timeout.as_secs()
             ),
         ))),
     }

@@ -42,7 +42,7 @@ pub(crate) fn body(
     upstream_response: reqwest::Response,
 ) -> Body {
     let content_length = upstream_response.content_length();
-    let usage_buffer_limit_bytes = ctx.state.config.relay_usage_buffer_limit_bytes;
+    let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
     body_from_stream(
         ctx,
         status,

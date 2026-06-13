@@ -136,35 +136,40 @@ watch(
 
     <el-main class="content">
       <header class="page-header">
-        <el-button
-          class="header-utility-button admin-menu-button"
-          :aria-label="t('adminMenu')"
-          :icon="Menu"
-          @click="adminMenuOpen = true"
-        />
+        <div class="page-topbar">
+          <div class="page-topbar-start">
+            <el-button
+              class="header-utility-button admin-menu-button"
+              :aria-label="t('adminMenu')"
+              :icon="Menu"
+              @click="adminMenuOpen = true"
+            />
+            <nav class="page-breadcrumb" :aria-label="t('admin')">
+              <template v-for="(breadcrumb, index) in activeBreadcrumbs" :key="breadcrumb">
+                <span>{{ breadcrumb }}</span>
+                <span v-if="index < activeBreadcrumbs.length - 1" aria-hidden="true">/</span>
+              </template>
+            </nav>
+          </div>
+          <div class="header-actions">
+            <el-tooltip :content="t('language')" placement="bottom">
+              <LocaleToggleButton class="header-utility-button header-language-button" />
+            </el-tooltip>
+            <span class="header-action-divider" aria-hidden="true"></span>
+            <el-tooltip :content="t('logout')" placement="bottom">
+              <el-button
+                class="header-utility-button header-logout-button"
+                :aria-label="t('logout')"
+                :icon="SwitchButton"
+                @click="logout"
+              />
+            </el-tooltip>
+          </div>
+        </div>
+
         <div class="page-title-block">
-          <nav class="page-breadcrumb" :aria-label="t('admin')">
-            <template v-for="(breadcrumb, index) in activeBreadcrumbs" :key="breadcrumb">
-              <span>{{ breadcrumb }}</span>
-              <span v-if="index < activeBreadcrumbs.length - 1" aria-hidden="true">/</span>
-            </template>
-          </nav>
           <h2>{{ activeRouteLabel }}</h2>
           <span>{{ activeRouteSubtitle }}</span>
-        </div>
-        <div class="header-actions">
-          <el-tooltip :content="t('language')" placement="bottom">
-            <LocaleToggleButton class="header-utility-button header-language-button" />
-          </el-tooltip>
-          <span class="header-action-divider" aria-hidden="true"></span>
-          <el-tooltip :content="t('logout')" placement="bottom">
-            <el-button
-              class="header-utility-button header-logout-button"
-              :aria-label="t('logout')"
-              :icon="SwitchButton"
-              @click="logout"
-            />
-          </el-tooltip>
         </div>
       </header>
 

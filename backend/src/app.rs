@@ -132,23 +132,29 @@ fn init_tracing() {
 const ERROR_LOG_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
 async fn log_bootstrap_http_request(request: Request<Body>, next: Next) -> Response {
-    log_http_response(request, next, "none", None).await
+    log_http_response(
+        request,
+        next,
+        auth::RequestAuthLogContext::new("none", None),
+    )
+    .await
 }
 
 async fn log_http_request(
     State(admin_token_secret): State<String>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let (auth, user_id) = request_auth_context(&request, &admin_token_secret);
-    log_http_response(request, next, auth, user_id).await
+    let auth_context = auth::RequestAuthLogContext::new(auth, user_id);
+    request.extensions_mut().insert(auth_context.clone());
+    log_http_response(request, next, auth_context).await
 }
 
 async fn log_http_response(
     request: Request<Body>,
     next: Next,
-    auth: &'static str,
-    user_id: Option<DbId>,
+    auth_context: auth::RequestAuthLogContext,
 ) -> Response {
     let started = Instant::now();
     let request_line = format!("{} {}", request.method(), request.uri().path());
@@ -157,6 +163,7 @@ async fn log_http_response(
     let status = response.status();
     let (response, error_code, error_message) = response_error_for_log(response).await;
     let elapsed_ms = started.elapsed().as_millis();
+    let (auth, user_id) = auth_context.snapshot();
     let user_id = user_id
         .map(|id| id.to_string())
         .unwrap_or_else(|| "-".to_string());

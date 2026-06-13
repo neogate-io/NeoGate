@@ -31,6 +31,40 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct AdminAuth;
 
+#[derive(Debug, Clone)]
+pub struct RequestAuthLogContext {
+    inner: Arc<RwLock<RequestAuthLogState>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RequestAuthLogState {
+    auth: &'static str,
+    user_id: Option<DbId>,
+}
+
+impl RequestAuthLogContext {
+    pub fn new(auth: &'static str, user_id: Option<DbId>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(RequestAuthLogState { auth, user_id })),
+        }
+    }
+
+    pub fn set(&self, auth: &'static str, user_id: Option<DbId>) {
+        *self
+            .inner
+            .write()
+            .expect("request auth log context poisoned") = RequestAuthLogState { auth, user_id };
+    }
+
+    pub fn snapshot(&self) -> (&'static str, Option<DbId>) {
+        let state = *self
+            .inner
+            .read()
+            .expect("request auth log context poisoned");
+        (state.auth, state.user_id)
+    }
+}
+
 impl FromRequestParts<Arc<AppState>> for AdminAuth {
     type Rejection = AppError;
 
@@ -45,6 +79,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         if !has_session_token {
             return Err(AppError::Unauthorized);
         }
+        set_request_auth_log_context(parts, "admin", None);
         Ok(Self)
     }
 }
@@ -340,6 +375,7 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             .ok_or(AppError::Unauthorized)?;
         let cache_key = hash_key(raw_key);
         if let Some(auth) = state.user_auth_cache.get(&cache_key) {
+            set_request_auth_log_context(parts, "token", Some(auth.user_id));
             return Ok(auth);
         }
 
@@ -408,7 +444,14 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
         state
             .user_auth_cache
             .insert(cache_key, auth.clone(), expires_at);
+        set_request_auth_log_context(parts, "token", Some(auth.user_id));
         Ok(auth)
+    }
+}
+
+pub fn set_request_auth_log_context(parts: &mut Parts, auth: &'static str, user_id: Option<DbId>) {
+    if let Some(context) = parts.extensions.get::<RequestAuthLogContext>() {
+        context.set(auth, user_id);
     }
 }
 

@@ -226,6 +226,9 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     let service_mode = service_mode(state).await?;
     let username = create_user_username(req.username.as_deref(), &email, service_mode)?;
     let mut tx = state.db.pool.begin().await?;
+    if find_user_by_email(&mut tx, &email).await?.is_some() {
+        return Err(user_email_exists_error());
+    }
     let row = sqlx::query(
         r#"
         INSERT INTO "user" (email, username, status, user_group_id, password_hash)
@@ -238,7 +241,8 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     .bind(req.status)
     .bind(password_hash)
     .fetch_one(&mut *tx)
-    .await?;
+    .await
+    .map_err(map_user_write_error)?;
     let user_id: DbId = row.try_get("id")?;
     if service_mode == ServiceMode::Paid {
         project::create_default_project_for_user(&mut tx, user_id).await?;
@@ -414,7 +418,8 @@ pub async fn update_user(
     .bind(username_provided)
     .bind(username)
     .fetch_optional(&state.db.pool)
-    .await?
+    .await
+    .map_err(map_user_write_error)?
     .ok_or(AppError::NotFound)?;
     let user_id: DbId = row.try_get("id")?;
     if disabling {
@@ -530,6 +535,11 @@ pub async fn create_user_key(
     req: CreateUserKeyRequest,
 ) -> AppResult<CreatedUserKey> {
     validate_user_key_status(&req.status)?;
+    if service_mode(state).await? != ServiceMode::Paid {
+        return Err(AppError::BadRequest(
+            "default project is only available in paid service mode".to_string(),
+        ));
+    }
     let name = normalize_user_key_name(&req.name)?;
     let key = generate_user_key();
     let secret_ciphertext = state.secrets.encrypt(&key)?;
@@ -569,6 +579,11 @@ pub async fn claim_public_user_key(
 ) -> AppResult<()> {
     let email = normalize_email(&req.email)?;
     let (service_mode, registration_enabled) = registration_policy(state).await?;
+    if service_mode != ServiceMode::Paid {
+        return Err(AppError::BadRequest(
+            "public api key claim is only available in paid service mode".to_string(),
+        ));
+    }
     if !registration_enabled {
         return Err(AppError::BadRequest("registration is closed".to_string()));
     }
@@ -601,10 +616,6 @@ pub async fn claim_public_user_key(
 
     let (user_id, created_user) = if let Some(record) = existing_user {
         (record.id, false)
-    } else if service_mode == ServiceMode::Internal {
-        create_user_by_email_with_status(&mut tx, &email, "pending").await?;
-        tx.commit().await?;
-        return Err(AppError::BadRequest("account pending approval".to_string()));
     } else {
         (
             create_user_by_email_with_status(&mut tx, &email, "enabled").await?,
@@ -664,7 +675,12 @@ pub async fn claim_public_user_key(
 pub async fn create_public_user_key_draft(
     state: &AppState,
 ) -> AppResult<PublicUserKeyDraftResponse> {
-    let (_, registration_enabled) = registration_policy(state).await?;
+    let (service_mode, registration_enabled) = registration_policy(state).await?;
+    if service_mode != ServiceMode::Paid {
+        return Err(AppError::BadRequest(
+            "public api key claim is only available in paid service mode".to_string(),
+        ));
+    }
     if !registration_enabled {
         return Err(AppError::BadRequest("registration is closed".to_string()));
     }
@@ -1045,8 +1061,29 @@ async fn create_user_by_email_with_status(
     .bind(email)
     .bind(status)
     .fetch_one(&mut **tx)
-    .await?;
+    .await
+    .map_err(map_user_write_error)?;
     Ok(row.try_get("id")?)
+}
+
+fn map_user_write_error(err: sqlx::Error) -> AppError {
+    if has_database_constraint(&err, "user_email_unique") {
+        return user_email_exists_error();
+    }
+    AppError::Sqlx(err)
+}
+
+fn has_database_constraint(err: &sqlx::Error, constraint: &str) -> bool {
+    err.as_database_error()
+        .and_then(|db_error| db_error.constraint())
+        == Some(constraint)
+}
+
+fn user_email_exists_error() -> AppError {
+    AppError::ConflictWithCode {
+        code: "user_email_exists",
+        message: "user email already exists",
+    }
 }
 
 pub async fn adjust_credit(

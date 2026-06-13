@@ -15,6 +15,7 @@ use crate::{
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
+    policy::{service_mode, ServiceMode},
     project, AppState,
 };
 
@@ -106,6 +107,11 @@ async fn create_apikey(
     auth: UserSessionAuth,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> AppResult<Json<CreatedUserApiKey>> {
+    if service_mode(&state).await? != ServiceMode::Paid {
+        return Err(AppError::BadRequest(
+            "default project is only available in paid service mode".to_string(),
+        ));
+    }
     let name = normalize_api_key_name(&req.name)?;
     let key = generate_user_key();
     let secret_ciphertext = state.secrets.encrypt(&key)?;

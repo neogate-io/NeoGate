@@ -28,6 +28,7 @@ const localeStorageKey = 'neogate_locale'
 
 const generalApiErrorMessageKeys = {
   internal_server_error: 'genericServerError',
+  user_email_exists: 'userEmailAlreadyExists',
   upstream_timeout: 'genericUpstreamError',
   upstream_tls_error: 'genericUpstreamError',
   upstream_dns_error: 'genericUpstreamError',

@@ -53,6 +53,7 @@ impl FromRequestParts<Arc<AppState>> for UserSessionAuth {
             return Err(AppError::PasswordChangeRequired);
         }
 
+        super::set_request_auth_log_context(parts, "user", Some(session.user_id));
         Ok(Self {
             user_id: session.user_id,
         })

@@ -598,11 +598,6 @@ async function handlePageSizeChange(size: number) {
               </span>
               <span class="project-name-stack">
                 <span class="project-name-text">{{ row.name }}</span>
-                <span v-if="row.is_default" class="project-meta-line">
-                  <el-tag size="small" effect="plain">
-                    {{ t('defaultProject') }}
-                  </el-tag>
-                </span>
               </span>
             </span>
           </template>
@@ -1084,7 +1079,6 @@ async function handlePageSizeChange(size: number) {
     .project-row-is-disabled
       :is(
         .project-name-text,
-        .project-meta-line,
         .project-owner-cell,
         .project-owner-cell .el-icon,
         .project-count-cell,
@@ -1140,17 +1134,6 @@ async function handlePageSizeChange(size: number) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.project-meta-line {
-  align-items: center;
-  color: #86909c;
-  display: inline-flex;
-  flex-wrap: wrap;
-  font-size: 12px;
-  font-weight: 560;
-  gap: 6px;
-  line-height: 1.15;
 }
 
 .project-owner-cell {

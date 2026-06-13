@@ -70,13 +70,6 @@ type UserStatusMeta = {
 const DEFAULT_USER_PAGE_SIZE = 50
 const USER_KEY_DIALOG_LIMIT = 100
 const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
-const RELATIVE_TIME_UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
-  ['year', 60 * 60 * 24 * 365],
-  ['month', 60 * 60 * 24 * 30],
-  ['day', 60 * 60 * 24],
-  ['hour', 60 * 60],
-  ['minute', 60]
-]
 const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
   enabled: {
     labelKey: 'enabled',
@@ -134,15 +127,9 @@ const {
 } satisfies UserPage)
 const users = computed(() => usersPage.value.items)
 const usersInitialLoading = computed(() => !usersLoaded.value)
-const hasUserPagination = computed(
-  () => usersCurrentPage.value > 1 || Boolean(usersPage.value.has_more)
-)
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
 const showAccountBalance = computed(() =>
   Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
-)
-const relativeTimeFormatter = computed(
-  () => new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
 )
 const defaultUserGroupId = computed(
   () => userGroups.value.find((group) => group.is_default)?.id ?? userGroups.value[0]?.id ?? 0
@@ -186,21 +173,7 @@ function accountBalanceTooltip(row: CreditBalance) {
 }
 
 function formatLastActiveAt(value?: string | null) {
-  return value ? `${formatCompactDateTime(value)} · ${formatRelativeTime(value)}` : t('neverActive')
-}
-
-function formatRelativeTime(value?: string | null) {
-  if (!value) return t('neverActive')
-  const timestamp = new Date(value).getTime()
-  if (Number.isNaN(timestamp)) return '-'
-  const diffSeconds = Math.round((timestamp - Date.now()) / 1000)
-  const formatter = relativeTimeFormatter.value
-  for (const [unit, seconds] of RELATIVE_TIME_UNITS) {
-    if (Math.abs(diffSeconds) >= seconds) {
-      return formatter.format(Math.round(diffSeconds / seconds), unit)
-    }
-  }
-  return formatter.format(diffSeconds, 'second')
+  return value ? formatCompactDateTime(value) : t('neverActive')
 }
 
 function userStatusText(status: UserStatus) {
@@ -563,11 +536,7 @@ onMounted(() => {
       <div class="user-table-loading-row"></div>
     </div>
 
-    <div
-      v-else
-      class="service-table-panel"
-      :class="{ 'has-pagination': hasUserPagination || users.length > 1 }"
-    >
+    <div v-else class="service-table-panel has-pagination">
       <el-table
         v-loading="loading"
         class="admin-table service-table user-table"
@@ -577,7 +546,7 @@ onMounted(() => {
         stripe
       >
         <el-table-column prop="id" label="ID" width="68" align="right" header-align="right" />
-        <el-table-column prop="username" :label="t('username')" min-width="120">
+        <el-table-column prop="username" :label="t('username')" min-width="180">
           <template #default="{ row }">
             <span class="user-email-cell">
               <span class="user-avatar">
@@ -782,7 +751,7 @@ onMounted(() => {
     </div>
 
     <div
-      v-if="!usersInitialLoading && (hasUserPagination || users.length > 1)"
+      v-if="!usersInitialLoading"
       class="admin-pagination-bar admin-table-pagination is-compact"
     >
       <div class="admin-pagination-controls">
@@ -983,7 +952,7 @@ onMounted(() => {
   border-bottom: 1px solid #dfe8f2;
   display: grid;
   gap: 28px;
-  grid-template-columns: 54px minmax(180px, 1fr) 100px 86px 104px 96px;
+  grid-template-columns: 54px minmax(220px, 1fr) 100px 86px 104px 96px;
   height: 48px;
   min-width: 1080px;
   padding: 0 300px 0 14px;
@@ -1029,7 +998,7 @@ onMounted(() => {
   border-bottom: 1px solid #edf3f8;
   display: grid;
   gap: 28px;
-  grid-template-columns: 54px minmax(180px, 1fr) 100px 86px 104px 96px;
+  grid-template-columns: 54px minmax(220px, 1fr) 100px 86px 104px 96px;
   height: 62px;
   min-width: 1080px;
   padding: 0 300px 0 14px;

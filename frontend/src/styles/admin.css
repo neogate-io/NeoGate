@@ -457,8 +457,7 @@
 }
 
 .channel-runtime-status,
-.user-status-tag,
-.usage-status-tag {
+.user-status-tag {
   align-items: center;
   background: #f8fafc;
   border: 1px solid #dbe4ef;
@@ -474,8 +473,7 @@
 }
 
 .channel-runtime-status .el-icon,
-.user-status-tag .el-icon,
-.usage-status-tag .el-icon {
+.user-status-tag .el-icon {
   align-items: center;
   background: #94a3b8;
   border-radius: 999px;
@@ -488,56 +486,48 @@
 }
 
 .channel-runtime-status.is-success,
-.user-status-tag.is-success,
-.usage-status-tag.is-success {
+.user-status-tag.is-success {
   background: #f0fdf4;
   border-color: #bbf7d0;
   color: #15803d;
 }
 
 .channel-runtime-status.is-success .el-icon,
-.user-status-tag.is-success .el-icon,
-.usage-status-tag.is-success .el-icon {
+.user-status-tag.is-success .el-icon {
   background: #22c55e;
 }
 
 .channel-runtime-status.is-warning,
-.user-status-tag.is-warning,
-.usage-status-tag.is-warning {
+.user-status-tag.is-warning {
   background: #fffbeb;
   border-color: #fde68a;
   color: #b45309;
 }
 
 .channel-runtime-status.is-warning .el-icon,
-.user-status-tag.is-warning .el-icon,
-.usage-status-tag.is-warning .el-icon {
+.user-status-tag.is-warning .el-icon {
   background: #f59e0b;
 }
 
-.channel-runtime-status.is-danger,
-.usage-status-tag.is-danger {
+.channel-runtime-status.is-danger {
   background: #fef2f2;
   border-color: #fecaca;
   color: #b91c1c;
 }
 
-.channel-runtime-status.is-danger .el-icon,
-.usage-status-tag.is-danger .el-icon {
+.channel-runtime-status.is-danger .el-icon {
   background: #ef4444;
 }
 
 .channel-runtime-status.is-neutral,
-.user-status-tag.is-neutral,
-.usage-status-tag.is-neutral {
+.user-status-tag.is-neutral {
   background: #eef2f6;
   border-color: #dbe4ef;
   color: #64748b;
 }
 
 .channel-runtime-status.is-neutral .el-icon,
-.user-status-tag.is-neutral .el-icon,
-.usage-status-tag.is-neutral .el-icon {
+.user-status-tag.is-neutral .el-icon {
   background: #94a3b8;
 }
 
@@ -545,6 +535,7 @@
   .user-status-switch,
   .project-status-switch,
   .channel-runtime-switch,
+  .usage-status-switch,
   .price-status-tag.el-tag
 ) {
   align-items: center;
@@ -557,7 +548,7 @@
   white-space: nowrap;
 }
 
-:is(.user-status-switch, .project-status-switch, .channel-runtime-switch) {
+:is(.user-status-switch, .project-status-switch, .channel-runtime-switch, .usage-status-switch) {
   appearance: none;
   background: #ffffff;
   border: 1px solid #e2e8f0;
@@ -565,6 +556,10 @@
   justify-content: flex-start;
   min-width: 72px;
   padding: 0 7px;
+}
+
+.usage-status-switch {
+  cursor: default;
 }
 
 :is(.user-status-switch, .project-status-switch, .channel-runtime-switch):disabled {
@@ -576,6 +571,7 @@
   .user-status-switch-icon,
   .project-status-switch-icon,
   .channel-runtime-switch-icon,
+  .usage-status-switch-icon,
   .price-status-tag.el-tag .el-icon
 ) {
   align-items: center;
@@ -590,8 +586,43 @@
   width: 18px;
 }
 
-:is(.user-status-switch-text, .project-status-switch-text, .channel-runtime-switch-text) {
+:is(
+  .user-status-switch-text,
+  .project-status-switch-text,
+  .channel-runtime-switch-text,
+  .usage-status-switch-text
+) {
   line-height: 1;
+}
+
+.usage-status-switch.is-success {
+  background: #f0fdf4;
+  border-color: #b7eb8f;
+  color: #166534;
+}
+
+.usage-status-switch.is-danger {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.usage-status-switch.is-neutral {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.usage-status-switch.is-success .usage-status-switch-icon {
+  background: #22c55e;
+}
+
+.usage-status-switch.is-danger .usage-status-switch-icon {
+  background: #ef4444;
+}
+
+.usage-status-switch.is-neutral .usage-status-switch-icon {
+  background: #94a3b8;
 }
 
 .price-status-tag.el-tag {
@@ -1785,7 +1816,7 @@
 
 .channel-runtime-status,
 .user-status-tag,
-.usage-status-tag,
+.usage-status-switch,
 .user-group-tag,
 .user-credit-cell,
 .usage-latency-tag {
@@ -2117,6 +2148,7 @@
   border: 1px solid var(--admin-border);
   border-radius: 0 0 var(--admin-radius-table) var(--admin-radius-table);
   border-top: 1px solid var(--admin-border);
+  box-sizing: border-box;
   box-shadow: none;
   margin-top: -1px;
   min-height: 54px;
@@ -2282,8 +2314,7 @@
 }
 
 .channel-runtime-status,
-.user-status-tag,
-.usage-status-tag {
+.user-status-tag {
   border-radius: 999px;
   min-height: 30px;
   padding: 0 12px 0 7px;
@@ -2291,7 +2322,7 @@
 
 .channel-runtime-status.is-success,
 .user-status-tag.is-success,
-.usage-status-tag.is-success,
+.usage-status-switch.is-success,
 :is(.user-status-switch, .project-status-switch, .channel-runtime-switch).is-enabled,
 .user-credit-cell.is-available {
   background: var(--admin-success-bg);
@@ -2301,7 +2332,6 @@
 
 .channel-runtime-status.is-warning,
 .user-status-tag.is-warning,
-.usage-status-tag.is-warning,
 :is(.user-status-switch, .project-status-switch).is-pending {
   background: var(--admin-warning-bg);
   border-color: var(--admin-warning-border);
@@ -2309,7 +2339,7 @@
 }
 
 .channel-runtime-status.is-danger,
-.usage-status-tag.is-danger,
+.usage-status-switch.is-danger,
 :is(.user-status-switch, .project-status-switch, .channel-runtime-switch).is-disabled,
 .user-credit-cell.is-depleted {
   background: var(--admin-danger-bg);
@@ -2317,7 +2347,7 @@
   color: var(--admin-danger);
 }
 
-:is(.user-status-switch, .project-status-switch, .channel-runtime-switch) {
+:is(.user-status-switch, .project-status-switch, .channel-runtime-switch, .usage-status-switch) {
   min-height: 30px;
 }
 
@@ -2350,6 +2380,7 @@
 
 .admin-pagination-bar,
 .admin-table-pagination {
+  box-sizing: border-box;
   min-height: 54px;
 }
 
@@ -2377,6 +2408,35 @@
 .admin-shell .admin-page-buttons .el-button:not(.is-disabled):hover {
   background-color: var(--admin-primary-soft) !important;
   color: var(--admin-primary);
+}
+
+.admin-pagination-bar.is-compact {
+  align-items: center;
+  display: flex;
+}
+
+.admin-pagination-bar.is-compact .admin-pagination-controls,
+.admin-pagination-bar.is-compact .admin-page-size-control,
+.admin-pagination-bar.is-compact .admin-page-buttons {
+  align-items: center;
+  display: flex;
+  flex-wrap: nowrap;
+  min-height: 32px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-label,
+.admin-pagination-bar.is-compact .admin-page-current,
+.admin-pagination-bar.is-compact .admin-page-size,
+.admin-pagination-bar.is-compact .admin-page-size .el-select__wrapper,
+.admin-pagination-bar.is-compact .admin-page-buttons .el-button {
+  align-items: center;
+  display: inline-flex;
+  height: 32px;
+  line-height: 32px;
+}
+
+.admin-pagination-bar.is-compact .admin-page-buttons .el-button {
+  margin: 0;
 }
 
 :is(

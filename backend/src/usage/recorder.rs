@@ -493,6 +493,10 @@ pub(crate) async fn flush_usage(
 
     for item in usages {
         if let Some(billing) = &item.billing {
+            if billing.parts.is_empty() && billing.returned_parts.is_empty() {
+                pending_usage.push(item);
+                continue;
+            }
             let row = insert_usage(tx, item).await?;
             let usage_id: DbId = row.try_get("id")?;
             let billing_parts = coalesce_debit_parts(&billing.parts);

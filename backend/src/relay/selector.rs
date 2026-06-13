@@ -22,7 +22,7 @@ use crate::{
 
 const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 
-type RouteIndex = HashMap<(UpstreamProtocol, String), Vec<usize>>;
+type RouteIndex = HashMap<UpstreamProtocol, HashMap<String, Vec<usize>>>;
 type WildcardRouteIndex = HashMap<UpstreamProtocol, Vec<usize>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,6 +173,10 @@ impl<'a> ModelBlockLookup<'a> {
             .or_else(|| self.persisted.get(key))
             .map(|blocked_until| *blocked_until > now)
             .unwrap_or(false)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.persisted.is_empty() && self.local.is_empty()
     }
 }
 
@@ -464,7 +468,9 @@ fn build_route_indexes(channels: &[ChannelCandidate]) -> (RouteIndex, WildcardRo
         }
         for model in &channel.models {
             route_index
-                .entry((channel.protocol, model.clone()))
+                .entry(channel.protocol)
+                .or_default()
+                .entry(model.clone())
                 .or_default()
                 .push(index);
         }
@@ -744,10 +750,10 @@ fn choose_channel_for_request<'a>(
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
 ) -> Option<&'a ChannelCandidate> {
-    let route_key = (protocol, model.to_string());
     let indexed = cache
         .route_index
-        .get(&route_key)
+        .get(&protocol)
+        .and_then(|models| models.get(model))
         .into_iter()
         .chain(cache.wildcard_index.get(&protocol))
         .flat_map(|indexes| indexes.iter().copied())
@@ -755,43 +761,35 @@ fn choose_channel_for_request<'a>(
 
     let mut highest_priority = None;
     let mut total_weight = 0;
-    let mut candidates = Vec::new();
+    let mut selected = None;
 
     for channel in indexed {
         if !channel_is_available(cache, channel, protocol, model, now, model_blocks) {
             continue;
         }
+        let weight = channel.weight.max(1);
         match highest_priority {
             None => {
                 highest_priority = Some(channel.priority);
-                total_weight = channel.weight.max(1);
-                candidates.push(channel);
+                total_weight = weight;
+                selected = Some(channel);
             }
             Some(priority) if channel.priority > priority => {
                 highest_priority = Some(channel.priority);
-                total_weight = channel.weight.max(1);
-                candidates.clear();
-                candidates.push(channel);
+                total_weight = weight;
+                selected = Some(channel);
             }
             Some(priority) if channel.priority == priority => {
-                total_weight += channel.weight.max(1);
-                candidates.push(channel);
+                total_weight += weight;
+                if rand::rng().random_range(0..total_weight) < weight {
+                    selected = Some(channel);
+                }
             }
             Some(_) => {}
         }
     }
 
-    highest_priority?;
-    let mut slot = rand::rng().random_range(0..total_weight);
-    candidates.into_iter().find(|channel| {
-        let weight = channel.weight.max(1);
-        if slot < weight {
-            true
-        } else {
-            slot -= weight;
-            false
-        }
-    })
+    selected
 }
 
 fn channel_is_available(
@@ -945,6 +943,9 @@ fn model_is_blocked(
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
 ) -> bool {
+    if model_blocks.is_empty() {
+        return false;
+    }
     let block_key = ModelBlockKey {
         protocol: channel.protocol,
         endpoint_id: channel.endpoint_id,

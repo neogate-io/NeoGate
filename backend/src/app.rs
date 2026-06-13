@@ -132,7 +132,7 @@ fn init_tracing() {
 const ERROR_LOG_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
 async fn log_bootstrap_http_request(request: Request<Body>, next: Next) -> Response {
-    log_http_response(request, next, "none".to_string(), None).await
+    log_http_response(request, next, "none", None).await
 }
 
 async fn log_http_request(
@@ -147,7 +147,7 @@ async fn log_http_request(
 async fn log_http_response(
     request: Request<Body>,
     next: Next,
-    auth: String,
+    auth: &'static str,
     user_id: Option<DbId>,
 ) -> Response {
     let started = Instant::now();
@@ -187,17 +187,17 @@ async fn log_http_response(
 fn request_auth_context(
     request: &Request<Body>,
     admin_token_secret: &str,
-) -> (String, Option<DbId>) {
+) -> (&'static str, Option<DbId>) {
     let Some(token) = auth::bearer(request.headers()) else {
-        return ("none".to_string(), None);
+        return ("none", None);
     };
     if auth::validate_admin_token(token, admin_token_secret) {
-        return ("admin".to_string(), None);
+        return ("admin", None);
     }
     if let Some(user_id) = auth::validate_user_session_token(token, admin_token_secret) {
-        return ("user".to_string(), Some(user_id));
+        return ("user", Some(user_id));
     }
-    ("token".to_string(), None)
+    ("token", None)
 }
 
 async fn response_error_for_log(response: Response) -> (Response, Option<String>, Option<String>) {

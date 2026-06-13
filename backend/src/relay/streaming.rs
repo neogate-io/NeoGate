@@ -7,8 +7,8 @@ use futures_util::StreamExt;
 use crate::{
     auth::UserAuth,
     billing::{
-        parse_usage_from_bytes, parse_usage_from_sse_data, BillingAccounts, CreditAccountId,
-        DebitHold, Price, SettleRequest, TokenUsage,
+        parse_usage_from_bytes, parse_usage_from_sse_data, BillingAccounts, BillingCharge,
+        CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
     AppState,
 };
@@ -44,9 +44,11 @@ pub(crate) fn body(
     status: StatusCode,
     upstream_response: reqwest::Response,
 ) -> Body {
+    let content_length = upstream_response.content_length();
     body_from_stream(
         ctx,
         status,
+        content_length,
         upstream_response
             .bytes_stream()
             .map(|chunk| chunk.map_err(|err| err.to_string()))
@@ -57,6 +59,7 @@ pub(crate) fn body(
 fn body_from_stream(
     ctx: RelayContext,
     status: StatusCode,
+    content_length: Option<u64>,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
 ) -> Body {
     let streamed = ctx.streamed;
@@ -65,7 +68,7 @@ fn body_from_stream(
         ctx: Some(ctx),
         status,
         stream,
-        usage: ResponseUsageParser::for_response(status, streamed, path),
+        usage: ResponseUsageParser::for_response(status, streamed, path, content_length),
         first_response_ms: None,
     };
 
@@ -110,35 +113,7 @@ impl StreamingRelay {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let billing = if self.status.is_success() {
-            match ctx
-                .state
-                .billing
-                .settle(
-                    &ctx.state.db.pool,
-                    SettleRequest {
-                        accounts: BillingAccounts {
-                            user_id: ctx.auth.user_id,
-                            project_id: ctx.auth.project_id,
-                            user_key_id: ctx.auth.user_key_id,
-                            user_key_model_credit_account: ctx
-                                .user_key_model_credit_account
-                                .as_ref(),
-                            user_key_credit_account: &ctx.auth.user_key_credit_account,
-                            project_credit_account: &ctx.auth.project_credit_account,
-                        },
-                        hold: ctx.hold.clone(),
-                        usage: token_usage,
-                        price: &ctx.price,
-                    },
-                )
-                .await
-            {
-                Ok(billing) => Some(billing),
-                Err(err) => {
-                    tracing::warn!("failed to settle streamed relay hold: {err}");
-                    None
-                }
-            }
+            settle_successful_hold(&ctx, token_usage, "streamed relay").await
         } else {
             release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream error").await;
             None
@@ -182,7 +157,13 @@ impl StreamingRelay {
             error = %summary,
             "upstream stream failed while relaying response body"
         );
-        release_empty_hold(&ctx.state, ctx.hold.clone(), "stream error").await;
+        let token_usage = self.usage.finish();
+        let billing = if self.status.is_success() {
+            settle_successful_hold(&ctx, token_usage, "successful stream error").await
+        } else {
+            release_empty_hold(&ctx.state, ctx.hold.clone(), "stream error").await;
+            None
+        };
         let failure = if should_cooldown_key_for_stream_error(self.status) {
             key_failure_from_context(&ctx, summary.clone()).await
         } else {
@@ -193,10 +174,44 @@ impl StreamingRelay {
             Some(self.status.as_u16() as i32),
             Some(summary),
             self.first_response_ms,
-            None,
-            None,
+            token_usage,
+            billing,
         );
         enqueue_relay_usage(&ctx.state, usage, failure).await;
+    }
+}
+
+async fn settle_successful_hold(
+    ctx: &RelayContext,
+    token_usage: Option<TokenUsage>,
+    context: &str,
+) -> Option<BillingCharge> {
+    match ctx
+        .state
+        .billing
+        .settle(
+            &ctx.state.db.pool,
+            SettleRequest {
+                accounts: BillingAccounts {
+                    user_id: ctx.auth.user_id,
+                    project_id: ctx.auth.project_id,
+                    user_key_id: ctx.auth.user_key_id,
+                    user_key_model_credit_account: ctx.user_key_model_credit_account.as_ref(),
+                    user_key_credit_account: &ctx.auth.user_key_credit_account,
+                    project_credit_account: &ctx.auth.project_credit_account,
+                },
+                hold: ctx.hold.clone(),
+                usage: token_usage,
+                price: &ctx.price,
+            },
+        )
+        .await
+    {
+        Ok(billing) => Some(billing),
+        Err(err) => {
+            tracing::warn!("failed to settle {context} hold: {err}");
+            None
+        }
     }
 }
 
@@ -210,6 +225,8 @@ impl Drop for StreamingRelay {
             return;
         };
         let status = self.status;
+        let token_usage = self.usage.finish();
+        let first_response_ms = self.first_response_ms;
 
         tokio::spawn(async move {
             tracing::warn!(
@@ -228,7 +245,12 @@ impl Drop for StreamingRelay {
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
                 "downstream client closed relay stream before completion"
             );
-            release_empty_hold(&ctx.state, ctx.hold.clone(), "dropped stream").await;
+            let billing = if status.is_success() {
+                settle_successful_hold(&ctx, token_usage, "dropped successful stream").await
+            } else {
+                release_empty_hold(&ctx.state, ctx.hold.clone(), "dropped stream").await;
+                None
+            };
             let failure = if status.is_success() {
                 None
             } else {
@@ -238,9 +260,9 @@ impl Drop for StreamingRelay {
                 &ctx,
                 Some(status.as_u16() as i32),
                 Some("downstream stream closed before completion".to_string()),
-                None,
-                None,
-                None,
+                first_response_ms,
+                token_usage,
+                billing,
             );
             enqueue_relay_usage(&ctx.state, usage, failure).await;
         });
@@ -254,7 +276,12 @@ enum ResponseUsageParser {
 }
 
 impl ResponseUsageParser {
-    fn for_response(status: StatusCode, streamed: bool, path: &str) -> Self {
+    fn for_response(
+        status: StatusCode,
+        streamed: bool,
+        path: &str,
+        content_length: Option<u64>,
+    ) -> Self {
         if !status.is_success() {
             Self::Disabled
         } else if path.starts_with("/v1/images/") {
@@ -262,7 +289,9 @@ impl ResponseUsageParser {
         } else if streamed {
             Self::Sse(StreamUsageParser::default())
         } else {
-            Self::Json(Some(Vec::new()))
+            Self::Json(Some(Vec::with_capacity(json_usage_buffer_capacity(
+                content_length,
+            ))))
         }
     }
 
@@ -294,6 +323,13 @@ impl ResponseUsageParser {
             Self::Disabled => None,
         }
     }
+}
+
+fn json_usage_buffer_capacity(content_length: Option<u64>) -> usize {
+    content_length
+        .and_then(|length| usize::try_from(length).ok())
+        .map(|length| length.min(MAX_JSON_USAGE_BUFFER_BYTES))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -376,7 +412,9 @@ impl StreamUsageParser {
             }
             consumed = line_end + 1;
         }
-        if consumed > 0 {
+        if consumed == self.buffered.len() {
+            self.buffered.clear();
+        } else if consumed > 0 {
             self.buffered.drain(..consumed);
         }
     }

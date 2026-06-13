@@ -1,5 +1,11 @@
 # Backend Tests
 
+## Relay benchmark
+
+Relay benchmark helpers live in `relay_bench_mock.py`, with instructions in
+`relay_bench.md`. They provide a local OpenAI-compatible mock upstream for
+measuring NeoGate relay overhead without calling a real model provider.
+
 ## OpenAI image smoke tests
 
 The image smoke tests live in `test_openai_image.py` and read defaults from

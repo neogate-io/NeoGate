@@ -21,9 +21,10 @@ use crate::{
     usage::{self, ActivityRecorder, UsageDailyRecorder, UsageInsert},
 };
 
-const BILLING_BATCH_SIZE: i64 = 100;
-const BILLING_PROCESS_CHUNK_SIZE: i64 = 10;
-const BILLING_MAX_BATCHES_PER_TICK: usize = 10;
+const BILLING_BATCH_SIZE: i64 = 500;
+const BILLING_PROCESS_CHUNK_SIZE: i64 = 500;
+const BILLING_MAX_BATCHES_PER_TICK: usize = 40;
+const BILLING_PROCESS_WORKERS: usize = 4;
 const BILLING_MAX_ATTEMPTS: i32 = 10;
 const BILLING_OUTBOX_WRITE_ATTEMPTS: u32 = 7;
 const BILLING_OUTBOX_INITIAL_RETRY_DELAY: Duration = Duration::from_millis(50);
@@ -95,10 +96,16 @@ impl BillingOutbox {
         };
         let worker = outbox.clone();
         tokio::spawn(async move {
-            worker
-                .run_worker(receiver, flush_interval, process_outbox)
-                .await;
+            worker.run_worker(receiver, flush_interval).await;
         });
+        if process_outbox {
+            for _ in 0..BILLING_PROCESS_WORKERS {
+                let process_worker = outbox.clone();
+                tokio::spawn(async move {
+                    process_worker.run_process_worker(flush_interval).await;
+                });
+            }
+        }
         let retry_worker = outbox.clone();
         tokio::spawn(async move {
             retry_worker.run_retry_worker(retry_receiver).await;
@@ -182,12 +189,7 @@ impl BillingOutbox {
         }
     }
 
-    async fn run_worker(
-        self,
-        mut receiver: mpsc::Receiver<UsageInsert>,
-        flush_interval: Duration,
-        process_outbox: bool,
-    ) {
+    async fn run_worker(self, mut receiver: mpsc::Receiver<UsageInsert>, flush_interval: Duration) {
         let mut interval = time::interval(flush_interval.max(Duration::from_millis(1)));
         loop {
             tokio::select! {
@@ -218,18 +220,29 @@ impl BillingOutbox {
                         }
                     }
                 }
-                _ = interval.tick() => {
-                    if process_outbox {
-                        for _ in 0..BILLING_MAX_BATCHES_PER_TICK {
-                            match process_billing_outbox_batch(&self.pool, &self.activity, &self.daily, BILLING_BATCH_SIZE).await {
-                                Ok(processed) if processed >= BILLING_BATCH_SIZE as u64 => {}
-                                Ok(_) => break,
-                                Err(err) => {
-                                    tracing::warn!("failed to process durable billing records: {err}");
-                                    break;
-                                }
-                            }
-                        }
+                _ = interval.tick() => {}
+            }
+        }
+    }
+
+    async fn run_process_worker(self, flush_interval: Duration) {
+        let mut interval = time::interval(flush_interval.max(Duration::from_millis(1)));
+        loop {
+            interval.tick().await;
+            for _ in 0..BILLING_MAX_BATCHES_PER_TICK {
+                match process_billing_outbox_batch(
+                    &self.pool,
+                    &self.activity,
+                    &self.daily,
+                    BILLING_BATCH_SIZE,
+                )
+                .await
+                {
+                    Ok(processed) if processed >= BILLING_BATCH_SIZE as u64 => {}
+                    Ok(_) => break,
+                    Err(err) => {
+                        tracing::warn!("failed to process durable billing records: {err}");
+                        break;
                     }
                 }
             }
@@ -461,21 +474,15 @@ async fn process_billing_outbox_chunk(
     let selected_ids = records.iter().map(|record| record.id).collect::<Vec<_>>();
     let mut processed_usages = Vec::with_capacity(records.len());
     for record in &records {
-        match process_billing_payload(
-            &mut tx,
-            record.id,
-            record.transaction_id,
-            record.payload.clone(),
-        )
-        .await
-        {
+        match usage_from_billing_payload(record.transaction_id, record.payload.clone()) {
             Ok(usage) => processed_usages.push(usage),
             Err(err) => {
+                let failed_id = record.id;
                 let _ = tx.rollback().await;
                 tracing::warn!(
-                    billing_id = %record.id,
+                    billing_id = %failed_id,
                     selected,
-                    "failed to process billing chunk; retrying selected records individually: {err}"
+                    "failed to decode billing chunk; retrying selected records individually: {err}"
                 );
                 let processed =
                     process_billing_records_individually(pool, activity, daily, records).await?;
@@ -487,6 +494,28 @@ async fn process_billing_outbox_chunk(
             }
         }
     }
+
+    if let Err(err) = async {
+        usage::flush_usage(&mut tx, &processed_usages).await?;
+        mark_billing_records_processed(&mut tx, &selected_ids).await?;
+        Ok::<(), AppError>(())
+    }
+    .await
+    {
+        let _ = tx.rollback().await;
+        tracing::warn!(
+            selected,
+            "failed to process billing chunk; retrying selected records individually: {err}"
+        );
+        let processed =
+            process_billing_records_individually(pool, activity, daily, records).await?;
+        return Ok(BillingOutboxChunkResult {
+            selected,
+            selected_ids,
+            processed,
+        });
+    }
+
     tx.commit().await?;
     activity.record(&processed_usages);
     daily.record(&processed_usages);
@@ -588,9 +617,7 @@ async fn process_billing_outbox_record(pool: &PgPool, id: DbId) -> AppResult<Opt
     }
 }
 
-async fn process_billing_payload(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    id: DbId,
+fn usage_from_billing_payload(
     transaction_id: Uuid,
     payload: serde_json::Value,
 ) -> AppResult<UsageInsert> {
@@ -605,6 +632,36 @@ async fn process_billing_payload(
         ));
     }
 
+    Ok(usage)
+}
+
+async fn mark_billing_records_processed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ids: &[DbId],
+) -> AppResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE billing
+         SET status = 'processed',
+             processed_at = now(),
+             last_error = NULL
+         WHERE id = ANY($1) AND status = 'pending'",
+    )
+    .bind(ids)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn process_billing_payload(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: DbId,
+    transaction_id: Uuid,
+    payload: serde_json::Value,
+) -> AppResult<UsageInsert> {
+    let usage = usage_from_billing_payload(transaction_id, payload)?;
     usage::flush_usage(tx, std::slice::from_ref(&usage)).await?;
 
     sqlx::query(

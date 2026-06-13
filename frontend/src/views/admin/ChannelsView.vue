@@ -993,7 +993,8 @@ onMounted(loadInitialData)
 
 .channel-table :deep(.el-table__expanded-cell) {
   background: #f6f9fc;
-  padding: 0;
+  height: auto !important;
+  padding: 0 !important;
 }
 
 .channel-table :deep(.el-table__expand-icon) {
@@ -1208,11 +1209,10 @@ onMounted(loadInitialData)
 }
 
 .channel-expand-panel {
-  animation: channel-expand-in 180ms ease-out;
   display: grid;
-  gap: 14px;
-  margin: 6px 12px 14px 44px;
-  padding: 16px;
+  gap: 12px;
+  margin: 0;
+  padding: 14px 16px 16px 60px;
 }
 
 .channel-expand-head {
@@ -1416,21 +1416,9 @@ onMounted(loadInitialData)
   padding: 30px 0 34px;
 }
 
-@keyframes channel-expand-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @media (max-width: 760px) {
   .channel-expand-panel {
-    margin-left: 0;
+    padding: 12px;
   }
 
   .channel-expand-head {

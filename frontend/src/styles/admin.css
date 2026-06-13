@@ -47,6 +47,7 @@
 
 .admin-shell .content {
   gap: 14px;
+  grid-auto-rows: max-content;
   grid-template-columns: minmax(0, min(100%, 1480px));
   justify-content: center;
   justify-items: stretch;
@@ -56,17 +57,19 @@
 }
 
 .admin-shell .page-header {
-  align-items: stretch;
+  align-items: start;
+  align-self: start;
   background: color-mix(in srgb, var(--admin-bg) 92%, #ffffff);
   border: 0;
   border-radius: 0;
   box-shadow: none;
   display: grid;
-  gap: 13px;
+  gap: 18px;
   grid-template-columns: minmax(0, 1fr);
-  min-height: 66px;
-  padding: 0 0 14px;
-  position: sticky;
+  grid-template-rows: auto auto;
+  min-height: 0;
+  padding: 0 0 4px;
+  position: relative;
   top: 0;
   width: 100%;
   z-index: 20;
@@ -87,11 +90,12 @@
 .admin-shell .page-topbar-start {
   align-items: center;
   display: flex;
-  gap: 10px;
+  gap: 18px;
   min-width: 0;
 }
 
 .admin-shell .page-title-block {
+  align-items: start;
   display: grid;
   gap: 4px;
   min-width: 0;
@@ -118,9 +122,15 @@
 .admin-shell .page-title-block > span:not(.page-kicker),
 .admin-shell .page-title-block > span:not(.page-breadcrumb) {
   color: var(--admin-text-muted);
+  display: none;
   font-size: 13px;
   font-weight: 540;
   line-height: 1.45;
+  max-width: 760px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-shell > .el-aside .el-sub-menu__title {
@@ -1827,7 +1837,7 @@
 
   .admin-shell .page-header {
     align-items: stretch;
-    gap: 12px;
+    gap: 10px;
     min-height: 0;
   }
 
@@ -2064,10 +2074,12 @@
   border-radius: 0;
   box-shadow: none;
   display: grid;
-  gap: 13px;
+  gap: 21px;
   grid-template-columns: minmax(0, 1fr);
-  min-height: 66px;
-  padding: 0 0 14px;
+  grid-template-rows: auto auto;
+  min-height: 0;
+  padding: 0 0 4px;
+  position: relative;
 }
 
 .channel-toolbar,
@@ -2481,7 +2493,7 @@
   }
 
   .admin-shell .page-header {
-    padding: 0 0 12px;
+    padding: 0 0 10px;
   }
 
   .admin-shell .page-topbar {

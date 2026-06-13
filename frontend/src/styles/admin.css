@@ -366,7 +366,8 @@
 
 .channel-toolbar,
 .user-toolbar,
-.usage-toolbar {
+.usage-toolbar,
+.project-toolbar {
   align-items: center;
   display: flex;
   gap: 14px;
@@ -379,7 +380,10 @@
 .user-toolbar-filters,
 .user-toolbar-actions,
 .usage-toolbar-filters,
-.usage-toolbar-actions {
+.usage-toolbar-actions,
+.project-toolbar-filters,
+.project-toolbar-actions,
+.channel-toolbar-actions {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
@@ -389,12 +393,15 @@
 
 .channel-toolbar-filters,
 .user-toolbar-filters,
-.usage-toolbar-filters {
+.usage-toolbar-filters,
+.project-toolbar-filters {
   flex: 1 1 auto;
 }
 
 .user-toolbar-actions,
-.usage-toolbar-actions {
+.usage-toolbar-actions,
+.project-toolbar-actions,
+.channel-toolbar-actions {
   flex: 0 0 auto;
   justify-content: flex-end;
 }
@@ -404,7 +411,9 @@
 .user-toolbar .el-input__wrapper,
 .usage-toolbar .el-input__wrapper,
 .usage-toolbar .el-select__wrapper,
-.usage-toolbar .el-date-editor {
+.usage-toolbar .el-date-editor,
+.project-toolbar .el-input__wrapper,
+.project-toolbar .el-select__wrapper {
   border-radius: 6px;
   height: 34px;
   min-height: 34px;
@@ -412,7 +421,8 @@
 
 .channel-toolbar .el-input__inner,
 .user-toolbar .el-input__inner,
-.usage-toolbar .el-input__inner {
+.usage-toolbar .el-input__inner,
+.project-toolbar .el-input__inner {
   height: 34px;
   line-height: 34px;
 }
@@ -1698,6 +1708,7 @@
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
+.project-toolbar,
 .admin-page-toolbar,
 .admin-filter-bar.el-form,
 .user-filter-bar.el-form,
@@ -1712,6 +1723,7 @@
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
+.project-toolbar,
 .admin-page-toolbar {
   min-height: 42px;
 }
@@ -1721,6 +1733,9 @@
 .usage-toolbar-filters,
 .user-toolbar-actions,
 .usage-toolbar-actions,
+.project-toolbar-filters,
+.project-toolbar-actions,
+.channel-toolbar-actions,
 .admin-page-toolbar-actions {
   gap: 10px;
 }
@@ -1957,6 +1972,7 @@
   .channel-toolbar,
   .user-toolbar,
   .usage-toolbar,
+  .project-toolbar,
   .admin-page-toolbar {
     align-items: stretch;
     display: grid;
@@ -1968,6 +1984,9 @@
   .user-toolbar-actions,
   .usage-toolbar-filters,
   .usage-toolbar-actions,
+  .project-toolbar-filters,
+  .project-toolbar-actions,
+  .channel-toolbar-actions,
   .admin-page-toolbar-actions {
     display: grid;
     grid-template-columns: 1fr;
@@ -1987,6 +2006,7 @@
   .channel-toolbar .el-button,
   .user-toolbar .el-button,
   .usage-toolbar .el-button,
+  .project-toolbar .el-button,
   .admin-page-toolbar .el-button {
     width: 100%;
   }
@@ -2085,6 +2105,7 @@
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
+.project-toolbar,
 .admin-page-toolbar,
 .admin-filter-bar.el-form,
 .user-filter-bar.el-form,
@@ -2116,6 +2137,7 @@
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
+.project-toolbar,
 .admin-page-toolbar,
 .admin-filter-bar.el-form,
 .user-filter-bar.el-form,

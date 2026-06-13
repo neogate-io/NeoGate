@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
+  ArrowLeft,
+  ArrowRight,
   CircleCheckFilled,
   Coin,
   Delete,
   Edit,
+  MoreFilled,
   Plus,
   PriceTag,
   Search,
@@ -97,6 +100,9 @@ const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
 const appliedChannelSearch = ref('')
 const channelStatusFilter = ref<'all' | 'normal' | 'attention' | 'disabled'>('all')
+const channelCurrentPage = ref(1)
+const channelPageSize = ref(20)
+const channelPageSizes = [20, 50, 100]
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 
 const priceByModel = computed(
@@ -122,13 +128,33 @@ const hasChannelSearchCriteria = computed(
   () => appliedChannelSearch.value.trim().length > 0 || channelStatusFilter.value !== 'all'
 )
 
+const paginatedChannels = computed(() => {
+  const start = (channelCurrentPage.value - 1) * channelPageSize.value
+  return filteredChannels.value.slice(start, start + channelPageSize.value)
+})
+
+const channelTotalPages = computed(() =>
+  Math.ceil(filteredChannels.value.length / channelPageSize.value)
+)
+
+const channelHasPagination = computed(
+  () => filteredChannels.value.length > channelPageSize.value
+)
+
+function handleChannelPageSizeChange(size: number) {
+  channelPageSize.value = size
+  channelCurrentPage.value = 1
+}
+
 function searchChannels() {
   appliedChannelSearch.value = channelSearch.value.trim()
+  channelCurrentPage.value = 1
 }
 
 function clearChannelSearch() {
   channelSearch.value = ''
   appliedChannelSearch.value = ''
+  channelCurrentPage.value = 1
 }
 
 function channelModelList(row: Channel) {
@@ -564,7 +590,7 @@ onMounted(loadInitialData)
 
 <template>
   <section class="grid channel-management-view">
-    <div class="channel-toolbar">
+    <el-form class="channel-toolbar" @submit.prevent="searchChannels">
       <div class="channel-toolbar-filters">
         <label class="admin-filter-field channel-search-field">
           <span>{{ t('name') }}</span>
@@ -575,7 +601,6 @@ onMounted(loadInitialData)
             :placeholder="t('channelSearchPlaceholder')"
             :prefix-icon="Search"
             @clear="clearChannelSearch"
-            @keyup.enter="searchChannels"
           />
         </label>
         <label class="admin-filter-field">
@@ -591,20 +616,23 @@ onMounted(loadInitialData)
           class="admin-action-button channel-search-action"
           type="primary"
           :icon="Search"
-          @click="searchChannels"
+          :loading="loading"
+          native-type="submit"
         >
           {{ t('search') }}
         </el-button>
       </div>
-      <el-button
-        class="admin-action-button add-channel-action"
-        type="primary"
-        :icon="Plus"
-        @click="openCreateDialog"
-      >
-        {{ t('addChannel') }}
-      </el-button>
-    </div>
+      <div class="channel-toolbar-actions">
+        <el-button
+          class="admin-action-button add-channel-action"
+          type="primary"
+          :icon="Plus"
+          @click="openCreateDialog"
+        >
+          {{ t('addChannel') }}
+        </el-button>
+      </div>
+    </el-form>
 
     <div v-if="!channelsLoaded" class="service-table-panel">
       <div v-loading="true" class="admin-table service-table channel-table-loading">
@@ -619,11 +647,11 @@ onMounted(loadInitialData)
       </div>
     </div>
 
-    <div v-else class="service-table-panel">
+    <div v-else class="service-table-panel" :class="{ 'has-pagination': channelHasPagination }">
       <el-table
         v-loading="loading"
         class="admin-table service-table channel-table"
-        :data="filteredChannels"
+        :data="paginatedChannels"
         :row-class-name="channelRowClassName"
         row-key="id"
         stripe
@@ -774,7 +802,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="164" align="center" header-align="center">
+        <el-table-column :label="t('actions')" width="150" fixed="right" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <AdminActionTooltip :content="t('configurePrice')">
@@ -793,16 +821,25 @@ onMounted(loadInitialData)
                   @click="openEditDialog(row)"
                 />
               </AdminActionTooltip>
-              <AdminActionTooltip :content="t('delete')">
+              <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
-                  :icon="Delete"
-                  class="admin-action-button icon-only-action"
-                  type="danger"
-                  :aria-label="t('delete')"
-                  :loading="deletingId === row.id"
-                  @click="confirmDeleteChannel(row)"
+                  class="admin-action-button icon-only-action action-more-button"
+                  :aria-label="t('moreActions')"
+                  :icon="MoreFilled"
                 />
-              </AdminActionTooltip>
+                <template #dropdown>
+                  <el-dropdown-menu class="admin-row-action-menu">
+                    <el-dropdown-item
+                      class="is-danger"
+                      :disabled="deletingId === row.id"
+                      @click="confirmDeleteChannel(row)"
+                    >
+                      <el-icon><Delete /></el-icon>
+                      <span>{{ t('delete') }}</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </template>
         </el-table-column>
@@ -823,6 +860,46 @@ onMounted(loadInitialData)
           </div>
         </template>
       </el-table>
+    </div>
+
+    <div
+      v-if="channelsLoaded && !loading && channelHasPagination"
+      class="admin-pagination-bar admin-table-pagination is-compact"
+    >
+      <div class="admin-pagination-controls">
+        <div class="admin-page-size-control">
+          <span class="admin-page-label">{{ t('pageSize') }}</span>
+          <el-select
+            v-model="channelPageSize"
+            class="admin-page-size"
+            @change="handleChannelPageSizeChange"
+          >
+            <el-option
+              v-for="s in channelPageSizes"
+              :key="s"
+              :value="s"
+              :label="String(s)"
+            />
+          </el-select>
+        </div>
+        <div class="admin-page-buttons">
+          <el-button
+            :aria-label="t('previousPage')"
+            :disabled="channelCurrentPage <= 1"
+            @click="channelCurrentPage--"
+          >
+            <el-icon><ArrowLeft /></el-icon>
+          </el-button>
+          <span class="admin-page-current">{{ channelCurrentPage }} / {{ channelTotalPages }}</span>
+          <el-button
+            :aria-label="t('nextPage')"
+            :disabled="channelCurrentPage >= channelTotalPages"
+            @click="channelCurrentPage++"
+          >
+            <el-icon><ArrowRight /></el-icon>
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <ChannelFormDialog
@@ -1228,16 +1305,18 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
-.channel-runtime-switch.is-enabled {
-  background: #f0fdf4;
-  border-color: #b7eb8f;
-  color: #166534;
+.channel-runtime-switch.is-enabled,
+.channel-runtime-switch.is-enabled .channel-runtime-switch-text {
+  background: var(--admin-success-bg);
+  border-color: var(--admin-success-border);
+  color: var(--admin-success);
 }
 
-.channel-runtime-switch.is-disabled {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  color: #64748b;
+.channel-runtime-switch.is-disabled,
+.channel-runtime-switch.is-disabled .channel-runtime-switch-text {
+  background: var(--admin-danger-bg);
+  border-color: var(--admin-danger-border);
+  color: var(--admin-danger);
 }
 
 .channel-runtime-switch.is-enabled .channel-runtime-switch-icon {

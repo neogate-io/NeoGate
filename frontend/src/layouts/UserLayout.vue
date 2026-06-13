@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, provide, type Component } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { DataBoard, Key, Monitor, Setting, SwitchButton, Wallet } from '@element-plus/icons-vue'
 import { getUserServicePolicy } from '../api/policy'
@@ -13,6 +13,7 @@ const { t } = useLocale()
 const route = useRoute()
 const logout = useLogout(t)
 const { data: servicePolicy } = useAsyncData(() => getUserServicePolicy(), null)
+provide('servicePolicy', servicePolicy)
 type NavItem = { path: string; key: MessageKey; icon: Component }
 
 const navItems = computed(() => {

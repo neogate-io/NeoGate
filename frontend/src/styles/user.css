@@ -25,6 +25,7 @@
   --shell-sidebar-logo-width: 110px;
   --shell-sidebar-menu-text: #5a6678;
   --shell-sidebar-padding: 24px 12px;
+  --skeleton-gradient: linear-gradient(90deg, #eef3f8 0%, #f8fafc 48%, #eef3f8 100%);
   background: var(--user-bg);
   height: auto;
   min-height: calc(100dvh - 38px);
@@ -105,10 +106,6 @@
   font-weight: 780;
   letter-spacing: 0;
   line-height: 1.2;
-}
-
-.user-api-keys-view {
-  max-width: 1120px;
 }
 
 @media (max-width: 900px) {

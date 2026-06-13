@@ -160,72 +160,72 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="grid admin-page-view">
-    <div v-loading="loading" class="admin-settings-panel">
-      <div class="admin-settings-panel-header">
-        <el-icon class="admin-settings-panel-icon"><Coin /></el-icon>
-        <div>
-          <div class="admin-settings-panel-title">
+  <section class="admin-settings-view other-settings-view">
+    <div v-loading="loading" class="other-settings-grid">
+      <section class="other-settings-card">
+        <header class="admin-settings-section-header other-settings-card-header">
+          <el-icon class="admin-settings-panel-icon"><Coin /></el-icon>
+          <div class="other-settings-card-copy">
             <h3>{{ t('creditRequired') }}</h3>
-            <el-switch
-              v-if="servicePolicy"
-              v-model="servicePolicy.credit_required"
-              :disabled="!servicePolicy || !servicePolicyEditable || servicePolicySaving"
-              @change="saveServicePolicy"
-            />
+            <p>{{ creditRequiredDescription }}</p>
           </div>
-          <p>{{ creditRequiredDescription }}</p>
-        </div>
-      </div>
-    </div>
+          <el-switch
+            v-if="servicePolicy"
+            v-model="servicePolicy.credit_required"
+            class="other-settings-switch"
+            :disabled="!servicePolicy || !servicePolicyEditable || servicePolicySaving"
+            @change="saveServicePolicy"
+          />
+        </header>
+      </section>
 
-    <div v-loading="loading" class="admin-settings-panel">
-      <div class="admin-settings-panel-header">
-        <el-icon class="admin-settings-panel-icon"><UserFilled /></el-icon>
-        <div>
-          <div class="admin-settings-panel-title">
+      <section class="other-settings-card">
+        <header class="admin-settings-section-header other-settings-card-header">
+          <el-icon class="admin-settings-panel-icon"><UserFilled /></el-icon>
+          <div class="other-settings-card-copy">
             <h3>{{ t('registrationEnabled') }}</h3>
-            <el-switch
-              v-if="servicePolicy"
-              v-model="servicePolicy.registration_enabled"
-              :disabled="!servicePolicy || servicePolicySaving"
-              @change="saveServicePolicy"
-            />
+            <p>{{ registrationDescription }}</p>
           </div>
-          <p>{{ registrationDescription }}</p>
-        </div>
-      </div>
-    </div>
+          <el-switch
+            v-if="servicePolicy"
+            v-model="servicePolicy.registration_enabled"
+            class="other-settings-switch"
+            :disabled="!servicePolicy || servicePolicySaving"
+            @change="saveServicePolicy"
+          />
+        </header>
+      </section>
 
-    <div class="admin-settings-panel">
-      <div class="admin-settings-panel-header">
-        <el-icon class="admin-settings-panel-icon"><PriceTag /></el-icon>
-        <div>
-          <h3>{{ t('modelReferencePrices') }}</h3>
-          <p>{{ t('syncReferencePricesConfirmIntro') }}</p>
-          <p class="admin-settings-panel-meta">
-            <span>{{ t('referencePricesLastUpdated') }}</span>
-            <strong>{{ referencePricesLastUpdated }}</strong>
-          </p>
+      <section class="other-settings-card">
+        <header class="admin-settings-section-header other-settings-card-header">
+          <el-icon class="admin-settings-panel-icon"><PriceTag /></el-icon>
+          <div class="other-settings-card-copy">
+            <h3>{{ t('modelReferencePrices') }}</h3>
+            <p>{{ t('syncReferencePricesConfirmIntro') }}</p>
+            <p class="other-settings-meta">
+              <span>{{ t('referencePricesLastUpdated') }}</span>
+              <strong>{{ referencePricesLastUpdated }}</strong>
+            </p>
+          </div>
+        </header>
+        <div class="other-settings-actions">
+          <el-button
+            class="admin-action-button"
+            :icon="View"
+            @click="referencePricesDialogOpen = true"
+          >
+            {{ t('viewReferencePrices') }}
+          </el-button>
+          <el-button
+            class="admin-action-button"
+            type="primary"
+            :loading="syncingTemplates"
+            @click="syncReferencePrices"
+          >
+            {{ t('syncReferencePrices') }}
+          </el-button>
         </div>
-      </div>
-      <div class="admin-settings-panel-actions">
-        <el-button
-          class="admin-action-button"
-          :icon="View"
-          @click="referencePricesDialogOpen = true"
-        >
-          {{ t('viewReferencePrices') }}
-        </el-button>
-        <el-button
-          class="admin-action-button"
-          type="primary"
-          :loading="syncingTemplates"
-          @click="syncReferencePrices"
-        >
-          {{ t('syncReferencePrices') }}
-        </el-button>
-      </div>
+      </section>
     </div>
 
     <el-dialog
@@ -285,6 +285,80 @@ onMounted(load)
 </template>
 
 <style scoped>
+:global(.other-settings-view.admin-settings-view) {
+  align-items: flex-start;
+}
+
+.other-settings-grid {
+  display: grid;
+  gap: 16px;
+  width: min(780px, 100%);
+}
+
+.other-settings-card {
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius);
+  box-shadow: none;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px 22px;
+}
+
+.other-settings-card-header {
+  align-items: flex-start;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+}
+
+.other-settings-card-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.other-settings-card-copy h3 {
+  color: var(--admin-text);
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.other-settings-card-copy p {
+  color: var(--admin-text-muted);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.other-settings-switch {
+  margin-top: 1px;
+}
+
+.other-settings-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.other-settings-meta strong {
+  color: var(--admin-text);
+  font-weight: 720;
+}
+
+.other-settings-actions {
+  border-top: 1px solid var(--admin-border-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 16px;
+}
+
 :global(.reference-prices-dialog) {
   max-width: calc(100vw - 32px);
 }
@@ -322,5 +396,30 @@ onMounted(load)
   padding: 0 8px;
   white-space: normal;
   word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .other-settings-card {
+    padding: 18px 16px;
+  }
+
+  .other-settings-card-header {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .other-settings-switch {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 4px;
+  }
+
+  .other-settings-actions {
+    justify-content: stretch;
+  }
+
+  .other-settings-actions .el-button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 </style>

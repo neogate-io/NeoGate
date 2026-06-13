@@ -552,19 +552,25 @@ onMounted(loadInitialData)
   <section class="grid channel-management-view">
     <div class="channel-toolbar">
       <div class="channel-toolbar-filters">
-        <el-input
-          v-model="channelSearch"
-          class="channel-search-input"
-          clearable
-          :placeholder="t('channelSearchPlaceholder')"
-          :prefix-icon="Search"
-        />
-        <el-select v-model="channelStatusFilter" class="channel-status-filter">
-          <el-option :label="t('allStatus')" value="all" />
-          <el-option :label="t('channelRunningNormal')" value="normal" />
-          <el-option :label="t('channelNeedsAttention')" value="attention" />
-          <el-option :label="t('channelStopped')" value="disabled" />
-        </el-select>
+        <label class="admin-filter-field">
+          <span>{{ t('providerOrModel') }}</span>
+          <el-input
+            v-model="channelSearch"
+            class="channel-search-input"
+            clearable
+            :placeholder="t('channelSearchPlaceholder')"
+            :prefix-icon="Search"
+          />
+        </label>
+        <label class="admin-filter-field">
+          <span>{{ t('channelStatus') }}</span>
+          <el-select v-model="channelStatusFilter" class="channel-status-filter">
+            <el-option :label="t('allStatus')" value="all" />
+            <el-option :label="t('channelRunningNormal')" value="normal" />
+            <el-option :label="t('channelNeedsAttention')" value="attention" />
+            <el-option :label="t('channelStopped')" value="disabled" />
+          </el-select>
+        </label>
       </div>
       <el-button
         class="admin-action-button add-channel-action"

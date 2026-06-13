@@ -501,23 +501,29 @@ onMounted(() => {
   <section class="grid user-management-view">
     <el-form class="user-toolbar" @submit.prevent="searchUsers">
       <div class="user-toolbar-filters">
-        <el-input
-          v-model="emailSearch"
-          class="user-search-input"
-          clearable
-          :prefix-icon="Search"
-          :placeholder="t('userEmailSearchPlaceholder')"
-          @clear="searchUsers"
-        />
-        <el-input
-          v-model="apiKeySearch"
-          class="user-search-input is-key-search"
-          clearable
-          show-password
-          :prefix-icon="Key"
-          :placeholder="t('apiKeySearchPlaceholder')"
-          @clear="searchUsers"
-        />
+        <label class="admin-filter-field">
+          <span>{{ t('email') }}</span>
+          <el-input
+            v-model="emailSearch"
+            class="user-search-input"
+            clearable
+            :prefix-icon="Search"
+            :placeholder="t('userEmailSearchPlaceholder')"
+            @clear="searchUsers"
+          />
+        </label>
+        <label class="admin-filter-field">
+          <span>{{ t('apiKey') }}</span>
+          <el-input
+            v-model="apiKeySearch"
+            class="user-search-input is-key-search"
+            clearable
+            show-password
+            :prefix-icon="Key"
+            :placeholder="t('apiKeySearchPlaceholder')"
+            @clear="searchUsers"
+          />
+        </label>
         <el-button
           class="admin-action-button user-search-button"
           type="primary"
@@ -570,25 +576,77 @@ onMounted(() => {
         row-key="id"
         stripe
       >
-        <el-table-column prop="id" label="ID" width="76" align="right" header-align="right" />
-        <el-table-column prop="username" :label="t('username')" min-width="130">
+        <el-table-column prop="id" label="ID" width="68" align="right" header-align="right" />
+        <el-table-column prop="username" :label="t('username')" min-width="120">
           <template #default="{ row }">
             <span class="user-email-cell">
               <span class="user-avatar">
                 <el-icon><UserIcon /></el-icon>
               </span>
-              <span class="user-username-text" :class="{ 'is-empty': !row.username }">
-                {{ row.username || '-' }}
+              <span class="user-identity-stack">
+                <span class="user-username-text" :class="{ 'is-empty': !row.username }">
+                  {{ row.username || '-' }}
+                </span>
+                <span class="user-mobile-email">{{ row.email }}</span>
+                <span class="user-mobile-meta">
+                  {{ userStatusText(row.status) }} · {{ row.user_key_count.toLocaleString(locale) }}
+                  {{ t('keys') }}
+                </span>
+                <span class="user-mobile-row-actions">
+                  <el-button
+                    v-if="row.status === 'pending'"
+                    class="admin-action-button icon-only-action user-status-action"
+                    :aria-label="t('approve')"
+                    :icon="CircleCheckFilled"
+                    :loading="approvingUserId === row.id"
+                    @click="approveUser(row)"
+                  />
+                  <AdminActionTooltip :content="t('viewApiKeys')">
+                    <el-button
+                      class="admin-action-button icon-only-action"
+                      :aria-label="t('viewApiKeys')"
+                      :icon="Key"
+                      @click="openUserKeysDialog(row)"
+                    />
+                  </AdminActionTooltip>
+                  <AdminActionTooltip :content="t('edit')">
+                    <el-button
+                      class="admin-action-button icon-only-action"
+                      :aria-label="t('edit')"
+                      :icon="Edit"
+                      @click="openEditDialog(row)"
+                    />
+                  </AdminActionTooltip>
+                  <el-dropdown trigger="click" placement="bottom-end">
+                    <el-button
+                      class="admin-action-button icon-only-action action-more-button"
+                      :aria-label="t('moreActions')"
+                      :icon="MoreFilled"
+                    />
+                    <template #dropdown>
+                      <el-dropdown-menu class="admin-row-action-menu">
+                        <el-dropdown-item
+                          class="is-danger"
+                          :disabled="deletingUserId === row.id"
+                          @click="confirmDeleteUser(row)"
+                        >
+                          <el-icon><Delete /></el-icon>
+                          <span>{{ t('delete') }}</span>
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </span>
               </span>
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="email" :label="t('email')" min-width="220">
+        <el-table-column prop="email" :label="t('email')" min-width="200">
           <template #default="{ row }">
             <span class="user-email-text">{{ row.email }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('userGroup')" min-width="130">
+        <el-table-column :label="t('userGroup')" min-width="120">
           <template #default="{ row }">
             <span class="user-group-tag" :class="`is-${userGroupTone(row)}`">
               {{ row.user_group_name }}
@@ -597,7 +655,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column
           :label="t('userApiKeyCount')"
-          min-width="112"
+          min-width="104"
           align="center"
           header-align="center"
         >
@@ -610,7 +668,7 @@ onMounted(() => {
         <el-table-column
           v-if="showAccountBalance"
           :label="t('accountBalance')"
-          min-width="132"
+          min-width="124"
           align="center"
           header-align="center"
         >
@@ -622,12 +680,12 @@ onMounted(() => {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('createdAt')" min-width="160">
+        <el-table-column :label="t('createdAt')" min-width="150">
           <template #default="{ row }">
             <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('lastActiveAt')" min-width="190">
+        <el-table-column :label="t('lastActiveAt')" min-width="170">
           <template #default="{ row }">
             <span class="user-time-cell" :class="{ 'is-empty': !row.last_active_at }">
               {{ formatLastActiveAt(row.last_active_at) }}
@@ -636,7 +694,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column
           :label="t('userStatus')"
-          min-width="128"
+          min-width="116"
           align="center"
           header-align="center"
         >
@@ -660,7 +718,13 @@ onMounted(() => {
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="152" align="center" header-align="center">
+        <el-table-column
+          :label="t('actions')"
+          width="150"
+          fixed="right"
+          align="center"
+          header-align="center"
+        >
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -1109,6 +1173,28 @@ onMounted(() => {
   min-width: 0;
 }
 
+.user-identity-stack {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.user-mobile-email {
+  color: #667085;
+  display: none;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-mobile-meta,
+.user-mobile-row-actions {
+  display: none;
+}
+
 .user-avatar {
   align-items: center;
   background: #eef7fd;
@@ -1323,6 +1409,24 @@ onMounted(() => {
 }
 
 @media (max-width: 640px) {
+  .user-mobile-email {
+    display: block;
+  }
+
+  .user-mobile-meta {
+    color: #98a2b3;
+    display: block;
+    font-size: 12px;
+    font-weight: 550;
+    line-height: 1.25;
+  }
+
+  .user-mobile-row-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
   .user-dialog-form {
     grid-template-columns: 1fr;
   }

@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
-import { CircleCheckFilled, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
+import {
+  ArrowLeft,
+  ArrowRight,
+  CircleCheckFilled,
+  Refresh,
+  Search,
+  WarningFilled
+} from '@element-plus/icons-vue'
 import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
@@ -130,27 +137,36 @@ async function handlePageSizeChange(size: number) {
   <section class="grid usage-view">
     <el-form class="usage-toolbar" @submit.prevent="handleSearch">
       <div class="usage-toolbar-filters">
-        <el-date-picker
-          v-model="filters.dateRange"
-          class="usage-date-range"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          :range-separator="t('to')"
-          :start-placeholder="t('startTime')"
-          :end-placeholder="t('endTime')"
-        />
-        <el-input
-          v-model="filters.query"
-          class="usage-search-input"
-          clearable
-          :prefix-icon="Search"
-          :placeholder="t('usageModelSearchPlaceholder')"
-        />
-        <el-select v-model="filters.status" class="usage-status-filter">
-          <el-option :label="t('usageStatusAll')" value="all" />
-          <el-option :label="t('usageStatusSuccess')" value="success" />
-          <el-option :label="t('usageStatusFailed')" value="failed" />
-        </el-select>
+        <label class="admin-filter-field">
+          <span>{{ t('timeRange') }}</span>
+          <el-date-picker
+            v-model="filters.dateRange"
+            class="usage-date-range"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            :range-separator="t('to')"
+            :start-placeholder="t('startTime')"
+            :end-placeholder="t('endTime')"
+          />
+        </label>
+        <label class="admin-filter-field">
+          <span>{{ t('providerOrModel') }}</span>
+          <el-input
+            v-model="filters.query"
+            class="usage-search-input"
+            clearable
+            :prefix-icon="Search"
+            :placeholder="t('usageModelSearchPlaceholder')"
+          />
+        </label>
+        <label class="admin-filter-field">
+          <span>{{ t('status') }}</span>
+          <el-select v-model="filters.status" class="usage-status-filter">
+            <el-option :label="t('usageStatusAll')" value="all" />
+            <el-option :label="t('usageStatusSuccess')" value="success" />
+            <el-option :label="t('usageStatusFailed')" value="failed" />
+          </el-select>
+        </label>
         <el-button
           class="admin-action-button"
           type="primary"
@@ -186,7 +202,11 @@ async function handlePageSizeChange(size: number) {
       <div class="usage-table-loading-row"></div>
     </div>
 
-    <div v-else class="service-table-panel">
+    <div
+      v-else
+      class="service-table-panel"
+      :class="{ 'has-pagination': hasUsagePagination || usageItems.length > 1 }"
+    >
       <el-table
         v-loading="loading"
         class="admin-table service-table usage-table"
@@ -296,7 +316,7 @@ async function handlePageSizeChange(size: number) {
 
     <div
       v-if="!usageInitialLoading && (hasUsagePagination || usageItems.length > 1)"
-      class="admin-pagination-bar"
+      class="admin-pagination-bar admin-table-pagination is-compact"
     >
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
@@ -309,12 +329,19 @@ async function handlePageSizeChange(size: number) {
         </div>
         <span class="admin-result-count">{{ t('currentPage') }} {{ currentPage }}</span>
         <div class="admin-page-buttons">
-          <el-button :disabled="currentPage <= 1 || loading" @click="previousPage">
-            {{ t('previousPage') }}
-          </el-button>
-          <el-button :disabled="!usagePage.has_more || loading" @click="nextPage">
-            {{ t('nextPage') }}
-          </el-button>
+          <el-button
+            :aria-label="t('previousPage')"
+            :disabled="currentPage <= 1 || loading"
+            :icon="ArrowLeft"
+            @click="previousPage"
+          />
+          <span class="admin-page-current">{{ currentPage }}</span>
+          <el-button
+            :aria-label="t('nextPage')"
+            :disabled="!usagePage.has_more || loading"
+            :icon="ArrowRight"
+            @click="nextPage"
+          />
         </div>
       </div>
     </div>

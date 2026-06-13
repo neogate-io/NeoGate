@@ -69,6 +69,18 @@ const activeRouteSubtitle = computed(() => {
   const subtitleKey = route.meta.subtitleKey
   return t(isMessageKey(subtitleKey) ? subtitleKey : 'adminConsoleSubtitle')
 })
+const activeRouteGroupLabel = computed(() => {
+  if (settingsOpen.value) return t('settings')
+  const matchedGroup = navGroups.find((group) =>
+    group.items.some((item) => activeRoute.value.startsWith(item.path))
+  )
+  return t(matchedGroup?.key ?? 'adminNavOperations')
+})
+const activeBreadcrumbs = computed(() => [
+  t('admin'),
+  activeRouteGroupLabel.value,
+  activeRouteLabel.value
+])
 
 watch(
   () => route.fullPath,
@@ -132,9 +144,10 @@ watch(
         />
         <div class="page-title-block">
           <nav class="page-breadcrumb" :aria-label="t('admin')">
-            <span>{{ t('admin') }}</span>
-            <span aria-hidden="true">/</span>
-            <span>{{ settingsOpen ? t('settings') : t('adminNavOperations') }}</span>
+            <template v-for="(breadcrumb, index) in activeBreadcrumbs" :key="breadcrumb">
+              <span>{{ breadcrumb }}</span>
+              <span v-if="index < activeBreadcrumbs.length - 1" aria-hidden="true">/</span>
+            </template>
           </nav>
           <h2>{{ activeRouteLabel }}</h2>
           <span>{{ activeRouteSubtitle }}</span>

@@ -129,7 +129,6 @@ const {
 } satisfies ProjectPage)
 const projects = computed(() => projectsPage.value.items)
 const initialLoading = computed(() => !loaded.value)
-const hasPagination = computed(() => currentPage.value > 1 || Boolean(projectsPage.value.has_more))
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
 )
@@ -203,7 +202,9 @@ function userSelectLabel(user: User) {
   return user.username ? `${user.username} / ${user.email}` : user.email
 }
 
-const editableMemberRoleOptions = computed<Array<{ label: string; value: EditableProjectMemberRole }>>(() => [
+const editableMemberRoleOptions = computed<
+  Array<{ label: string; value: EditableProjectMemberRole }>
+>(() => [
   { label: memberRoleText('admin'), value: 'admin' },
   { label: memberRoleText('member'), value: 'member' }
 ])
@@ -521,31 +522,36 @@ async function handlePageSizeChange(size: number) {
   resetPagination()
   await reload()
 }
-
 </script>
 
 <template>
   <section class="grid project-management-view">
     <el-form class="user-toolbar project-toolbar" @submit.prevent="searchProjects">
       <div class="user-toolbar-filters">
-        <el-input
-          v-model="search"
-          class="project-search-input"
-          clearable
-          :prefix-icon="Search"
-          :placeholder="t('projectSearchPlaceholder')"
-          @clear="searchProjects"
-        />
-        <el-select
-          v-model="statusFilter"
-          class="project-status-filter"
-          :placeholder="t('allProjects')"
-          @change="searchProjects"
-        >
-          <el-option :label="t('allProjects')" value="" />
-          <el-option :label="t('enabled')" value="enabled" />
-          <el-option :label="t('disabled')" value="disabled" />
-        </el-select>
+        <label class="admin-filter-field">
+          <span>{{ t('projectName') }}</span>
+          <el-input
+            v-model="search"
+            class="project-search-input"
+            clearable
+            :prefix-icon="Search"
+            :placeholder="t('projectSearchPlaceholder')"
+            @clear="searchProjects"
+          />
+        </label>
+        <label class="admin-filter-field">
+          <span>{{ t('projectStatus') }}</span>
+          <el-select
+            v-model="statusFilter"
+            class="project-status-filter"
+            :placeholder="t('allProjects')"
+            @change="searchProjects"
+          >
+            <el-option :label="t('allProjects')" value="" />
+            <el-option :label="t('enabled')" value="enabled" />
+            <el-option :label="t('disabled')" value="disabled" />
+          </el-select>
+        </label>
         <el-button
           class="admin-action-button user-search-button"
           type="primary"
@@ -574,11 +580,7 @@ async function handlePageSizeChange(size: number) {
       <div class="project-loading-row" />
     </div>
 
-    <div
-      v-else
-      class="service-table-panel"
-      :class="{ 'has-pagination': hasPagination || projects.length > 1 }"
-    >
+    <div v-else class="service-table-panel has-pagination">
       <el-table
         v-loading="loading"
         class="admin-table service-table project-table"
@@ -609,7 +611,9 @@ async function handlePageSizeChange(size: number) {
           <template #default="{ row }">
             <span class="project-owner-cell">
               <el-icon><UserFilled /></el-icon>
-              <span>{{ row.admin_display_names.length ? row.admin_display_names.join(', ') : '-' }}</span>
+              <span>{{
+                row.admin_display_names.length ? row.admin_display_names.join(', ') : '-'
+              }}</span>
             </span>
           </template>
         </el-table-column>
@@ -675,7 +679,13 @@ async function handlePageSizeChange(size: number) {
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="144" align="center" header-align="center">
+        <el-table-column
+          :label="t('actions')"
+          width="144"
+          fixed="right"
+          align="center"
+          header-align="center"
+        >
           <template #default="{ row }">
             <div class="table-row-actions">
               <AdminActionTooltip :content="t('viewProjectMembers')">
@@ -728,10 +738,7 @@ async function handlePageSizeChange(size: number) {
       </el-table>
     </div>
 
-    <div
-      v-if="!initialLoading && (hasPagination || projects.length > 1)"
-      class="admin-pagination-bar admin-table-pagination is-compact"
-    >
+    <div v-if="!initialLoading" class="admin-pagination-bar admin-table-pagination is-compact">
       <div class="admin-pagination-controls">
         <div class="admin-page-size-control">
           <span class="admin-page-label">{{ t('pageSize') }}</span>
@@ -772,7 +779,11 @@ async function handlePageSizeChange(size: number) {
           @submit.prevent="submitProjectForm"
         >
           <el-form-item class="project-create-field" :label="t('projectName')">
-            <el-input v-model="projectForm.name" :placeholder="t('projectNamePlaceholder')" autofocus />
+            <el-input
+              v-model="projectForm.name"
+              :placeholder="t('projectNamePlaceholder')"
+              autofocus
+            />
           </el-form-item>
           <div class="project-create-field-row">
             <el-form-item class="project-create-field" :label="t('projectOwner')">
@@ -931,7 +942,12 @@ async function handlePageSizeChange(size: number) {
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('memberRole')" width="88" align="center" header-align="center">
+            <el-table-column
+              :label="t('memberRole')"
+              width="88"
+              align="center"
+              header-align="center"
+            >
               <template #default="{ row }">
                 <el-tag class="static-state-tag" effect="plain">
                   {{ memberRoleText(row.role) }}
@@ -957,19 +973,28 @@ async function handlePageSizeChange(size: number) {
             <el-table-column :label="t('createdAt')" width="116">
               <template #default="{ row }">
                 <span v-if="formatDateTimeParts(row.created_at)" class="project-member-time-cell">
-                  <span class="user-time-cell">{{ formatDateTimePart(row.created_at, 'date') }}</span>
-                  <span class="user-time-cell">{{ formatDateTimePart(row.created_at, 'time') }}</span>
+                  <span class="user-time-cell">{{
+                    formatDateTimePart(row.created_at, 'date')
+                  }}</span>
+                  <span class="user-time-cell">{{
+                    formatDateTimePart(row.created_at, 'time')
+                  }}</span>
                 </span>
-                <span v-else class="user-time-cell project-member-empty-time is-empty">
-                  -
-                </span>
+                <span v-else class="user-time-cell project-member-empty-time is-empty"> - </span>
               </template>
             </el-table-column>
             <el-table-column :label="t('lastActiveAt')" width="116">
               <template #default="{ row }">
-                <span v-if="formatLastActiveAt(row.last_active_at)" class="project-member-time-cell">
-                  <span class="user-time-cell">{{ formatDateTimePart(row.last_active_at, 'date') }}</span>
-                  <span class="user-time-cell">{{ formatDateTimePart(row.last_active_at, 'time') }}</span>
+                <span
+                  v-if="formatLastActiveAt(row.last_active_at)"
+                  class="project-member-time-cell"
+                >
+                  <span class="user-time-cell">{{
+                    formatDateTimePart(row.last_active_at, 'date')
+                  }}</span>
+                  <span class="user-time-cell">{{
+                    formatDateTimePart(row.last_active_at, 'time')
+                  }}</span>
                 </span>
                 <span v-else class="user-time-cell project-member-empty-time is-empty">
                   {{ t('neverActive') }}

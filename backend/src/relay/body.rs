@@ -32,14 +32,14 @@ impl FromRequest<Arc<AppState>> for RelayBody {
                     %path,
                     status = status.as_u16(),
                     ?content_length,
-                    relay_body_limit_bytes = state.config.relay_body_limit_bytes,
+                    relay_body_limit_bytes = state.config.relay.body_limit_bytes,
                     rejection = %message,
                     "relay request body rejected"
                 );
                 if status == StatusCode::PAYLOAD_TOO_LARGE {
                     return Err(AppError::PayloadTooLarge(format!(
                         "request body exceeds {} bytes",
-                        state.config.relay_body_limit_bytes
+                        state.config.relay.body_limit_bytes
                     )));
                 }
                 Err(AppError::BadRequest(message))

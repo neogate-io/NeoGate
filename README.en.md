@@ -249,21 +249,26 @@ NeoGate can run as a single-node deployment or a clustered deployment. For most 
 
 ## ✅ Production Checklist
 
-Before going live:
+Required before going live:
 
 | Check | Recommendation |
 | --- | --- |
 | 👤 Admin account | Create the admin account in the first-run wizard and avoid weak passwords. |
 | 🔐 System secrets | Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node. |
-| 🌍 Public URL | Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links. |
+| 🌍 Public URL | Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links and install script URLs. |
 | 🏷️ Site name | Set `SITE_NAME` in the first-run wizard or environment configuration for page, email, and payment gateway display. |
-| 🔁 CORS | If the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration. |
-| 📦 Body size limit | If you proxy image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. |
-| 🧾 Usage parse buffer | `RELAY_USAGE_BUFFER_LIMIT_BYTES` defaults to 16 MiB for non-streaming JSON and SSE usage parsing; keep the default in billing mode unless load tests prove a different limit still preserves usage extraction. |
-| ⏱️ Timeout | For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; by default it follows `REQUEST_TIMEOUT_SECONDS`, usually 600 seconds. |
-| ✉️ SMTP | Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims. |
-| 💳 Billing | For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console. |
-| 🌐 Cluster | For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode. |
+
+Check by scenario:
+
+| Scenario | Recommendation |
+| --- | --- |
+| 🔁 Cross-origin access | When the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration. |
+| 📦 Large request proxying | When proxying image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. |
+| 🧾 Billing usage parsing | `RELAY_USAGE_BUFFER_LIMIT_BYTES` defaults to 16 MiB for non-streaming JSON and SSE usage parsing; keep the default in billing mode unless load tests prove a different limit still preserves usage extraction. |
+| ⏱️ Long-running requests | For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; it defaults to 600 seconds, and the old `REQUEST_TIMEOUT_SECONDS` name remains a compatibility alias. |
+| ✉️ Email-based key claims | Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims. |
+| 💳 Billing mode | For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console. |
+| 🌐 Clustered deployment | For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode. |
 
 ---
 

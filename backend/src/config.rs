@@ -12,7 +12,7 @@ pub const DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-production";
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
-const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -25,41 +25,16 @@ pub struct Config {
     pub admin_token_secret: String,
     pub admin_session_ttl: Duration,
     pub upstream_secret_key: String,
-    pub anthropic_version: String,
-    pub key_cooldown: Duration,
-    pub request_timeout: Duration,
-    pub upstream_connect_timeout: Duration,
-    pub upstream_timeout: Duration,
-    pub relay_body_limit_bytes: usize,
-    pub relay_usage_buffer_limit_bytes: usize,
-    pub credential_upload_limit_bytes: usize,
-    pub http_pool_max_idle_per_host: usize,
-    pub http_pool_idle_timeout: Duration,
-    pub user_auth_cache_ttl: Duration,
-    pub user_auth_cache_max_entries: usize,
-    pub routing_cache_ttl: Duration,
-    pub price_cache_ttl: Duration,
-    pub price_cache_max_entries: usize,
-    pub secret_cache_max_entries: usize,
+    pub http: HttpClientConfig,
+    pub relay: RelayConfig,
+    pub cache: CacheConfig,
     pub redis_url: Option<String>,
     pub redis_key_prefix: String,
-    pub credit_prefetch_micro_usd: i64,
-    pub credit_allocation_recovery_after: Duration,
-    pub credit_allocation_recovery_interval: Duration,
-    pub default_output_tokens: i64,
-    pub usage_flush_interval: Duration,
-    pub usage_queue_size: usize,
-    pub billing_outbox_max_pending: i64,
-    pub billing_outbox_max_age: Duration,
-    pub task_upstream_poll_interval: Duration,
-    pub task_upstream_poll_batch_size: i64,
-    pub task_upstream_retention: Duration,
-    pub task_upstream_stale_hold_release: Duration,
-    pub neogate_response_asset_dir: PathBuf,
-    pub neogate_response_retention: Duration,
-    pub image_sync_global_limit: usize,
-    pub image_sync_key_limit: usize,
-    pub payment: PaymentConfig,
+    pub billing: BillingConfig,
+    pub usage_queue: UsageQueueConfig,
+    pub health: HealthConfig,
+    pub task: TaskConfig,
+    pub response_assets: ResponseAssetConfig,
     pub db_pool: DbPoolConfig,
     pub cors_allowed_origins: Vec<String>,
 }
@@ -145,6 +120,67 @@ pub struct DbPoolConfig {
     pub acquire_timeout: Duration,
 }
 
+#[derive(Clone, Debug)]
+pub struct HttpClientConfig {
+    pub upstream_connect_timeout: Duration,
+    pub upstream_timeout: Duration,
+    pub pool_max_idle_per_host: usize,
+    pub pool_idle_timeout: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct RelayConfig {
+    pub key_cooldown: Duration,
+    pub body_limit_bytes: usize,
+    pub usage_buffer_limit_bytes: usize,
+    pub credential_upload_limit_bytes: usize,
+    pub image_sync_global_limit: usize,
+    pub image_sync_key_limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct CacheConfig {
+    pub user_auth_ttl: Duration,
+    pub user_auth_max_entries: usize,
+    pub routing_ttl: Duration,
+    pub price_ttl: Duration,
+    pub price_max_entries: usize,
+    pub secret_max_entries: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct BillingConfig {
+    pub credit_prefetch_micro_usd: i64,
+    pub credit_allocation_recovery_after: Duration,
+    pub credit_allocation_recovery_interval: Duration,
+    pub default_output_tokens: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct UsageQueueConfig {
+    pub flush_interval: Duration,
+    pub size: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct HealthConfig {
+    pub billing_outbox_max_pending: i64,
+    pub billing_outbox_max_age: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskConfig {
+    pub upstream_poll_interval: Duration,
+    pub upstream_poll_batch_size: i64,
+    pub upstream_retention: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResponseAssetConfig {
+    pub dir: PathBuf,
+    pub retention: Duration,
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let runtime_mode = RuntimeMode::from_env_value(
@@ -153,7 +189,12 @@ impl Config {
         let process_role = ProcessRole::from_env_value(
             &env::var("PROCESS_ROLE").unwrap_or_else(|_| "all".to_string()),
         )?;
-        let mut config = Self {
+        let upstream_timeout = Duration::from_secs(parse_u64_with_alias(
+            "UPSTREAM_TIMEOUT_SECONDS",
+            "REQUEST_TIMEOUT_SECONDS",
+            600,
+        )?);
+        let config = Self {
             database_url: required("DATABASE_URL")?,
             bind_addr: env::var("BIND_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
@@ -171,92 +212,97 @@ impl Config {
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
                 .unwrap_or_else(|_| DEFAULT_ADMIN_TOKEN_SECRET.to_string()),
-            admin_session_ttl: Duration::from_secs(parse_u64("ADMIN_SESSION_TTL_SECONDS", 86400)),
+            admin_session_ttl: Duration::from_secs(parse_u64("ADMIN_SESSION_TTL_SECONDS", 86400)?),
             upstream_secret_key: env::var("UPSTREAM_SECRET_KEY")
                 .unwrap_or_else(|_| DEFAULT_UPSTREAM_SECRET_KEY.to_string()),
-            anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
-            key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)),
-            request_timeout: Duration::from_secs(parse_u64("REQUEST_TIMEOUT_SECONDS", 600)),
-            upstream_connect_timeout: Duration::from_secs(parse_u64(
-                "UPSTREAM_CONNECT_TIMEOUT_SECONDS",
-                10,
-            )),
-            upstream_timeout: Duration::from_secs(parse_u64(
-                "UPSTREAM_TIMEOUT_SECONDS",
-                parse_u64("REQUEST_TIMEOUT_SECONDS", 600),
-            )),
-            relay_body_limit_bytes: parse_usize(
-                "RELAY_BODY_LIMIT_BYTES",
-                DEFAULT_RELAY_BODY_LIMIT_BYTES,
-            ),
-            relay_usage_buffer_limit_bytes: parse_usize(
-                "RELAY_USAGE_BUFFER_LIMIT_BYTES",
-                DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
-            ),
-            credential_upload_limit_bytes: parse_usize(
-                "CREDENTIAL_UPLOAD_LIMIT_BYTES",
-                DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
-            ),
-            http_pool_max_idle_per_host: parse_usize("HTTP_POOL_MAX_IDLE_PER_HOST", 100),
-            http_pool_idle_timeout: Duration::from_secs(parse_u64(
-                "HTTP_POOL_IDLE_TIMEOUT_SECONDS",
-                90,
-            )),
-            user_auth_cache_ttl: Duration::from_secs(parse_u64("USER_AUTH_CACHE_TTL_SECONDS", 60)),
-            user_auth_cache_max_entries: parse_usize("USER_AUTH_CACHE_MAX_ENTRIES", 100_000),
-            routing_cache_ttl: Duration::from_secs(parse_u64("ROUTING_CACHE_TTL_SECONDS", 30)),
-            price_cache_ttl: Duration::from_secs(parse_u64("PRICE_CACHE_TTL_SECONDS", 300)),
-            price_cache_max_entries: parse_usize("PRICE_CACHE_MAX_ENTRIES", 10_000),
-            secret_cache_max_entries: parse_usize("SECRET_CACHE_MAX_ENTRIES", 4096),
+            http: HttpClientConfig {
+                upstream_connect_timeout: Duration::from_secs(parse_u64(
+                    "UPSTREAM_CONNECT_TIMEOUT_SECONDS",
+                    10,
+                )?),
+                upstream_timeout,
+                pool_max_idle_per_host: parse_usize("HTTP_POOL_MAX_IDLE_PER_HOST", 100)?,
+                pool_idle_timeout: Duration::from_secs(parse_u64(
+                    "HTTP_POOL_IDLE_TIMEOUT_SECONDS",
+                    90,
+                )?),
+            },
+            relay: RelayConfig {
+                key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)?),
+                body_limit_bytes: parse_usize(
+                    "RELAY_BODY_LIMIT_BYTES",
+                    DEFAULT_RELAY_BODY_LIMIT_BYTES,
+                )?,
+                usage_buffer_limit_bytes: parse_usize(
+                    "RELAY_USAGE_BUFFER_LIMIT_BYTES",
+                    DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
+                )?,
+                credential_upload_limit_bytes: parse_usize(
+                    "CREDENTIAL_UPLOAD_LIMIT_BYTES",
+                    DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
+                )?,
+                image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8)?,
+                image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2)?,
+            },
+            cache: CacheConfig {
+                user_auth_ttl: Duration::from_secs(parse_u64("USER_AUTH_CACHE_TTL_SECONDS", 60)?),
+                user_auth_max_entries: parse_usize("USER_AUTH_CACHE_MAX_ENTRIES", 100_000)?,
+                routing_ttl: Duration::from_secs(parse_u64("ROUTING_CACHE_TTL_SECONDS", 30)?),
+                price_ttl: Duration::from_secs(parse_u64("PRICE_CACHE_TTL_SECONDS", 300)?),
+                price_max_entries: parse_usize("PRICE_CACHE_MAX_ENTRIES", 10_000)?,
+                secret_max_entries: parse_usize("SECRET_CACHE_MAX_ENTRIES", 4096)?,
+            },
             redis_url: optional("REDIS_URL"),
             redis_key_prefix: env::var("REDIS_KEY_PREFIX")
                 .unwrap_or_else(|_| "neogate".to_string()),
-            credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000),
-            credit_allocation_recovery_after: Duration::from_secs(parse_u64(
-                "CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS",
-                900,
-            )),
-            credit_allocation_recovery_interval: Duration::from_secs(parse_u64(
-                "CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS",
-                60,
-            )),
-            default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 2048),
-            usage_flush_interval: Duration::from_millis(parse_u64("USAGE_FLUSH_INTERVAL_MS", 1000)),
-            usage_queue_size: parse_usize("USAGE_QUEUE_SIZE", 8192),
-            billing_outbox_max_pending: parse_i64("BILLING_OUTBOX_MAX_PENDING", 10_000),
-            billing_outbox_max_age: Duration::from_secs(parse_u64(
-                "BILLING_OUTBOX_MAX_AGE_SECONDS",
-                300,
-            )),
-            task_upstream_poll_interval: Duration::from_secs(parse_u64(
-                "TASK_UPSTREAM_POLL_INTERVAL_SECONDS",
-                30,
-            )),
-            task_upstream_poll_batch_size: parse_i64("TASK_UPSTREAM_POLL_BATCH_SIZE", 100),
-            task_upstream_retention: Duration::from_secs(parse_u64(
-                "TASK_UPSTREAM_RETENTION_SECONDS",
-                2_592_000,
-            )),
-            task_upstream_stale_hold_release: Duration::from_secs(parse_u64(
-                "TASK_UPSTREAM_STALE_HOLD_RELEASE_SECONDS",
-                parse_u64("CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS", 900),
-            )),
-            neogate_response_asset_dir: env::var("NEOGATE_ASSET_DIR")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("data/assets")),
-            neogate_response_retention: Duration::from_secs(parse_u64(
-                "NEOGATE_RESPONSE_RETENTION_SECONDS",
-                604_800,
-            )),
-            image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8),
-            image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2),
-            payment: PaymentConfig::default(),
+            billing: BillingConfig {
+                credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000)?,
+                credit_allocation_recovery_after: Duration::from_secs(parse_u64(
+                    "CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS",
+                    900,
+                )?),
+                credit_allocation_recovery_interval: Duration::from_secs(parse_u64(
+                    "CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS",
+                    60,
+                )?),
+                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 2048)?,
+            },
+            usage_queue: UsageQueueConfig {
+                flush_interval: Duration::from_millis(parse_u64("USAGE_FLUSH_INTERVAL_MS", 1000)?),
+                size: parse_usize("USAGE_QUEUE_SIZE", 8192)?,
+            },
+            health: HealthConfig {
+                billing_outbox_max_pending: parse_i64("BILLING_OUTBOX_MAX_PENDING", 10_000)?,
+                billing_outbox_max_age: Duration::from_secs(parse_u64(
+                    "BILLING_OUTBOX_MAX_AGE_SECONDS",
+                    300,
+                )?),
+            },
+            task: TaskConfig {
+                upstream_poll_interval: Duration::from_secs(parse_u64(
+                    "TASK_UPSTREAM_POLL_INTERVAL_SECONDS",
+                    30,
+                )?),
+                upstream_poll_batch_size: parse_i64("TASK_UPSTREAM_POLL_BATCH_SIZE", 100)?,
+                upstream_retention: Duration::from_secs(parse_u64(
+                    "TASK_UPSTREAM_RETENTION_SECONDS",
+                    2_592_000,
+                )?),
+            },
+            response_assets: ResponseAssetConfig {
+                dir: env::var("NEOGATE_ASSET_DIR")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("data/assets")),
+                retention: Duration::from_secs(parse_u64(
+                    "NEOGATE_RESPONSE_RETENTION_SECONDS",
+                    604_800,
+                )?),
+            },
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
         };
-        config.payment.zpay.site_name = config.site_name.clone();
         config.validate()?;
         Ok(config)
     }
@@ -268,70 +314,64 @@ impl Config {
         if self.runtime_mode.is_distributed() && self.redis_url.is_none() {
             anyhow::bail!("REDIS_URL is required when RUNTIME_MODE=distributed");
         }
-        if self.credit_prefetch_micro_usd <= 0 {
+        if self.billing.credit_prefetch_micro_usd <= 0 {
             anyhow::bail!("CREDIT_PREFETCH_MICRO_USD must be positive");
         }
-        if self.credit_allocation_recovery_after.is_zero() {
+        if self.billing.credit_allocation_recovery_after.is_zero() {
             anyhow::bail!("CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS must be positive");
         }
-        if self.credit_allocation_recovery_interval.is_zero() {
+        if self.billing.credit_allocation_recovery_interval.is_zero() {
             anyhow::bail!("CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS must be positive");
         }
-        if self.default_output_tokens <= 0 {
+        if self.billing.default_output_tokens <= 0 {
             anyhow::bail!("DEFAULT_OUTPUT_TOKENS must be positive");
         }
-        if self.request_timeout.is_zero() {
-            anyhow::bail!("REQUEST_TIMEOUT_SECONDS must be positive");
-        }
-        if self.upstream_connect_timeout.is_zero() {
+        if self.http.upstream_connect_timeout.is_zero() {
             anyhow::bail!("UPSTREAM_CONNECT_TIMEOUT_SECONDS must be positive");
         }
-        if self.upstream_timeout.is_zero() {
+        if self.http.upstream_timeout.is_zero() {
             anyhow::bail!("UPSTREAM_TIMEOUT_SECONDS must be positive");
         }
-        if self.relay_body_limit_bytes == 0 {
+        if self.relay.body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");
         }
-        if self.relay_usage_buffer_limit_bytes == 0 {
+        if self.relay.usage_buffer_limit_bytes == 0 {
             anyhow::bail!("RELAY_USAGE_BUFFER_LIMIT_BYTES must be positive");
         }
-        if self.credential_upload_limit_bytes == 0 {
+        if self.relay.credential_upload_limit_bytes == 0 {
             anyhow::bail!("CREDENTIAL_UPLOAD_LIMIT_BYTES must be positive");
         }
-        if self.billing_outbox_max_pending < 0 {
+        if self.health.billing_outbox_max_pending < 0 {
             anyhow::bail!("BILLING_OUTBOX_MAX_PENDING must be non-negative");
         }
-        if self.task_upstream_poll_interval.is_zero() {
+        if self.task.upstream_poll_interval.is_zero() {
             anyhow::bail!("TASK_UPSTREAM_POLL_INTERVAL_SECONDS must be positive");
         }
-        if self.task_upstream_poll_batch_size <= 0 {
+        if self.task.upstream_poll_batch_size <= 0 {
             anyhow::bail!("TASK_UPSTREAM_POLL_BATCH_SIZE must be positive");
         }
-        if self.task_upstream_retention.is_zero() {
+        if self.task.upstream_retention.is_zero() {
             anyhow::bail!("TASK_UPSTREAM_RETENTION_SECONDS must be positive");
         }
-        if self.task_upstream_stale_hold_release.is_zero() {
-            anyhow::bail!("TASK_UPSTREAM_STALE_HOLD_RELEASE_SECONDS must be positive");
-        }
-        if self.neogate_response_retention.is_zero() {
+        if self.response_assets.retention.is_zero() {
             anyhow::bail!("NEOGATE_RESPONSE_RETENTION_SECONDS must be positive");
         }
-        if self.image_sync_global_limit == 0 {
+        if self.relay.image_sync_global_limit == 0 {
             anyhow::bail!("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT must be positive");
         }
-        if self.image_sync_key_limit == 0 {
+        if self.relay.image_sync_key_limit == 0 {
             anyhow::bail!("NEOGATE_IMAGE_SYNC_KEY_LIMIT must be positive");
         }
-        if self.user_auth_cache_max_entries == 0 {
+        if self.cache.user_auth_max_entries == 0 {
             anyhow::bail!("USER_AUTH_CACHE_MAX_ENTRIES must be positive");
         }
-        if self.price_cache_max_entries == 0 {
+        if self.cache.price_max_entries == 0 {
             anyhow::bail!("PRICE_CACHE_MAX_ENTRIES must be positive");
         }
-        if self.secret_cache_max_entries == 0 {
+        if self.cache.secret_max_entries == 0 {
             anyhow::bail!("SECRET_CACHE_MAX_ENTRIES must be positive");
         }
-        if self.usage_queue_size > 1_000_000 {
+        if self.usage_queue.size > 1_000_000 {
             anyhow::bail!("USAGE_QUEUE_SIZE must be <= 1000000");
         }
 
@@ -443,6 +483,12 @@ impl Default for PaymentConfig {
 }
 
 impl PaymentConfig {
+    pub fn default_for_site(site_name: &str) -> Self {
+        let mut config = Self::default();
+        config.zpay.site_name = site_name.to_string();
+        config
+    }
+
     pub fn provider_enabled(&self, provider: PaymentProvider) -> bool {
         self.enabled_providers.contains(&provider)
     }
@@ -468,9 +514,9 @@ impl PaymentProvider {
 impl DbPoolConfig {
     fn from_env() -> Result<Self> {
         Ok(Self {
-            min_connections: parse_u32("DB_POOL_MIN_CONNECTIONS", 1),
-            max_connections: parse_u32("DB_POOL_MAX_CONNECTIONS", 10),
-            acquire_timeout: Duration::from_secs(parse_u64("DB_POOL_ACQUIRE_TIMEOUT_SECONDS", 5)),
+            min_connections: parse_u32("DB_POOL_MIN_CONNECTIONS", 1)?,
+            max_connections: parse_u32("DB_POOL_MAX_CONNECTIONS", 10)?,
+            acquire_timeout: Duration::from_secs(parse_u64("DB_POOL_ACQUIRE_TIMEOUT_SECONDS", 5)?),
         })
     }
 }
@@ -483,32 +529,53 @@ fn optional(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-fn parse_u64(name: &str, default: u64) -> u64 {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
+fn parse_u64(name: &str, default: u64) -> Result<u64> {
+    parse_env(name, default)
 }
 
-fn parse_u32(name: &str, default: u32) -> u32 {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
+fn parse_u64_with_alias(name: &str, alias: &str, default: u64) -> Result<u64> {
+    if let Some(value) = parse_env_optional(name)? {
+        return Ok(value);
+    }
+    parse_u64(alias, default)
 }
 
-fn parse_i64(name: &str, default: i64) -> i64 {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
+fn parse_u32(name: &str, default: u32) -> Result<u32> {
+    parse_env(name, default)
 }
 
-fn parse_usize(name: &str, default: usize) -> usize {
-    env::var(name)
+fn parse_i64(name: &str, default: i64) -> Result<i64> {
+    parse_env(name, default)
+}
+
+fn parse_usize(name: &str, default: usize) -> Result<usize> {
+    parse_env(name, default)
+}
+
+fn parse_env<T>(name: &str, default: T) -> Result<T>
+where
+    T: std::str::FromStr + Copy,
+    T::Err: std::fmt::Display,
+{
+    Ok(parse_env_optional(name)?.unwrap_or(default))
+}
+
+fn parse_env_optional<T>(name: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let Some(value) = env::var(name)
         .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    value
+        .parse()
+        .map(Some)
+        .map_err(|err| anyhow::anyhow!("{name} must be a valid number: {err}"))
 }
 
 fn parse_csv(name: &str, default: &str) -> Vec<String> {

@@ -115,8 +115,8 @@ pub(crate) async fn create(
             hold,
             upstream_metadata: serde_json::to_value(metadata)?,
         },
-        state.config.task_upstream_poll_interval,
-        state.config.neogate_response_retention,
+        state.config.task.upstream_poll_interval,
+        state.config.response_assets.retention,
     )
     .await?;
     mark_due_now(&state.db.pool, &response_id).await?;
@@ -283,7 +283,7 @@ pub(crate) async fn cleanup_expired_assets(state: &AppState, limit: i64) -> AppR
             continue;
         };
         for asset in metadata.assets {
-            let path = asset_path(&state.config.neogate_response_asset_dir, &asset.path)?;
+            let path = asset_path(&state.config.response_assets.dir, &asset.path)?;
             if let Err(err) = fs::remove_file(path).await {
                 if err.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!("failed to remove expired neogate response asset: {err}");
@@ -437,7 +437,7 @@ async fn save_image_asset(
         task.upstream_task_id,
         index
     );
-    let path = asset_path(&state.config.neogate_response_asset_dir, &relative)?;
+    let path = asset_path(&state.config.response_assets.dir, &relative)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
     }
@@ -460,7 +460,7 @@ async fn outputs_from_assets(
 ) -> AppResult<Vec<Value>> {
     let mut outputs = Vec::with_capacity(assets.len());
     for asset in assets {
-        let path = asset_path(&state.config.neogate_response_asset_dir, &asset.path)?;
+        let path = asset_path(&state.config.response_assets.dir, &asset.path)?;
         let bytes = fs::read(path).await.map_err(|err| {
             AppError::BadRequest(format!("neogate response image asset is missing: {err}"))
         })?;

@@ -23,6 +23,7 @@ use crate::{
     auth::{self, AdminAuth},
     billing::CreditAccountType,
     cache::InvalidationEvent,
+    config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
     AppState,
@@ -599,7 +600,7 @@ pub(crate) async fn fetch_upstream_models(
     if protocol == "anthropic" {
         request = request
             .header("x-api-key", secret)
-            .header("anthropic-version", &state.config.anthropic_version);
+            .header("anthropic-version", DEFAULT_ANTHROPIC_VERSION);
     } else {
         request = request.bearer_auth(secret);
     }

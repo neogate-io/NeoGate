@@ -660,8 +660,8 @@ async fn create_background_response(
             hold: &hold,
             upstream_metadata: value.clone(),
         },
-        state.config.task_upstream_poll_interval,
-        state.config.task_upstream_retention,
+        state.config.task.upstream_poll_interval,
+        state.config.task.upstream_retention,
     )
     .await
     {
@@ -788,7 +788,7 @@ async fn refresh_task_after_stream(
             terminal,
             metadata: value,
             usage,
-            poll_interval: state.config.task_upstream_poll_interval,
+            poll_interval: state.config.task.upstream_poll_interval,
         },
     )
     .await?;

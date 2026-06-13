@@ -138,7 +138,7 @@ pub(crate) async fn finish_task_json_response(
                     terminal,
                     metadata: value,
                     usage,
-                    poll_interval: state.config.task_upstream_poll_interval,
+                    poll_interval: state.config.task.upstream_poll_interval,
                 },
             )
             .await?;
@@ -561,7 +561,7 @@ pub(crate) async fn reserve_credit(
 }
 
 fn key_cooldown_until(state: &AppState) -> chrono::DateTime<Utc> {
-    let cooldown = ChronoDuration::from_std(state.config.key_cooldown)
+    let cooldown = ChronoDuration::from_std(state.config.relay.key_cooldown)
         .unwrap_or_else(|_| ChronoDuration::seconds(60));
     Utc::now() + cooldown
 }

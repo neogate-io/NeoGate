@@ -105,7 +105,7 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let app = router(state)
-        .layer(DefaultBodyLimit::max(config.relay_body_limit_bytes))
+        .layer(DefaultBodyLimit::max(config.relay.body_limit_bytes))
         .layer(cors_layer(&config)?)
         .layer(middleware::from_fn_with_state(
             config.admin_token_secret.clone(),
@@ -388,14 +388,14 @@ async fn build_state(
 ) -> anyhow::Result<Arc<AppState>> {
     let db = Db::connect(&config).await?;
     sqlx::migrate!("./migrations").run(&db.pool).await?;
-    let secrets = SecretStore::new(&config.upstream_secret_key, config.secret_cache_max_entries);
+    let secrets = SecretStore::new(&config.upstream_secret_key, config.cache.secret_max_entries);
     let email = EmailService::new(db.clone(), secrets.clone());
 
     let http = Client::builder()
-        .read_timeout(config.request_timeout)
-        .connect_timeout(config.upstream_connect_timeout)
-        .pool_max_idle_per_host(config.http_pool_max_idle_per_host)
-        .pool_idle_timeout(config.http_pool_idle_timeout)
+        .read_timeout(config.http.upstream_timeout)
+        .connect_timeout(config.http.upstream_connect_timeout)
+        .pool_max_idle_per_host(config.http.pool_max_idle_per_host)
+        .pool_idle_timeout(config.http.pool_idle_timeout)
         .tcp_nodelay(true)
         .build()?;
     let redis = if config.runtime_mode.is_distributed() {
@@ -405,23 +405,23 @@ async fn build_state(
     } else {
         None
     };
-    let selector = Selector::with_cache_ttl(config.routing_cache_ttl);
+    let selector = Selector::with_cache_ttl(config.cache.routing_ttl);
     let billing = if config.runtime_mode.is_distributed() {
         Billing::new_redis(
             config.redis_url.as_deref().expect("validated redis url"),
             config.redis_key_prefix.clone(),
-            config.price_cache_ttl,
-            config.price_cache_max_entries,
-            config.credit_prefetch_micro_usd,
-            config.default_output_tokens,
+            config.cache.price_ttl,
+            config.cache.price_max_entries,
+            config.billing.credit_prefetch_micro_usd,
+            config.billing.default_output_tokens,
         )
         .await?
     } else {
         Billing::new_memory(
-            config.price_cache_ttl,
-            config.price_cache_max_entries,
-            config.credit_prefetch_micro_usd,
-            config.default_output_tokens,
+            config.cache.price_ttl,
+            config.cache.price_max_entries,
+            config.billing.credit_prefetch_micro_usd,
+            config.billing.default_output_tokens,
         )
     };
     let (cache_invalidator, invalidation_listener) = if config.runtime_mode.is_distributed() {
@@ -437,33 +437,35 @@ async fn build_state(
     let usage_daily = UsageDailyRecorder::spawn(
         db.pool.clone(),
         config
-            .usage_flush_interval
+            .usage_queue
+            .flush_interval
             .saturating_mul(10)
             .max(std::time::Duration::from_secs(5)),
     );
     let activity = ActivityRecorder::spawn(
         db.pool.clone(),
         config
-            .usage_flush_interval
+            .usage_queue
+            .flush_interval
             .saturating_mul(10)
             .max(std::time::Duration::from_secs(10)),
     );
     let usage = UsageRecorder::spawn(
         db.pool.clone(),
-        config.usage_flush_interval,
-        config.usage_queue_size,
+        config.usage_queue.flush_interval,
+        config.usage_queue.size,
         activity.clone(),
         usage_daily.clone(),
     );
     let credential_models = relay::CredentialModelRecorder::spawn(
         db.pool.clone(),
-        config.usage_flush_interval,
-        config.usage_queue_size,
+        config.usage_queue.flush_interval,
+        config.usage_queue.size,
     );
     let billing_outbox = BillingOutbox::spawn(
         db.pool.clone(),
-        config.usage_flush_interval,
-        config.usage_queue_size,
+        config.usage_queue.flush_interval,
+        config.usage_queue.size,
         activity,
         usage_daily.clone(),
         config.process_role.runs_background(),
@@ -471,8 +473,8 @@ async fn build_state(
     if config.process_role.runs_background() {
         billing.spawn_allocation_recovery(
             db.pool.clone(),
-            config.credit_allocation_recovery_interval,
-            config.credit_allocation_recovery_after,
+            config.billing.credit_allocation_recovery_interval,
+            config.billing.credit_allocation_recovery_after,
         );
     }
 
@@ -500,13 +502,13 @@ async fn build_state(
         secrets,
         selector,
         user_auth_cache: auth::UserAuthCache::new(
-            config.user_auth_cache_ttl,
-            config.user_auth_cache_max_entries,
+            config.cache.user_auth_ttl,
+            config.cache.user_auth_max_entries,
         ),
         auth_rate_limiter,
         image_sync_limiter: relay::ImageSyncLimiter::new(
-            config.image_sync_global_limit,
-            config.image_sync_key_limit,
+            config.relay.image_sync_global_limit,
+            config.relay.image_sync_key_limit,
         ),
         service_policy_cache: policy::ServicePolicyCache::default(),
         cache_invalidator,
@@ -665,50 +667,52 @@ pub(crate) mod tests {
                 admin_token_secret: "test-admin-token-secret".to_string(),
                 admin_session_ttl: Duration::from_secs(3600),
                 upstream_secret_key: "test-upstream-secret-key".to_string(),
-                anthropic_version: "2023-06-01".to_string(),
-                key_cooldown: Duration::from_secs(60),
-                request_timeout: Duration::from_secs(60),
-                upstream_connect_timeout: Duration::from_secs(10),
-                upstream_timeout: Duration::from_secs(30),
-                relay_body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
-                relay_usage_buffer_limit_bytes: config::DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
-                credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
-                http_pool_max_idle_per_host: 100,
-                http_pool_idle_timeout: Duration::from_secs(90),
-                user_auth_cache_ttl: Duration::from_secs(30),
-                user_auth_cache_max_entries: 1024,
-                routing_cache_ttl: Duration::from_secs(30),
-                price_cache_ttl: Duration::from_secs(30),
-                price_cache_max_entries: 1024,
-                secret_cache_max_entries: 1024,
+                http: config::HttpClientConfig {
+                    upstream_connect_timeout: Duration::from_secs(10),
+                    upstream_timeout: Duration::from_secs(30),
+                    pool_max_idle_per_host: 100,
+                    pool_idle_timeout: Duration::from_secs(90),
+                },
+                relay: config::RelayConfig {
+                    key_cooldown: Duration::from_secs(60),
+                    body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
+                    usage_buffer_limit_bytes: config::DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
+                    credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
+                    image_sync_global_limit: 8,
+                    image_sync_key_limit: 2,
+                },
+                cache: config::CacheConfig {
+                    user_auth_ttl: Duration::from_secs(30),
+                    user_auth_max_entries: 1024,
+                    routing_ttl: Duration::from_secs(30),
+                    price_ttl: Duration::from_secs(30),
+                    price_max_entries: 1024,
+                    secret_max_entries: 1024,
+                },
                 redis_url: None,
                 redis_key_prefix: "neogate-test".to_string(),
-                credit_prefetch_micro_usd: 100_000,
-                credit_allocation_recovery_after: Duration::from_secs(3600),
-                credit_allocation_recovery_interval: Duration::from_secs(60),
-                default_output_tokens: 4096,
-                usage_flush_interval: Duration::from_secs(1),
-                usage_queue_size: 1024,
-                billing_outbox_max_pending: 10_000,
-                billing_outbox_max_age: Duration::from_secs(300),
-                task_upstream_poll_interval: Duration::from_secs(30),
-                task_upstream_poll_batch_size: 100,
-                task_upstream_retention: Duration::from_secs(2_592_000),
-                task_upstream_stale_hold_release: Duration::from_secs(900),
-                neogate_response_asset_dir: std::env::temp_dir().join("neogate-test-assets"),
-                neogate_response_retention: Duration::from_secs(604_800),
-                image_sync_global_limit: 8,
-                image_sync_key_limit: 2,
-                payment: config::PaymentConfig {
-                    enabled_providers: Vec::new(),
-                    return_base_url: None,
-                    zpay: config::ZpayConfig {
-                        api_url: Some("https://zpayz.cn/submit.php".to_string()),
-                        merchant_id: None,
-                        secret_key: None,
-                        default_pay_type: "wxpay".to_string(),
-                        site_name: "NeoGate".to_string(),
-                    },
+                billing: config::BillingConfig {
+                    credit_prefetch_micro_usd: 100_000,
+                    credit_allocation_recovery_after: Duration::from_secs(3600),
+                    credit_allocation_recovery_interval: Duration::from_secs(60),
+                    default_output_tokens: 4096,
+                },
+                usage_queue: config::UsageQueueConfig {
+                    flush_interval: Duration::from_secs(1),
+                    size: 1024,
+                },
+                health: config::HealthConfig {
+                    billing_outbox_max_pending: 10_000,
+                    billing_outbox_max_age: Duration::from_secs(300),
+                },
+                task: config::TaskConfig {
+                    upstream_poll_interval: Duration::from_secs(30),
+                    upstream_poll_batch_size: 100,
+                    upstream_retention: Duration::from_secs(2_592_000),
+                },
+                response_assets: config::ResponseAssetConfig {
+                    dir: std::env::temp_dir().join("neogate-test-assets"),
+                    retention: Duration::from_secs(604_800),
                 },
                 db_pool: config::DbPoolConfig {
                     min_connections: 0,

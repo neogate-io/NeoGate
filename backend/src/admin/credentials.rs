@@ -173,10 +173,10 @@ pub async fn upload_credentials(
             .bytes()
             .await
             .map_err(|err| AppError::BadRequest(format!("failed to read uploaded file: {err}")))?;
-        if bytes.len() > state.config.credential_upload_limit_bytes {
+        if bytes.len() > state.config.relay.credential_upload_limit_bytes {
             return Err(AppError::PayloadTooLarge(format!(
                 "credential upload exceeds {} bytes",
-                state.config.credential_upload_limit_bytes
+                state.config.relay.credential_upload_limit_bytes
             )));
         }
         import_upload_bytes(state, &filename, &bytes, &mut result).await?;
@@ -373,12 +373,12 @@ async fn import_zip(state: &AppState, bytes: &[u8], result: &mut CredentialUploa
             });
             continue;
         }
-        if content.len() > state.config.credential_upload_limit_bytes {
+        if content.len() > state.config.relay.credential_upload_limit_bytes {
             result.failed.push(CredentialUploadFailure {
                 filename: name,
                 error: format!(
                     "credential exceeds {} bytes",
-                    state.config.credential_upload_limit_bytes
+                    state.config.relay.credential_upload_limit_bytes
                 ),
             });
             continue;

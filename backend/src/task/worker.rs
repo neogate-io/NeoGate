@@ -23,7 +23,7 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         return;
     }
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(state.config.task_upstream_poll_interval);
+        let mut ticker = tokio::time::interval(state.config.task.upstream_poll_interval);
         loop {
             ticker.tick().await;
             if let Err(err) = poll_due_tasks(&state).await {
@@ -36,8 +36,8 @@ pub(crate) fn spawn(state: Arc<AppState>) {
 async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
     let tasks = upstream::claim_due_tasks(
         &state.db.pool,
-        state.config.task_upstream_poll_batch_size,
-        state.config.task_upstream_poll_interval,
+        state.config.task.upstream_poll_batch_size,
+        state.config.task.upstream_poll_interval,
     )
     .await?;
     for task in tasks {
@@ -51,13 +51,14 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
 }
 
 async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
-    let stale_window = ChronoDuration::from_std(state.config.task_upstream_stale_hold_release)
-        .unwrap_or_else(|_| ChronoDuration::seconds(900));
+    let stale_window =
+        ChronoDuration::from_std(state.config.billing.credit_allocation_recovery_after)
+            .unwrap_or_else(|_| ChronoDuration::seconds(900));
     let stale_before = Utc::now() - stale_window;
     let tasks = upstream::fetch_stale_terminal_held_tasks(
         &state.db.pool,
         stale_before,
-        state.config.task_upstream_poll_batch_size,
+        state.config.task.upstream_poll_batch_size,
     )
     .await?;
     for task in tasks {
@@ -67,10 +68,10 @@ async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
 }
 
 async fn cleanup_expired_tasks(state: &Arc<AppState>) -> AppResult<()> {
-    jobs::cleanup_expired_assets(state, state.config.task_upstream_poll_batch_size).await?;
+    jobs::cleanup_expired_assets(state, state.config.task.upstream_poll_batch_size).await?;
     let deleted = upstream::delete_expired_terminal_tasks(
         &state.db.pool,
-        state.config.task_upstream_poll_batch_size,
+        state.config.task.upstream_poll_batch_size,
     )
     .await?;
     if deleted > 0 {
@@ -124,7 +125,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             terminal,
             metadata: value,
             usage,
-            poll_interval: state.config.task_upstream_poll_interval,
+            poll_interval: state.config.task.upstream_poll_interval,
         },
     )
     .await?;

@@ -526,8 +526,8 @@ async function handlePageSizeChange(size: number) {
 
 <template>
   <section class="grid project-management-view">
-    <el-form class="user-toolbar project-toolbar" @submit.prevent="searchProjects">
-      <div class="user-toolbar-filters">
+    <el-form class="project-toolbar" @submit.prevent="searchProjects">
+      <div class="project-toolbar-filters">
         <label class="admin-filter-field">
           <span>{{ t('projectName') }}</span>
           <el-input
@@ -562,7 +562,7 @@ async function handlePageSizeChange(size: number) {
           {{ t('search') }}
         </el-button>
       </div>
-      <div class="user-toolbar-actions">
+      <div class="project-toolbar-actions">
         <el-button
           class="admin-action-button"
           type="primary"
@@ -575,9 +575,17 @@ async function handlePageSizeChange(size: number) {
     </el-form>
 
     <div v-if="initialLoading" v-loading="true" class="service-table-panel project-table-loading">
-      <div class="project-loading-row" />
-      <div class="project-loading-row" />
-      <div class="project-loading-row" />
+      <div class="project-table-loading-head">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="project-table-loading-row"></div>
+      <div class="project-table-loading-row"></div>
+      <div class="project-table-loading-row"></div>
     </div>
 
     <div v-else class="service-table-panel has-pagination">
@@ -640,7 +648,7 @@ async function handlePageSizeChange(size: number) {
         >
           <template #default="{ row }">
             <el-tooltip :content="creditTooltip(row)" placement="top">
-              <span class="user-credit-cell" :class="creditCellClass(row)">
+              <span class="project-credit-cell" :class="creditCellClass(row)">
                 {{ formatAvailableUsd(row) }}
               </span>
             </el-tooltip>
@@ -648,7 +656,7 @@ async function handlePageSizeChange(size: number) {
         </el-table-column>
         <el-table-column :label="t('createdAt')" min-width="160">
           <template #default="{ row }">
-            <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
+            <span class="project-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -676,7 +684,7 @@ async function handlePageSizeChange(size: number) {
         </el-table-column>
         <el-table-column
           :label="t('actions')"
-          width="144"
+          width="150"
           fixed="right"
           align="center"
           header-align="center"
@@ -726,7 +734,7 @@ async function handlePageSizeChange(size: number) {
           </template>
         </el-table-column>
         <template #empty>
-          <div class="channel-empty-state user-empty-state">
+          <div class="project-empty-state">
             <el-empty :description="emptyDescription" />
           </div>
         </template>
@@ -1037,31 +1045,61 @@ async function handlePageSizeChange(size: number) {
   overflow: hidden;
 }
 
-.project-loading-row {
-  border-bottom: 1px solid #edf3f8;
-  height: 62px;
-  position: relative;
+.project-table-loading-head {
+  align-items: center;
+  background: #f9fbfd;
+  border-bottom: 1px solid #dfe8f2;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 54px minmax(160px, 1fr) 140px 86px 86px 96px;
+  height: 48px;
+  min-width: 1000px;
+  padding: 0 160px 0 14px;
 }
 
-.project-loading-row::before,
-.project-loading-row::after {
+.project-table-loading-head span,
+.project-table-loading-row::before,
+.project-table-loading-row::after,
+.project-table-loading-row span {
   background: #e8eef6;
   border-radius: 999px;
   content: '';
   display: block;
   height: 12px;
-  left: 24px;
-  position: absolute;
-  top: 25px;
 }
 
-.project-loading-row::before {
-  width: 32px;
+.project-table-loading-head span:nth-child(1) { width: 28px; }
+.project-table-loading-head span:nth-child(2) { width: 64px; }
+.project-table-loading-head span:nth-child(3) { width: 56px; }
+.project-table-loading-head span:nth-child(4) { width: 48px; }
+.project-table-loading-head span:nth-child(5) { width: 48px; }
+.project-table-loading-head span:nth-child(6) { width: 56px; }
+
+.project-table-loading-row {
+  align-items: center;
+  border-bottom: 1px solid #edf3f8;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 54px minmax(160px, 1fr) 140px 86px 86px 96px;
+  height: 62px;
+  min-width: 1000px;
+  padding: 0 160px 0 14px;
 }
 
-.project-loading-row::after {
-  left: 112px;
-  width: min(320px, 40%);
+.project-table-loading-row::before {
+  width: 28px;
+}
+
+.project-table-loading-row::after {
+  width: min(260px, 100%);
+}
+
+.project-table-loading-row span {
+  width: 58px;
+}
+
+.project-empty-state {
+  padding: 30px 0 34px;
 }
 
 .project-table,
@@ -1082,8 +1120,8 @@ async function handlePageSizeChange(size: number) {
         .project-owner-cell,
         .project-owner-cell .el-icon,
         .project-count-cell,
-        .user-credit-cell,
-        .user-time-cell,
+        .project-credit-cell,
+        .project-time-cell,
         .project-status-switch-text
       )
   ) {
@@ -1154,21 +1192,33 @@ async function handlePageSizeChange(size: number) {
   font-weight: 700;
 }
 
-.project-table .user-credit-cell,
-.project-table .user-time-cell {
+.project-credit-cell {
+  font-feature-settings: 'tnum';
   font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  white-space: nowrap;
 }
 
-.project-status-switch.is-enabled {
-  background: #f0fdf4;
-  border-color: #b7eb8f;
-  color: #166534;
+.project-time-cell {
+  color: #475467;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
-.project-status-switch.is-disabled {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  color: #64748b;
+.project-status-switch.is-enabled,
+.project-status-switch.is-enabled .project-status-switch-text {
+  background: var(--admin-success-bg);
+  border-color: var(--admin-success-border);
+  color: var(--admin-success);
+}
+
+.project-status-switch.is-disabled,
+.project-status-switch.is-disabled .project-status-switch-text {
+  background: var(--admin-danger-bg);
+  border-color: var(--admin-danger-border);
+  color: var(--admin-danger);
 }
 
 .project-status-switch.is-enabled .project-status-switch-icon {

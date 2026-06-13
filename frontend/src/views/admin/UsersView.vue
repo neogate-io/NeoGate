@@ -743,7 +743,7 @@ onMounted(() => {
           </template>
         </el-table-column>
         <template #empty>
-          <div class="channel-empty-state user-empty-state">
+          <div class="user-empty-state">
             <el-empty :description="emptyUsersDescription" />
           </div>
         </template>
@@ -1241,22 +1241,25 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.user-status-switch.is-enabled {
-  background: #f0fdf4;
-  border-color: #b7eb8f;
-  color: #166534;
+.user-status-switch.is-enabled,
+.user-status-switch.is-enabled .user-status-switch-text {
+  background: var(--admin-success-bg);
+  border-color: var(--admin-success-border);
+  color: var(--admin-success);
 }
 
-.user-status-switch.is-disabled {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  color: #64748b;
+.user-status-switch.is-disabled,
+.user-status-switch.is-disabled .user-status-switch-text {
+  background: var(--admin-danger-bg);
+  border-color: var(--admin-danger-border);
+  color: var(--admin-danger);
 }
 
-.user-status-switch.is-pending {
-  background: #fffbeb;
-  border-color: #f7d37a;
-  color: #a16207;
+.user-status-switch.is-pending,
+.user-status-switch.is-pending .user-status-switch-text {
+  background: var(--admin-warning-bg);
+  border-color: var(--admin-warning-border);
+  color: var(--admin-warning);
 }
 
 .user-status-switch.is-enabled .user-status-switch-icon {
@@ -1309,48 +1312,6 @@ onMounted(() => {
 
 .hidden-submit {
   display: none;
-}
-
-:global(.user-admin-dialog) {
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-:global(.user-admin-dialog .el-dialog__header) {
-  border-bottom: 1px solid var(--admin-border-soft);
-  margin: 0;
-  padding: 18px 20px 16px;
-}
-
-:global(.user-admin-dialog .el-dialog__title) {
-  color: var(--admin-text);
-  font-size: 17px;
-  font-weight: 760;
-  line-height: 1.25;
-}
-
-:global(.user-admin-dialog .el-dialog__headerbtn) {
-  height: 52px;
-  top: 0;
-  width: 52px;
-}
-
-:global(.user-admin-dialog .el-dialog__body) {
-  padding: 18px 20px;
-}
-
-:global(.user-admin-dialog .el-dialog__footer) {
-  border-top: 1px solid var(--admin-border-soft);
-  padding: 14px 20px 16px;
-}
-
-:global(.user-admin-dialog .el-dialog__footer .admin-dialog-footer) {
-  border-top: 0;
-  padding-top: 0;
-}
-
-:global(.user-admin-dialog .el-button) {
-  border-radius: 7px;
 }
 
 :global(.user-create-dialog) {

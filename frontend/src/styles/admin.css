@@ -2137,6 +2137,12 @@
   overflow-y: hidden;
 }
 
+/* 外层 service-table-panel 已处理横向滚动，禁用 Element Plus 表格内部 hover 滚动条 */
+.service-table-panel .el-scrollbar__wrap {
+  overflow-x: hidden !important;
+  overflow-y: hidden !important;
+}
+
 .service-table-panel.has-pagination {
   border-bottom: 0;
   border-bottom-left-radius: 0;

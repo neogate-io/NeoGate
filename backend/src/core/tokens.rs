@@ -39,21 +39,21 @@ pub struct RequestAuthLogContext {
 #[derive(Debug, Clone, Copy)]
 struct RequestAuthLogState {
     auth: &'static str,
-    user_id: Option<DbId>,
+    subject_id: Option<DbId>,
 }
 
 impl RequestAuthLogContext {
-    pub fn new(auth: &'static str, user_id: Option<DbId>) -> Self {
+    pub fn new(auth: &'static str, subject_id: Option<DbId>) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(RequestAuthLogState { auth, user_id })),
+            inner: Arc::new(RwLock::new(RequestAuthLogState { auth, subject_id })),
         }
     }
 
-    pub fn set(&self, auth: &'static str, user_id: Option<DbId>) {
+    pub fn set(&self, auth: &'static str, subject_id: Option<DbId>) {
         *self
             .inner
             .write()
-            .expect("request auth log context poisoned") = RequestAuthLogState { auth, user_id };
+            .expect("request auth log context poisoned") = RequestAuthLogState { auth, subject_id };
     }
 
     pub fn snapshot(&self) -> (&'static str, Option<DbId>) {
@@ -61,7 +61,7 @@ impl RequestAuthLogContext {
             .inner
             .read()
             .expect("request auth log context poisoned");
-        (state.auth, state.user_id)
+        (state.auth, state.subject_id)
     }
 }
 
@@ -72,25 +72,23 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let has_session_token = bearer(&parts.headers)
-            .map(|token| validate_admin_token(token, &state.config.admin_token_secret))
-            .unwrap_or(false);
-
-        if !has_session_token {
+        let Some(admin_id) = bearer(&parts.headers).and_then(|token| {
+            validate_admin_session_token(token, &state.config.admin_token_secret)
+        }) else {
             return Err(AppError::Unauthorized);
-        }
-        set_request_auth_log_context(parts, "admin", None);
+        };
+        set_request_auth_log_context(parts, "admin", Some(admin_id));
         Ok(Self)
     }
 }
 
-pub fn issue_admin_token(ttl: Duration, secret: &str) -> String {
+pub fn issue_admin_token(ttl: Duration, secret: &str, admin_id: DbId) -> String {
     let expires_at = Utc::now() + chrono_ttl(ttl);
     let expires_at = expires_at.timestamp();
     let nonce = generate_admin_nonce();
-    let payload = admin_token_payload(expires_at, &nonce);
+    let payload = admin_session_token_payload(expires_at, admin_id, &nonce);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    format!("neo_admin_v1_{expires_at}_{nonce}_{signature}")
+    format!("neo_admin_v2_{expires_at}_{admin_id}_{nonce}_{signature}")
 }
 
 pub fn issue_user_session_token(ttl: Duration, secret: &str, user_id: DbId) -> String {
@@ -133,27 +131,24 @@ pub fn password_reset_email_from_token(token: &str, secret: &str) -> Option<Stri
 }
 
 pub fn validate_admin_token(token: &str, secret: &str) -> bool {
-    let Some(rest) = token.strip_prefix("neo_admin_v1_") else {
-        return false;
-    };
-    let mut parts = rest.splitn(3, '_');
-    let Some(expires_at) = parts.next().and_then(|value| value.parse::<i64>().ok()) else {
-        return false;
-    };
-    let Some(nonce) = parts.next().filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    let Some(signature) = parts.next() else {
-        return false;
-    };
+    validate_admin_session_token(token, secret).is_some()
+}
+
+pub fn validate_admin_session_token(token: &str, secret: &str) -> Option<DbId> {
+    let rest = token.strip_prefix("neo_admin_v2_")?;
+    let mut parts = rest.splitn(4, '_');
+    let expires_at = parts.next().and_then(|value| value.parse::<i64>().ok())?;
+    let admin_id = parts.next().and_then(|value| value.parse::<DbId>().ok())?;
+    let nonce = parts.next().filter(|value| !value.is_empty())?;
+    let signature = parts.next()?;
 
     if expires_at <= Utc::now().timestamp() {
-        return false;
+        return None;
     }
 
-    let payload = admin_token_payload(expires_at, nonce);
+    let payload = admin_session_token_payload(expires_at, admin_id, nonce);
     let expected = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    constant_time_eq(signature.as_bytes(), expected.as_bytes())
+    constant_time_eq(signature.as_bytes(), expected.as_bytes()).then_some(admin_id)
 }
 
 pub fn validate_user_session_token(token: &str, secret: &str) -> Option<DbId> {
@@ -565,8 +560,8 @@ fn generate_admin_nonce() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 48)
 }
 
-fn admin_token_payload(expires_at: i64, nonce: &str) -> String {
-    format!("v1.{expires_at}.{nonce}")
+fn admin_session_token_payload(expires_at: i64, admin_id: DbId, nonce: &str) -> String {
+    format!("admin.v2.{expires_at}.{admin_id}.{nonce}")
 }
 
 fn user_key_draft_token_payload(expires_at: i64, head: &str, tail: &str) -> String {
@@ -833,14 +828,16 @@ mod tests {
     #[test]
     fn admin_tokens_are_signed_and_expire() {
         let secret = "test-admin-token-secret";
-        let token = issue_admin_token(Duration::from_secs(60), secret);
+        let token = issue_admin_token(Duration::from_secs(60), secret, 42);
 
-        assert!(token.starts_with("neo_admin_"));
+        assert!(token.starts_with("neo_admin_v2_"));
         assert!(validate_admin_token(&token, secret));
+        assert_eq!(validate_admin_session_token(&token, secret), Some(42));
         assert!(!validate_admin_token(&token, "different-secret"));
         assert!(!validate_admin_token("change-me-in-production", secret));
+        assert!(!validate_admin_token("neo_admin_v1_1_abc_def", secret));
 
-        let expired = issue_admin_token(Duration::from_secs(0), secret);
+        let expired = issue_admin_token(Duration::from_secs(0), secret, 42);
         assert!(!validate_admin_token(&expired, secret));
     }
 

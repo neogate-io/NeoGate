@@ -6,7 +6,7 @@
     <title>大模型 API 网关方案对比 - NeoGate</title>
     <meta
       name="description"
-      content="从私有化部署、OpenAI 兼容接口、Anthropic 兼容接口、管理后台、项目 API Key、用量统计、计费和企业部署角度对比大模型 API 网关方案。"
+      content="面向企业自建大模型 API 网关的选型指南，帮助判断什么时候需要 NeoGate，而不只是基础转发代理或托管 AI 网关。"
     />
     <meta
       name="keywords"
@@ -15,7 +15,7 @@
     <meta property="og:title" content="大模型 API 网关方案对比 - NeoGate" />
     <meta
       property="og:description"
-      content="一份中性的选择清单，用来比较自托管大模型网关、通用代理和 SaaS AI 网关。"
+      content="当团队需要项目 API Key、上游凭证集中管理、用量统计和内部成本归集时，如何判断是否需要私有化大模型网关。"
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://neogate.io/zh/compare/" />
@@ -47,51 +47,51 @@
 
     <main>
       <section class="page-hero">
-        <p class="eyebrow">方案对比</p>
-        <h1>大模型 API 网关方案怎么选？</h1>
+        <p class="eyebrow">企业网关选型</p>
+        <h1>你需要基础转发代理，还是企业自己的大模型 API 网关？</h1>
         <p>
-          选择网关时，关键不是功能清单越长越好，而是它是否匹配你的部署边界、接口兼容、
-          访问隔离、用量统计和计费需求。下面是一份中性的选择清单。
+          如果只有一个应用调用一个供应商，只做请求转发可能就够了。当多个团队开始共用上游账号、
+          分发内部 Key，并且不断有人问“谁用了多少、成本归谁”时，就需要把访问、路由、用量和成本边界一起管起来。
         </p>
       </section>
 
       <section class="section compare-section">
         <div class="section-heading">
-          <p class="eyebrow">选择清单</p>
-          <h2>在共享模型访问之前，先确认这些问题。</h2>
+          <p class="eyebrow">问题变化时</p>
+          <h2>这些信号说明基础转发代理可能已经不够用了。</h2>
         </div>
         <div class="check-grid">
           <article>
-            <h3>部署模式</h3>
-            <p>网关能否运行在你自己的基础设施里，还是模型流量必须离开你的环境？</p>
+            <h3>不止一个模型供应商</h3>
+            <p>团队希望把 OpenAI、Anthropic 和兼容上游统一放到企业自己的 API 入口后面。</p>
           </article>
           <article>
-            <h3>接口兼容</h3>
-            <p>你的客户端需要 OpenAI 兼容接口、Anthropic 兼容接口，还是两者都需要？</p>
+            <h3>内部应用需要自己的 Key</h3>
+            <p>业务服务、部门或自动化任务需要独立 API Key，而不是共用同一批上游供应商密钥。</p>
           </article>
           <article>
-            <h3>运维控制</h3>
-            <p>管理员能否管理上游通道、凭证、路由、健康状态和访问策略？</p>
+            <h3>上游凭证要集中托管</h3>
+            <p>供应商 Key 不应该散落在每个服务仓库、脚本和团队环境变量里。</p>
           </article>
           <article>
-            <h3>项目隔离</h3>
-            <p>团队、应用或客户能否获得独立 API Key，并独立归集用量？</p>
+            <h3>成本归集开始重要</h3>
+            <p>平台或财务团队需要按项目、API Key、模型、供应商和上游通道查看用量。</p>
           </article>
           <article>
-            <h3>用量和成本</h3>
-            <p>能否按用户、项目、API Key、模型、供应商和上游通道查看用量？</p>
+            <h3>内部模式优先</h3>
+            <p>你希望内部用户无需预充值也能调用，但仍然沉淀用量和费用记录用于分析。</p>
           </article>
           <article>
-            <h3>计费准备度</h3>
-            <p>是否需要余额检查、模型价格、充值流程，以及走向付费模型服务的路径？</p>
+            <h3>不能依赖单个上游 Key</h3>
+            <p>某个 Key 或通道失败时，网关应该冷却异常凭证，并尽量切换到其他可用凭证。</p>
           </article>
         </div>
       </section>
 
       <section class="section">
         <div class="section-heading">
-          <p class="eyebrow">能力清单</p>
-          <h2>用中性的方式比较不同网关类别。</h2>
+          <p class="eyebrow">决策表</p>
+          <h2>按你真实需要的运营模式来选。</h2>
         </div>
         <div class="table-wrap">
           <table class="compare-table">
@@ -99,19 +99,19 @@
               <tr>
                 <th>能力</th>
                 <th>NeoGate</th>
-                <th>通用代理</th>
+                <th>基础转发代理</th>
                 <th>SaaS AI 网关</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>私有化部署</td>
+                <td>部署在自己的基础设施里</td>
                 <td>支持</td>
                 <td>通常支持</td>
                 <td>有限或不支持</td>
               </tr>
               <tr>
-                <td>OpenAI 兼容接口</td>
+                <td>兼容现有客户端的 OpenAI 接口</td>
                 <td>支持</td>
                 <td>通常支持</td>
                 <td>通常支持</td>
@@ -123,34 +123,40 @@
                 <td>通常支持</td>
               </tr>
               <tr>
-                <td>管理后台</td>
+                <td>管理后台统一管理通道和凭证</td>
                 <td>支持</td>
                 <td>视项目而定</td>
                 <td>支持</td>
               </tr>
               <tr>
-                <td>项目 API Key</td>
+                <td>给团队和应用发项目 API Key</td>
                 <td>支持</td>
                 <td>视项目而定</td>
                 <td>支持</td>
               </tr>
               <tr>
-                <td>用量统计</td>
+                <td>按项目、Key、模型和通道看用量</td>
                 <td>支持</td>
                 <td>视项目而定</td>
                 <td>支持</td>
               </tr>
               <tr>
-                <td>计费模式</td>
+                <td>内部模式下记录成本</td>
+                <td>支持</td>
+                <td>较少内置</td>
+                <td>视服务而定</td>
+              </tr>
+              <tr>
+                <td>后续切换计费模式</td>
                 <td>支持</td>
                 <td>较少内置</td>
                 <td>通常支持</td>
               </tr>
               <tr>
-                <td>企业私有化部署</td>
+                <td>先单节点，后续按需集群</td>
                 <td>支持</td>
-                <td>通常支持</td>
-                <td>有限</td>
+                <td>取决于项目</td>
+                <td>由服务商托管</td>
               </tr>
             </tbody>
           </table>
@@ -162,21 +168,21 @@
           <p class="eyebrow">适合场景</p>
           <h2>什么时候适合 NeoGate？</h2>
           <ul class="plain-list">
-            <li>你希望为多个模型供应商提供一个私有化统一入口。</li>
-            <li>你需要发放项目 API Key，而不是共享上游供应商密钥。</li>
-            <li>你关心项目、API Key、模型和通道维度的用量记录。</li>
-            <li>你需要内部成本归集，或计划提供付费模型调用服务。</li>
-            <li>你偏好 Rust 后端和简单的 Docker Compose 部署。</li>
+            <li>公司希望为多个模型供应商提供一个私有化统一入口。</li>
+            <li>内部团队需要项目 API Key，而不是共享上游供应商密钥。</li>
+            <li>你关心项目、API Key、模型、供应商和通道维度的用量记录。</li>
+            <li>你现在需要内部成本归集，未来可能开启计费模式。</li>
+            <li>你希望先用 Docker Compose 落地，再判断是否需要集群部署。</li>
           </ul>
         </div>
         <div>
           <p class="eyebrow">非目标场景</p>
           <h2>什么时候可能不适合？</h2>
           <ul class="plain-list">
-            <li>你只需要一个很小的本地开发代理。</li>
+            <li>你只需要给一个应用做很小的本地请求转发。</li>
             <li>你完全不想维护任何基础设施，只想使用托管服务。</li>
             <li>你的主要需求是 Prompt 评测、Prompt 管理或 Agent 工作流。</li>
-            <li>你已经深度绑定某个云厂商 AI 网关，并且不需要可迁移性。</li>
+            <li>组织已经统一使用某个云厂商 AI 网关，并且不需要可迁移性。</li>
           </ul>
         </div>
       </section>

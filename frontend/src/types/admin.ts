@@ -100,6 +100,7 @@ export type Channel = {
   key_selection_mode: 'polling' | 'random'
   use_credentials: boolean
   endpoints: ChannelEndpoint[]
+  probe_samples: ChannelProbeSample[]
   created_at?: string
   updated_at?: string
 }
@@ -148,6 +149,15 @@ export type ChannelKey = {
   last_used_at?: string | null
   created_at: string
   updated_at: string
+}
+
+export type ChannelProbeSample = {
+  status: 'ok' | 'failed' | 'skipped'
+  latency_ms?: number | null
+  status_code?: number | null
+  model: string
+  error_summary?: string | null
+  created_at: string
 }
 
 export type DiagnosticStatus = 'ok' | 'warning' | 'failed' | 'skipped'

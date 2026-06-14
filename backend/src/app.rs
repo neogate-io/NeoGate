@@ -163,32 +163,76 @@ async fn log_http_response(
     let status = response.status();
     let (response, error_code, error_message) = response_error_for_log(response).await;
     let elapsed_ms = started.elapsed().as_millis();
-    let (auth, user_id) = auth_context.snapshot();
-    let user_id = user_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    if let Some(error_message) = error_message {
-        tracing::info!(
+    let (auth, subject_id) = auth_context.snapshot();
+    log_http_request_event(
+        &request_line,
+        status,
+        elapsed_ms,
+        auth,
+        subject_id,
+        error_code,
+        error_message,
+    );
+    response
+}
+
+fn log_http_request_event(
+    request_line: &str,
+    status: StatusCode,
+    elapsed_ms: u128,
+    auth: &'static str,
+    subject_id: Option<DbId>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+) {
+    match (auth, subject_id, error_message) {
+        ("admin", Some(admin_id), Some(error_message)) => tracing::info!(
             request = %request_line,
             status = %status.as_u16(),
             elapsed_ms = %elapsed_ms,
-            auth = %auth,
+            admin_id = %admin_id,
+            error_code = %error_code.unwrap_or_else(|| "-".to_string()),
+            error_message = %error_message,
+            "http request"
+        ),
+        ("admin", Some(admin_id), None) => tracing::info!(
+            request = %request_line,
+            status = %status.as_u16(),
+            elapsed_ms = %elapsed_ms,
+            admin_id = %admin_id,
+            "http request"
+        ),
+        ("user" | "token", Some(user_id), Some(error_message)) => tracing::info!(
+            request = %request_line,
+            status = %status.as_u16(),
+            elapsed_ms = %elapsed_ms,
             user_id = %user_id,
             error_code = %error_code.unwrap_or_else(|| "-".to_string()),
             error_message = %error_message,
             "http request"
-        );
-    } else {
-        tracing::info!(
+        ),
+        ("user" | "token", Some(user_id), None) => tracing::info!(
             request = %request_line,
             status = %status.as_u16(),
             elapsed_ms = %elapsed_ms,
-            auth = %auth,
             user_id = %user_id,
             "http request"
-        );
+        ),
+        (_, _, Some(error_message)) => tracing::info!(
+            request = %request_line,
+            status = %status.as_u16(),
+            elapsed_ms = %elapsed_ms,
+            error_code = %error_code.unwrap_or_else(|| "-".to_string()),
+            error_message = %error_message,
+            "http request"
+        ),
+        _ => tracing::info!(
+            request = %request_line,
+            status = %status.as_u16(),
+            elapsed_ms = %elapsed_ms,
+            "http request"
+        ),
     }
-    response
 }
 
 fn request_auth_context(
@@ -198,13 +242,13 @@ fn request_auth_context(
     let Some(token) = auth::bearer(request.headers()) else {
         return ("none", None);
     };
-    if auth::validate_admin_token(token, admin_token_secret) {
-        return ("admin", None);
+    if let Some(admin_id) = auth::validate_admin_session_token(token, admin_token_secret) {
+        return ("admin", Some(admin_id));
     }
     if let Some(user_id) = auth::validate_user_session_token(token, admin_token_secret) {
         return ("user", Some(user_id));
     }
-    ("token", None)
+    ("none", None)
 }
 
 async fn response_error_for_log(response: Response) -> (Response, Option<String>, Option<String>) {
@@ -820,6 +864,7 @@ pub(crate) mod tests {
         let token = auth::issue_admin_token(
             state.config.admin_session_ttl,
             &state.config.admin_token_secret,
+            1,
         );
         let app = Router::new()
             .merge(admin::router())

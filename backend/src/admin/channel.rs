@@ -11,6 +11,7 @@ use crate::{
     AppState,
 };
 
+use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
     ensure_custom_provider, ensure_newapi_provider, provider_default_endpoint_base_url,
     provider_default_endpoints, provider_default_models, record_provider_models,
@@ -44,6 +45,7 @@ pub struct ChannelRecord {
     pub key_selection_mode: String,
     pub use_credentials: bool,
     pub endpoints: Vec<ChannelEndpointRecord>,
+    pub probe_samples: Vec<ChannelProbeSampleRecord>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -221,11 +223,16 @@ pub async fn list_channels(state: &AppState) -> AppResult<Vec<ChannelRecord>> {
         .map(|row| row.try_get("id"))
         .collect::<Result<_, _>>()?;
     let endpoints = endpoints_by_channel(state, &channel_ids).await?;
+    let probe_samples = recent_probe_samples_by_channel(state, &channel_ids, 12).await?;
 
     rows.iter()
         .map(|row| {
             let id: DbId = row.try_get("id")?;
-            channel_from_row(row, endpoints.get(&id).cloned().unwrap_or_default())
+            channel_from_row(
+                row,
+                endpoints.get(&id).cloned().unwrap_or_default(),
+                probe_samples.get(&id).cloned().unwrap_or_default(),
+            )
         })
         .collect()
 }
@@ -304,7 +311,12 @@ pub async fn update_channel(
     }
 
     let endpoints = endpoints_by_channel(state, &[id]).await?;
-    channel_from_row(&row, endpoints.get(&id).cloned().unwrap_or_default())
+    let probe_samples = recent_probe_samples_by_channel(state, &[id], 12).await?;
+    channel_from_row(
+        &row,
+        endpoints.get(&id).cloned().unwrap_or_default(),
+        probe_samples.get(&id).cloned().unwrap_or_default(),
+    )
 }
 
 pub async fn delete_channel(state: &AppState, id: DbId) -> AppResult<()> {
@@ -760,7 +772,12 @@ async fn get_channel(state: &AppState, id: DbId) -> AppResult<ChannelRecord> {
     .await?
     .ok_or(AppError::NotFound)?;
     let endpoints = endpoints_by_channel(state, &[id]).await?;
-    channel_from_row(&row, endpoints.get(&id).cloned().unwrap_or_default())
+    let probe_samples = recent_probe_samples_by_channel(state, &[id], 12).await?;
+    channel_from_row(
+        &row,
+        endpoints.get(&id).cloned().unwrap_or_default(),
+        probe_samples.get(&id).cloned().unwrap_or_default(),
+    )
 }
 
 async fn endpoints_by_channel(
@@ -805,6 +822,7 @@ fn validate_weight(weight: i32) -> AppResult<()> {
 pub fn channel_from_row(
     row: &sqlx::postgres::PgRow,
     endpoints: Vec<ChannelEndpointRecord>,
+    probe_samples: Vec<ChannelProbeSampleRecord>,
 ) -> AppResult<ChannelRecord> {
     Ok(ChannelRecord {
         id: row.try_get("id")?,
@@ -816,6 +834,7 @@ pub fn channel_from_row(
         key_selection_mode: row.try_get("key_selection_mode")?,
         use_credentials: row.try_get("use_credentials")?,
         endpoints,
+        probe_samples,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

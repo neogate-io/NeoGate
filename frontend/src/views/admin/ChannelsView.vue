@@ -37,6 +37,7 @@ import type {
   Channel,
   ChannelDiagnosticReport,
   ChannelKey,
+  ChannelProbeSample,
   DiagnosticStatus,
   PricingTemplate,
   ProviderPrice
@@ -307,6 +308,57 @@ function diagnosticStepLabel(name: string) {
 function diagnosticModelsPreview(models: string[]) {
   if (models.length === 0) return t('diagnosticNoModels')
   return models.slice(0, 6).join(', ') + (models.length > 6 ? ` +${models.length - 6}` : '')
+}
+
+function latestProbeSample(row: Channel) {
+  return row.probe_samples.length > 0 ? row.probe_samples[row.probe_samples.length - 1] : null
+}
+
+function probeTrendPoints(row: Channel) {
+  const samples = row.probe_samples.filter((sample) => sample.latency_ms != null)
+  if (samples.length === 0) return ''
+  const values = samples.map((sample) => sample.latency_ms ?? 0)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = Math.max(max - min, 1)
+  const width = 96
+  const height = 28
+  return values
+    .map((value, index) => {
+      const x = samples.length === 1 ? width : (index / (samples.length - 1)) * width
+      const y = height - ((value - min) / range) * (height - 4) - 2
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
+function probeTrendClass(row: Channel) {
+  const latest = latestProbeSample(row)
+  if (!latest) return 'is-empty'
+  return latest.status === 'ok' ? 'is-ok' : 'is-failed'
+}
+
+function probeLatencyLabel(sample: ChannelProbeSample | null) {
+  if (!sample) return t('probeNoData')
+  if (sample.status !== 'ok') return t('probeFailed')
+  return sample.latency_ms == null ? '-' : `${sample.latency_ms}ms`
+}
+
+function probeTooltip(row: Channel) {
+  const sample = latestProbeSample(row)
+  if (!sample) return t('probeNoDataHint')
+  const time = new Date(sample.created_at).toLocaleString()
+  const model = sample.model || '-'
+  const status = sample.status === 'ok' ? t('diagnosticStatusOk') : t('diagnosticStatusFailed')
+  return [
+    `${t('time')}: ${time}`,
+    `${t('model')}: ${model}`,
+    `${t('channelStatus')}: ${status}`,
+    `${t('latency')}: ${probeLatencyLabel(sample)}`,
+    sample.error_summary ? `${t('error')}: ${sample.error_summary}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 function channelRuntimeStatus(row: Channel) {
@@ -842,6 +894,25 @@ onMounted(loadInitialData)
             <span class="channel-key-count">{{ channelCredentialSummary(row).label }}</span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('probeTrend')" min-width="170" align="center" header-align="center">
+          <template #default="{ row }">
+            <div class="probe-trend-cell" :class="probeTrendClass(row)" :title="probeTooltip(row)">
+              <svg class="probe-trend-chart" viewBox="0 0 96 28" aria-hidden="true">
+                <polyline
+                  v-if="probeTrendPoints(row)"
+                  :points="probeTrendPoints(row)"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                />
+                <line v-else x1="8" y1="14" x2="88" y2="14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+              <span class="probe-trend-latency">{{ probeLatencyLabel(latestProbeSample(row)) }}</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column
           :label="t('channelStatus')"
           min-width="190"
@@ -903,7 +974,7 @@ onMounted(loadInitialData)
                       @click="runChannelDiagnostic(row)"
                     >
                       <el-icon><Search /></el-icon>
-                      <span>{{ t('diagnoseChannel') }}</span>
+                      <span>{{ t('fullDiagnoseChannel') }}</span>
                     </el-dropdown-item>
                     <el-dropdown-item
                       class="is-danger"
@@ -1520,6 +1591,51 @@ onMounted(loadInitialData)
 
 .channel-runtime-switch.is-disabled .channel-runtime-switch-icon {
   background: #94a3b8;
+}
+
+.probe-trend-cell {
+  align-items: center;
+  color: #94a3b8;
+  display: inline-flex;
+  gap: 10px;
+  justify-content: center;
+  min-height: 34px;
+  min-width: 142px;
+}
+
+.probe-trend-cell.is-ok {
+  color: #16a34a;
+}
+
+.probe-trend-cell.is-failed {
+  color: #dc2626;
+}
+
+.probe-trend-chart {
+  color: inherit;
+  flex: 0 0 96px;
+  height: 28px;
+  width: 96px;
+}
+
+.probe-trend-latency {
+  color: #1d2129;
+  font-size: 12px;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  min-width: 56px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.probe-trend-cell.is-empty .probe-trend-latency {
+  color: #86909c;
+  font-weight: 560;
+}
+
+.probe-trend-cell.is-failed .probe-trend-latency {
+  color: #dc2626;
 }
 
 .channel-expand-panel {

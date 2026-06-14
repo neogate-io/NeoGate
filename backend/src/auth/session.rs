@@ -120,6 +120,7 @@ pub(super) async fn login_admin(
         token: super::issue_admin_token(
             state.config.admin_session_ttl,
             &state.config.admin_token_secret,
+            id,
         ),
         role: "admin".to_string(),
         requires_password_change: false,

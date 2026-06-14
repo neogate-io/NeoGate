@@ -6,7 +6,7 @@
     <title>NeoGate - 简单好用的大模型 API 网关</title>
     <meta
       name="description"
-      content="NeoGate 是一个可私有化部署的 Rust 大模型 API 网关，支持 OpenAI 兼容接口、Anthropic 兼容接口、模型路由、多租户 API Key、用量统计、计费和管理后台。"
+      content="NeoGate 帮助企业把多个大模型供应商统一收拢到自己的 API 入口，集中管理上游凭证、项目 API Key、模型路由、用量统计和内部成本归集。"
     />
     <meta
       name="keywords"
@@ -15,7 +15,7 @@
     <meta property="og:title" content="NeoGate - 简单好用的大模型 API 网关" />
     <meta
       property="og:description"
-      content="OpenAI 兼容接口、Anthropic 兼容接口、模型路由、多租户 API Key、用量统计、计费和私有化部署。"
+      content="把多个模型供应商统一收拢到企业自己的 API 入口，按团队、项目、模型和 API Key 管理访问、用量和成本。"
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://neogate.io/zh/" />
@@ -49,11 +49,12 @@
     <main id="top">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">私有化 AI 基础设施</p>
+          <p class="eyebrow">给团队使用的私有化大模型网关</p>
           <h1>NeoGate - 简单好用的大模型 API 网关</h1>
           <p class="hero-text">
-            NeoGate 将 OpenAI 兼容接口、Anthropic 兼容接口、模型路由、上游凭证管理、
-            用量统计和计费能力收拢到一个可私有化部署的统一网关中。
+            把 OpenAI、Anthropic 和其他上游模型服务统一接入企业自己的 API 入口。
+            给内部应用发项目 API Key，把上游凭证集中托管，并按团队、项目、模型和 Key
+            追踪用量与成本。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="https://github.com/neogate-io/NeoGate">查看 GitHub</a>
@@ -62,15 +63,15 @@
           <dl class="hero-stats" aria-label="项目亮点">
             <div>
               <dt>Rust</dt>
-              <dd>低延迟转发</dd>
+              <dd>高性能转发层</dd>
             </div>
             <div>
-              <dt>双模式</dt>
-              <dd>内部或计费</dd>
+              <dt>项目</dt>
+              <dd>Key 和用量隔离</dd>
             </div>
             <div>
               <dt>Docker</dt>
-              <dd>单节点启动</dd>
+              <dd>单节点起步</dd>
             </div>
           </dl>
         </div>
@@ -86,62 +87,62 @@
 
       <section id="features" class="section">
         <div class="section-heading">
-          <p class="eyebrow">核心能力</p>
-          <h2>团队共享模型访问之前，该有的控制面都在这里。</h2>
+          <p class="eyebrow">企业自用场景</p>
+          <h2>当多个团队开始共用大模型能力，先把访问入口和成本边界管起来。</h2>
           <p>
-            NeoGate 适合需要统一管理上游模型账号、项目 API Key、访问权限、用量和成本的组织，
-            避免把供应商密钥分散到每个服务和团队里。
+            NeoGate 关注的是企业内部落地大模型时最先遇到的运营问题：谁能调用、
+            用哪个上游、用了多少、成本归到哪个项目，以及上游异常时如何少影响业务。
           </p>
         </div>
         <div class="feature-grid">
           <article>
-            <h3>统一模型入口</h3>
-            <p>用一个网关管理多个上游供应商、协议、端点和凭证。</p>
+            <h3>公司内部统一模型入口</h3>
+            <p>所有业务应用都接入企业自己的 NeoGate 地址，不再让每个团队分别配置不同供应商。</p>
           </article>
           <article>
-            <h3>项目 API Key</h3>
-            <p>为团队、客户、服务和自动化任务发放相互隔离的调用密钥。</p>
+            <h3>给项目和团队发独立 Key</h3>
+            <p>按部门、业务项目、内部服务或自动化任务发放 API Key，权限、额度和用量互相隔离。</p>
           </article>
           <article>
-            <h3>模型路由</h3>
-            <p>按模型、供应商、优先级、权重、凭证状态和通道健康度选择上游。</p>
+            <h3>集中托管上游凭证</h3>
+            <p>上游供应商 Key 不再散落在业务系统里，管理员在后台统一管理 OpenAI、Anthropic 和兼容通道。</p>
           </article>
           <article>
-            <h3>用量记录</h3>
-            <p>按用户、项目、API Key、模型、供应商和上游通道追踪请求。</p>
+            <h3>按项目看用量和成本</h3>
+            <p>记录用户、项目、API Key、模型、供应商和通道维度的调用，方便排查问题和做内部核算。</p>
           </article>
           <article>
-            <h3>计费模式</h3>
-            <p>既可作为内部网关，也可开启余额、充值、价格和面向客户的付费访问。</p>
+            <h3>先服务内部管理</h3>
+            <p>内部模式下默认不要求用户余额，但仍记录用量和费用，适合成本分析、预算评估和内部归集。</p>
           </article>
           <article>
-            <h3>私有化部署</h3>
-            <p>从 Docker Compose 单节点启动，后续按流量需求切换到集群部署。</p>
+            <h3>上游异常时自动切换</h3>
+            <p>上游 Key 失败后自动冷却，并尽量切换到可用凭证，减少单个密钥或通道异常对业务的影响。</p>
           </article>
         </div>
       </section>
 
       <section id="architecture" class="section split">
         <div>
-          <p class="eyebrow">架构</p>
-          <h2>从项目 Key 到上游凭证，只有一条受控路径。</h2>
+          <p class="eyebrow">企业调用路径</p>
+          <h2>业务应用调用项目 Key，NeoGate 负责鉴权、路由和记录。</h2>
           <p>
-            请求通过 OpenAI 兼容或 Anthropic 兼容接口进入网关，经过项目策略检查，
-            选择上游通道并记录用量，用于排障、成本归集或计费。
+            内部应用使用项目 API Key 调用 NeoGate。网关完成项目鉴权、服务模式策略、
+            上游通道和凭证选择，再把响应转回应用，同时沉淀用量记录用于排障、成本分析和内部核算。
           </p>
         </div>
         <div class="steps">
-          <div><strong>1</strong><span>认证项目 API Key</span></div>
-          <div><strong>2</strong><span>检查策略、服务模式和余额</span></div>
-          <div><strong>3</strong><span>选择供应商通道和上游凭证</span></div>
-          <div><strong>4</strong><span>转发响应并记录用量</span></div>
+          <div><strong>1</strong><span>内部应用使用项目 API Key 发起请求</span></div>
+          <div><strong>2</strong><span>NeoGate 检查项目策略和服务模式</span></div>
+          <div><strong>3</strong><span>网关选择供应商通道和上游凭证</span></div>
+          <div><strong>4</strong><span>转发响应，并记录项目维度用量</span></div>
         </div>
       </section>
 
       <section id="deployment" class="section deploy">
         <div class="section-heading">
-          <p class="eyebrow">快速部署</p>
-          <h2>使用 Docker Compose 启动单节点网关。</h2>
+          <p class="eyebrow">部署路径</p>
+          <h2>先用单节点落地，真正需要多副本时再切集群。</h2>
         </div>
         <div class="terminal" aria-label="Docker Compose 快速启动命令">
           <div class="terminal-bar">
@@ -152,8 +153,8 @@
           <code>docker compose up -d --build</code>
         </div>
         <p class="deploy-note">
-          启动后打开部署地址，通过首次运行向导完成管理员账号、服务模式、初始上游、价格、
-          SMTP 和支付配置。
+          大多数团队起步时使用单节点部署就够了：前端 Nginx、后端和 PostgreSQL 一起启动，
+          配置简单、排障成本低。等明确需要横向扩展时，再切换到共享 PostgreSQL 和 Redis 的集群部署。
         </p>
       </section>
     </main>

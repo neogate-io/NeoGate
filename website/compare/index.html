@@ -6,7 +6,7 @@
     <title>Compare LLM API Gateway Options - NeoGate</title>
     <meta
       name="description"
-      content="Compare LLM API gateway options by self-hosting, OpenAI-compatible APIs, Anthropic-compatible APIs, admin console, project keys, usage tracking, billing, and private deployment."
+      content="A practical guide for enterprise teams deciding whether they need a private LLM API gateway like NeoGate instead of a simple proxy or hosted AI gateway."
     />
     <meta
       name="keywords"
@@ -15,7 +15,7 @@
     <meta property="og:title" content="Compare LLM API Gateway Options - NeoGate" />
     <meta
       property="og:description"
-      content="A practical checklist for choosing between self-hosted LLM gateways, generic proxies, and SaaS AI gateways."
+      content="Decide whether your team needs a private gateway for project API keys, upstream credential management, usage tracking, and internal cost attribution."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://neogate.io/compare/" />
@@ -47,52 +47,52 @@
 
     <main>
       <section class="page-hero">
-        <p class="eyebrow">Comparison guide</p>
-        <h1>Compare LLM API gateway options.</h1>
+        <p class="eyebrow">Enterprise gateway checklist</p>
+        <h1>Do you need a simple proxy, or a private LLM API gateway?</h1>
         <p>
-          The right gateway depends on whether you need a simple model proxy, a private enterprise
-          control plane, or a managed SaaS AI gateway. This page highlights the questions that matter
-          before you share upstream model access across teams or customers.
+          If one application is calling one provider, a small proxy may be enough. When multiple
+          teams start sharing upstream accounts, issuing internal keys, and asking who used what,
+          you need a gateway that manages access, routing, usage, and cost boundaries together.
         </p>
       </section>
 
       <section class="section compare-section">
         <div class="section-heading">
-          <p class="eyebrow">Decision checklist</p>
-          <h2>What to evaluate before choosing an AI gateway.</h2>
+          <p class="eyebrow">When the problem changes</p>
+          <h2>Signs that a generic proxy is no longer enough.</h2>
         </div>
         <div class="check-grid">
           <article>
-            <h3>Deployment model</h3>
-            <p>Can the gateway run inside your own infrastructure, or does traffic need to leave your environment?</p>
+            <h3>More than one provider</h3>
+            <p>Your team wants OpenAI, Anthropic, and compatible upstreams behind one company-controlled endpoint.</p>
           </article>
           <article>
-            <h3>Compatible APIs</h3>
-            <p>Do your clients need OpenAI-compatible, Anthropic-compatible, or both API surfaces?</p>
+            <h3>Internal apps need their own keys</h3>
+            <p>Business services, departments, or automation jobs need separate API keys instead of shared vendor credentials.</p>
           </article>
           <article>
-            <h3>Operational control</h3>
-            <p>Can administrators manage upstream channels, credentials, routing, health, and policies?</p>
+            <h3>Upstream keys should stay central</h3>
+            <p>Provider keys should live in the gateway, not in every service repository, script, or team environment.</p>
           </article>
           <article>
-            <h3>Project isolation</h3>
-            <p>Can teams, applications, or customers receive separate API keys with independent usage attribution?</p>
+            <h3>Cost attribution matters</h3>
+            <p>Platform or finance teams need usage grouped by project, API key, model, provider, and upstream channel.</p>
           </article>
           <article>
-            <h3>Usage and cost visibility</h3>
-            <p>Can you inspect usage by user, project, API key, model, provider, and upstream channel?</p>
+            <h3>Internal mode comes first</h3>
+            <p>You want internal users to call without prepaid balance while still recording usage and cost for analysis.</p>
           </article>
           <article>
-            <h3>Billing readiness</h3>
-            <p>Do you need balance checks, prices, recharge flows, and a path toward paid model access?</p>
+            <h3>Reliability cannot depend on one key</h3>
+            <p>When a key or channel fails, the gateway should cool it down and keep routing through available credentials.</p>
           </article>
         </div>
       </section>
 
       <section class="section">
         <div class="section-heading">
-          <p class="eyebrow">Feature checklist</p>
-          <h2>A neutral way to compare gateway categories.</h2>
+          <p class="eyebrow">Decision table</p>
+          <h2>Choose based on the operating model you actually need.</h2>
         </div>
         <div class="table-wrap">
           <table class="compare-table">
@@ -100,58 +100,64 @@
               <tr>
                 <th>Capability</th>
                 <th>NeoGate</th>
-                <th>Generic proxy</th>
+                <th>Simple proxy</th>
                 <th>SaaS AI gateway</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Self-hosted deployment</td>
+                <td>Private deployment in your infrastructure</td>
                 <td>Yes</td>
                 <td>Usually</td>
                 <td>Limited or no</td>
               </tr>
               <tr>
-                <td>OpenAI-compatible API</td>
+                <td>OpenAI-compatible API for existing clients</td>
                 <td>Yes</td>
                 <td>Often</td>
                 <td>Often</td>
               </tr>
               <tr>
-                <td>Anthropic-compatible API</td>
+                <td>Anthropic-compatible API support</td>
                 <td>Yes</td>
                 <td>Sometimes</td>
                 <td>Often</td>
               </tr>
               <tr>
-                <td>Admin console</td>
+                <td>Admin console for channels and credentials</td>
                 <td>Yes</td>
                 <td>Varies</td>
                 <td>Yes</td>
               </tr>
               <tr>
-                <td>Project API keys</td>
+                <td>Project API keys for teams and apps</td>
                 <td>Yes</td>
                 <td>Varies</td>
                 <td>Yes</td>
               </tr>
               <tr>
-                <td>Usage tracking</td>
+                <td>Usage by project, API key, model, and channel</td>
                 <td>Yes</td>
                 <td>Varies</td>
                 <td>Yes</td>
               </tr>
               <tr>
-                <td>Billing mode</td>
+                <td>Internal mode with cost records</td>
+                <td>Yes</td>
+                <td>Rare</td>
+                <td>Varies</td>
+              </tr>
+              <tr>
+                <td>Path to billing mode later</td>
                 <td>Yes</td>
                 <td>Rare</td>
                 <td>Often</td>
               </tr>
               <tr>
-                <td>Private enterprise deployment</td>
+                <td>Standalone first, clustered when needed</td>
                 <td>Yes</td>
-                <td>Usually</td>
-                <td>Limited</td>
+                <td>Project-dependent</td>
+                <td>Managed by vendor</td>
               </tr>
             </tbody>
           </table>
@@ -163,21 +169,21 @@
           <p class="eyebrow">Best fit</p>
           <h2>When NeoGate is a good fit.</h2>
           <ul class="plain-list">
-            <li>You want one private entry point for multiple model providers.</li>
-            <li>You need project API keys instead of shared upstream vendor keys.</li>
-            <li>You care about usage records by project, API key, model, and channel.</li>
-            <li>You need internal cost attribution or a path toward paid model access.</li>
-            <li>You prefer a Rust backend and simple Docker Compose deployment.</li>
+            <li>Your company wants one private entry point for multiple model providers.</li>
+            <li>Internal teams need project API keys instead of shared upstream vendor keys.</li>
+            <li>You need usage records by project, API key, model, provider, and channel.</li>
+            <li>You want internal cost attribution now, with a path toward billing mode later.</li>
+            <li>You want to start with Docker Compose before deciding whether clustered deployment is necessary.</li>
           </ul>
         </div>
         <div>
           <p class="eyebrow">Not the goal</p>
           <h2>When another option may be better.</h2>
           <ul class="plain-list">
-            <li>You only need a tiny local development proxy.</li>
-            <li>You want a fully managed service and do not want to operate infrastructure.</li>
-            <li>Your primary need is prompt evaluation, prompt management, or agent workflow tooling.</li>
-            <li>You are already locked into one cloud provider's AI gateway and do not need portability.</li>
+            <li>You only need a tiny local development proxy for one application.</li>
+            <li>You do not want to run any infrastructure and prefer a fully managed service.</li>
+            <li>Your main requirement is prompt evaluation, prompt management, or agent workflow tooling.</li>
+            <li>Your organization has already standardized on one cloud AI gateway and does not need portability.</li>
           </ul>
         </div>
       </section>

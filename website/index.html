@@ -6,7 +6,7 @@
     <title>NeoGate - Simple and Easy-to-use LLM API Gateway</title>
     <meta
       name="description"
-      content="NeoGate is a self-hosted Rust LLM API gateway with OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant keys, usage tracking, billing, and an admin console."
+      content="NeoGate helps companies run a private LLM API gateway that centralizes upstream credentials, project API keys, model routing, usage tracking, and internal cost attribution."
     />
     <meta
       name="keywords"
@@ -15,7 +15,7 @@
     <meta property="og:title" content="NeoGate - Simple and Easy-to-use LLM API Gateway" />
     <meta
       property="og:description"
-      content="OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant keys, usage tracking, billing, and private deployment."
+      content="Centralize model providers behind one private API entry point for teams, projects, usage tracking, and internal cost attribution."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://neogate.io/" />
@@ -49,12 +49,12 @@
     <main id="top">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Self-hosted AI infrastructure</p>
+          <p class="eyebrow">Private LLM gateway for teams</p>
           <h1>NeoGate - Simple and easy-to-use LLM API gateway</h1>
           <p class="hero-text">
-            NeoGate brings OpenAI-compatible and Anthropic-compatible APIs, model routing,
-            upstream credential management, usage tracking, and billing into one privately
-            controlled gateway.
+            Put OpenAI, Anthropic, and other upstream model providers behind one API entry point
+            controlled by your company. Issue project API keys to internal apps, keep upstream
+            credentials in one place, and track usage and cost by team, project, model, and key.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
             <a class="button primary" href="https://github.com/neogate-io/NeoGate">View on GitHub</a>
@@ -63,15 +63,15 @@
           <dl class="hero-stats" aria-label="Project highlights">
             <div>
               <dt>Rust</dt>
-              <dd>low-latency relay</dd>
+              <dd>fast relay layer</dd>
             </div>
             <div>
-              <dt>2 modes</dt>
-              <dd>internal or billing</dd>
+              <dt>Projects</dt>
+              <dd>keys and usage isolated</dd>
             </div>
             <div>
               <dt>Docker</dt>
-              <dd>single-node start</dd>
+              <dd>start single-node</dd>
             </div>
           </dl>
         </div>
@@ -87,63 +87,63 @@
 
       <section id="features" class="section">
         <div class="section-heading">
-          <p class="eyebrow">What it does</p>
-          <h2>Everything a team needs before sharing model access.</h2>
+          <p class="eyebrow">Enterprise usage scenarios</p>
+          <h2>Built for teams that need to share model access without losing control.</h2>
           <p>
-            NeoGate is built for organizations that need controlled access to upstream model
-            providers without spreading vendor keys across every service and team.
+            NeoGate focuses on the daily operational problems that appear once multiple teams,
+            internal services, or business projects start calling large model APIs.
           </p>
         </div>
         <div class="feature-grid">
           <article>
-            <h3>Unified model entry point</h3>
-            <p>Expose one gateway for multiple upstream providers, protocols, endpoints, and credentials.</p>
+            <h3>One internal model API entry point</h3>
+            <p>Give every application the same company-controlled gateway instead of asking teams to connect to each provider separately.</p>
           </article>
           <article>
-            <h3>Project API keys</h3>
-            <p>Issue isolated keys for teams, customers, services, and automation jobs.</p>
+            <h3>Project keys for teams and apps</h3>
+            <p>Issue separate API keys for departments, projects, services, or automation jobs so permissions and usage stay isolated.</p>
           </article>
           <article>
-            <h3>Model routing</h3>
-            <p>Route by model, provider, priority, weight, credential status, and channel health.</p>
+            <h3>Centralized upstream credentials</h3>
+            <p>Keep vendor keys in the gateway and manage OpenAI, Anthropic, and compatible upstream channels from the admin console.</p>
           </article>
           <article>
-            <h3>Usage records</h3>
-            <p>Track requests by user, project, API key, model, provider, and upstream channel.</p>
+            <h3>Usage and cost by project</h3>
+            <p>Record usage by user, project, API key, model, provider, and channel so finance and platform teams can analyze cost accurately.</p>
           </article>
           <article>
-            <h3>Billing mode</h3>
-            <p>Run as an internal gateway or enable credit balance, recharge, pricing, and paid access.</p>
+            <h3>Internal mode first</h3>
+            <p>Run without requiring user balance while still recording cost, making it practical for internal analysis and chargeback.</p>
           </article>
           <article>
-            <h3>Private deployment</h3>
-            <p>Start with Docker Compose, then move to clustered deployment when traffic needs it.</p>
+            <h3>Failover when upstream keys fail</h3>
+            <p>Cool down failing upstream keys and continue routing through available credentials to reduce impact on business applications.</p>
           </article>
         </div>
       </section>
 
       <section id="architecture" class="section split">
         <div>
-          <p class="eyebrow">Architecture</p>
-          <h2>One controlled path from application keys to upstream credentials.</h2>
+          <p class="eyebrow">Enterprise request path</p>
+          <h2>Business applications call project keys; NeoGate handles the control plane.</h2>
           <p>
-            Requests enter through OpenAI-compatible or Anthropic-compatible routes, pass project
-            policy checks, select an upstream channel, and produce usage records for analysis,
-            chargeback, or billing.
+            Internal applications call NeoGate with project API keys. The gateway authenticates the
+            project, applies service-mode policy, selects an upstream channel and credential, then
+            records usage for troubleshooting, cost analysis, and internal accounting.
           </p>
         </div>
         <div class="steps">
-          <div><strong>1</strong><span>Authenticate project API key</span></div>
-          <div><strong>2</strong><span>Check policy, mode, and balance</span></div>
-          <div><strong>3</strong><span>Select provider channel and credential</span></div>
-          <div><strong>4</strong><span>Relay response and record usage</span></div>
+          <div><strong>1</strong><span>Internal app calls a project API key</span></div>
+          <div><strong>2</strong><span>NeoGate checks project policy and service mode</span></div>
+          <div><strong>3</strong><span>Gateway selects provider channel and upstream credential</span></div>
+          <div><strong>4</strong><span>Response is relayed and usage is recorded</span></div>
         </div>
       </section>
 
       <section id="deployment" class="section deploy">
         <div class="section-heading">
-          <p class="eyebrow">Quick deploy</p>
-          <h2>Bring up a single-node gateway with Docker Compose.</h2>
+          <p class="eyebrow">Deployment path</p>
+          <h2>Start with a single-node gateway, then move to clustered mode when you need scale.</h2>
         </div>
         <div class="terminal" aria-label="Docker Compose quick start command">
           <div class="terminal-bar">
@@ -154,8 +154,9 @@
           <code>docker compose up -d --build</code>
         </div>
         <p class="deploy-note">
-          Open the deployed address to complete the first-run wizard for administrator account,
-          service mode, initial upstream, prices, SMTP, and payment settings.
+          Most teams can start with the standalone Docker Compose deployment: frontend Nginx,
+          backend, and PostgreSQL together. When multi-replica traffic becomes a real requirement,
+          switch to distributed mode with shared PostgreSQL and Redis.
         </p>
       </section>
     </main>

@@ -39,16 +39,48 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 ## ✨ Key Features
 
-| Capability | Description |
-| --- | --- |
-| 🏢 Enterprise gateway | Deploy a privately controlled enterprise LLM API entry point that centralizes upstream credentials and access policies for multiple model providers. |
-| 🧩 Project management | Use projects as business applications, internal projects, or cost units, with unified management for members, API keys, model permissions, budgets, and usage attribution. |
-| 🔑 Independent API keys | Issue independent API keys to teams, projects, customers, or internal apps, with permissions, quota, and cost isolation by project and API key. |
-| 🧭 Model routing | Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight. |
-| 🔌 Compatible APIs | Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect to the enterprise gateway with minimal changes. |
-| 📊 Usage records | Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing. |
-| 💳 Service billing | Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support. |
-| 🛡️ Failover | Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure. |
+<table>
+  <thead>
+    <tr>
+      <th width="210">Capability</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🏢 Enterprise gateway</td>
+      <td>Deploy a privately controlled enterprise LLM API entry point that centralizes upstream credentials and access policies for multiple model providers.</td>
+    </tr>
+    <tr>
+      <td>🧩 Project management</td>
+      <td>Use projects as business applications, internal projects, or cost units, with unified management for members, API keys, model permissions, budgets, and usage attribution.</td>
+    </tr>
+    <tr>
+      <td>🔑 Independent API keys</td>
+      <td>Issue independent API keys to teams, projects, customers, or internal apps, with permissions, quota, and cost isolation by project and API key.</td>
+    </tr>
+    <tr>
+      <td>🧭 Model routing</td>
+      <td>Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight.</td>
+    </tr>
+    <tr>
+      <td>🔌 Compatible APIs</td>
+      <td>Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect to the enterprise gateway with minimal changes.</td>
+    </tr>
+    <tr>
+      <td>📊 Usage records</td>
+      <td>Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing.</td>
+    </tr>
+    <tr>
+      <td>💳 Service billing</td>
+      <td>Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support.</td>
+    </tr>
+    <tr>
+      <td>🛡️ Failover</td>
+      <td>Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure.</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
@@ -56,10 +88,30 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 NeoGate asks you to choose internal mode or billing mode during first-run setup. Both modes provide a unified entry point, centralized upstream credential management, model routing, and usage records. The main difference is whether users need credit balance and whether payment gateways are enabled.
 
-| Mode | Scenario | Call restriction | Configuration focus |
-| --- | --- | --- | --- |
-| 🏠 Internal mode | Company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members. | By default, users can call without available credit. | NeoGate still records usage and cost for analysis and internal management. |
-| 💰 Billing mode | Paid access offered to customers, developers, or external users. | Users need available credit before calls. | Configure model prices, recharge plans, and the payment gateway before going live. |
+<table>
+  <thead>
+    <tr>
+      <th width="170">Mode</th>
+      <th>Scenario</th>
+      <th width="190">Call restriction</th>
+      <th>Configuration focus</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🏠 Internal mode</td>
+      <td>Company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members.</td>
+      <td>By default, users can call without available credit.</td>
+      <td>NeoGate still records usage and cost for analysis and internal management.</td>
+    </tr>
+    <tr>
+      <td>💰 Billing mode</td>
+      <td>Paid access offered to customers, developers, or external users.</td>
+      <td>Users need available credit before calls.</td>
+      <td>Configure model prices, recharge plans, and the payment gateway before going live.</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
@@ -144,10 +196,27 @@ On first startup, if runtime configuration is incomplete, the backend enters boo
 
 Development deployment uses the Rust debug build and the Vite dev server. Use it for local development, debugging, and trying the first-run flow.
 
-| Service | Command | Default URL |
-| --- | --- | --- |
-| Backend | `cd backend && cargo run` | `http://127.0.0.1:8080` |
-| Frontend | `cd frontend && pnpm install && pnpm dev --host 0.0.0.0` | `http://SERVER_IP:5173` |
+<table>
+  <thead>
+    <tr>
+      <th width="120">Service</th>
+      <th>Command</th>
+      <th width="190">Default URL</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Backend</td>
+      <td><code>cd backend &amp;&amp; cargo run</code></td>
+      <td><code>http://127.0.0.1:8080</code></td>
+    </tr>
+    <tr>
+      <td>Frontend</td>
+      <td><code>cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev --host 0.0.0.0</code></td>
+      <td><code>http://SERVER_IP:5173</code></td>
+    </tr>
+  </tbody>
+</table>
 
 Open `http://SERVER_IP:5173`; the app redirects to the first-run wizard automatically. Complete the runtime configuration, admin account, service mode, initial upstream, and optional SMTP settings. If the page asks for a restart after saving runtime configuration, restart the backend and refresh the page.
 
@@ -237,10 +306,30 @@ sudo systemctl reload nginx
 
 NeoGate can run as a single-node deployment or a clustered deployment. For most teams, single-node deployment is enough to start with: it does not require Redis, keeps configuration simple, and is easier to operate and troubleshoot.
 
-| Deployment | Configuration | Best for | Components |
-| --- | --- | --- | --- |
-| 🧱 Single-node deployment | Default mode. No `RUNTIME_MODE` configuration is required. | Personal projects, small teams, and early production deployments. | `docker-compose.yml` starts frontend Nginx, backend, and PostgreSQL. |
-| 🌐 Clustered deployment | Set `RUNTIME_MODE=distributed`. | Scenarios that clearly need multiple replicas and horizontal scaling. | Multiple backend API/worker replicas share PostgreSQL and Redis; `docker-compose.cluster.yml` does not include PostgreSQL or Redis. |
+<table>
+  <thead>
+    <tr>
+      <th width="190">Deployment</th>
+      <th width="210">Configuration</th>
+      <th>Best for</th>
+      <th>Components</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🧱 Single-node deployment</td>
+      <td>Default mode. No <code>RUNTIME_MODE</code> configuration is required.</td>
+      <td>Personal projects, small teams, and early production deployments.</td>
+      <td><code>docker-compose.yml</code> starts frontend Nginx, backend, and PostgreSQL.</td>
+    </tr>
+    <tr>
+      <td>🌐 Clustered deployment</td>
+      <td>Set <code>RUNTIME_MODE=distributed</code>.</td>
+      <td>Scenarios that clearly need multiple replicas and horizontal scaling.</td>
+      <td>Multiple backend API/worker replicas share PostgreSQL and Redis; <code>docker-compose.cluster.yml</code> does not include PostgreSQL or Redis.</td>
+    </tr>
+  </tbody>
+</table>
 
 > [!TIP]
 > If you do not clearly need multiple backend replicas, prefer single-node deployment first.
@@ -251,24 +340,73 @@ NeoGate can run as a single-node deployment or a clustered deployment. For most 
 
 Required before going live:
 
-| Check | Recommendation |
-| --- | --- |
-| 👤 Admin account | Create the admin account in the first-run wizard and avoid weak passwords. |
-| 🔐 System secrets | Use long, random values for `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY`; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node. |
-| 🌍 Public URL | Set a trusted `PUBLIC_BASE_URL` in the first-run wizard or environment configuration for password reset links and install script URLs. |
-| 🏷️ Site name | Set `SITE_NAME` in the first-run wizard or environment configuration for page, email, and payment gateway display. |
+<table>
+  <thead>
+    <tr>
+      <th width="190">Check</th>
+      <th>Recommendation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>👤 Admin account</td>
+      <td>Create the admin account in the first-run wizard and avoid weak passwords.</td>
+    </tr>
+    <tr>
+      <td>🔐 System secrets</td>
+      <td>Use long, random values for <code>ADMIN_TOKEN_SECRET</code> and <code>UPSTREAM_SECRET_KEY</code>; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node.</td>
+    </tr>
+    <tr>
+      <td>🌍 Public URL</td>
+      <td>Set a trusted <code>PUBLIC_BASE_URL</code> in the first-run wizard or environment configuration for password reset links and install script URLs.</td>
+    </tr>
+    <tr>
+      <td>🏷️ Site name</td>
+      <td>Set <code>SITE_NAME</code> in the first-run wizard or environment configuration for page, email, and payment gateway display.</td>
+    </tr>
+  </tbody>
+</table>
 
 Check by scenario:
 
-| Scenario | Recommendation |
-| --- | --- |
-| 🔁 Cross-origin access | When the frontend and API are accessed cross-origin, set the correct `CORS_ALLOWED_ORIGINS`; same-origin reverse proxy deployments usually do not need extra CORS configuration. |
-| 📦 Large request proxying | When proxying image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend `RELAY_BODY_LIMIT_BYTES` value, which defaults to 64 MiB. |
-| 🧾 Billing usage parsing | `RELAY_USAGE_BUFFER_LIMIT_BYTES` defaults to 16 MiB for non-streaming JSON and SSE usage parsing; keep the default in billing mode unless load tests prove a different limit still preserves usage extraction. |
-| ⏱️ Long-running requests | For 504s on long image edits, increase `UPSTREAM_TIMEOUT_SECONDS`; it defaults to 600 seconds, and the old `REQUEST_TIMEOUT_SECONDS` name remains a compatibility alias. |
-| ✉️ Email-based key claims | Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims. |
-| 💳 Billing mode | For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console. |
-| 🌐 Clustered deployment | For clustered deployment, set `RUNTIME_MODE=distributed` and configure Redis. Otherwise, keep the default single-node mode. |
+<table>
+  <thead>
+    <tr>
+      <th width="210">Scenario</th>
+      <th>Recommendation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🔁 Cross-origin access</td>
+      <td>When the frontend and API are accessed cross-origin, set the correct <code>CORS_ALLOWED_ORIGINS</code>; same-origin reverse proxy deployments usually do not need extra CORS configuration.</td>
+    </tr>
+    <tr>
+      <td>📦 Large request proxying</td>
+      <td>When proxying image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend <code>RELAY_BODY_LIMIT_BYTES</code> value, which defaults to 64 MiB.</td>
+    </tr>
+    <tr>
+      <td>🧾 Billing usage parsing</td>
+      <td><code>RELAY_USAGE_BUFFER_LIMIT_BYTES</code> defaults to 16 MiB for non-streaming JSON and SSE usage parsing; keep the default in billing mode unless load tests prove a different limit still preserves usage extraction.</td>
+    </tr>
+    <tr>
+      <td>⏱️ Long-running requests</td>
+      <td>For 504s on long image edits, increase <code>UPSTREAM_TIMEOUT_SECONDS</code>; it defaults to 600 seconds, and the old <code>REQUEST_TIMEOUT_SECONDS</code> name remains a compatibility alias.</td>
+    </tr>
+    <tr>
+      <td>✉️ Email-based key claims</td>
+      <td>Configure SMTP in the first-run wizard or admin settings if you want public email-based API key claims.</td>
+    </tr>
+    <tr>
+      <td>💳 Billing mode</td>
+      <td>For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console.</td>
+    </tr>
+    <tr>
+      <td>🌐 Clustered deployment</td>
+      <td>For clustered deployment, set <code>RUNTIME_MODE=distributed</code> and configure Redis. Otherwise, keep the default single-node mode.</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 

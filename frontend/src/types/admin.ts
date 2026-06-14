@@ -150,6 +150,50 @@ export type ChannelKey = {
   updated_at: string
 }
 
+export type DiagnosticStatus = 'ok' | 'warning' | 'failed' | 'skipped'
+
+export type DiagnosticStep = {
+  name: string
+  status: DiagnosticStatus
+  message: string
+  duration_ms: number
+  status_code?: number | null
+}
+
+export type KeyDiagnosticReport = {
+  key_id?: number | null
+  key_name: string
+  key_prefix?: string | null
+  status: DiagnosticStatus
+  summary: string
+  discovered_models: string[]
+  steps: DiagnosticStep[]
+}
+
+export type EndpointDiagnosticReport = {
+  endpoint_id: number
+  protocol: EndpointProtocol
+  base_url: string
+  status: DiagnosticStatus
+  summary: string
+  discovered_models: string[]
+  configured_models: string[]
+  missing_configured_models: string[]
+  keys: KeyDiagnosticReport[]
+}
+
+export type ChannelDiagnosticReport = {
+  channel_id: number
+  channel_name: string
+  provider: string
+  status: DiagnosticStatus
+  summary: string
+  started_at: string
+  finished_at: string
+  duration_ms: number
+  endpoints: EndpointDiagnosticReport[]
+}
+
 export type UsageRecord = {
   id: number
   user_id?: number | null

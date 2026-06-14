@@ -1,5 +1,6 @@
 pub(crate) mod channel;
 pub(crate) mod credentials;
+pub(crate) mod diagnostics;
 mod openai;
 pub(crate) mod price;
 pub(crate) mod project;
@@ -42,6 +43,7 @@ use self::{
         runtime_secret_from_enabled_credential, upload_credentials, CredentialModelRecord,
         CredentialRecord, CredentialUploadResult,
     },
+    diagnostics::{diagnose_channel, ChannelDiagnosticReport},
     price::{
         list_pricing_policies, list_pricing_templates, list_provider_models, list_provider_prices,
         sync_pricing_templates, upsert_pricing_policy, upsert_provider_price, PricingPolicyRecord,
@@ -185,6 +187,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/channels/{id}",
             patch(update_channel_handler).delete(delete_channel_handler),
+        )
+        .route(
+            "/api/admin/channels/{id}/diagnose",
+            post(diagnose_channel_handler),
         )
         .route(
             "/api/admin/channels/{id}/keys",
@@ -874,6 +880,16 @@ async fn delete_channel_handler(
     delete_channel(&state, id).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn diagnose_channel_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+) -> AppResult<Json<ChannelDiagnosticReport>> {
+    let report = diagnose_channel(&state, id).await?;
+    invalidate_cache(&state, InvalidationEvent::Routing).await;
+    Ok(Json(report))
 }
 
 async fn channel_keys(

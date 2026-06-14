@@ -39,16 +39,48 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 ## ✨ 功能概览
 
-| 能力 | 说明 |
-| --- | --- |
-| 🏢 企业统一入口 | 将多个模型供应商统一收拢到企业自己的大模型 API 入口，由网关集中托管上游凭证和访问策略。 |
-| 🧩 项目化管理 | 以项目作为业务应用、内部项目或成本单元，统一管理成员、API key、模型权限、预算额度和用量归集。 |
-| 🔑 独立 API Key | 给不同团队、项目、客户或内部应用分发独立 API key，支持按项目和 API key 隔离调用权限、额度和成本。 |
-| 🧭 模型路由 | 在一个后台里集中管理 OpenAI、Anthropic 等上游模型服务，并按模型、优先级和权重分配请求。 |
-| 🔌 兼容接口 | 对外提供 OpenAI 兼容和 Anthropic 兼容接口，让现有客户端少改配置即可接入企业统一网关。 |
-| 📊 用量记录 | 记录用户、项目、API key、模型和上游通道维度的调用用量，方便排查问题、分析成本、内部核算和后续计费。 |
-| 💳 服务计费 | 支持内部模式和计费模式，既可作为企业内部网关使用，也可开启额度、充值和支付能力面向客户或开发者收费。 |
-| 🛡️ 故障切换 | 在上游 key 失败时自动冷却并切换可用 key，减少单个密钥或渠道异常对企业业务连续性的影响。 |
+<table>
+  <thead>
+    <tr>
+      <th width="180">能力</th>
+      <th>说明</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🏢 企业统一入口</td>
+      <td>将多个模型供应商统一收拢到企业自己的大模型 API 入口，由网关集中托管上游凭证和访问策略。</td>
+    </tr>
+    <tr>
+      <td>🧩 项目化管理</td>
+      <td>以项目作为业务应用、内部项目或成本单元，统一管理成员、API key、模型权限、预算额度和用量归集。</td>
+    </tr>
+    <tr>
+      <td>🔑 独立 API Key</td>
+      <td>给不同团队、项目、客户或内部应用分发独立 API key，支持按项目和 API key 隔离调用权限、额度和成本。</td>
+    </tr>
+    <tr>
+      <td>🧭 模型路由</td>
+      <td>在一个后台里集中管理 OpenAI、Anthropic 等上游模型服务，并按模型、优先级和权重分配请求。</td>
+    </tr>
+    <tr>
+      <td>🔌 兼容接口</td>
+      <td>对外提供 OpenAI 兼容和 Anthropic 兼容接口，让现有客户端少改配置即可接入企业统一网关。</td>
+    </tr>
+    <tr>
+      <td>📊 用量记录</td>
+      <td>记录用户、项目、API key、模型和上游通道维度的调用用量，方便排查问题、分析成本、内部核算和后续计费。</td>
+    </tr>
+    <tr>
+      <td>💳 服务计费</td>
+      <td>支持内部模式和计费模式，既可作为企业内部网关使用，也可开启额度、充值和支付能力面向客户或开发者收费。</td>
+    </tr>
+    <tr>
+      <td>🛡️ 故障切换</td>
+      <td>在上游 key 失败时自动冷却并切换可用 key，减少单个密钥或渠道异常对企业业务连续性的影响。</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
@@ -56,10 +88,30 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 NeoGate 首次运行时需要选择内部模式或计费模式。两种模式都支持统一入口、上游凭证集中托管、模型路由和用量记录，主要区别在于是否要求用户先有额度、是否接入支付通道。
 
-| 模式 | 适用场景 | 调用限制 | 配置重点 |
-| --- | --- | --- | --- |
-| 🏠 内部模式 | 公司、部门、项目组自用，或给内部应用、自动化脚本和成员分发 API key。 | 默认不要求可用额度即可调用。 | 仍会记录用量和费用，便于成本分析和内部管理。 |
-| 💰 计费模式 | 面向客户、开发者或外部用户提供收费模型调用服务。 | 用户需要有可用额度后才能调用。 | 上线前需要配置模型价格、充值套餐和支付通道。 |
+<table>
+  <thead>
+    <tr>
+      <th width="150">模式</th>
+      <th>适用场景</th>
+      <th width="180">调用限制</th>
+      <th>配置重点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🏠 内部模式</td>
+      <td>公司、部门、项目组自用，或给内部应用、自动化脚本和成员分发 API key。</td>
+      <td>默认不要求可用额度即可调用。</td>
+      <td>仍会记录用量和费用，便于成本分析和内部管理。</td>
+    </tr>
+    <tr>
+      <td>💰 计费模式</td>
+      <td>面向客户、开发者或外部用户提供收费模型调用服务。</td>
+      <td>用户需要有可用额度后才能调用。</td>
+      <td>上线前需要配置模型价格、充值套餐和支付通道。</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
@@ -144,10 +196,27 @@ postgres://neogate:change-me@localhost:5432/neogate
 
 开发部署使用 Rust 调试构建和 Vite 开发服务，适合本地开发、调试和体验首次运行流程。
 
-| 服务 | 命令 | 默认地址 |
-| --- | --- | --- |
-| 后端 | `cd backend && cargo run` | `http://127.0.0.1:8080` |
-| 前端 | `cd frontend && pnpm install && pnpm dev --host 0.0.0.0` | `http://服务器IP:5173` |
+<table>
+  <thead>
+    <tr>
+      <th width="120">服务</th>
+      <th>命令</th>
+      <th width="190">默认地址</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>后端</td>
+      <td><code>cd backend &amp;&amp; cargo run</code></td>
+      <td><code>http://127.0.0.1:8080</code></td>
+    </tr>
+    <tr>
+      <td>前端</td>
+      <td><code>cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev --host 0.0.0.0</code></td>
+      <td><code>http://服务器IP:5173</code></td>
+    </tr>
+  </tbody>
+</table>
 
 打开 `http://服务器IP:5173`，页面会自动跳转到首次运行向导。按提示完成运行配置、管理员账号、服务模式、初始上游和可选 SMTP；如果保存运行配置后提示需要重启，请重新运行后端并刷新页面。
 
@@ -237,10 +306,30 @@ sudo systemctl reload nginx
 
 NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用单节点部署就够了：不需要 Redis，配置简单，部署和排障成本也更低。
 
-| 部署方式 | 配置 | 适合场景 | 组件 |
-| --- | --- | --- | --- |
-| 🧱 单节点部署 | 默认模式，无需配置 `RUNTIME_MODE`。 | 个人项目、小团队和早期生产环境。 | `docker-compose.yml` 会同时启动前端 Nginx、后端和 PostgreSQL。 |
-| 🌐 集群部署 | 设置 `RUNTIME_MODE=distributed`。 | 明确需要多副本和横向扩展的场景。 | 多个后端 API/worker 共享 PostgreSQL 和 Redis；`docker-compose.cluster.yml` 不包含 PostgreSQL/Redis。 |
+<table>
+  <thead>
+    <tr>
+      <th width="150">部署方式</th>
+      <th width="190">配置</th>
+      <th>适合场景</th>
+      <th>组件</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🧱 单节点部署</td>
+      <td>默认模式，无需配置 <code>RUNTIME_MODE</code>。</td>
+      <td>个人项目、小团队和早期生产环境。</td>
+      <td><code>docker-compose.yml</code> 会同时启动前端 Nginx、后端和 PostgreSQL。</td>
+    </tr>
+    <tr>
+      <td>🌐 集群部署</td>
+      <td>设置 <code>RUNTIME_MODE=distributed</code>。</td>
+      <td>明确需要多副本和横向扩展的场景。</td>
+      <td>多个后端 API/worker 共享 PostgreSQL 和 Redis；<code>docker-compose.cluster.yml</code> 不包含 PostgreSQL/Redis。</td>
+    </tr>
+  </tbody>
+</table>
 
 > [!TIP]
 > 没有明确的多副本需求时，建议优先使用单节点部署。
@@ -251,24 +340,73 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
 
 上线前必须确认：
 
-| 检查项 | 建议 |
-| --- | --- |
-| 👤 管理员账号 | 在首次运行向导中创建管理员账号，不要使用弱密码。 |
-| 🔐 系统密钥 | 使用足够长且随机的 `ADMIN_TOKEN_SECRET` 和 `UPSTREAM_SECRET_KEY`；单机部署可由首次运行向导生成，集群部署需要提前写入所有节点共享的环境配置。 |
-| 🌍 站点地址 | 在首次运行向导或环境配置中设置可信的 `PUBLIC_BASE_URL`，用于生成密码重置链接和安装脚本地址。 |
-| 🏷️ 站点名称 | 在首次运行向导或环境配置中设置 `SITE_NAME`，用于页面、邮件和支付网关显示。 |
+<table>
+  <thead>
+    <tr>
+      <th width="170">检查项</th>
+      <th>建议</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>👤 管理员账号</td>
+      <td>在首次运行向导中创建管理员账号，不要使用弱密码。</td>
+    </tr>
+    <tr>
+      <td>🔐 系统密钥</td>
+      <td>使用足够长且随机的 <code>ADMIN_TOKEN_SECRET</code> 和 <code>UPSTREAM_SECRET_KEY</code>；单机部署可由首次运行向导生成，集群部署需要提前写入所有节点共享的环境配置。</td>
+    </tr>
+    <tr>
+      <td>🌍 站点地址</td>
+      <td>在首次运行向导或环境配置中设置可信的 <code>PUBLIC_BASE_URL</code>，用于生成密码重置链接和安装脚本地址。</td>
+    </tr>
+    <tr>
+      <td>🏷️ 站点名称</td>
+      <td>在首次运行向导或环境配置中设置 <code>SITE_NAME</code>，用于页面、邮件和支付网关显示。</td>
+    </tr>
+  </tbody>
+</table>
 
 按使用场景确认：
 
-| 场景 | 建议 |
-| --- | --- |
-| 🔁 跨域访问 | 当前端与 API 跨域访问时，设置正确的 `CORS_ALLOWED_ORIGINS`；同域反向代理部署通常无需额外配置。 |
-| 📦 大请求转发 | 转发图片编辑、文件上传或超长上下文请求时，确认反向代理的请求体限制不低于后端 `RELAY_BODY_LIMIT_BYTES`（默认 64 MiB）。 |
-| 🧾 计费用量解析 | `RELAY_USAGE_BUFFER_LIMIT_BYTES` 默认 16 MiB，用于非流式 JSON 和 SSE 用量解析；计费模式建议保持默认或按最大响应体压测后再调整，避免影响计费用量提取。 |
-| ⏱️ 长耗时请求 | 图片编辑等长耗时请求如果出现 504，可调大 `UPSTREAM_TIMEOUT_SECONDS`（默认 600 秒；旧的 `REQUEST_TIMEOUT_SECONDS` 仍作为兼容别名）。 |
-| ✉️ 邮箱领 key | 如需公开邮箱领取 API key，在首次运行向导或管理员后台的系统设置中配置 SMTP。 |
-| 💳 计费模式 | 如需使用计费模式，在首次运行向导或管理员后台配置模型价格、充值套餐和支付通道。 |
-| 🌐 集群部署 | 如需集群部署，设置 `RUNTIME_MODE=distributed` 并配置 Redis；否则保持默认单节点模式即可。 |
+<table>
+  <thead>
+    <tr>
+      <th width="170">场景</th>
+      <th>建议</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🔁 跨域访问</td>
+      <td>当前端与 API 跨域访问时，设置正确的 <code>CORS_ALLOWED_ORIGINS</code>；同域反向代理部署通常无需额外配置。</td>
+    </tr>
+    <tr>
+      <td>📦 大请求转发</td>
+      <td>转发图片编辑、文件上传或超长上下文请求时，确认反向代理的请求体限制不低于后端 <code>RELAY_BODY_LIMIT_BYTES</code>（默认 64 MiB）。</td>
+    </tr>
+    <tr>
+      <td>🧾 计费用量解析</td>
+      <td><code>RELAY_USAGE_BUFFER_LIMIT_BYTES</code> 默认 16 MiB，用于非流式 JSON 和 SSE 用量解析；计费模式建议保持默认或按最大响应体压测后再调整，避免影响计费用量提取。</td>
+    </tr>
+    <tr>
+      <td>⏱️ 长耗时请求</td>
+      <td>图片编辑等长耗时请求如果出现 504，可调大 <code>UPSTREAM_TIMEOUT_SECONDS</code>（默认 600 秒；旧的 <code>REQUEST_TIMEOUT_SECONDS</code> 仍作为兼容别名）。</td>
+    </tr>
+    <tr>
+      <td>✉️ 邮箱领 key</td>
+      <td>如需公开邮箱领取 API key，在首次运行向导或管理员后台的系统设置中配置 SMTP。</td>
+    </tr>
+    <tr>
+      <td>💳 计费模式</td>
+      <td>如需使用计费模式，在首次运行向导或管理员后台配置模型价格、充值套餐和支付通道。</td>
+    </tr>
+    <tr>
+      <td>🌐 集群部署</td>
+      <td>如需集群部署，设置 <code>RUNTIME_MODE=distributed</code> 并配置 Redis；否则保持默认单节点模式即可。</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 

@@ -1,0 +1,724 @@
+use std::time::Instant;
+
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use reqwest::StatusCode;
+use serde::Serialize;
+use serde_json::{json, Value};
+use sqlx::Row;
+
+use crate::{
+    config::DEFAULT_ANTHROPIC_VERSION,
+    error::{AppError, AppResult, UpstreamErrorKind},
+    id::DbId,
+    relay::upstream_url,
+    AppState,
+};
+
+use super::credentials::runtime_secret_from_enabled_credential;
+use super::provider::OPENAI_OAUTH_PROTOCOL;
+
+const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
+
+#[derive(Debug, Serialize)]
+pub struct ChannelDiagnosticReport {
+    pub channel_id: DbId,
+    pub channel_name: String,
+    pub provider: String,
+    pub status: DiagnosticStatus,
+    pub summary: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub duration_ms: i64,
+    pub endpoints: Vec<EndpointDiagnosticReport>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticStatus {
+    Ok,
+    Warning,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EndpointDiagnosticReport {
+    pub endpoint_id: DbId,
+    pub protocol: String,
+    pub base_url: String,
+    pub status: DiagnosticStatus,
+    pub summary: String,
+    pub discovered_models: Vec<String>,
+    pub configured_models: Vec<String>,
+    pub missing_configured_models: Vec<String>,
+    pub keys: Vec<KeyDiagnosticReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KeyDiagnosticReport {
+    pub key_id: Option<DbId>,
+    pub key_name: String,
+    pub key_prefix: Option<String>,
+    pub status: DiagnosticStatus,
+    pub summary: String,
+    pub discovered_models: Vec<String>,
+    pub steps: Vec<DiagnosticStep>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiagnosticStep {
+    pub name: &'static str,
+    pub status: DiagnosticStatus,
+    pub message: String,
+    pub duration_ms: i64,
+    pub status_code: Option<u16>,
+}
+
+struct ChannelDiagnosticTarget {
+    id: DbId,
+    provider: String,
+    name: String,
+    enabled: bool,
+    use_credentials: bool,
+}
+
+struct EndpointTarget {
+    id: DbId,
+    protocol: String,
+    base_url: String,
+    models: Vec<String>,
+    enabled: bool,
+}
+
+struct KeyTarget {
+    id: Option<DbId>,
+    name: String,
+    key_prefix: Option<String>,
+    secret: String,
+    enabled: bool,
+}
+
+pub async fn diagnose_channel(
+    state: &AppState,
+    channel_id: DbId,
+) -> AppResult<ChannelDiagnosticReport> {
+    let started = Instant::now();
+    let started_at = Utc::now();
+    let channel = load_channel(state, channel_id).await?;
+    let endpoints = load_endpoints(state, channel_id).await?;
+    let keys = load_keys(state, &channel).await?;
+    let mut endpoint_reports = Vec::new();
+
+    for endpoint in endpoints {
+        let report = diagnose_endpoint(state, &channel, &endpoint, &keys).await;
+        if report.status != DiagnosticStatus::Skipped {
+            persist_endpoint_health(state, endpoint.id, report.status, &report.summary).await?;
+        }
+        endpoint_reports.push(report);
+    }
+
+    let finished_at = Utc::now();
+    let status = aggregate_status(endpoint_reports.iter().map(|item| item.status));
+    let summary = channel_summary(&channel, &endpoint_reports, status);
+    Ok(ChannelDiagnosticReport {
+        channel_id,
+        channel_name: channel.name,
+        provider: channel.provider,
+        status,
+        summary,
+        started_at,
+        finished_at,
+        duration_ms: started.elapsed().as_millis() as i64,
+        endpoints: endpoint_reports,
+    })
+}
+
+async fn diagnose_endpoint(
+    state: &AppState,
+    channel: &ChannelDiagnosticTarget,
+    endpoint: &EndpointTarget,
+    keys: &[KeyTarget],
+) -> EndpointDiagnosticReport {
+    if !endpoint.enabled {
+        return EndpointDiagnosticReport {
+            endpoint_id: endpoint.id,
+            protocol: endpoint.protocol.clone(),
+            base_url: endpoint.base_url.clone(),
+            status: DiagnosticStatus::Skipped,
+            summary: "端点已停用，未执行诊断".to_string(),
+            discovered_models: Vec::new(),
+            configured_models: endpoint.models.clone(),
+            missing_configured_models: Vec::new(),
+            keys: Vec::new(),
+        };
+    }
+
+    if !channel.enabled {
+        return EndpointDiagnosticReport {
+            endpoint_id: endpoint.id,
+            protocol: endpoint.protocol.clone(),
+            base_url: endpoint.base_url.clone(),
+            status: DiagnosticStatus::Skipped,
+            summary: "通道已停用，未执行诊断".to_string(),
+            discovered_models: Vec::new(),
+            configured_models: endpoint.models.clone(),
+            missing_configured_models: Vec::new(),
+            keys: Vec::new(),
+        };
+    }
+
+    let enabled_keys: Vec<_> = keys.iter().filter(|key| key.enabled).collect();
+    if enabled_keys.is_empty() {
+        return EndpointDiagnosticReport {
+            endpoint_id: endpoint.id,
+            protocol: endpoint.protocol.clone(),
+            base_url: endpoint.base_url.clone(),
+            status: DiagnosticStatus::Failed,
+            summary: "没有启用的上游 Key 或凭证".to_string(),
+            discovered_models: Vec::new(),
+            configured_models: endpoint.models.clone(),
+            missing_configured_models: endpoint.models.clone(),
+            keys: Vec::new(),
+        };
+    }
+
+    let mut discovered_models = Vec::new();
+    let mut key_reports = Vec::new();
+    for key in enabled_keys {
+        let report = diagnose_key(state, channel, endpoint, key).await;
+        for model in report.discovered_models.clone() {
+            if !discovered_models.iter().any(|item| item == &model) {
+                discovered_models.push(model);
+            }
+        }
+        if let Some(key_id) = key.id {
+            let _ = persist_key_health(state, key_id, report.status, &report.summary).await;
+        }
+        key_reports.push(report);
+    }
+
+    discovered_models.sort();
+    let missing_configured_models = missing_models(&endpoint.models, &discovered_models);
+    let mut status = aggregate_status(key_reports.iter().map(|item| item.status));
+    if status == DiagnosticStatus::Ok && !missing_configured_models.is_empty() {
+        status = DiagnosticStatus::Warning;
+    }
+
+    EndpointDiagnosticReport {
+        endpoint_id: endpoint.id,
+        protocol: endpoint.protocol.clone(),
+        base_url: endpoint.base_url.clone(),
+        status,
+        summary: endpoint_summary(status, &missing_configured_models),
+        discovered_models,
+        configured_models: endpoint.models.clone(),
+        missing_configured_models,
+        keys: key_reports,
+    }
+}
+
+async fn diagnose_key(
+    state: &AppState,
+    _channel: &ChannelDiagnosticTarget,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+) -> KeyDiagnosticReport {
+    if endpoint.protocol == OPENAI_OAUTH_PROTOCOL {
+        return KeyDiagnosticReport {
+            key_id: key.id,
+            key_name: key.name.clone(),
+            key_prefix: key.key_prefix.clone(),
+            status: DiagnosticStatus::Warning,
+            summary: "OpenAI OAuth 通道需要账号上下文，已跳过主动调用诊断".to_string(),
+            discovered_models: Vec::new(),
+            steps: vec![DiagnosticStep {
+                name: "probe",
+                status: DiagnosticStatus::Skipped,
+                message: "OpenAI OAuth 主动诊断暂未启用；请以实际调用结果为准".to_string(),
+                duration_ms: 0,
+                status_code: None,
+            }],
+        };
+    }
+
+    let mut steps = Vec::new();
+    let models_step = run_models_step(state, endpoint, key).await;
+    let discovered_models = models_step.models.clone();
+    steps.push(models_step.step);
+
+    let probe_model = endpoint
+        .models
+        .iter()
+        .find(|model| discovered_models.is_empty() || discovered_models.contains(model))
+        .cloned()
+        .or_else(|| discovered_models.first().cloned());
+    if let Some(model) = probe_model {
+        steps.push(run_probe_step(state, endpoint, key, &model).await);
+    } else {
+        steps.push(DiagnosticStep {
+            name: "probe",
+            status: DiagnosticStatus::Skipped,
+            message: "没有可用于轻量调用测试的模型".to_string(),
+            duration_ms: 0,
+            status_code: None,
+        });
+    }
+
+    let status = aggregate_status(steps.iter().map(|item| item.status));
+    KeyDiagnosticReport {
+        key_id: key.id,
+        key_name: key.name.clone(),
+        key_prefix: key.key_prefix.clone(),
+        status,
+        summary: key_summary(status),
+        discovered_models,
+        steps,
+    }
+}
+
+struct ModelsStepResult {
+    step: DiagnosticStep,
+    models: Vec<String>,
+}
+
+async fn run_models_step(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+) -> ModelsStepResult {
+    let started = Instant::now();
+    let response = upstream_request(state, endpoint, key, "GET", "/v1/models", None)
+        .send()
+        .await;
+    match response {
+        Ok(response) => {
+            let status = response.status();
+            if !status.is_success() {
+                return ModelsStepResult {
+                    step: DiagnosticStep {
+                        name: "models",
+                        status: DiagnosticStatus::Failed,
+                        message: upstream_status_message(status),
+                        duration_ms: started.elapsed().as_millis() as i64,
+                        status_code: Some(status.as_u16()),
+                    },
+                    models: Vec::new(),
+                };
+            }
+            match response.json::<Value>().await {
+                Ok(value) => {
+                    let models = extract_model_ids(&value);
+                    let status = if models.is_empty() {
+                        DiagnosticStatus::Warning
+                    } else {
+                        DiagnosticStatus::Ok
+                    };
+                    ModelsStepResult {
+                        step: DiagnosticStep {
+                            name: "models",
+                            status,
+                            message: if models.is_empty() {
+                                "模型列表接口可访问，但没有返回模型".to_string()
+                            } else {
+                                format!("模型列表可访问，发现 {} 个模型", models.len())
+                            },
+                            duration_ms: started.elapsed().as_millis() as i64,
+                            status_code: Some(StatusCode::OK.as_u16()),
+                        },
+                        models,
+                    }
+                }
+                Err(_) => ModelsStepResult {
+                    step: DiagnosticStep {
+                        name: "models",
+                        status: DiagnosticStatus::Failed,
+                        message: "模型列表响应不是有效 JSON".to_string(),
+                        duration_ms: started.elapsed().as_millis() as i64,
+                        status_code: Some(status.as_u16()),
+                    },
+                    models: Vec::new(),
+                },
+            }
+        }
+        Err(err) => ModelsStepResult {
+            step: DiagnosticStep {
+                name: "models",
+                status: DiagnosticStatus::Failed,
+                message: transport_error_message(&err),
+                duration_ms: started.elapsed().as_millis() as i64,
+                status_code: None,
+            },
+            models: Vec::new(),
+        },
+    }
+}
+
+async fn run_probe_step(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+) -> DiagnosticStep {
+    let started = Instant::now();
+    let (path, body) = probe_request(endpoint, model);
+    let response = upstream_request(state, endpoint, key, "POST", path, Some(body))
+        .send()
+        .await;
+    match response {
+        Ok(response) => {
+            let status = response.status();
+            DiagnosticStep {
+                name: "probe",
+                status: if status.is_success() {
+                    DiagnosticStatus::Ok
+                } else {
+                    DiagnosticStatus::Failed
+                },
+                message: if status.is_success() {
+                    format!("模型 {model} 轻量调用成功")
+                } else {
+                    upstream_status_message(status)
+                },
+                duration_ms: started.elapsed().as_millis() as i64,
+                status_code: Some(status.as_u16()),
+            }
+        }
+        Err(err) => DiagnosticStep {
+            name: "probe",
+            status: DiagnosticStatus::Failed,
+            message: transport_error_message(&err),
+            duration_ms: started.elapsed().as_millis() as i64,
+            status_code: None,
+        },
+    }
+}
+
+fn upstream_request(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> reqwest::RequestBuilder {
+    let url = upstream_url(&endpoint.base_url, path);
+    let mut request = match method {
+        "POST" => state.http.post(url),
+        _ => state.http.get(url),
+    };
+
+    request = if endpoint.protocol == "anthropic" {
+        request
+            .header("x-api-key", &key.secret)
+            .header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
+    } else {
+        request.bearer_auth(&key.secret)
+    };
+
+    if endpoint.protocol == OPENAI_OAUTH_PROTOCOL {
+        request = request
+            .header("accept", "text/event-stream")
+            .header("connection", "Keep-Alive")
+            .header("originator", "codex_cli_rs")
+            .header("user-agent", "codex_cli_rs/0.118.0 (NeoGate; diagnostics)");
+    }
+
+    if let Some(body) = body {
+        request = request
+            .header("content-type", "application/json")
+            .json(&body);
+    }
+    request
+}
+
+fn probe_request<'a>(endpoint: &EndpointTarget, model: &'a str) -> (&'static str, Value) {
+    if endpoint.protocol == "anthropic" {
+        return (
+            "/v1/messages",
+            json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{ "role": "user", "content": "ping" }]
+            }),
+        );
+    }
+
+    if endpoint.protocol == OPENAI_OAUTH_PROTOCOL {
+        return (
+            "/responses",
+            json!({
+                "model": model,
+                "input": "ping",
+                "max_output_tokens": 1,
+                "store": false,
+                "stream": false
+            }),
+        );
+    }
+
+    (
+        "/v1/chat/completions",
+        json!({
+            "model": model,
+            "max_tokens": 1,
+            "messages": [{ "role": "user", "content": "ping" }]
+        }),
+    )
+}
+
+async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDiagnosticTarget> {
+    let row = sqlx::query(
+        "SELECT id, provider, name, enabled, use_credentials
+         FROM channel
+         WHERE id = $1",
+    )
+    .bind(channel_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(ChannelDiagnosticTarget {
+        id: row.try_get("id")?,
+        provider: row.try_get("provider")?,
+        name: row.try_get("name")?,
+        enabled: row.try_get("enabled")?,
+        use_credentials: row.try_get("use_credentials")?,
+    })
+}
+
+async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<EndpointTarget>> {
+    let rows = sqlx::query(
+        "SELECT id, protocol, base_url, models, enabled
+         FROM channel_endpoint
+         WHERE channel_id = $1
+         ORDER BY CASE protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END,
+                  created_at ASC",
+    )
+    .bind(channel_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| EndpointTarget {
+            id: row.try_get("id").unwrap_or_default(),
+            protocol: row.try_get("protocol").unwrap_or_default(),
+            base_url: row.try_get("base_url").unwrap_or_default(),
+            models: row.try_get("models").unwrap_or_default(),
+            enabled: row.try_get("enabled").unwrap_or_default(),
+        })
+        .collect())
+}
+
+async fn load_keys(
+    state: &AppState,
+    channel: &ChannelDiagnosticTarget,
+) -> AppResult<Vec<KeyTarget>> {
+    if channel.use_credentials {
+        let secret = runtime_secret_from_enabled_credential(state, &channel.provider).await?;
+        return Ok(vec![KeyTarget {
+            id: None,
+            name: "启用的凭证文件".to_string(),
+            key_prefix: None,
+            secret,
+            enabled: true,
+        }]);
+    }
+
+    let rows = sqlx::query(
+        "SELECT id, name, key_prefix, secret_ciphertext, enabled
+         FROM channel_key
+         WHERE channel_id = $1
+         ORDER BY enabled DESC, healthy DESC, created_at ASC",
+    )
+    .bind(channel.id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let id: DbId = row.try_get("id")?;
+            let ciphertext: String = row.try_get("secret_ciphertext")?;
+            Ok(KeyTarget {
+                id: Some(id),
+                name: row.try_get("name")?,
+                key_prefix: row.try_get("key_prefix")?,
+                secret: state.secrets.plaintext(id, &ciphertext)?,
+                enabled: row.try_get("enabled")?,
+            })
+        })
+        .collect()
+}
+
+async fn persist_key_health(
+    state: &AppState,
+    key_id: DbId,
+    status: DiagnosticStatus,
+    summary: &str,
+) -> AppResult<()> {
+    let healthy = status == DiagnosticStatus::Ok || status == DiagnosticStatus::Warning;
+    let cooldown_until =
+        (!healthy).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
+    sqlx::query(
+        "UPDATE channel_key
+         SET healthy = $2,
+             last_error = $3,
+             cooldown_until = $4,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(key_id)
+    .bind(healthy)
+    .bind((!healthy).then_some(summary))
+    .bind(cooldown_until)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn persist_endpoint_health(
+    state: &AppState,
+    endpoint_id: DbId,
+    status: DiagnosticStatus,
+    summary: &str,
+) -> AppResult<()> {
+    let healthy = status == DiagnosticStatus::Ok || status == DiagnosticStatus::Warning;
+    let cooldown_until =
+        (!healthy).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET healthy = $2,
+             last_error = $3,
+             cooldown_until = $4,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(endpoint_id)
+    .bind(healthy)
+    .bind((!healthy).then_some(summary))
+    .bind(cooldown_until)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+fn aggregate_status(statuses: impl Iterator<Item = DiagnosticStatus>) -> DiagnosticStatus {
+    let mut saw = false;
+    let mut has_failed = false;
+    let mut has_warning = false;
+    for status in statuses {
+        saw = true;
+        match status {
+            DiagnosticStatus::Failed => has_failed = true,
+            DiagnosticStatus::Warning | DiagnosticStatus::Skipped => has_warning = true,
+            DiagnosticStatus::Ok => {}
+        }
+    }
+    if !saw || has_failed {
+        DiagnosticStatus::Failed
+    } else if has_warning {
+        DiagnosticStatus::Warning
+    } else {
+        DiagnosticStatus::Ok
+    }
+}
+
+fn channel_summary(
+    channel: &ChannelDiagnosticTarget,
+    endpoints: &[EndpointDiagnosticReport],
+    status: DiagnosticStatus,
+) -> String {
+    if endpoints.is_empty() {
+        return "通道没有配置端点".to_string();
+    }
+    if !channel.enabled {
+        return "通道已停用，诊断已跳过".to_string();
+    }
+    match status {
+        DiagnosticStatus::Ok => "所有启用端点和 Key 均通过诊断".to_string(),
+        DiagnosticStatus::Warning => "通道可用，但存在需要关注的配置项".to_string(),
+        DiagnosticStatus::Failed => "通道诊断失败，请检查失败步骤".to_string(),
+        DiagnosticStatus::Skipped => "诊断已跳过".to_string(),
+    }
+}
+
+fn endpoint_summary(status: DiagnosticStatus, missing_models: &[String]) -> String {
+    if !missing_models.is_empty() {
+        return format!(
+            "有 {} 个配置模型未出现在上游模型列表中",
+            missing_models.len()
+        );
+    }
+    match status {
+        DiagnosticStatus::Ok => "端点诊断通过".to_string(),
+        DiagnosticStatus::Warning => "端点可访问，但存在警告".to_string(),
+        DiagnosticStatus::Failed => "端点诊断失败".to_string(),
+        DiagnosticStatus::Skipped => "端点诊断已跳过".to_string(),
+    }
+}
+
+fn key_summary(status: DiagnosticStatus) -> String {
+    match status {
+        DiagnosticStatus::Ok => "Key 可用".to_string(),
+        DiagnosticStatus::Warning => "Key 基本可用，但存在警告".to_string(),
+        DiagnosticStatus::Failed => "Key 不可用".to_string(),
+        DiagnosticStatus::Skipped => "Key 诊断已跳过".to_string(),
+    }
+}
+
+fn upstream_status_message(status: StatusCode) -> String {
+    match status.as_u16() {
+        400 => "上游拒绝测试请求，请检查模型名或请求协议".to_string(),
+        401 | 403 => "认证失败，请检查上游 Key 或凭证权限".to_string(),
+        404 => "接口不存在，请检查 Base URL 和协议".to_string(),
+        429 => "上游限流，请稍后重试或切换 Key".to_string(),
+        500..=599 => "上游服务暂时不可用".to_string(),
+        _ => format!("上游返回 HTTP {}", status.as_u16()),
+    }
+}
+
+fn transport_error_message(err: &reqwest::Error) -> String {
+    match UpstreamErrorKind::from_reqwest(err) {
+        UpstreamErrorKind::Timeout => "连接上游超时，请检查网络或上游状态".to_string(),
+        UpstreamErrorKind::Tls => "TLS 握手失败，请检查 Base URL 证书".to_string(),
+        UpstreamErrorKind::Dns => "DNS 解析失败，请检查 Base URL 域名".to_string(),
+        UpstreamErrorKind::Connect => "无法连接上游，请检查网络、防火墙或 Base URL".to_string(),
+        UpstreamErrorKind::Request => "上游请求失败，请检查网络和配置".to_string(),
+    }
+}
+
+fn extract_model_ids(value: &Value) -> Vec<String> {
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array());
+    let Some(items) = data else {
+        return Vec::new();
+    };
+
+    let mut models = Vec::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .or_else(|| item.get("name"))
+            .and_then(Value::as_str);
+        let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if !models.iter().any(|model| model == id) {
+            models.push(id.to_string());
+        }
+    }
+    models
+}
+
+fn missing_models(configured: &[String], discovered: &[String]) -> Vec<String> {
+    if configured.is_empty() || discovered.is_empty() {
+        return Vec::new();
+    }
+    configured
+        .iter()
+        .filter(|model| !discovered.iter().any(|item| item == *model))
+        .cloned()
+        .collect()
+}

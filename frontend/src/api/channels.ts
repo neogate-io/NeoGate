@@ -1,4 +1,10 @@
-import type { Channel, ChannelKey, ChannelProvider, EndpointProtocol } from '../types/admin'
+import type {
+  Channel,
+  ChannelDiagnosticReport,
+  ChannelKey,
+  ChannelProvider,
+  EndpointProtocol
+} from '../types/admin'
 import { adminRequest } from './request'
 
 export type KeySelectionMode = 'polling' | 'random'
@@ -120,5 +126,11 @@ export function updateChannel(id: number, payload: {
 export function deleteChannel(id: number) {
   return adminRequest<{ ok: boolean }>(`/api/admin/channels/${id}`, {
     method: 'DELETE'
+  })
+}
+
+export function diagnoseChannel(id: number) {
+  return adminRequest<ChannelDiagnosticReport>(`/api/admin/channels/${id}/diagnose`, {
+    method: 'POST'
   })
 }

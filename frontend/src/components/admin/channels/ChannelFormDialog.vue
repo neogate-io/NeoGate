@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { CopyDocument, Delete } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
+import { Close, CopyDocument, Delete, Plus } from '@element-plus/icons-vue'
 import ProviderIcon from '../../ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { ChannelForm } from '../../../composables/useChannels'
 import type { ChannelKey } from '../../../types/admin'
 import type { ChannelProviderOption } from '../../../utils/channel'
+import { formatCompactDateTime } from '../../../utils/format'
 
 const open = defineModel<boolean>('open', { required: true })
 const form = defineModel<ChannelForm>('form', { required: true })
 const baseUrl = defineModel<string>('baseUrl', { required: true })
 const secret = defineModel<string>('secret', { required: true })
 
-defineProps<{
+const props = defineProps<{
   mode: 'create' | 'edit'
   providerOptions: ChannelProviderOption[]
   providerValue: string
@@ -35,11 +37,49 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+const addingKey = ref(false)
+
+const showExistingKeyTable = computed(
+  () => props.mode === 'edit' && Boolean(props.existingKeys?.length)
+)
+const selectedModels = computed(() =>
+  form.value.models
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean)
+)
+
+watch(open, (isOpen) => {
+  if (!isOpen) addingKey.value = false
+})
+
+watch(secret, (value) => {
+  if (value.trim()) addingKey.value = true
+})
+
+function toggleAddingKey() {
+  addingKey.value = !addingKey.value
+  if (!addingKey.value) secret.value = ''
+}
+
+function removeSelectedModel(model: string) {
+  form.value.models = selectedModels.value.filter((item) => item !== model).join(', ')
+}
 
 function maskedKey(key: ChannelKey) {
   const prefix = key.key_prefix.trim()
   if (!prefix) return '********'
   return `${prefix}${'********'}`
+}
+
+function keyHealthType(key: ChannelKey) {
+  if (!key.enabled) return 'info'
+  return key.healthy ? 'success' : 'danger'
+}
+
+function keyHealthLabel(key: ChannelKey) {
+  if (!key.enabled) return t('disabled')
+  return key.healthy ? t('healthy') : t('unhealthy')
 }
 </script>
 
@@ -48,7 +88,7 @@ function maskedKey(key: ChannelKey) {
     v-model="open"
     class="channel-dialog"
     :title="mode === 'create' ? t('createChannel') : t('editChannel')"
-    width="620px"
+    width="680px"
   >
     <el-form class="channel-form" label-position="top" @submit.prevent="emit('submit')">
       <div class="provider-row">
@@ -154,30 +194,71 @@ function maskedKey(key: ChannelKey) {
       </div>
 
       <el-form-item v-if="!form.use_credentials" class="api-key-field" :label="t('apiKeyOrJson')">
-        <div v-if="mode === 'edit' && existingKeys?.length" class="existing-keys">
-          <div v-for="key in existingKeys" :key="key.id" class="existing-key-row">
-            <code class="existing-key-value">{{ maskedKey(key) }}</code>
-            <el-button
-              text
-              :loading="copyingKeyId === key.id"
-              :aria-label="t('copyKey')"
-              @click="emit('copyKey', key)"
-            >
-              <el-icon><CopyDocument /></el-icon>
-            </el-button>
-            <el-button
-              class="existing-key-delete"
-              text
-              type="danger"
-              :loading="deletingKeyId === key.id"
-              :aria-label="t('delete')"
-              @click="emit('deleteKey', key)"
-            >
-              <el-icon><Delete /></el-icon>
-            </el-button>
+        <div v-if="showExistingKeyTable" class="existing-keys">
+          <el-table
+            :data="existingKeys"
+            class="existing-keys-table"
+            size="small"
+            row-key="id"
+          >
+            <el-table-column :label="t('upstreamApiKey')" min-width="0">
+              <template #default="{ row }: { row: ChannelKey }">
+                <code class="existing-key-value">{{ maskedKey(row) }}</code>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('status')" width="76">
+              <template #default="{ row }: { row: ChannelKey }">
+                <el-tag :type="keyHealthType(row)" effect="light" round>
+                  {{ keyHealthLabel(row) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('lastUsedAt')" width="106">
+              <template #default="{ row }: { row: ChannelKey }">
+                <span class="existing-key-time">{{ formatCompactDateTime(row.last_used_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('actions')" width="72" align="center" header-align="center">
+              <template #default="{ row }: { row: ChannelKey }">
+                <div class="existing-key-actions">
+                  <el-button
+                    text
+                    :loading="copyingKeyId === row.id"
+                    :aria-label="t('copyKey')"
+                    @click="emit('copyKey', row)"
+                  >
+                    <el-icon><CopyDocument /></el-icon>
+                  </el-button>
+                  <el-button
+                    text
+                    type="danger"
+                    :loading="deletingKeyId === row.id"
+                    :aria-label="t('delete')"
+                    @click="emit('deleteKey', row)"
+                  >
+                    <el-icon><Delete /></el-icon>
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="add-key-panel" :class="{ 'is-open': addingKey }">
+            <button class="add-key-toggle" type="button" @click="toggleAddingKey">
+              <el-icon><Plus /></el-icon>
+              <span>{{ t('addUpstreamKey') }}</span>
+            </button>
+            <el-input
+              v-if="addingKey"
+              v-model="secret"
+              class="secret-input is-inline-add"
+              :rows="2"
+              type="textarea"
+              :placeholder="secretPlaceholder"
+            />
           </div>
         </div>
         <el-input
+          v-else
           v-model="secret"
           class="secret-input"
           :rows="2"
@@ -187,20 +268,31 @@ function maskedKey(key: ChannelKey) {
       </el-form-item>
 
       <el-form-item :label="t('models')">
-        <div class="models-row">
-          <el-input
-            v-model="form.models"
-            :placeholder="modelsInputPlaceholder"
-            :readonly="modelsInputReadonly"
-          />
+        <div class="model-summary-field" :class="{ 'is-empty': selectedModels.length === 0 }">
+          <div v-if="selectedModels.length" class="model-summary-content">
+            <div class="model-tags">
+              <span v-for="model in selectedModels" :key="model" class="model-tag">
+                <span class="model-tag-text">{{ model }}</span>
+                <button
+                  class="model-tag-remove"
+                  type="button"
+                  :aria-label="t('removeModel')"
+                  @click.stop="removeSelectedModel(model)"
+                >
+                  <el-icon><Close /></el-icon>
+                </button>
+              </span>
+            </div>
+          </div>
           <button
-            class="auto-fetch-link"
+            class="model-summary-action add-key-toggle"
             :class="{ 'is-loading': fetchingModels }"
             type="button"
             :disabled="fetchingModels"
             @click="emit('fetchModels')"
           >
-            {{ fetchingModels ? t('fetchingModels') : t('autoFetch') }}
+            <el-icon v-if="!fetchingModels"><Plus /></el-icon>
+            {{ fetchingModels ? t('fetchingModels') : t('addModel') }}
           </button>
         </div>
       </el-form-item>
@@ -303,39 +395,88 @@ function maskedKey(key: ChannelKey) {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.models-row {
-  align-items: center;
+.model-summary-field {
+  align-items: stretch;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
   display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0;
+  min-height: 54px;
+  padding: 0;
   width: 100%;
 }
 
-.auto-fetch-link {
+.model-summary-field.is-empty {
+  min-height: 0;
+}
+
+.model-tags {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px 10px 14px;
+}
+
+.model-summary-content {
+  min-width: 0;
+}
+
+.model-tag {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8e4ff;
+  border-radius: 999px;
+  color: #49617f;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 650;
+  gap: 5px;
+  height: 24px;
+  line-height: 16px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 6px 0 9px;
+}
+
+.model-tag-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-tag-remove {
   align-items: center;
   appearance: none;
   background: transparent;
   border: 0;
-  color: var(--brand-blue);
+  border-radius: 999px;
+  color: #8a9ab3;
   cursor: pointer;
   display: inline-flex;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 740;
-  gap: 6px;
-  min-height: 42px;
-  padding: 0 2px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  white-space: nowrap;
+  flex: 0 0 auto;
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  width: 18px;
 }
 
-.auto-fetch-link:disabled {
-  color: #98a2b3;
-  cursor: default;
+.model-tag-remove:hover {
+  background: #eef4ff;
+  color: #3156b3;
 }
 
-.auto-fetch-link.is-loading::before {
+.model-tag-remove :deep(.el-icon) {
+  font-size: 12px;
+}
+
+.model-summary-action {
+  border-top: 1px solid #edf1f6;
+}
+
+.model-summary-action.is-loading::before {
   animation: fetch-spin 0.8s linear infinite;
   border: 2px solid #c7d7fe;
   border-top-color: var(--brand-blue);
@@ -343,6 +484,11 @@ function maskedKey(key: ChannelKey) {
   content: '';
   height: 13px;
   width: 13px;
+}
+
+.model-summary-action:disabled {
+  color: #98a2b3;
+  cursor: default;
 }
 
 @keyframes fetch-spin {
@@ -382,20 +528,48 @@ function maskedKey(key: ChannelKey) {
 }
 
 .existing-keys {
-  display: grid;
-  gap: 8px;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 7px;
+  overflow: hidden;
   width: 100%;
 }
 
-.existing-key-row {
-  align-items: center;
+.existing-keys-table {
+  border: 0;
+  border-radius: 0;
+  width: 100%;
+}
+
+.existing-keys-table :deep(.el-table__inner-wrapper::before) {
+  background: #edf1f6;
+  height: 1px;
+}
+
+.existing-keys-table :deep(.el-table__header th) {
   background: #f8fafc;
-  border: 1px solid #e8edf3;
-  border-radius: 7px;
-  display: flex;
-  gap: 10px;
-  min-height: 44px;
-  padding: 7px 8px 7px 10px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.existing-keys-table :deep(.el-table__cell) {
+  padding: 9px 0;
+}
+
+.existing-keys-table :deep(.cell) {
+  padding: 0 8px;
+}
+
+.existing-keys-table :deep(.el-table__body-wrapper) {
+  max-height: 214px;
+  overflow-y: auto;
+}
+
+.existing-keys-table :deep(.el-button) {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 4px;
 }
 
 .existing-key-value {
@@ -410,8 +584,63 @@ function maskedKey(key: ChannelKey) {
   white-space: nowrap;
 }
 
-.existing-key-delete {
-  margin-left: auto;
+.existing-key-time {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.existing-key-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 0;
+  justify-content: center;
+}
+
+.add-key-panel {
+  display: grid;
+  gap: 0;
+}
+
+.add-key-toggle {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #667085;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 640;
+  gap: 6px;
+  min-height: 42px;
+  padding: 0 18px;
+  text-align: left;
+  width: 100%;
+}
+
+.add-key-toggle:hover {
+  background: transparent;
+  color: var(--brand-blue);
+}
+
+.add-key-panel.is-open .add-key-toggle {
+  border-bottom: 1px solid #edf1f6;
+  color: #334155;
+}
+
+.secret-input.is-inline-add :deep(.el-textarea__inner) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 76px;
+  padding: 12px 18px;
+}
+
+.secret-input.is-inline-add :deep(.el-textarea__inner:focus) {
+  box-shadow: none;
 }
 
 .secret-input :deep(.el-textarea__inner) {
@@ -509,13 +738,20 @@ function maskedKey(key: ChannelKey) {
     padding-bottom: 0;
   }
 
-  .models-row {
-    align-items: stretch;
+  .model-summary-field {
+    align-items: flex-start;
+    display: grid;
+    gap: 8px;
     grid-template-columns: 1fr;
   }
 
-  .auto-fetch-link {
-    justify-self: start;
+  .model-summary-content {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .model-tags {
+    width: 100%;
   }
 
   :global(.channel-dialog .el-dialog__header) {

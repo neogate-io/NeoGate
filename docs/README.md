@@ -10,7 +10,6 @@ NeoGate is a self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropi
 | [Provider Guide](providers.md) | OpenAI-compatible, Anthropic-compatible, and provider-specific integration notes. |
 | [Billing Guide](billing.md) | Internal mode, billing mode, usage metering, credit balance, and cost attribution. |
 | [Deployment Guide](deployment.md) | Standalone Docker Compose, source deployment, and clustered deployment notes. |
-| [Discoverability Guide](discoverability.md) | Recommended GitHub About text, topics, social preview, and search positioning. |
 | [Project Model](design/project-model.md) | Project, member, API key, and usage attribution design. |
 | [Billing Outbox](design/billing-outbox.md) | Reliable metering and billing event processing design. |
 

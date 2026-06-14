@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>大模型 API 网关方案对比 - NeoGate</title>
+    <meta
+      name="description"
+      content="从私有化部署、OpenAI 兼容接口、Anthropic 兼容接口、管理后台、项目 API Key、用量统计、计费和企业部署角度对比大模型 API 网关方案。"
+    />
+    <meta
+      name="keywords"
+      content="大模型 API 网关对比, AI 网关对比, 私有化 LLM 网关, OpenAI 代理, Anthropic API 网关, 大模型计费, 用量统计"
+    />
+    <meta property="og:title" content="大模型 API 网关方案对比 - NeoGate" />
+    <meta
+      property="og:description"
+      content="一份中性的选择清单，用来比较自托管大模型网关、通用代理和 SaaS AI 网关。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://neogate.io/zh/compare/" />
+    <link rel="icon" href="../../assets/logo-square.svg" type="image/svg+xml" />
+    <link rel="alternate" hreflang="en" href="https://neogate.io/compare/" />
+    <link rel="alternate" hreflang="zh" href="https://neogate.io/zh/compare/" />
+    <link rel="alternate" hreflang="x-default" href="https://neogate.io/compare/" />
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="NeoGate 首页">
+        <img src="../../assets/logo-square.svg" alt="" width="34" height="34" />
+        <span>NeoGate</span>
+      </a>
+      <nav class="nav" aria-label="主导航">
+        <a href="../#features">功能</a>
+        <a href="../#architecture">架构</a>
+        <a href="../#deployment">部署</a>
+        <a href="../compare/">对比</a>
+        <a href="https://github.com/neogate-io/NeoGate/tree/main/docs">文档</a>
+      </nav>
+      <div class="language-switch" aria-label="语言切换">
+        <a href="../../compare/">EN</a>
+        <a class="is-active" href="../compare/">中文</a>
+      </div>
+      <a class="header-action" href="https://github.com/neogate-io/NeoGate">GitHub</a>
+    </header>
+
+    <main>
+      <section class="page-hero">
+        <p class="eyebrow">方案对比</p>
+        <h1>大模型 API 网关方案怎么选？</h1>
+        <p>
+          选择网关时，关键不是功能清单越长越好，而是它是否匹配你的部署边界、接口兼容、
+          访问隔离、用量统计和计费需求。下面是一份中性的选择清单。
+        </p>
+      </section>
+
+      <section class="section compare-section">
+        <div class="section-heading">
+          <p class="eyebrow">选择清单</p>
+          <h2>在共享模型访问之前，先确认这些问题。</h2>
+        </div>
+        <div class="check-grid">
+          <article>
+            <h3>部署模式</h3>
+            <p>网关能否运行在你自己的基础设施里，还是模型流量必须离开你的环境？</p>
+          </article>
+          <article>
+            <h3>接口兼容</h3>
+            <p>你的客户端需要 OpenAI 兼容接口、Anthropic 兼容接口，还是两者都需要？</p>
+          </article>
+          <article>
+            <h3>运维控制</h3>
+            <p>管理员能否管理上游通道、凭证、路由、健康状态和访问策略？</p>
+          </article>
+          <article>
+            <h3>项目隔离</h3>
+            <p>团队、应用或客户能否获得独立 API Key，并独立归集用量？</p>
+          </article>
+          <article>
+            <h3>用量和成本</h3>
+            <p>能否按用户、项目、API Key、模型、供应商和上游通道查看用量？</p>
+          </article>
+          <article>
+            <h3>计费准备度</h3>
+            <p>是否需要余额检查、模型价格、充值流程，以及走向付费模型服务的路径？</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <p class="eyebrow">能力清单</p>
+          <h2>用中性的方式比较不同网关类别。</h2>
+        </div>
+        <div class="table-wrap">
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th>能力</th>
+                <th>NeoGate</th>
+                <th>通用代理</th>
+                <th>SaaS AI 网关</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>私有化部署</td>
+                <td>支持</td>
+                <td>通常支持</td>
+                <td>有限或不支持</td>
+              </tr>
+              <tr>
+                <td>OpenAI 兼容接口</td>
+                <td>支持</td>
+                <td>通常支持</td>
+                <td>通常支持</td>
+              </tr>
+              <tr>
+                <td>Anthropic 兼容接口</td>
+                <td>支持</td>
+                <td>部分支持</td>
+                <td>通常支持</td>
+              </tr>
+              <tr>
+                <td>管理后台</td>
+                <td>支持</td>
+                <td>视项目而定</td>
+                <td>支持</td>
+              </tr>
+              <tr>
+                <td>项目 API Key</td>
+                <td>支持</td>
+                <td>视项目而定</td>
+                <td>支持</td>
+              </tr>
+              <tr>
+                <td>用量统计</td>
+                <td>支持</td>
+                <td>视项目而定</td>
+                <td>支持</td>
+              </tr>
+              <tr>
+                <td>计费模式</td>
+                <td>支持</td>
+                <td>较少内置</td>
+                <td>通常支持</td>
+              </tr>
+              <tr>
+                <td>企业私有化部署</td>
+                <td>支持</td>
+                <td>通常支持</td>
+                <td>有限</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section split">
+        <div>
+          <p class="eyebrow">适合场景</p>
+          <h2>什么时候适合 NeoGate？</h2>
+          <ul class="plain-list">
+            <li>你希望为多个模型供应商提供一个私有化统一入口。</li>
+            <li>你需要发放项目 API Key，而不是共享上游供应商密钥。</li>
+            <li>你关心项目、API Key、模型和通道维度的用量记录。</li>
+            <li>你需要内部成本归集，或计划提供付费模型调用服务。</li>
+            <li>你偏好 Rust 后端和简单的 Docker Compose 部署。</li>
+          </ul>
+        </div>
+        <div>
+          <p class="eyebrow">非目标场景</p>
+          <h2>什么时候可能不适合？</h2>
+          <ul class="plain-list">
+            <li>你只需要一个很小的本地开发代理。</li>
+            <li>你完全不想维护任何基础设施，只想使用托管服务。</li>
+            <li>你的主要需求是 Prompt 评测、Prompt 管理或 Agent 工作流。</li>
+            <li>你已经深度绑定某个云厂商 AI 网关，并且不需要可迁移性。</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>NeoGate</span>
+      <nav aria-label="底部导航">
+        <a href="../">首页</a>
+        <a href="https://github.com/neogate-io/NeoGate">GitHub</a>
+        <a href="https://github.com/neogate-io/NeoGate/tree/main/docs">文档</a>
+        <a href="https://github.com/neogate-io/NeoGate/releases">版本</a>
+      </nav>
+    </footer>
+  </body>
+</html>

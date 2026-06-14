@@ -4,9 +4,11 @@ import {
   createChannel,
   createChannelKey,
   deleteChannel,
+  deleteChannelKey,
   fetchUpstreamModels,
   getAllChannelKeys,
   getChannels,
+  revealChannelKeySecret,
   updateChannel
 } from '../api/channels'
 import { getProviders } from '../api/providers'
@@ -113,6 +115,8 @@ export function useChannels(t: Translate) {
   const fetchingModels = ref(false)
   const updating = ref(false)
   const deletingId = ref<number | null>(null)
+  const deletingKeyId = ref<number | null>(null)
+  const copyingKeyId = ref<number | null>(null)
   const editingChannel = ref<Channel | null>(null)
   const fetchedModels = ref<string[]>([])
   const selectedFetchedModels = ref<string[]>([])
@@ -167,6 +171,12 @@ export function useChannels(t: Translate) {
       counts.set(key.channel_id, (counts.get(key.channel_id) ?? 0) + 1)
     }
     return counts
+  })
+
+  const editingChannelKeys = computed(() => {
+    const channelId = editingChannel.value?.id
+    if (!channelId) return []
+    return channelKeys.value.filter((key) => key.channel_id === channelId)
   })
 
   const hasFetchedModels = computed(() => fetchedModels.value.length > 0)
@@ -394,6 +404,42 @@ export function useChannels(t: Translate) {
       return null
     } finally {
       updating.value = false
+    }
+  }
+
+  async function confirmDeleteChannelKey(key: ChannelKey) {
+    const confirmed = await confirmAction(t('deleteChannelKeyConfirm'), t('delete'), {
+      confirmText: t('delete'),
+      cancelText: t('cancel'),
+      danger: true,
+      type: 'warning'
+    })
+    if (!confirmed) return
+
+    deletingKeyId.value = key.id
+    try {
+      await deleteChannelKey(key.channel_id, key.id)
+      ElMessage.success(t('channelKeyDeleted'))
+      channelKeys.value = channelKeys.value.filter((item) => item.id !== key.id)
+    } catch (err) {
+      ElMessage.error(readError(err))
+    } finally {
+      deletingKeyId.value = null
+    }
+  }
+
+  async function copyChannelKeySecret(key: ChannelKey) {
+    if (copyingKeyId.value) return
+
+    copyingKeyId.value = key.id
+    try {
+      const { secret } = await revealChannelKeySecret(key.channel_id, key.id)
+      await navigator.clipboard.writeText(secret)
+      ElMessage.success(t('channelKeyCopied'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    } finally {
+      copyingKeyId.value = null
     }
   }
 
@@ -675,7 +721,10 @@ export function useChannels(t: Translate) {
     fetchingModels,
     updating,
     deletingId,
+    deletingKeyId,
+    copyingKeyId,
     editingChannel,
+    editingChannelKeys,
     createForm,
     editForm,
     createBaseUrl,
@@ -700,6 +749,8 @@ export function useChannels(t: Translate) {
     loadChannels,
     submitChannel,
     submitEditChannel,
+    confirmDeleteChannelKey,
+    copyChannelKeySecret,
     confirmDeleteChannel
   }
 }

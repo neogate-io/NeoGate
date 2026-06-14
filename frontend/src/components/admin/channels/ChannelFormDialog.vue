@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { CopyDocument, Delete } from '@element-plus/icons-vue'
 import ProviderIcon from '../../ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { ChannelForm } from '../../../composables/useChannels'
+import type { ChannelKey } from '../../../types/admin'
 import type { ChannelProviderOption } from '../../../utils/channel'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -19,15 +21,26 @@ defineProps<{
   modelsInputPlaceholder: string
   modelsInputReadonly: boolean
   secretPlaceholder: string
+  existingKeys?: ChannelKey[]
+  deletingKeyId?: number | null
+  copyingKeyId?: number | null
 }>()
 
 const emit = defineEmits<{
   fetchModels: []
   selectProvider: [provider: string]
+  copyKey: [key: ChannelKey]
+  deleteKey: [key: ChannelKey]
   submit: []
 }>()
 
 const { t } = useLocale()
+
+function maskedKey(key: ChannelKey) {
+  const prefix = key.key_prefix.trim()
+  if (!prefix) return '********'
+  return `${prefix}${'********'}`
+}
 </script>
 
 <template>
@@ -141,6 +154,29 @@ const { t } = useLocale()
       </div>
 
       <el-form-item v-if="!form.use_credentials" class="api-key-field" :label="t('apiKeyOrJson')">
+        <div v-if="mode === 'edit' && existingKeys?.length" class="existing-keys">
+          <div v-for="key in existingKeys" :key="key.id" class="existing-key-row">
+            <code class="existing-key-value">{{ maskedKey(key) }}</code>
+            <el-button
+              text
+              :loading="copyingKeyId === key.id"
+              :aria-label="t('copyKey')"
+              @click="emit('copyKey', key)"
+            >
+              <el-icon><CopyDocument /></el-icon>
+            </el-button>
+            <el-button
+              class="existing-key-delete"
+              text
+              type="danger"
+              :loading="deletingKeyId === key.id"
+              :aria-label="t('delete')"
+              @click="emit('deleteKey', key)"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </div>
+        </div>
         <el-input
           v-model="secret"
           class="secret-input"
@@ -338,6 +374,44 @@ const { t } = useLocale()
 
 .api-key-field {
   margin-bottom: 0;
+}
+
+.api-key-field :deep(.el-form-item__content) {
+  display: grid;
+  gap: 10px;
+}
+
+.existing-keys {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.existing-key-row {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e8edf3;
+  border-radius: 7px;
+  display: flex;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 8px 7px 10px;
+}
+
+.existing-key-value {
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.existing-key-delete {
+  margin-left: auto;
 }
 
 .secret-input :deep(.el-textarea__inner) {

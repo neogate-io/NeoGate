@@ -33,9 +33,10 @@ use crate::{
 use self::{
     channel::{
         create_channel, create_channel_key, delete_channel, delete_channel_key,
-        list_all_channel_keys, list_channel_keys, list_channels, update_channel,
-        update_channel_key, ChannelKeyRecord, ChannelRecord, CreateChannelKeyRequest,
-        CreateChannelRequest, UpdateChannelKeyRequest, UpdateChannelRequest,
+        list_all_channel_keys, list_channel_keys, list_channels, reveal_channel_key_secret,
+        update_channel, update_channel_key, ChannelKeyRecord, ChannelRecord,
+        CreateChannelKeyRequest, CreateChannelRequest, UpdateChannelKeyRequest,
+        UpdateChannelRequest,
     },
     credentials::{
         delete_credential, disable_credential, enable_credential, list_credential_models,
@@ -199,6 +200,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/channels/{id}/keys/{key_id}",
             patch(update_channel_key_handler).delete(delete_channel_key_handler),
+        )
+        .route(
+            "/api/admin/channels/{id}/keys/{key_id}/secret",
+            get(reveal_channel_key_secret_handler),
         )
         .route("/api/admin/usage", get(usage))
         .route("/api/admin/health", get(health))
@@ -1009,6 +1014,15 @@ async fn update_channel_key_handler(
     invalidate_cache(&state, InvalidationEvent::ChannelKeySecret { id: key_id }).await;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(key))
+}
+
+async fn reveal_channel_key_secret_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((channel_id, key_id)): Path<(DbId, DbId)>,
+) -> AppResult<Json<Value>> {
+    let secret = reveal_channel_key_secret(&state, channel_id, key_id).await?;
+    Ok(Json(json!({ "secret": secret })))
 }
 
 async fn delete_channel_key_handler(

@@ -72,7 +72,10 @@ const {
   fetchingModels,
   updating,
   deletingId,
+  deletingKeyId,
+  copyingKeyId,
   editingChannel,
+  editingChannelKeys,
   createForm,
   editForm,
   createBaseUrl,
@@ -95,6 +98,8 @@ const {
   loadChannels,
   submitChannel: submitChannelBase,
   submitEditChannel: submitEditChannelBase,
+  confirmDeleteChannelKey,
+  copyChannelKeySecret,
   confirmDeleteChannel
 } = useChannels(t)
 
@@ -1081,7 +1086,12 @@ onMounted(loadInitialData)
       :models-input-placeholder="modelsInputPlaceholder()"
       :models-input-readonly="modelsInputReadonly()"
       :secret-placeholder="t('optionalEditUpstreamKey')"
+      :existing-keys="editingChannelKeys"
+      :deleting-key-id="deletingKeyId"
+      :copying-key-id="copyingKeyId"
       @fetch-models="fetchEditModels"
+      @copy-key="copyChannelKeySecret"
+      @delete-key="confirmDeleteChannelKey"
       @submit="submitEditChannel"
     />
 

@@ -32,6 +32,16 @@ export function createChannelKey(channelId: number, payload: {
   })
 }
 
+export function deleteChannelKey(channelId: number, keyId: number) {
+  return adminRequest<{ ok: boolean }>(`/api/admin/channels/${channelId}/keys/${keyId}`, {
+    method: 'DELETE'
+  })
+}
+
+export function revealChannelKeySecret(channelId: number, keyId: number) {
+  return adminRequest<{ secret: string }>(`/api/admin/channels/${channelId}/keys/${keyId}/secret`)
+}
+
 export function fetchUpstreamModels(payload: {
   channel_id?: number
   provider: ChannelProvider

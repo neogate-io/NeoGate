@@ -378,6 +378,25 @@ pub async fn list_all_channel_keys(state: &AppState) -> AppResult<Vec<ChannelKey
     rows.iter().map(channel_key_from_row).collect()
 }
 
+pub async fn reveal_channel_key_secret(
+    state: &AppState,
+    channel_id: DbId,
+    key_id: DbId,
+) -> AppResult<String> {
+    let row = sqlx::query(
+        "SELECT secret_ciphertext
+         FROM channel_key
+         WHERE id = $1 AND channel_id = $2",
+    )
+    .bind(key_id)
+    .bind(channel_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let secret_ciphertext: String = row.try_get("secret_ciphertext")?;
+    state.secrets.plaintext(key_id, &secret_ciphertext).map_err(Into::into)
+}
+
 pub async fn update_channel_key(
     state: &AppState,
     id: DbId,

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NeoGate - Self-hosted Rust LLM API Gateway</title>
+    <meta
+      name="description"
+      content="NeoGate is a self-hosted Rust LLM API gateway with OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant keys, usage tracking, billing, and an admin console."
+    />
+    <meta
+      name="keywords"
+      content="LLM API gateway, AI gateway, OpenAI-compatible proxy, Anthropic-compatible API, self-hosted AI infrastructure, model routing, usage tracking, billing, Rust"
+    />
+    <meta property="og:title" content="NeoGate - Self-hosted Rust LLM API Gateway" />
+    <meta
+      property="og:description"
+      content="OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant keys, usage tracking, billing, and private deployment."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://neogate.io/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="./assets/logo-square.svg" type="image/svg+xml" />
+    <link rel="alternate" hreflang="en" href="https://neogate.io/" />
+    <link rel="alternate" hreflang="zh" href="https://neogate.io/zh/" />
+    <link rel="alternate" hreflang="x-default" href="https://neogate.io/" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="NeoGate home">
+        <img src="./assets/logo-square.svg" alt="" width="34" height="34" />
+        <span>NeoGate</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#deployment">Deploy</a>
+        <a href="https://github.com/neogate-io/NeoGate/tree/main/docs">Docs</a>
+      </nav>
+      <div class="language-switch" aria-label="Language switcher">
+        <a class="is-active" href="/">EN</a>
+        <a href="./zh/">中文</a>
+      </div>
+      <a class="header-action" href="https://github.com/neogate-io/NeoGate">GitHub</a>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Self-hosted AI infrastructure</p>
+          <h1>NeoGate - Self-hosted Rust LLM API Gateway</h1>
+          <p class="hero-text">
+            NeoGate brings OpenAI-compatible and Anthropic-compatible APIs, model routing,
+            upstream credential management, usage tracking, and billing into one privately
+            controlled gateway.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button primary" href="https://github.com/neogate-io/NeoGate">View on GitHub</a>
+            <a class="button secondary" href="#deployment">Quick deploy</a>
+          </div>
+          <dl class="hero-stats" aria-label="Project highlights">
+            <div>
+              <dt>Rust</dt>
+              <dd>low-latency relay</dd>
+            </div>
+            <div>
+              <dt>2 modes</dt>
+              <dd>internal or billing</dd>
+            </div>
+            <div>
+              <dt>Docker</dt>
+              <dd>single-node start</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="logo-strip" aria-label="Positioning keywords">
+        <span>LLM API gateway</span>
+        <span>OpenAI proxy</span>
+        <span>Anthropic API</span>
+        <span>usage tracking</span>
+        <span>billing</span>
+      </section>
+
+      <section id="features" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">What it does</p>
+          <h2>Everything a team needs before sharing model access.</h2>
+          <p>
+            NeoGate is built for organizations that need controlled access to upstream model
+            providers without spreading vendor keys across every service and team.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article>
+            <h3>Unified model entry point</h3>
+            <p>Expose one gateway for multiple upstream providers, protocols, endpoints, and credentials.</p>
+          </article>
+          <article>
+            <h3>Project API keys</h3>
+            <p>Issue isolated keys for teams, customers, services, and automation jobs.</p>
+          </article>
+          <article>
+            <h3>Model routing</h3>
+            <p>Route by model, provider, priority, weight, credential status, and channel health.</p>
+          </article>
+          <article>
+            <h3>Usage records</h3>
+            <p>Track requests by user, project, API key, model, provider, and upstream channel.</p>
+          </article>
+          <article>
+            <h3>Billing mode</h3>
+            <p>Run as an internal gateway or enable credit balance, recharge, pricing, and paid access.</p>
+          </article>
+          <article>
+            <h3>Private deployment</h3>
+            <p>Start with Docker Compose, then move to clustered deployment when traffic needs it.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="architecture" class="section split">
+        <div>
+          <p class="eyebrow">Architecture</p>
+          <h2>One controlled path from application keys to upstream credentials.</h2>
+          <p>
+            Requests enter through OpenAI-compatible or Anthropic-compatible routes, pass project
+            policy checks, select an upstream channel, and produce usage records for analysis,
+            chargeback, or billing.
+          </p>
+        </div>
+        <div class="steps">
+          <div><strong>1</strong><span>Authenticate project API key</span></div>
+          <div><strong>2</strong><span>Check policy, mode, and balance</span></div>
+          <div><strong>3</strong><span>Select provider channel and credential</span></div>
+          <div><strong>4</strong><span>Relay response and record usage</span></div>
+        </div>
+      </section>
+
+      <section id="deployment" class="section deploy">
+        <div class="section-heading">
+          <p class="eyebrow">Quick deploy</p>
+          <h2>Bring up a single-node gateway with Docker Compose.</h2>
+        </div>
+        <div class="terminal" aria-label="Docker Compose quick start command">
+          <div class="terminal-bar">
+            <span></span><span></span><span></span>
+          </div>
+          <code>git clone https://github.com/neogate-io/NeoGate.git</code>
+          <code>cd NeoGate</code>
+          <code>docker compose up -d --build</code>
+        </div>
+        <p class="deploy-note">
+          Open the deployed address to complete the first-run wizard for administrator account,
+          service mode, initial upstream, prices, SMTP, and payment settings.
+        </p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>NeoGate</span>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/neogate-io/NeoGate">GitHub</a>
+        <a href="https://github.com/neogate-io/NeoGate/tree/main/docs">Docs</a>
+        <a href="https://github.com/neogate-io/NeoGate/releases">Releases</a>
+      </nav>
+    </footer>
+  </body>
+</html>

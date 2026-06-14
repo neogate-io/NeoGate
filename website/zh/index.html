@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NeoGate - 私有化 Rust 大模型 API 网关</title>
+    <meta
+      name="description"
+      content="NeoGate 是一个可私有化部署的 Rust 大模型 API 网关，支持 OpenAI 兼容接口、Anthropic 兼容接口、模型路由、多租户 API Key、用量统计、计费和管理后台。"
+    />
+    <meta
+      name="keywords"
+      content="大模型 API 网关, AI 网关, OpenAI 兼容代理, Anthropic 兼容接口, 私有化 AI 基础设施, 模型路由, 用量统计, 计费, Rust"
+    />
+    <meta property="og:title" content="NeoGate - 私有化 Rust 大模型 API 网关" />
+    <meta
+      property="og:description"
+      content="OpenAI 兼容接口、Anthropic 兼容接口、模型路由、多租户 API Key、用量统计、计费和私有化部署。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://neogate.io/zh/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="../assets/logo-square.svg" type="image/svg+xml" />
+    <link rel="alternate" hreflang="en" href="https://neogate.io/" />
+    <link rel="alternate" hreflang="zh" href="https://neogate.io/zh/" />
+    <link rel="alternate" hreflang="x-default" href="https://neogate.io/" />
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="NeoGate 首页">
+        <img src="../assets/logo-square.svg" alt="" width="34" height="34" />
+        <span>NeoGate</span>
+      </a>
+      <nav class="nav" aria-label="主导航">
+        <a href="#features">功能</a>
+        <a href="#architecture">架构</a>
+        <a href="#deployment">部署</a>
+        <a href="https://github.com/neogate-io/NeoGate/tree/main/docs">文档</a>
+      </nav>
+      <div class="language-switch" aria-label="语言切换">
+        <a href="../">EN</a>
+        <a class="is-active" href="./">中文</a>
+      </div>
+      <a class="header-action" href="https://github.com/neogate-io/NeoGate">GitHub</a>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">私有化 AI 基础设施</p>
+          <h1>NeoGate - 私有化 Rust 大模型 API 网关</h1>
+          <p class="hero-text">
+            NeoGate 将 OpenAI 兼容接口、Anthropic 兼容接口、模型路由、上游凭证管理、
+            用量统计和计费能力收拢到一个可私有化部署的统一网关中。
+          </p>
+          <div class="hero-actions" aria-label="主要操作">
+            <a class="button primary" href="https://github.com/neogate-io/NeoGate">查看 GitHub</a>
+            <a class="button secondary" href="#deployment">快速部署</a>
+          </div>
+          <dl class="hero-stats" aria-label="项目亮点">
+            <div>
+              <dt>Rust</dt>
+              <dd>低延迟转发</dd>
+            </div>
+            <div>
+              <dt>双模式</dt>
+              <dd>内部或计费</dd>
+            </div>
+            <div>
+              <dt>Docker</dt>
+              <dd>单节点启动</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="logo-strip" aria-label="定位关键词">
+        <span>大模型 API 网关</span>
+        <span>OpenAI 代理</span>
+        <span>Anthropic 接口</span>
+        <span>用量统计</span>
+        <span>计费</span>
+      </section>
+
+      <section id="features" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">核心能力</p>
+          <h2>团队共享模型访问之前，该有的控制面都在这里。</h2>
+          <p>
+            NeoGate 适合需要统一管理上游模型账号、项目 API Key、访问权限、用量和成本的组织，
+            避免把供应商密钥分散到每个服务和团队里。
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article>
+            <h3>统一模型入口</h3>
+            <p>用一个网关管理多个上游供应商、协议、端点和凭证。</p>
+          </article>
+          <article>
+            <h3>项目 API Key</h3>
+            <p>为团队、客户、服务和自动化任务发放相互隔离的调用密钥。</p>
+          </article>
+          <article>
+            <h3>模型路由</h3>
+            <p>按模型、供应商、优先级、权重、凭证状态和通道健康度选择上游。</p>
+          </article>
+          <article>
+            <h3>用量记录</h3>
+            <p>按用户、项目、API Key、模型、供应商和上游通道追踪请求。</p>
+          </article>
+          <article>
+            <h3>计费模式</h3>
+            <p>既可作为内部网关，也可开启余额、充值、价格和面向客户的付费访问。</p>
+          </article>
+          <article>
+            <h3>私有化部署</h3>
+            <p>从 Docker Compose 单节点启动，后续按流量需求切换到集群部署。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="architecture" class="section split">
+        <div>
+          <p class="eyebrow">架构</p>
+          <h2>从项目 Key 到上游凭证，只有一条受控路径。</h2>
+          <p>
+            请求通过 OpenAI 兼容或 Anthropic 兼容接口进入网关，经过项目策略检查，
+            选择上游通道并记录用量，用于排障、成本归集或计费。
+          </p>
+        </div>
+        <div class="steps">
+          <div><strong>1</strong><span>认证项目 API Key</span></div>
+          <div><strong>2</strong><span>检查策略、服务模式和余额</span></div>
+          <div><strong>3</strong><span>选择供应商通道和上游凭证</span></div>
+          <div><strong>4</strong><span>转发响应并记录用量</span></div>
+        </div>
+      </section>
+
+      <section id="deployment" class="section deploy">
+        <div class="section-heading">
+          <p class="eyebrow">快速部署</p>
+          <h2>使用 Docker Compose 启动单节点网关。</h2>
+        </div>
+        <div class="terminal" aria-label="Docker Compose 快速启动命令">
+          <div class="terminal-bar">
+            <span></span><span></span><span></span>
+          </div>
+          <code>git clone https://github.com/neogate-io/NeoGate.git</code>
+          <code>cd NeoGate</code>
+          <code>docker compose up -d --build</code>
+        </div>
+        <p class="deploy-note">
+          启动后打开部署地址，通过首次运行向导完成管理员账号、服务模式、初始上游、价格、
+          SMTP 和支付配置。
+        </p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>NeoGate</span>
+      <nav aria-label="底部导航">
+        <a href="https://github.com/neogate-io/NeoGate">GitHub</a>
+        <a href="https://github.com/neogate-io/NeoGate/tree/main/docs">文档</a>
+        <a href="https://github.com/neogate-io/NeoGate/releases">版本</a>
+      </nav>
+    </footer>
+  </body>
+</html>

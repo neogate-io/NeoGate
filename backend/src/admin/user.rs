@@ -5,22 +5,23 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
+    AppState,
     auth::{
-        generate_user_key, generate_user_key_from_parts_and_seed, hash_user_password,
+        UserAuth, generate_user_key, generate_user_key_from_parts_and_seed, hash_user_password,
         is_generated_user_key, issue_user_key_draft_token, key_prefix,
-        user_key_draft_parts_from_token, validate_user_password_input, UserAuth,
+        user_key_draft_parts_from_token, validate_user_password_input,
     },
-    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
-    email::{smtp_config_error, EmailLocale},
+    billing::{CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD, account},
+    email::{EmailLocale, smtp_config_error},
     error::{AppError, AppResult},
     id::DbId,
-    policy::{registration_policy, service_mode, ServiceMode},
-    project, AppState,
+    policy::{ServiceMode, registration_policy, service_mode},
+    project,
 };
 use axum::{
+    Json, Router,
     extract::State,
     routing::{get, post},
-    Json, Router,
 };
 
 #[derive(Debug, Serialize)]

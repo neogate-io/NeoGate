@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
@@ -22,7 +22,11 @@ import {
   syncPricingTemplates,
   upsertProviderPrice
 } from '../../api/prices'
-import { diagnoseChannel, updateChannel } from '../../api/channels'
+import {
+  streamChannelDiagnostic,
+  updateChannel,
+  type ChannelDiagnosticStreamEvent
+} from '../../api/channels'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelPriceDialog, {
   type ChannelPriceForm
@@ -38,12 +42,20 @@ import type {
   ChannelDiagnosticReport,
   ChannelKey,
   ChannelProbeSample,
+  DiagnosticStep,
   DiagnosticStatus,
+  EndpointDiagnosticReport,
   PricingTemplate,
   ProviderPrice
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
-import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
+import {
+  formatCompactDateTime,
+  formatDurationMs,
+  formatUsdPerMillion,
+  microUsdToUsd,
+  usdToMicroUsd
+} from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
 import {
   derivedCacheReadPrice,
@@ -114,6 +126,11 @@ const diagnosticReport = ref<ChannelDiagnosticReport | null>(null)
 const diagnosticError = ref('')
 const diagnosticChannel = ref<Channel | null>(null)
 const diagnosingChannelId = ref<number | null>(null)
+const diagnosticLiveSteps = ref<
+  Array<Extract<ChannelDiagnosticStreamEvent, { type: 'model_result' }>>
+>([])
+const diagnosticCurrentModel = ref('')
+const diagnosticLiveListRef = ref<HTMLElement | null>(null)
 const togglingRuntimeKeys = useReactiveSet<string>()
 const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
@@ -307,7 +324,14 @@ function diagnosticStatusType(status: DiagnosticStatus) {
 function diagnosticStepLabel(name: string) {
   if (name === 'models') return t('diagnosticStepModels')
   if (name === 'probe') return t('diagnosticStepProbe')
+  if (name.startsWith('probe:')) return `${t('diagnosticStepProbe')} · ${name.slice(6)}`
   return name
+}
+
+async function scrollDiagnosticLiveListToBottom() {
+  await nextTick()
+  const list = diagnosticLiveListRef.value
+  if (list) list.scrollTop = list.scrollHeight
 }
 
 function diagnosticModelsPreview(models: string[]) {
@@ -315,8 +339,65 @@ function diagnosticModelsPreview(models: string[]) {
   return models.slice(0, 6).join(', ') + (models.length > 6 ? ` +${models.length - 6}` : '')
 }
 
+function diagnosticEndpointCount(report: ChannelDiagnosticReport) {
+  return report.endpoints.length
+}
+
+function diagnosticKeyCount(report: ChannelDiagnosticReport) {
+  return report.endpoints.reduce((count, endpoint) => count + endpoint.keys.length, 0)
+}
+
+function diagnosticAvailableKeyCount(report: ChannelDiagnosticReport) {
+  return report.endpoints.reduce(
+    (count, endpoint) => count + endpoint.keys.filter((key) => key.status === 'ok').length,
+    0
+  )
+}
+
+function diagnosticConfiguredModelCount(endpoint: EndpointDiagnosticReport) {
+  return endpoint.configured_models.length
+}
+
+function diagnosticDiscoveredModelSummary(endpoint: EndpointDiagnosticReport) {
+  const count = endpoint.discovered_models.length
+  return count > 0 ? `${count}` : t('diagnosticNoModels')
+}
+
+function diagnosticStepMeta(step: DiagnosticStep) {
+  return `${formatDurationMs(step.duration_ms)}${step.status_code ? ` · HTTP ${step.status_code}` : ''}`
+}
+
+function diagnosticEndpointTitle(endpoint: EndpointDiagnosticReport) {
+  return `${endpoint.protocol.toUpperCase()} · ${endpoint.base_url}`
+}
+
 function latestProbeSample(row: Channel) {
   return row.probe_samples.length > 0 ? row.probe_samples[row.probe_samples.length - 1] : null
+}
+
+function probeTrendStats(row: Channel) {
+  const samples = row.probe_samples
+  const latencySamples = samples.filter((sample) => sample.latency_ms != null)
+  const latencyValues = latencySamples.map((sample) => sample.latency_ms ?? 0)
+  const latest = latestProbeSample(row)
+  const okCount = samples.filter((sample) => sample.status === 'ok').length
+  const failedCount = samples.filter((sample) => sample.status === 'failed').length
+  const avgLatency =
+    latencyValues.length > 0
+      ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length
+      : null
+  const minLatency = latencyValues.length > 0 ? Math.min(...latencyValues) : null
+  const maxLatency = latencyValues.length > 0 ? Math.max(...latencyValues) : null
+
+  return {
+    total: samples.length,
+    okCount,
+    failedCount,
+    latest,
+    avgLatency,
+    minLatency,
+    maxLatency
+  }
 }
 
 function probeTrendPoints(row: Channel) {
@@ -326,12 +407,12 @@ function probeTrendPoints(row: Channel) {
   const min = Math.min(...values)
   const max = Math.max(...values)
   const range = Math.max(max - min, 1)
-  const width = 96
-  const height = 28
+  const width = 132
+  const height = 34
   return values
     .map((value, index) => {
       const x = samples.length === 1 ? width : (index / (samples.length - 1)) * width
-      const y = height - ((value - min) / range) * (height - 4) - 2
+      const y = height - ((value - min) / range) * (height - 10) - 5
       return `${x.toFixed(1)},${y.toFixed(1)}`
     })
     .join(' ')
@@ -349,10 +430,28 @@ function probeLatencyLabel(sample: ChannelProbeSample | null) {
   return sample.latency_ms == null ? '-' : `${sample.latency_ms}ms`
 }
 
+function probeSampleStatusLabel(sample: ChannelProbeSample | null) {
+  if (!sample) return t('probeNoData')
+  if (sample.status === 'ok') return t('diagnosticStatusOk')
+  if (sample.status === 'skipped') return t('diagnosticStatusSkipped')
+  return t('diagnosticStatusFailed')
+}
+
+function probeTrendSuccessLabel(row: Channel) {
+  const stats = probeTrendStats(row)
+  return stats.total === 0 ? '-' : `${stats.okCount}/${stats.total}`
+}
+
+function probeTrendAverageLabel(row: Channel) {
+  const stats = probeTrendStats(row)
+  return stats.avgLatency == null ? '-' : formatDurationMs(stats.avgLatency)
+}
+
 function probeTooltip(row: Channel) {
-  const sample = latestProbeSample(row)
+  const stats = probeTrendStats(row)
+  const sample = stats.latest
   if (!sample) return t('probeNoDataHint')
-  const time = new Date(sample.created_at).toLocaleString()
+  const time = formatCompactDateTime(sample.created_at)
   const model = sample.model || '-'
   const status = sample.status === 'ok' ? t('diagnosticStatusOk') : t('diagnosticStatusFailed')
   return [
@@ -360,6 +459,12 @@ function probeTooltip(row: Channel) {
     `${t('model')}: ${model}`,
     `${t('channelStatus')}: ${status}`,
     `${t('latency')}: ${probeLatencyLabel(sample)}`,
+    `${t('probeSuccessRatio')}: ${stats.okCount}/${stats.total}`,
+    stats.avgLatency != null ? `${t('probeAverageLatency')}: ${formatDurationMs(stats.avgLatency)}` : '',
+    stats.minLatency != null && stats.maxLatency != null
+      ? `${t('probeLatencyRange')}: ${formatDurationMs(stats.minLatency)} - ${formatDurationMs(stats.maxLatency)}`
+      : '',
+    sample.status_code ? `${t('probeStatusCode')}: ${sample.status_code}` : '',
     sample.error_summary ? `${t('error')}: ${sample.error_summary}` : ''
   ]
     .filter(Boolean)
@@ -643,10 +748,24 @@ async function runChannelDiagnostic(row: Channel) {
   diagnosticChannel.value = row
   diagnosticReport.value = null
   diagnosticError.value = ''
+  diagnosticLiveSteps.value = []
+  diagnosticCurrentModel.value = ''
   diagnosticDialogOpen.value = true
   diagnosingChannelId.value = row.id
   try {
-    diagnosticReport.value = await diagnoseChannel(row.id)
+    diagnosticReport.value = await streamChannelDiagnostic(row.id, (event) => {
+      if (event.type === 'model_started') {
+        diagnosticCurrentModel.value = event.model
+      }
+      if (event.type === 'model_result') {
+        diagnosticLiveSteps.value.push(event)
+        diagnosticCurrentModel.value = ''
+        void scrollDiagnosticLiveListToBottom()
+      }
+      if (event.type === 'finished') {
+        diagnosticReport.value = event.report
+      }
+    })
     await loadChannels()
   } catch (err) {
     diagnosticError.value = readError(err)
@@ -846,7 +965,7 @@ onMounted(loadInitialData)
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="name" :label="t('name')" min-width="200">
+        <el-table-column prop="name" :label="t('name')" min-width="160">
           <template #default="{ row }">
             <span class="channel-name-cell">
               <ProviderIcon :provider="row.provider" />
@@ -857,7 +976,7 @@ onMounted(loadInitialData)
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('modelPrices')" min-width="360">
+        <el-table-column :label="t('modelPrices')" min-width="420">
           <template #default="{ row }">
             <div class="channel-price-summary">
               <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
@@ -899,23 +1018,95 @@ onMounted(loadInitialData)
             <span class="channel-key-count">{{ channelCredentialSummary(row).label }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('probeTrend')" min-width="170" align="center" header-align="center">
+        <el-table-column :label="t('probeTrend')" min-width="220" align="center" header-align="center">
           <template #default="{ row }">
-            <div class="probe-trend-cell" :class="probeTrendClass(row)" :title="probeTooltip(row)">
-              <svg class="probe-trend-chart" viewBox="0 0 96 28" aria-hidden="true">
-                <polyline
-                  v-if="probeTrendPoints(row)"
-                  :points="probeTrendPoints(row)"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                />
-                <line v-else x1="8" y1="14" x2="88" y2="14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-              </svg>
-              <span class="probe-trend-latency">{{ probeLatencyLabel(latestProbeSample(row)) }}</span>
-            </div>
+            <el-tooltip
+              placement="top"
+              effect="light"
+              popper-class="probe-trend-tooltip"
+              :show-after="180"
+            >
+              <template #content>
+                <div class="probe-tooltip-content">
+                  <div class="probe-tooltip-title">{{ latestProbeSample(row)?.model || '-' }}</div>
+                  <div class="probe-tooltip-grid">
+                    <span>{{ t('time') }}</span>
+                    <strong>{{
+                      latestProbeSample(row)
+                        ? formatCompactDateTime(latestProbeSample(row)?.created_at)
+                        : '-'
+                    }}</strong>
+                    <span>{{ t('channelStatus') }}</span>
+                    <strong>{{ probeSampleStatusLabel(latestProbeSample(row)) }}</strong>
+                    <span>{{ t('latency') }}</span>
+                    <strong>{{ probeLatencyLabel(latestProbeSample(row)) }}</strong>
+                    <span>{{ t('probeSuccessRatio') }}</span>
+                    <strong>{{ probeTrendSuccessLabel(row) }}</strong>
+                    <span>{{ t('probeAverageLatency') }}</span>
+                    <strong>{{ probeTrendAverageLabel(row) }}</strong>
+                    <template
+                      v-if="
+                        probeTrendStats(row).minLatency != null &&
+                        probeTrendStats(row).maxLatency != null
+                      "
+                    >
+                      <span>{{ t('probeLatencyRange') }}</span>
+                      <strong>
+                        {{ formatDurationMs(probeTrendStats(row).minLatency) }} -
+                        {{ formatDurationMs(probeTrendStats(row).maxLatency) }}
+                      </strong>
+                    </template>
+                    <template v-if="latestProbeSample(row)?.status_code">
+                      <span>{{ t('probeStatusCode') }}</span>
+                      <strong>{{ latestProbeSample(row)?.status_code }}</strong>
+                    </template>
+                    <template v-if="latestProbeSample(row)?.error_summary">
+                      <span>{{ t('error') }}</span>
+                      <strong>{{ latestProbeSample(row)?.error_summary }}</strong>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <div
+                class="probe-trend-cell"
+                :class="probeTrendClass(row)"
+                :aria-label="probeTooltip(row)"
+              >
+                <svg class="probe-trend-chart" viewBox="0 0 132 34" aria-hidden="true">
+                  <line
+                    x1="0"
+                    y1="29"
+                    x2="132"
+                    y2="29"
+                    class="probe-trend-baseline"
+                    stroke-linecap="round"
+                  />
+                  <polyline
+                    v-if="probeTrendPoints(row)"
+                    :points="probeTrendPoints(row)"
+                    fill="none"
+                    class="probe-trend-line"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2.4"
+                  />
+                  <line
+                    v-else
+                    x1="14"
+                    y1="17"
+                    x2="118"
+                    y2="17"
+                    class="probe-trend-line"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <div class="probe-trend-foot">
+                  <span>{{ t('probeAverageLatency') }}</span>
+                  <strong>{{ probeTrendAverageLabel(row) }}</strong>
+                </div>
+              </div>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column
@@ -1124,18 +1315,26 @@ onMounted(loadInitialData)
           <span>{{ diagnosticChannel.name }} · {{ diagnosticChannel.provider }}</span>
           <p>{{ t('diagnosticRunningHint') }}</p>
         </div>
-        <div class="diagnostic-running-steps">
-          <div class="diagnostic-running-step">
-            <span></span>
-            <strong>{{ t('diagnosticRunningStepModels') }}</strong>
+        <div v-if="diagnosticCurrentModel" class="diagnostic-current-model">
+          <span>{{ t('diagnosticCurrentModel') }}</span>
+          <strong>{{ diagnosticCurrentModel }}</strong>
+        </div>
+        <div ref="diagnosticLiveListRef" class="diagnostic-live-list">
+          <div v-if="diagnosticLiveSteps.length === 0" class="diagnostic-live-empty">
+            {{ t('diagnosticWaitingFirstResult') }}
           </div>
-          <div class="diagnostic-running-step">
-            <span></span>
-            <strong>{{ t('diagnosticRunningStepProbe') }}</strong>
-          </div>
-          <div class="diagnostic-running-step">
-            <span></span>
-            <strong>{{ t('diagnosticRunningStepPersist') }}</strong>
+          <div
+            v-for="event in diagnosticLiveSteps"
+            :key="`${event.endpoint_id}-${event.key_id ?? event.key_name}-${event.model}`"
+            class="diagnostic-step"
+            :class="`is-${event.step.status}`"
+          >
+            <span class="diagnostic-step-dot"></span>
+            <div class="diagnostic-step-copy">
+              <strong>{{ diagnosticStepLabel(event.step.name) }}</strong>
+              <span>{{ event.step.message }}</span>
+            </div>
+            <span class="diagnostic-step-meta">{{ diagnosticStepMeta(event.step) }}</span>
           </div>
         </div>
       </div>
@@ -1153,85 +1352,117 @@ onMounted(loadInitialData)
       </div>
 
       <div v-else-if="diagnosticReport" class="diagnostic-report">
-        <div class="diagnostic-report-head">
-          <div>
-            <strong>{{ diagnosticReport.channel_name }}</strong>
-            <span>{{ diagnosticReport.provider }}</span>
+        <div class="diagnostic-result-card" :class="`is-${diagnosticReport.status}`">
+          <div class="diagnostic-result-main">
+            <span>{{ t('diagnosticResultOverview') }}</span>
+            <strong>{{ diagnosticReport.summary }}</strong>
+            <small>{{ diagnosticReport.channel_name }} · {{ diagnosticReport.provider }}</small>
           </div>
-          <el-tag :type="diagnosticStatusType(diagnosticReport.status)" effect="light">
+          <el-tag :type="diagnosticStatusType(diagnosticReport.status)" effect="light" round>
             {{ diagnosticStatusLabel(diagnosticReport.status) }}
           </el-tag>
         </div>
-        <p class="diagnostic-summary">{{ diagnosticReport.summary }}</p>
-        <div class="diagnostic-meta">
-          <span>{{ t('latency') }} {{ diagnosticReport.duration_ms }}ms</span>
-          <span>{{ diagnosticReport.endpoints.length }} {{ t('diagnosticEndpointUnit') }}</span>
+
+        <div class="diagnostic-stats">
+          <div class="diagnostic-stat">
+            <span>{{ t('latency') }}</span>
+            <strong>{{ formatDurationMs(diagnosticReport.duration_ms) }}</strong>
+          </div>
+          <div class="diagnostic-stat">
+            <span>{{ t('diagnosticTestedEndpoints') }}</span>
+            <strong>{{ diagnosticEndpointCount(diagnosticReport) }}</strong>
+          </div>
+          <div class="diagnostic-stat">
+            <span>{{ t('diagnosticTestedKeys') }}</span>
+            <strong>{{ diagnosticKeyCount(diagnosticReport) }}</strong>
+          </div>
+          <div class="diagnostic-stat">
+            <span>{{ t('diagnosticAvailableKeys') }}</span>
+            <strong>{{ diagnosticAvailableKeyCount(diagnosticReport) }}</strong>
+          </div>
         </div>
 
-        <el-collapse class="diagnostic-collapse">
-          <el-collapse-item
+        <div class="diagnostic-section">
+          <div class="diagnostic-section-title">
+            <strong>{{ t('diagnosticEndpointOverview') }}</strong>
+          </div>
+          <div
             v-for="endpoint in diagnosticReport.endpoints"
             :key="endpoint.endpoint_id"
-            :name="String(endpoint.endpoint_id)"
+            class="diagnostic-endpoint-card"
           >
-            <template #title>
-              <span class="diagnostic-collapse-title">
-                <el-tag :type="diagnosticStatusType(endpoint.status)" size="small" effect="light">
-                  {{ diagnosticStatusLabel(endpoint.status) }}
-                </el-tag>
-                <span>{{ endpoint.protocol }}</span>
-                <span class="diagnostic-url">{{ endpoint.base_url }}</span>
+            <div class="diagnostic-endpoint-head">
+              <div>
+                <strong>{{ diagnosticEndpointTitle(endpoint) }}</strong>
+                <span>{{ endpoint.summary }}</span>
+              </div>
+              <el-tag :type="diagnosticStatusType(endpoint.status)" size="small" effect="light">
+                {{ diagnosticStatusLabel(endpoint.status) }}
+              </el-tag>
+            </div>
+            <div class="diagnostic-endpoint-facts">
+              <span>
+                {{ t('diagnosticConfiguredModels') }}
+                <strong>{{ diagnosticConfiguredModelCount(endpoint) }}</strong>
               </span>
-            </template>
-
-            <div class="diagnostic-endpoint-body">
-              <p>{{ endpoint.summary }}</p>
-              <div class="diagnostic-model-row">
-                <span>{{ t('diagnosticDiscoveredModels') }}</span>
-                <strong>{{ diagnosticModelsPreview(endpoint.discovered_models) }}</strong>
-              </div>
-              <div v-if="endpoint.missing_configured_models.length" class="diagnostic-model-row is-warning">
-                <span>{{ t('diagnosticMissingModels') }}</span>
+              <span>
+                {{ t('diagnosticDiscoveredModels') }}
+                <strong>{{ diagnosticDiscoveredModelSummary(endpoint) }}</strong>
+              </span>
+              <span v-if="endpoint.missing_configured_models.length" class="is-warning">
+                {{ t('diagnosticMissingModels') }}
                 <strong>{{ diagnosticModelsPreview(endpoint.missing_configured_models) }}</strong>
-              </div>
+              </span>
+            </div>
+            <div v-if="endpoint.discovered_models.length" class="diagnostic-model-preview">
+              {{ diagnosticModelsPreview(endpoint.discovered_models) }}
+            </div>
+          </div>
+        </div>
 
-              <div class="diagnostic-key-list">
+        <div class="diagnostic-section">
+          <div class="diagnostic-section-title">
+            <strong>{{ t('diagnosticKeyChecks') }}</strong>
+          </div>
+          <div
+            v-for="endpoint in diagnosticReport.endpoints"
+            :key="`keys-${endpoint.endpoint_id}`"
+            class="diagnostic-key-group"
+          >
+            <div
+              v-for="key in endpoint.keys"
+              :key="`${endpoint.endpoint_id}-${key.key_id ?? key.key_name}`"
+              class="diagnostic-key-item"
+            >
+              <div class="diagnostic-key-head">
+                <div>
+                  <strong>{{ key.key_name }}</strong>
+                  <span v-if="key.key_prefix">{{ key.key_prefix }}</span>
+                  <span v-else>{{ endpoint.protocol.toUpperCase() }}</span>
+                </div>
+                <el-tag :type="diagnosticStatusType(key.status)" size="small" effect="light">
+                  {{ diagnosticStatusLabel(key.status) }}
+                </el-tag>
+              </div>
+              <p>{{ key.summary }}</p>
+              <div class="diagnostic-step-list">
                 <div
-                  v-for="key in endpoint.keys"
-                  :key="`${endpoint.endpoint_id}-${key.key_id ?? key.key_name}`"
-                  class="diagnostic-key-item"
+                  v-for="step in key.steps"
+                  :key="`${key.key_id ?? key.key_name}-${step.name}`"
+                  class="diagnostic-step"
+                  :class="`is-${step.status}`"
                 >
-                  <div class="diagnostic-key-head">
-                    <div>
-                      <strong>{{ key.key_name }}</strong>
-                      <span v-if="key.key_prefix">{{ key.key_prefix }}</span>
-                    </div>
-                    <el-tag :type="diagnosticStatusType(key.status)" size="small" effect="light">
-                      {{ diagnosticStatusLabel(key.status) }}
-                    </el-tag>
+                  <span class="diagnostic-step-dot"></span>
+                  <div class="diagnostic-step-copy">
+                    <strong>{{ diagnosticStepLabel(step.name) }}</strong>
+                    <span>{{ step.message }}</span>
                   </div>
-                  <p>{{ key.summary }}</p>
-                  <div class="diagnostic-step-list">
-                    <div
-                      v-for="step in key.steps"
-                      :key="`${key.key_id ?? key.key_name}-${step.name}`"
-                      class="diagnostic-step"
-                    >
-                      <el-tag :type="diagnosticStatusType(step.status)" size="small" effect="plain">
-                        {{ diagnosticStatusLabel(step.status) }}
-                      </el-tag>
-                      <span class="diagnostic-step-name">{{ diagnosticStepLabel(step.name) }}</span>
-                      <span class="diagnostic-step-message">{{ step.message }}</span>
-                      <span class="diagnostic-step-meta">
-                        {{ step.duration_ms }}ms<span v-if="step.status_code"> · HTTP {{ step.status_code }}</span>
-                      </span>
-                    </div>
-                  </div>
+                  <span class="diagnostic-step-meta">{{ diagnosticStepMeta(step) }}</span>
                 </div>
               </div>
             </div>
-          </el-collapse-item>
-        </el-collapse>
+          </div>
+        </div>
       </div>
     </el-dialog>
   </section>
@@ -1500,8 +1731,10 @@ onMounted(loadInitialData)
   align-items: center;
   display: inline-flex;
   gap: 0;
+  inline-size: fit-content;
   min-width: 0;
   overflow: hidden;
+  width: fit-content;
 }
 
 .channel-price-model {
@@ -1529,9 +1762,8 @@ onMounted(loadInitialData)
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
   font-weight: 680;
-  min-width: 94px;
   padding: 2px 9px;
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
 }
 
@@ -1604,48 +1836,115 @@ onMounted(loadInitialData)
 }
 
 .probe-trend-cell {
-  align-items: center;
-  color: #94a3b8;
-  display: inline-flex;
-  gap: 10px;
-  justify-content: center;
-  min-height: 34px;
-  min-width: 142px;
-}
-
-.probe-trend-cell.is-ok {
-  color: #16a34a;
+  color: #17a169;
+  display: inline-grid;
+  gap: 3px;
+  min-width: 156px;
+  padding: 4px 0;
+  text-align: left;
 }
 
 .probe-trend-cell.is-failed {
   color: #dc2626;
 }
 
-.probe-trend-chart {
-  color: inherit;
-  flex: 0 0 96px;
-  height: 28px;
-  width: 96px;
+.probe-trend-cell.is-empty {
+  color: #94a3b8;
 }
 
-.probe-trend-latency {
-  color: #1d2129;
-  font-size: 12px;
+.probe-trend-foot {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.probe-trend-foot strong {
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  min-width: 56px;
-  text-align: left;
   white-space: nowrap;
 }
 
-.probe-trend-cell.is-empty .probe-trend-latency {
-  color: #86909c;
-  font-weight: 560;
+.probe-trend-chart {
+  color: inherit;
+  display: block;
+  height: 34px;
+  width: 132px;
 }
 
-.probe-trend-cell.is-failed .probe-trend-latency {
-  color: #dc2626;
+.probe-trend-baseline {
+  stroke: #e5e7eb;
+  stroke-width: 1;
+}
+
+.probe-trend-line {
+  stroke: currentColor;
+}
+
+.probe-trend-foot {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.1;
+}
+
+.probe-trend-foot strong {
+  color: #344054;
+  font-weight: 760;
+}
+
+.probe-trend-cell.is-empty .probe-trend-foot strong {
+  color: #86909c;
+  font-weight: 620;
+}
+
+.probe-trend-cell.is-failed .probe-trend-foot strong {
+  color: #b42318;
+}
+
+:global(.probe-trend-tooltip.el-popper.is-light) {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
+  color: #1f2937;
+  padding: 10px 12px;
+}
+
+.probe-tooltip-content {
+  display: grid;
+  gap: 8px;
+  min-width: 230px;
+}
+
+.probe-tooltip-title {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 760;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.probe-tooltip-grid {
+  display: grid;
+  gap: 5px 14px;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.probe-tooltip-grid span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.probe-tooltip-grid strong {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 720;
+  max-width: 260px;
+  overflow-wrap: anywhere;
 }
 
 .channel-expand-panel {
@@ -1858,7 +2157,7 @@ onMounted(loadInitialData)
 
 .diagnostic-report {
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 
 .diagnostic-running,
@@ -1894,11 +2193,69 @@ onMounted(loadInitialData)
   margin: 0;
 }
 
+.diagnostic-running-copy small {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1;
+  padding: 6px 10px;
+}
+
+.diagnostic-current-model {
+  align-items: center;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  max-width: min(100%, 620px);
+  padding: 10px 12px;
+}
+
+.diagnostic-current-model span {
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.diagnostic-current-model strong {
+  color: #1d2129;
+  font-size: 13px;
+  font-weight: 760;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-live-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 2px;
+  width: min(100%, 620px);
+}
+
+.diagnostic-live-empty {
+  background: #f8fafc;
+  border: 1px dashed #d8e0ea;
+  border-radius: 8px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 620;
+  padding: 12px;
+}
+
 .diagnostic-running-icon {
   align-items: center;
-  background: #eef4ff;
+  background: #fff7ed;
   border-radius: 999px;
-  color: #165dff;
+  color: #c2410c;
   display: inline-flex;
   font-size: 22px;
   height: 56px;
@@ -1916,151 +2273,169 @@ onMounted(loadInitialData)
   }
 }
 
-.diagnostic-running-steps {
-  display: grid;
-  gap: 10px;
-  width: min(100%, 520px);
-}
-
-.diagnostic-running-step {
-  align-items: center;
-  background: #fbfcff;
-  border: 1px solid #eef2f7;
+.diagnostic-result-card {
+  align-items: start;
+  background: #f7fbf8;
+  border: 1px solid #d8f0d1;
   border-radius: 8px;
   display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.diagnostic-result-card.is-warning {
+  background: #fffaf0;
+  border-color: #fdecc8;
+}
+
+.diagnostic-result-card.is-failed {
+  background: #fff7f7;
+  border-color: #ffd6d6;
+}
+
+.diagnostic-result-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.diagnostic-result-main span,
+.diagnostic-section-title span,
+.diagnostic-stat span,
+.diagnostic-key-head span,
+.diagnostic-step-copy span,
+.diagnostic-step-meta,
+.diagnostic-endpoint-head span,
+.diagnostic-model-preview,
+.diagnostic-endpoint-facts {
+  color: #86909c;
+  font-size: 12px;
+}
+
+.diagnostic-result-main strong {
+  color: #1d2129;
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.diagnostic-result-main small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.diagnostic-stats {
+  display: grid;
   gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.diagnostic-stat {
+  background: #f8fafc;
+  border: 1px solid #edf1f6;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
   padding: 10px 12px;
 }
 
-.diagnostic-running-step span {
-  background: #165dff;
-  border-radius: 999px;
-  height: 8px;
-  width: 8px;
+.diagnostic-stat strong {
+  color: #1d2129;
+  font-size: 16px;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
 }
 
-.diagnostic-report-head {
+.diagnostic-section {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostic-section-title {
   align-items: center;
   display: flex;
-  gap: 16px;
   justify-content: space-between;
 }
 
-.diagnostic-report-head div,
+.diagnostic-section-title strong {
+  color: #344054;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.diagnostic-endpoint-card,
+.diagnostic-key-item {
+  border: 1px solid #e6edf5;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 13px 14px;
+}
+
+.diagnostic-endpoint-head,
+.diagnostic-key-head {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.diagnostic-endpoint-head div,
 .diagnostic-key-head div {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
 
-.diagnostic-report-head strong,
+.diagnostic-endpoint-head strong,
 .diagnostic-key-head strong {
   color: #1d2129;
-  font-size: 15px;
-  font-weight: 680;
-}
-
-.diagnostic-report-head span,
-.diagnostic-key-head span,
-.diagnostic-meta,
-.diagnostic-step-meta {
-  color: #86909c;
-  font-size: 12px;
-}
-
-.diagnostic-summary {
-  color: #4e5969;
-  line-height: 1.55;
-  margin: 0;
-}
-
-.diagnostic-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.diagnostic-collapse {
-  border-bottom: 0;
-  border-top: 1px solid #eef2f7;
-}
-
-.diagnostic-collapse-title {
-  align-items: center;
-  display: flex;
-  gap: 9px;
-  min-width: 0;
-  width: 100%;
-}
-
-.diagnostic-url {
-  color: #86909c;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.diagnostic-endpoint-body {
-  display: grid;
-  gap: 12px;
-  padding: 2px 0 8px;
-}
-
-.diagnostic-endpoint-body p,
-.diagnostic-key-item p {
-  color: #4e5969;
-  line-height: 1.55;
-  margin: 0;
-}
-
-.diagnostic-model-row {
-  align-items: start;
-  background: #f7f9fc;
-  border: 1px solid #eef2f7;
-  border-radius: 8px;
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-}
-
-.diagnostic-model-row span {
-  color: #86909c;
-  font-size: 12px;
-  font-weight: 620;
-}
-
-.diagnostic-model-row strong {
-  color: #1d2129;
-  font-size: 13px;
-  font-weight: 620;
-  line-height: 1.45;
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
-.diagnostic-model-row.is-warning {
-  background: #fff8eb;
-  border-color: #ffe2ba;
-}
-
-.diagnostic-key-list {
-  display: grid;
-  gap: 10px;
-}
-
-.diagnostic-key-item {
-  border: 1px solid #eef2f7;
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-}
-
-.diagnostic-key-head {
+.diagnostic-endpoint-facts {
   align-items: center;
   display: flex;
-  gap: 12px;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.diagnostic-endpoint-facts strong {
+  color: #344054;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+  margin-left: 4px;
+}
+
+.diagnostic-endpoint-facts .is-warning,
+.diagnostic-endpoint-facts .is-warning strong {
+  color: #c2410c;
+}
+
+.diagnostic-model-preview {
+  background: #f8fafc;
+  border-radius: 8px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+}
+
+.diagnostic-key-group {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostic-key-item p {
+  color: #4e5969;
+  line-height: 1.45;
+  margin: 0;
 }
 
 .diagnostic-step-list {
@@ -2073,23 +2448,51 @@ onMounted(loadInitialData)
   background: #fbfcff;
   border-radius: 8px;
   display: grid;
-  gap: 8px;
-  grid-template-columns: 78px minmax(72px, 100px) minmax(0, 1fr) auto;
-  padding: 8px 10px;
+  gap: 10px;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  padding: 9px 10px;
 }
 
-.diagnostic-step-name {
+.diagnostic-step-dot {
+  background: #22c55e;
+  border-radius: 999px;
+  height: 8px;
+  width: 8px;
+}
+
+.diagnostic-step.is-warning .diagnostic-step-dot {
+  background: #eab308;
+}
+
+.diagnostic-step.is-failed .diagnostic-step-dot {
+  background: #ef4444;
+}
+
+.diagnostic-step.is-skipped .diagnostic-step-dot {
+  background: #94a3b8;
+}
+
+.diagnostic-step-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.diagnostic-step-copy strong {
   color: #1d2129;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 720;
 }
 
-.diagnostic-step-message {
-  color: #4e5969;
-  font-size: 13px;
-  line-height: 1.4;
-  min-width: 0;
+.diagnostic-step-copy span {
+  line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.diagnostic-step-meta {
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 @media (max-width: 760px) {
@@ -2118,12 +2521,21 @@ onMounted(loadInitialData)
     text-align: left;
   }
 
-  .diagnostic-step {
-    align-items: start;
-    grid-template-columns: 1fr;
+  .diagnostic-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .diagnostic-report-head,
+  .diagnostic-step {
+    align-items: start;
+    grid-template-columns: 10px minmax(0, 1fr);
+  }
+
+  .diagnostic-step-meta {
+    grid-column: 2;
+  }
+
+  .diagnostic-result-card,
+  .diagnostic-endpoint-head,
   .diagnostic-key-head {
     align-items: flex-start;
     flex-direction: column;

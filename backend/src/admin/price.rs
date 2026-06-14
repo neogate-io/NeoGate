@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{
+    AppState,
     error::{AppError, AppResult},
     id::DbId,
-    AppState,
 };
 
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";

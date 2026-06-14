@@ -3,9 +3,12 @@ import type {
   ChannelDiagnosticReport,
   ChannelKey,
   ChannelProvider,
+  DiagnosticStep,
   EndpointProtocol
 } from '../types/admin'
 import { adminRequest } from './request'
+import { useAuthStore } from '../stores/auth'
+import { ApiError } from '../utils/errors'
 
 export type KeySelectionMode = 'polling' | 'random'
 
@@ -143,4 +146,86 @@ export function diagnoseChannel(id: number) {
   return adminRequest<ChannelDiagnosticReport>(`/api/admin/channels/${id}/diagnose`, {
     method: 'POST'
   })
+}
+
+export type ChannelDiagnosticStreamEvent =
+  | {
+      type: 'started'
+      channel_id: number
+      channel_name: string
+      provider: string
+    }
+  | {
+      type: 'model_started'
+      endpoint_id: number
+      protocol: string
+      base_url: string
+      key_id?: number | null
+      key_name: string
+      key_prefix?: string | null
+      model: string
+    }
+  | {
+      type: 'model_result'
+      endpoint_id: number
+      protocol: string
+      base_url: string
+      key_id?: number | null
+      key_name: string
+      key_prefix?: string | null
+      model: string
+      step: DiagnosticStep
+    }
+  | {
+      type: 'finished'
+      report: ChannelDiagnosticReport
+    }
+  | {
+      type: 'error'
+      message: string
+    }
+
+export async function streamChannelDiagnostic(
+  id: number,
+  onEvent: (event: ChannelDiagnosticStreamEvent) => void
+) {
+  const auth = useAuthStore()
+  const headers = new Headers()
+  if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
+
+  const response = await fetch(`/api/admin/channels/${id}/diagnose/stream`, {
+    method: 'POST',
+    headers
+  })
+  if (!response.ok || !response.body) {
+    throw new ApiError(response.statusText, response.status)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let report: ChannelDiagnosticReport | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+    for (const chunk of chunks) {
+      const data = chunk
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n')
+      if (!data) continue
+      const event = JSON.parse(data) as ChannelDiagnosticStreamEvent
+      onEvent(event)
+      if (event.type === 'finished') report = event.report
+      if (event.type === 'error') throw new Error(event.message)
+    }
+  }
+
+  if (!report) throw new Error('Diagnostic stream ended without a final report')
+  return report
 }

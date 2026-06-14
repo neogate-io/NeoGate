@@ -147,7 +147,7 @@ function keyHealthLabel(key: ChannelKey) {
         </label>
       </div>
 
-      <el-form-item :label="t('name')">
+      <el-form-item class="name-field" :label="t('name')">
         <el-input v-model="form.name" :placeholder="t('channelNamePlaceholder')" />
       </el-form-item>
 
@@ -321,11 +321,17 @@ function keyHealthLabel(key: ChannelKey) {
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) 86px;
+  grid-template-columns: minmax(0, 50%) max-content;
+  justify-content: start;
 }
 
 .provider-field {
   margin-bottom: 0;
+  width: 100%;
+}
+
+.name-field {
+  width: 50%;
 }
 
 .provider-select {
@@ -698,6 +704,11 @@ function keyHealthLabel(key: ChannelKey) {
   margin-bottom: 7px;
 }
 
+.provider-field :deep(.el-form-item__content),
+.name-field :deep(.el-form-item__content) {
+  width: 100%;
+}
+
 .channel-form :deep(.el-input__wrapper),
 .channel-form :deep(.el-select__wrapper) {
   border-radius: 7px;
@@ -730,6 +741,11 @@ function keyHealthLabel(key: ChannelKey) {
   .provider-row {
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  .provider-field,
+  .name-field {
+    width: 100%;
   }
 
   .status-toggle {

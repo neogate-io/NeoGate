@@ -3,15 +3,15 @@ use std::time::Instant;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::Row;
 
 use crate::{
+    AppState,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     relay::upstream_url,
-    AppState,
 };
 
 use super::credentials::runtime_secret_from_enabled_credential;
@@ -20,7 +20,7 @@ use super::provider::OPENAI_OAUTH_PROTOCOL;
 const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
 const PROBE_SAMPLE_RETENTION_DAYS: i64 = 7;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChannelDiagnosticReport {
     pub channel_id: DbId,
     pub channel_name: String,
@@ -31,6 +31,53 @@ pub struct ChannelDiagnosticReport {
     pub finished_at: DateTime<Utc>,
     pub duration_ms: i64,
     pub endpoints: Vec<EndpointDiagnosticReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChannelDiagnosticEvent {
+    Started {
+        channel_id: DbId,
+        channel_name: String,
+        provider: String,
+    },
+    ModelStarted {
+        endpoint_id: DbId,
+        protocol: String,
+        base_url: String,
+        key_id: Option<DbId>,
+        key_name: String,
+        key_prefix: Option<String>,
+        model: String,
+    },
+    ModelResult {
+        endpoint_id: DbId,
+        protocol: String,
+        base_url: String,
+        key_id: Option<DbId>,
+        key_name: String,
+        key_prefix: Option<String>,
+        model: String,
+        step: DiagnosticStep,
+    },
+    Finished {
+        report: ChannelDiagnosticReport,
+    },
+    Error {
+        message: String,
+    },
+}
+
+impl ChannelDiagnosticEvent {
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::Started { .. } => "started",
+            Self::ModelStarted { .. } => "model_started",
+            Self::ModelResult { .. } => "model_result",
+            Self::Finished { .. } => "finished",
+            Self::Error { .. } => "error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,7 +129,7 @@ pub enum DiagnosticStatus {
     Skipped,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EndpointDiagnosticReport {
     pub endpoint_id: DbId,
     pub protocol: String,
@@ -95,7 +142,7 @@ pub struct EndpointDiagnosticReport {
     pub keys: Vec<KeyDiagnosticReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct KeyDiagnosticReport {
     pub key_id: Option<DbId>,
     pub key_name: String,
@@ -106,9 +153,9 @@ pub struct KeyDiagnosticReport {
     pub steps: Vec<DiagnosticStep>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DiagnosticStep {
-    pub name: &'static str,
+    pub name: String,
     pub status: DiagnosticStatus,
     pub message: String,
     pub duration_ms: i64,
@@ -143,6 +190,14 @@ pub async fn diagnose_channel(
     state: &AppState,
     channel_id: DbId,
 ) -> AppResult<ChannelDiagnosticReport> {
+    diagnose_channel_with_progress(state, channel_id, None).await
+}
+
+pub async fn diagnose_channel_with_progress(
+    state: &AppState,
+    channel_id: DbId,
+    progress: Option<tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
+) -> AppResult<ChannelDiagnosticReport> {
     let started = Instant::now();
     let started_at = Utc::now();
     let channel = load_channel(state, channel_id).await?;
@@ -150,8 +205,17 @@ pub async fn diagnose_channel(
     let keys = load_keys(state, &channel).await?;
     let mut endpoint_reports = Vec::new();
 
-    for endpoint in endpoints {
-        let report = diagnose_endpoint(state, &channel, &endpoint, &keys).await;
+    send_diagnostic_event(
+        &progress,
+        ChannelDiagnosticEvent::Started {
+            channel_id,
+            channel_name: channel.name.clone(),
+            provider: channel.provider.clone(),
+        },
+    );
+
+    if let Some(endpoint) = select_diagnostic_endpoint(&endpoints) {
+        let report = diagnose_endpoint(state, &channel, endpoint, &keys, progress.as_ref()).await;
         if report.status != DiagnosticStatus::Skipped {
             persist_endpoint_health(state, endpoint.id, report.status, &report.summary).await?;
         }
@@ -161,7 +225,7 @@ pub async fn diagnose_channel(
     let finished_at = Utc::now();
     let status = aggregate_status(endpoint_reports.iter().map(|item| item.status));
     let summary = channel_summary(&channel, &endpoint_reports, status);
-    Ok(ChannelDiagnosticReport {
+    let report = ChannelDiagnosticReport {
         channel_id,
         channel_name: channel.name,
         provider: channel.provider,
@@ -171,7 +235,35 @@ pub async fn diagnose_channel(
         finished_at,
         duration_ms: started.elapsed().as_millis() as i64,
         endpoints: endpoint_reports,
-    })
+    };
+    send_diagnostic_event(
+        &progress,
+        ChannelDiagnosticEvent::Finished {
+            report: report.clone(),
+        },
+    );
+    Ok(report)
+}
+
+fn send_diagnostic_event(
+    progress: &Option<tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
+    event: ChannelDiagnosticEvent,
+) {
+    if let Some(progress) = progress {
+        let _ = progress.send(event);
+    }
+}
+
+fn select_diagnostic_endpoint(endpoints: &[EndpointTarget]) -> Option<&EndpointTarget> {
+    endpoints
+        .iter()
+        .find(|endpoint| {
+            endpoint.enabled
+                && endpoint.protocol != OPENAI_OAUTH_PROTOCOL
+                && probe_model(endpoint).is_some()
+        })
+        .or_else(|| endpoints.iter().find(|endpoint| endpoint.enabled))
+        .or_else(|| endpoints.first())
 }
 
 pub async fn probe_channel_once(state: &AppState, channel_id: DbId) -> AppResult<()> {
@@ -289,6 +381,7 @@ async fn diagnose_endpoint(
     channel: &ChannelDiagnosticTarget,
     endpoint: &EndpointTarget,
     keys: &[KeyTarget],
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
 ) -> EndpointDiagnosticReport {
     if !endpoint.enabled {
         return EndpointDiagnosticReport {
@@ -336,7 +429,7 @@ async fn diagnose_endpoint(
     let mut discovered_models = Vec::new();
     let mut key_reports = Vec::new();
     for key in enabled_keys {
-        let report = diagnose_key(state, channel, endpoint, key).await;
+        let report = diagnose_key(state, channel, endpoint, key, progress).await;
         for model in report.discovered_models.clone() {
             if !discovered_models.iter().any(|item| item == &model) {
                 discovered_models.push(model);
@@ -444,17 +537,18 @@ async fn diagnose_key(
     _channel: &ChannelDiagnosticTarget,
     endpoint: &EndpointTarget,
     key: &KeyTarget,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
 ) -> KeyDiagnosticReport {
     if endpoint.protocol == OPENAI_OAUTH_PROTOCOL {
         return KeyDiagnosticReport {
             key_id: key.id,
-            key_name: key.name.clone(),
-            key_prefix: key.key_prefix.clone(),
+            key_name: mask_possible_secret_label(&key.name),
+            key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
             status: DiagnosticStatus::Warning,
             summary: "OpenAI OAuth 通道需要账号上下文，已跳过主动调用诊断".to_string(),
             discovered_models: Vec::new(),
             steps: vec![DiagnosticStep {
-                name: "probe",
+                name: "probe".to_string(),
                 status: DiagnosticStatus::Skipped,
                 message: "OpenAI OAuth 主动诊断暂未启用；请以实际调用结果为准".to_string(),
                 duration_ms: 0,
@@ -468,19 +562,33 @@ async fn diagnose_key(
     let discovered_models = models_step.models.clone();
     steps.push(models_step.step);
 
-    let probe_model = endpoint
+    let probe_models: Vec<_> = endpoint
         .models
         .iter()
-        .find(|model| discovered_models.is_empty() || discovered_models.contains(model))
         .cloned()
-        .or_else(|| discovered_models.first().cloned());
-    if let Some(model) = probe_model {
-        steps.push(run_probe_step(state, endpoint, key, &model).await);
+        .filter(|model| is_text_probe_model(model))
+        .filter(|model| discovered_models.is_empty() || discovered_models.contains(model))
+        .collect();
+    if !probe_models.is_empty() {
+        for model in probe_models {
+            send_model_started_event(progress, endpoint, key, &model);
+            let step = run_probe_step(state, endpoint, key, &model).await;
+            send_model_result_event(progress, endpoint, key, &model, &step);
+            steps.push(step);
+        }
+    } else if let Some(model) = discovered_models
+        .iter()
+        .find(|model| is_text_probe_model(model))
+    {
+        send_model_started_event(progress, endpoint, key, model);
+        let step = run_probe_step(state, endpoint, key, model).await;
+        send_model_result_event(progress, endpoint, key, model, &step);
+        steps.push(step);
     } else {
         steps.push(DiagnosticStep {
-            name: "probe",
+            name: "probe".to_string(),
             status: DiagnosticStatus::Skipped,
-            message: "没有可用于轻量调用测试的模型".to_string(),
+            message: "没有可用于轻量调用测试的文本模型".to_string(),
             duration_ms: 0,
             status_code: None,
         });
@@ -489,12 +597,52 @@ async fn diagnose_key(
     let status = aggregate_status(steps.iter().map(|item| item.status));
     KeyDiagnosticReport {
         key_id: key.id,
-        key_name: key.name.clone(),
-        key_prefix: key.key_prefix.clone(),
+        key_name: mask_possible_secret_label(&key.name),
+        key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
         status,
         summary: key_summary(status),
         discovered_models,
         steps,
+    }
+}
+
+fn send_model_started_event(
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+) {
+    if let Some(progress) = progress {
+        let _ = progress.send(ChannelDiagnosticEvent::ModelStarted {
+            endpoint_id: endpoint.id,
+            protocol: endpoint.protocol.clone(),
+            base_url: endpoint.base_url.clone(),
+            key_id: key.id,
+            key_name: mask_possible_secret_label(&key.name),
+            key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
+            model: model.to_string(),
+        });
+    }
+}
+
+fn send_model_result_event(
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+    step: &DiagnosticStep,
+) {
+    if let Some(progress) = progress {
+        let _ = progress.send(ChannelDiagnosticEvent::ModelResult {
+            endpoint_id: endpoint.id,
+            protocol: endpoint.protocol.clone(),
+            base_url: endpoint.base_url.clone(),
+            key_id: key.id,
+            key_name: mask_possible_secret_label(&key.name),
+            key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
+            model: model.to_string(),
+            step: step.clone(),
+        });
     }
 }
 
@@ -592,7 +740,7 @@ async fn run_models_step(
             if !status.is_success() {
                 return ModelsStepResult {
                     step: DiagnosticStep {
-                        name: "models",
+                        name: "models".to_string(),
                         status: DiagnosticStatus::Failed,
                         message: upstream_status_message(status),
                         duration_ms: started.elapsed().as_millis() as i64,
@@ -611,7 +759,7 @@ async fn run_models_step(
                     };
                     ModelsStepResult {
                         step: DiagnosticStep {
-                            name: "models",
+                            name: "models".to_string(),
                             status,
                             message: if models.is_empty() {
                                 "模型列表接口可访问，但没有返回模型".to_string()
@@ -626,7 +774,7 @@ async fn run_models_step(
                 }
                 Err(_) => ModelsStepResult {
                     step: DiagnosticStep {
-                        name: "models",
+                        name: "models".to_string(),
                         status: DiagnosticStatus::Failed,
                         message: "模型列表响应不是有效 JSON".to_string(),
                         duration_ms: started.elapsed().as_millis() as i64,
@@ -638,7 +786,7 @@ async fn run_models_step(
         }
         Err(err) => ModelsStepResult {
             step: DiagnosticStep {
-                name: "models",
+                name: "models".to_string(),
                 status: DiagnosticStatus::Failed,
                 message: transport_error_message(&err),
                 duration_ms: started.elapsed().as_millis() as i64,
@@ -657,14 +805,46 @@ async fn run_probe_step(
 ) -> DiagnosticStep {
     let started = Instant::now();
     let (path, body) = probe_request(endpoint, model);
+    let key_label = diagnostic_key_log_label(key);
+    tracing::info!(
+        endpoint_id = endpoint.id,
+        protocol = %endpoint.protocol,
+        base_url = %endpoint.base_url,
+        key = %key_label,
+        model = %model,
+        path = %path,
+        "diagnostic probe request started"
+    );
     let response = upstream_request(state, endpoint, key, "POST", path, Some(body))
         .send()
         .await;
     match response {
         Ok(response) => {
             let status = response.status();
+            let duration_ms = started.elapsed().as_millis() as i64;
+            if status.is_success() {
+                tracing::info!(
+                    endpoint_id = endpoint.id,
+                    protocol = %endpoint.protocol,
+                    key = %key_label,
+                    model = %model,
+                    status = status.as_u16(),
+                    duration_ms,
+                    "diagnostic probe request succeeded"
+                );
+            } else {
+                tracing::warn!(
+                    endpoint_id = endpoint.id,
+                    protocol = %endpoint.protocol,
+                    key = %key_label,
+                    model = %model,
+                    status = status.as_u16(),
+                    duration_ms,
+                    "diagnostic probe request failed"
+                );
+            }
             DiagnosticStep {
-                name: "probe",
+                name: format!("probe:{model}"),
                 status: if status.is_success() {
                     DiagnosticStatus::Ok
                 } else {
@@ -675,17 +855,30 @@ async fn run_probe_step(
                 } else {
                     upstream_status_message(status)
                 },
-                duration_ms: started.elapsed().as_millis() as i64,
+                duration_ms,
                 status_code: Some(status.as_u16()),
             }
         }
-        Err(err) => DiagnosticStep {
-            name: "probe",
-            status: DiagnosticStatus::Failed,
-            message: transport_error_message(&err),
-            duration_ms: started.elapsed().as_millis() as i64,
-            status_code: None,
-        },
+        Err(err) => {
+            let duration_ms = started.elapsed().as_millis() as i64;
+            let message = transport_error_message(&err);
+            tracing::warn!(
+                endpoint_id = endpoint.id,
+                protocol = %endpoint.protocol,
+                key = %key_label,
+                model = %model,
+                duration_ms,
+                error = %message,
+                "diagnostic probe request errored"
+            );
+            DiagnosticStep {
+                name: format!("probe:{model}"),
+                status: DiagnosticStatus::Failed,
+                message,
+                duration_ms,
+                status_code: None,
+            }
+        }
     }
 }
 
@@ -957,7 +1150,7 @@ fn channel_summary(
         return "通道已停用，诊断已跳过".to_string();
     }
     match status {
-        DiagnosticStatus::Ok => "所有启用端点和 Key 均通过诊断".to_string(),
+        DiagnosticStatus::Ok => "已选端点和 Key 均通过诊断".to_string(),
         DiagnosticStatus::Warning => "通道可用，但存在需要关注的配置项".to_string(),
         DiagnosticStatus::Failed => "通道诊断失败，请检查失败步骤".to_string(),
         DiagnosticStatus::Skipped => "诊断已跳过".to_string(),
@@ -977,6 +1170,42 @@ fn endpoint_summary(status: DiagnosticStatus, missing_models: &[String]) -> Stri
         DiagnosticStatus::Failed => "端点诊断失败".to_string(),
         DiagnosticStatus::Skipped => "端点诊断已跳过".to_string(),
     }
+}
+
+fn mask_key_prefix(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.chars().count() <= 6 {
+        return "******".to_string();
+    }
+    let head: String = trimmed.chars().take(4).collect();
+    let tail: String = trimmed
+        .chars()
+        .rev()
+        .take(3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}****{tail}")
+}
+
+fn mask_possible_secret_label(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.starts_with("sk-") || trimmed.starts_with("sess-") || trimmed.len() >= 24 {
+        return mask_key_prefix(trimmed);
+    }
+    trimmed.to_string()
+}
+
+fn diagnostic_key_log_label(key: &KeyTarget) -> String {
+    key.key_prefix
+        .as_deref()
+        .map(mask_key_prefix)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| mask_possible_secret_label(&key.name))
 }
 
 fn key_summary(status: DiagnosticStatus) -> String {

@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{
-    email::{smtp_test_error, EmailConfig, EmailService, SMTP_SETTING_KEY},
-    error::{AppError, AppResult},
     AppState,
+    email::{EmailConfig, EmailService, SMTP_SETTING_KEY, smtp_test_error},
+    error::{AppError, AppResult},
 };
 
 #[derive(Debug, Serialize)]

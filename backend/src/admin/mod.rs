@@ -8,76 +8,79 @@ pub(crate) mod provider;
 pub(crate) mod setting;
 mod user;
 
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use axum::{
-    extract::{Multipart, Path, Query, State},
-    routing::{get, patch, post},
     Json, Router,
+    extract::{Multipart, Path, Query, State},
+    response::sse::{Event, KeepAlive, Sse},
+    routing::{get, patch, post},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::Row;
 
 use crate::{
+    AppState,
     auth::{self, AdminAuth},
     billing::CreditAccountType,
     cache::InvalidationEvent,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
-    AppState,
 };
 
 use self::{
     channel::{
-        create_channel, create_channel_key, delete_channel, delete_channel_key,
-        list_all_channel_keys, list_channel_keys, list_channels, reveal_channel_key_secret,
-        update_channel, update_channel_key, ChannelKeyRecord, ChannelRecord,
-        CreateChannelKeyRequest, CreateChannelRequest, UpdateChannelKeyRequest,
-        UpdateChannelRequest,
+        ChannelKeyRecord, ChannelRecord, CreateChannelKeyRequest, CreateChannelRequest,
+        UpdateChannelKeyRequest, UpdateChannelRequest, create_channel, create_channel_key,
+        delete_channel, delete_channel_key, list_all_channel_keys, list_channel_keys,
+        list_channels, reveal_channel_key_secret, update_channel, update_channel_key,
     },
     credentials::{
-        delete_credential, disable_credential, enable_credential, list_credential_models,
-        list_credentials, refresh_credential, reset_credential_model,
-        runtime_secret_from_enabled_credential, upload_credentials, CredentialModelRecord,
-        CredentialRecord, CredentialUploadResult,
+        CredentialModelRecord, CredentialRecord, CredentialUploadResult, delete_credential,
+        disable_credential, enable_credential, list_credential_models, list_credentials,
+        refresh_credential, reset_credential_model, runtime_secret_from_enabled_credential,
+        upload_credentials,
     },
-    diagnostics::{diagnose_channel, ChannelDiagnosticReport},
+    diagnostics::{
+        ChannelDiagnosticEvent, ChannelDiagnosticReport, diagnose_channel,
+        diagnose_channel_with_progress,
+    },
     price::{
-        list_pricing_policies, list_pricing_templates, list_provider_models, list_provider_prices,
-        sync_pricing_templates, upsert_pricing_policy, upsert_provider_price, PricingPolicyRecord,
-        PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
-        SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
+        PricingPolicyRecord, PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord,
+        ProviderPriceRecord, SyncPricingTemplatesRequest, UpsertPricingPolicyRequest,
+        UpsertProviderPriceRequest, list_pricing_policies, list_pricing_templates,
+        list_provider_models, list_provider_prices, sync_pricing_templates, upsert_pricing_policy,
+        upsert_provider_price,
     },
     project::{
-        add_project_member, create_project, delete_project, delete_project_member,
-        list_project_members, list_projects, update_project, update_project_member,
         CreateProjectRequest, CreatedProject, CreatedProjectMember, ListProjectsQuery,
         ProjectMemberRecord, ProjectPage, ProjectRecord, UpdateProjectMemberRequest,
-        UpdateProjectRequest, UpsertProjectMemberRequest,
+        UpdateProjectRequest, UpsertProjectMemberRequest, add_project_member, create_project,
+        delete_project, delete_project_member, list_project_members, list_projects, update_project,
+        update_project_member,
     },
     provider::{
+        CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, ProviderRecord,
         ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
-        record_provider_models, ProviderRecord, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE,
-        OPENAI_OAUTH_PROTOCOL,
+        record_provider_models,
     },
     setting::{
-        get_smtp_setting, test_smtp_setting, upsert_smtp_setting, SmtpSettingRecord,
-        TestSmtpSettingResponse, UpsertSmtpSettingRequest,
+        SmtpSettingRecord, TestSmtpSettingResponse, UpsertSmtpSettingRequest, get_smtp_setting,
+        test_smtp_setting, upsert_smtp_setting,
     },
     user::{
-        adjust_credit, adjust_user_key_model_credit, create_user, create_user_key, delete_user,
-        delete_user_key, list_user_groups, list_user_keys, list_users, update_user,
-        update_user_key, CreateUserKeyRequest, CreateUserRequest, CreatedUserKey,
-        ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
-        UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
-        UserRecord,
+        CreateUserKeyRequest, CreateUserRequest, CreatedUserKey, ListUserKeysQuery, ListUsersQuery,
+        UpdateUserKeyRequest, UpdateUserRequest, UserGroupRecord, UserKeyModelCreditRecord,
+        UserKeyPage, UserKeyRecord, UserPage, UserRecord, adjust_credit,
+        adjust_user_key_model_credit, create_user, create_user_key, delete_user, delete_user_key,
+        list_user_groups, list_user_keys, list_users, update_user, update_user_key,
     },
 };
 use crate::payment::settings::{
-    get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
+    PaymentSettingRecord, UpsertPaymentSettingRequest, get_payment_setting, upsert_payment_setting,
 };
 
 pub use user::public_router;
@@ -192,6 +195,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/channels/{id}/diagnose",
             post(diagnose_channel_handler),
+        )
+        .route(
+            "/api/admin/channels/{id}/diagnose/stream",
+            post(diagnose_channel_stream_handler),
         )
         .route(
             "/api/admin/channels/{id}/keys",
@@ -331,7 +338,7 @@ async fn adjust_credit_handler(
         other => {
             return Err(AppError::BadRequest(format!(
                 "invalid credit_account type: {other}"
-            )))
+            )));
         }
     };
     let balance_micro_usd = adjust_credit(
@@ -895,6 +902,37 @@ async fn diagnose_channel_handler(
     let report = diagnose_channel(&state, id).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(report))
+}
+
+async fn diagnose_channel_stream_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ChannelDiagnosticEvent>();
+    tokio::spawn(async move {
+        match diagnose_channel_with_progress(&state, id, Some(tx.clone())).await {
+            Ok(_) => {
+                invalidate_cache(&state, InvalidationEvent::Routing).await;
+            }
+            Err(err) => {
+                let _ = tx.send(ChannelDiagnosticEvent::Error {
+                    message: err.to_string(),
+                });
+            }
+        }
+    });
+
+    let stream = futures_util::stream::unfold(rx, |mut rx| async {
+        let event = rx.recv().await?;
+        let data = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
+        Some((
+            Ok::<_, Infallible>(Event::default().event(event.event_name()).data(data)),
+            rx,
+        ))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn channel_keys(

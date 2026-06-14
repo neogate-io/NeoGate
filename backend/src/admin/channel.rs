@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 
 use crate::{
+    AppState,
     auth::key_prefix,
     error::{AppError, AppResult},
     id::DbId,
-    AppState,
 };
 
-use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
+use super::diagnostics::{ChannelProbeSampleRecord, recent_probe_samples_by_channel};
 use super::provider::{
-    ensure_custom_provider, ensure_newapi_provider, provider_default_endpoint_base_url,
-    provider_default_endpoints, provider_default_models, record_provider_models,
-    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, ensure_custom_provider,
+    ensure_newapi_provider, provider_default_endpoint_base_url, provider_default_endpoints,
+    provider_default_models, record_provider_models,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -394,7 +394,10 @@ pub async fn reveal_channel_key_secret(
     .await?
     .ok_or(AppError::NotFound)?;
     let secret_ciphertext: String = row.try_get("secret_ciphertext")?;
-    state.secrets.plaintext(key_id, &secret_ciphertext).map_err(Into::into)
+    state
+        .secrets
+        .plaintext(key_id, &secret_ciphertext)
+        .map_err(Into::into)
 }
 
 pub async fn update_channel_key(

@@ -3,8 +3,8 @@ use serde::Serialize;
 use sqlx::Row;
 
 use crate::{
-    error::{AppError, AppResult},
     AppState,
+    error::{AppError, AppResult},
 };
 
 pub const CUSTOM_PROVIDER_CODE: &str = "custom";

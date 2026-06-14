@@ -4,6 +4,8 @@
 
 🚀 **极致性能、简单易用、企业私有化的大模型 API 网关**
 
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+
 <p align="center">
   <strong>中文</strong> |
   <a href="README.en.md">English</a>
@@ -16,8 +18,10 @@
 
 <p align="center">
   <a href="#-功能概览">功能概览</a> •
+  <a href="#-为什么选择-neogate">为什么选择 NeoGate</a> •
   <a href="#-快速开始">快速开始</a> •
   <a href="#-部署模式">部署模式</a> •
+  <a href="docs/README.md">文档</a> •
   <a href="#-生产建议">生产建议</a> •
   <a href="#-获取帮助">获取帮助</a>
 </p>
@@ -37,6 +41,12 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 ---
 
+## 🔎 Search Keywords
+
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
+
+---
+
 ## ✨ 功能概览
 
 | 能力 | 说明 |
@@ -49,6 +59,17 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 | 📊 用量记录 | 记录用户、项目、API key、模型和上游通道维度的调用用量，方便排查问题、分析成本、内部核算和后续计费。 |
 | 💳 服务计费 | 支持内部模式和计费模式，既可作为企业内部网关使用，也可开启额度、充值和支付能力面向客户或开发者收费。 |
 | 🛡️ 故障切换 | 在上游 key 失败时自动冷却并切换可用 key，减少单个密钥或渠道异常对企业业务连续性的影响。 |
+
+---
+
+## 🧠 为什么选择 NeoGate
+
+- **Rust 后端**：面向低延迟、高并发的大模型 API 转发场景设计。
+- **私有化优先**：默认自托管部署，适合企业内部网关、团队共享上游账号和受控访问。
+- **统一兼容接口**：同时提供 OpenAI 兼容和 Anthropic 兼容接口，方便现有客户端迁移。
+- **项目和 Key 隔离**：按项目、成员和 API key 管理权限、额度、用量和成本归集。
+- **内置计费模式**：支持内部模式和面向客户/开发者的计费模式，减少二次开发。
+- **从单机到集群**：Docker Compose 快速启动，后续可切换到 Redis 协调的集群部署。
 
 ---
 

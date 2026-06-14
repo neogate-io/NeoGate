@@ -4,6 +4,8 @@
 
 🚀 **An LLM API gateway built for maximum performance, simple operation, and enterprise private deployment**
 
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+
 <p align="center">
   <a href="README.md">中文</a> |
   <strong>English</strong>
@@ -16,8 +18,10 @@
 
 <p align="center">
   <a href="#-key-features">Key Features</a> •
+  <a href="#-why-neogate">Why NeoGate</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-deployment-modes">Deployment Modes</a> •
+  <a href="docs/README.md">Docs</a> •
   <a href="#-production-checklist">Production Checklist</a> •
   <a href="#-help">Help</a>
 </p>
@@ -37,6 +41,12 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 ---
 
+## 🔎 Search Keywords
+
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
+
+---
+
 ## ✨ Key Features
 
 | Capability | Description |
@@ -49,6 +59,17 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 | 📊 Usage records | Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing. |
 | 💳 Service billing | Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support. |
 | 🛡️ Failover | Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure. |
+
+---
+
+## 🧠 Why NeoGate
+
+- **Rust backend**: Designed for low-latency, high-concurrency LLM API forwarding.
+- **Self-hosted first**: Built for private enterprise deployment, shared upstream accounts, and controlled internal access.
+- **Compatible APIs**: Provides OpenAI-compatible and Anthropic-compatible APIs for easier client migration.
+- **Project and key isolation**: Manage permissions, balance, usage, and cost attribution by project, member, and API key.
+- **Built-in billing mode**: Supports both internal gateway usage and paid access for customers or developers.
+- **Standalone to clustered**: Start with Docker Compose, then move to Redis-coordinated clustered deployment when needed.
 
 ---
 

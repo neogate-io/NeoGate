@@ -4,6 +4,8 @@
 
 🚀 **极致性能、简单易用、企业私有化的大模型 API 网关**
 
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+
 <p align="center">
   <strong>中文</strong> |
   <a href="README.en.md">English</a>
@@ -16,8 +18,10 @@
 
 <p align="center">
   <a href="#-功能概览">功能概览</a> •
+  <a href="#-为什么选择-neogate">为什么选择 NeoGate</a> •
   <a href="#-快速开始">快速开始</a> •
   <a href="#-部署模式">部署模式</a> •
+  <a href="docs/README.md">文档</a> •
   <a href="#-生产建议">生产建议</a> •
   <a href="#-获取帮助">获取帮助</a>
 </p>
@@ -34,6 +38,12 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 > [!IMPORTANT]
 > NeoGate 适用于合法、授权的 AI API 网关、企业级鉴权、多模型管理、用量统计、成本归集和私有化部署场景。使用者应合法获取上游 API key、账号、模型服务和接口权限，并遵守上游服务条款及所在地法律法规。
+
+---
+
+## 🔎 Search Keywords
+
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
 
 ---
 
@@ -81,6 +91,17 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
     </tr>
   </tbody>
 </table>
+
+---
+
+## 🧠 为什么选择 NeoGate
+
+- **Rust 后端**：面向低延迟、高并发的大模型 API 转发场景设计。
+- **私有化优先**：默认自托管部署，适合企业内部网关、团队共享上游账号和受控访问。
+- **统一兼容接口**：同时提供 OpenAI 兼容和 Anthropic 兼容接口，方便现有客户端迁移。
+- **项目和 Key 隔离**：按项目、成员和 API key 管理权限、额度、用量和成本归集。
+- **内置计费模式**：支持内部模式和面向客户/开发者的计费模式，减少二次开发。
+- **从单机到集群**：Docker Compose 快速启动，后续可切换到 Redis 协调的集群部署。
 
 ---
 

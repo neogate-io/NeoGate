@@ -20,10 +20,10 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
   <a href="#-功能概览">功能概览</a> •
   <a href="#-为什么选择-neogate">为什么选择 NeoGate</a> •
   <a href="#-快速开始">快速开始</a> •
-  <a href="#-部署模式">部署模式</a> •
   <a href="docs/README.md">文档</a> •
   <a href="#-生产建议">生产建议</a> •
-  <a href="#-获取帮助">获取帮助</a>
+  <a href="#-获取帮助">获取帮助</a> •
+  <a href="docs/deployment/cluster.zh.md">集群部署</a>
 </p>
 
 </div>
@@ -89,6 +89,10 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
       <td>🛡️ 故障切换</td>
       <td>在上游 key 失败时自动冷却并切换可用 key，减少单个密钥或渠道异常对企业业务连续性的影响。</td>
     </tr>
+    <tr>
+      <td>🚀 集群部署</td>
+      <td>支持从单机 Compose 起步，并在生产环境切换到基于外部 PostgreSQL 和 Redis 的多副本部署。</td>
+    </tr>
   </tbody>
 </table>
 
@@ -140,7 +144,7 @@ NeoGate 首次运行时需要选择内部模式或计费模式。两种模式都
 
 ### 🐳 Docker 安装
 
-Docker 安装分为单机部署和集群部署。两种方式都不需要在宿主机单独安装 Rust、Node.js 或 pnpm。
+Docker 安装不需要在宿主机单独安装 Rust、Node.js 或 pnpm。下面是适合大多数起步场景的单机部署；需要多副本和横向扩展的生产环境请查看：[集群部署文档](docs/deployment/cluster.zh.md)。
 
 #### 单机部署
 
@@ -152,17 +156,27 @@ docker compose up -d --build
 
 启动后访问 `http://服务器IP:8080`，通过首次运行向导完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
 
-#### 集群部署
+#### 检查运行状态
 
-集群部署适合已经明确需要多副本和横向扩展的场景。集群版 Compose 只包含前端 Nginx、后端 API 和 worker，不包含 PostgreSQL/Redis，需要先准备外部 PostgreSQL、Redis、公开域名和共享密钥。
+单机部署启动完成后，可以先查看容器是否都处于 `running` 或 `healthy` 状态：
 
 ```bash
-cp deploy/env/cluster.env.example .env.cluster
-docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --build
+docker compose ps
 ```
 
-> [!WARNING]
-> 生产环境请替换 `.env.cluster` 中的默认密码、域名和共享密钥。单机部署缺失的后端密钥可由首次运行向导自动生成并写入后端配置卷。
+通常会看到 `postgres`、`backend`、`web` 三个服务。若服务状态不是 `running`/`healthy`，可以查看日志定位原因：
+
+```bash
+docker compose logs -f
+```
+
+也可以只查看某个服务的日志，例如单机部署的后端：
+
+```bash
+docker compose logs -f backend
+```
+
+最后在浏览器访问 `http://服务器IP:8080`，如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。
 
 ### 🧑‍💻 源码本地运行
 
@@ -323,40 +337,6 @@ sudo systemctl reload nginx
 
 ---
 
-## 🏗️ 部署模式
-
-NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用单节点部署就够了：不需要 Redis，配置简单，部署和排障成本也更低。
-
-<table>
-  <thead>
-    <tr>
-      <th width="150">部署方式</th>
-      <th width="190">配置</th>
-      <th>适合场景</th>
-      <th>组件</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>🧱 单节点部署</td>
-      <td>默认模式，无需配置 <code>RUNTIME_MODE</code>。</td>
-      <td>个人项目、小团队和早期生产环境。</td>
-      <td><code>docker-compose.yml</code> 会同时启动前端 Nginx、后端和 PostgreSQL。</td>
-    </tr>
-    <tr>
-      <td>🌐 集群部署</td>
-      <td>设置 <code>RUNTIME_MODE=distributed</code>。</td>
-      <td>明确需要多副本和横向扩展的场景。</td>
-      <td>多个后端 API/worker 共享 PostgreSQL 和 Redis；<code>docker-compose.cluster.yml</code> 不包含 PostgreSQL/Redis。</td>
-    </tr>
-  </tbody>
-</table>
-
-> [!TIP]
-> 没有明确的多副本需求时，建议优先使用单节点部署。
-
----
-
 ## ✅ 生产建议
 
 上线前必须确认：
@@ -413,10 +393,6 @@ NeoGate 可以按单节点或集群方式部署。大多数团队起步时使用
     <tr>
       <td>⏱️ 长耗时请求</td>
       <td>图片编辑等长耗时请求如果出现 504，可调大 <code>UPSTREAM_TIMEOUT_SECONDS</code>（默认 600 秒；旧的 <code>REQUEST_TIMEOUT_SECONDS</code> 仍作为兼容别名）。</td>
-    </tr>
-    <tr>
-      <td>✉️ 邮箱领 key</td>
-      <td>如需公开邮箱领取 API key，在首次运行向导或管理员后台的系统设置中配置 SMTP。</td>
     </tr>
     <tr>
       <td>💳 计费模式</td>

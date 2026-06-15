@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
+  CircleCheck,
   CircleCheckFilled,
   CircleCloseFilled,
   Coin,
@@ -14,6 +15,7 @@ import {
   PriceTag,
   Search,
   VideoPause,
+  Warning,
   WarningFilled
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -199,6 +201,47 @@ function channelModelList(row: Channel) {
   return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
 }
 
+function modelEndpoint(row: Channel, model: string) {
+  return row.endpoints.find((ep) => ep.models.map((m) => m.trim()).includes(model)) ?? null
+}
+
+function modelOperationalStatus(
+  row: Channel,
+  model: string,
+  runtimeEnabled: boolean
+): 'normal' | 'rate_limited' | 'cooldown' | 'failed' | 'disabled' {
+  if (!runtimeEnabled) return 'disabled'
+
+  const ep = modelEndpoint(row, model)
+  if (!ep || !row.enabled) return 'failed'
+
+  const latestProbe = row.probe_samples
+    .filter((s) => s.model === model)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
+
+  if (latestProbe?.status === 'ok') return 'normal'
+
+  const error = (latestProbe?.error_summary ?? ep.last_error ?? '').toLowerCase()
+  if (error.includes('rate') || error.includes('quota') || error.includes('429')) return 'rate_limited'
+
+  if (ep.cooldown_until && new Date(ep.cooldown_until) > new Date()) return 'cooldown'
+
+  if (!ep.healthy || latestProbe?.status === 'failed') return 'failed'
+
+  return 'normal'
+}
+
+function modelOperationalStatusLabel(status: ReturnType<typeof modelOperationalStatus>) {
+  const labels: Record<string, string> = {
+    normal: t('modelStatusNormal'),
+    rate_limited: t('modelStatusRateLimited'),
+    cooldown: t('modelStatusCooldown'),
+    failed: t('modelStatusFailed'),
+    disabled: t('modelStatusDisabled')
+  }
+  return labels[status]
+}
+
 function channelPriceStatus(row: Channel) {
   const models = channelModelList(row)
   if (models.length === 0) {
@@ -265,16 +308,20 @@ function channelPriceRows(row: Channel) {
       : t('priceMissing')
     const hasConfiguredPrice = isProviderPriceConfigured(price)
     const runtimeEnabled = isProviderPriceReady(price)
+    const modelStatus = modelOperationalStatus(row, model, runtimeEnabled)
     return {
       model,
       disabled: Boolean(price && !price.enabled),
       missing: !hasConfiguredPrice,
       runtimeToggleDisabled: !hasConfiguredPrice || isRuntimeToggling(row.provider, model),
       runtimeEnabled,
+      modelStatus,
+      modelStatusLabel: modelOperationalStatusLabel(modelStatus),
       inputPrice,
       outputPrice,
       cacheReadPrice,
       cacheWritePrice,
+      cachePrice: price ? `${cacheReadPrice} / ${cacheWritePrice}` : t('priceMissing'),
       price: price ? `${inputPrice} / ${outputPrice}` : t('priceMissing')
     }
   })
@@ -961,11 +1008,13 @@ onMounted(loadInitialData)
       >
         <el-table-column type="expand" width="44">
           <template #default="{ row }">
-            <div class="channel-expand-panel">
+            <div
+              class="channel-expand-panel"
+              :class="{ 'is-channel-disabled': !row.enabled }"
+            >
               <div class="channel-expand-head">
                 <div>
                   <strong>{{ t('modelPriceDetails') }}</strong>
-                  <span>{{ t('inputOutputPriceHint') }}</span>
                 </div>
                 <el-button
                   class="admin-action-button expand-price-action"
@@ -978,12 +1027,11 @@ onMounted(loadInitialData)
               <div class="channel-expand-price-table">
                 <div class="channel-expand-price-row is-head">
                   <span>{{ t('modelName') }}</span>
-                  <span class="channel-head-label">{{ t('inputPrice') }}</span>
-                  <span class="channel-head-label">{{ t('outputPrice') }}</span>
-                  <span class="channel-head-label">{{ t('cacheReadPrice') }}</span>
-                  <span class="channel-head-label">{{ t('cacheWritePrice') }}</span>
+                  <span class="channel-head-label">{{ t('inputOutputPriceShort') }}</span>
+                  <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
                   <span>{{ t('priceStatus') }}</span>
-                  <span>{{ t('channelStatus') }}</span>
+                  <span>{{ t('modelRuntimeStatus') }}</span>
+                  <span>{{ t('modelRuntimeSwitch') }}</span>
                 </div>
                 <div
                   v-for="item in channelPriceRows(row)"
@@ -992,21 +1040,23 @@ onMounted(loadInitialData)
                   :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
                 >
                   <span class="channel-price-model">{{ item.model }}</span>
-                  <span class="channel-detail-price">{{ item.inputPrice }}</span>
-                  <span class="channel-detail-price">{{ item.outputPrice }}</span>
-                  <span class="channel-detail-price">{{ item.cacheReadPrice }}</span>
-                  <span class="channel-detail-price" :aria-label="item.cacheWritePrice">
-                    {{ item.cacheWritePrice }}
-                  </span>
+                  <span class="channel-detail-price">{{ item.price }}</span>
+                  <span class="channel-detail-price">{{ item.cachePrice }}</span>
                   <span
                     class="channel-detail-status"
                     :class="{ 'is-missing': item.missing }"
                     :aria-label="item.missing ? t('priceMissing') : t('priceReady')"
                   >
                     <el-icon>
-                      <WarningFilled v-if="item.missing" />
-                      <CircleCheckFilled v-else />
+                      <Warning v-if="item.missing" />
+                      <CircleCheck v-else />
                     </el-icon>
+                  </span>
+                  <span
+                    class="channel-detail-runtime-status"
+                    :class="`is-${item.modelStatus}`"
+                  >
+                    {{ item.modelStatusLabel }}
                   </span>
                   <span
                     class="channel-detail-runtime-switch"
@@ -1180,6 +1230,29 @@ onMounted(loadInitialData)
                 </div>
               </div>
             </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('channelStatus')"
+          min-width="130"
+          align="center"
+          header-align="center"
+        >
+          <template #default="{ row }">
+            <span
+              class="channel-runtime-status-tag"
+              :class="`is-${channelRuntimeStatus(row)}`"
+            >
+              <template v-if="channelRuntimeStatus(row) === 'normal'">
+                {{ t('channelRunningNormal') }}
+              </template>
+              <template v-else-if="channelRuntimeStatus(row) === 'attention'">
+                {{ t('channelNeedsAttention') }}
+              </template>
+              <template v-else>
+                {{ t('channelStopped') }}
+              </template>
+            </span>
           </template>
         </el-table-column>
         <el-table-column
@@ -1906,6 +1979,31 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
+.channel-runtime-status-tag {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+
+.channel-runtime-status-tag.is-normal {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.channel-runtime-status-tag.is-attention {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.channel-runtime-status-tag.is-disabled {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
 .channel-runtime-switch.is-enabled,
 .channel-runtime-switch.is-enabled .channel-runtime-switch-text {
   background: var(--admin-success-bg);
@@ -2140,15 +2238,14 @@ onMounted(loadInitialData)
   display: grid;
   gap: 10px;
   grid-template-columns:
-    minmax(180px, 1.25fr)
-    minmax(132px, 0.78fr)
-    minmax(132px, 0.78fr)
-    minmax(150px, 0.9fr)
-    minmax(164px, 0.92fr)
-    84px
+    minmax(160px, 2fr)
+    minmax(130px, 0.7fr)
+    minmax(130px, 0.7fr)
+    90px
+    100px
     84px;
   min-height: 46px;
-  min-width: 912px;
+  min-width: 834px;
   padding: 0 16px;
 }
 
@@ -2177,18 +2274,13 @@ onMounted(loadInitialData)
 
 .channel-expand-price-row.is-head span:nth-child(2),
 .channel-expand-price-row.is-head span:nth-child(3),
-.channel-expand-price-row.is-head span:nth-child(4),
-.channel-expand-price-row.is-head span:nth-child(5),
 .channel-detail-price {
   text-align: right;
 }
 
+.channel-expand-price-row.is-head span:nth-child(4),
+.channel-expand-price-row.is-head span:nth-child(5),
 .channel-expand-price-row.is-head span:nth-child(6) {
-  padding-left: 20px;
-  text-align: center;
-}
-
-.channel-expand-price-row.is-head span:nth-child(7) {
   text-align: center;
 }
 
@@ -2204,15 +2296,47 @@ onMounted(loadInitialData)
   color: #c2410c;
 }
 
+.channel-expand-panel.is-channel-disabled .channel-expand-head strong,
+.channel-expand-panel.is-channel-disabled .channel-expand-head span {
+  color: #94a3b8;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-expand-price-row {
+  color: #94a3b8;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-expand-price-row.is-head {
+  background: #f1f5f9;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-price-model,
+.channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-detail-price {
+  color: #94a3b8;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-detail-status .el-icon {
+  color: #cbd5e1;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-detail-runtime-status {
+  color: #94a3b8;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-detail-runtime-switch :deep(.el-switch) {
+  --el-switch-on-color: #cbd5e1;
+  --el-switch-off-color: #cbd5e1;
+}
+
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-price-model,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-price,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status,
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-status,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-switch {
   color: #94a3b8;
 }
 
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status .el-icon {
-  background: #cbd5e1;
+  color: #cbd5e1;
 }
 
 .channel-expand-price-row .channel-price-model {
@@ -2251,18 +2375,51 @@ onMounted(loadInitialData)
 
 .channel-detail-status .el-icon {
   align-items: center;
-  background: #22c55e;
-  border-radius: 999px;
-  color: #ffffff;
+  color: #22c55e;
   display: inline-flex;
-  font-size: 13px;
-  height: 22px;
+  font-size: 18px;
   justify-content: center;
-  width: 22px;
 }
 
 .channel-detail-status.is-missing .el-icon {
-  background: #f97316;
+  color: #f97316;
+}
+
+.channel-detail-runtime-status {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  justify-content: center;
+  line-height: 1;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.channel-detail-runtime-status.is-normal {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.channel-detail-runtime-status.is-rate_limited {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.channel-detail-runtime-status.is-cooldown {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.channel-detail-runtime-status.is-failed {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.channel-detail-runtime-status.is-disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
 }
 
 .channel-detail-runtime-switch {

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="784" height="400" viewBox="0 0 784 400" role="img" aria-labelledby="title desc">
+  <title id="title">Automatic configuration completed</title>
+  <desc id="desc">Terminal screenshot showing successful configuration writes.</desc>
+  <g transform="translate(-88 -70)">
+  <rect x="88" y="70" width="784" height="400" rx="14" fill="#0f172a"/>
+  <rect x="88" y="70" width="784" height="46" rx="14" fill="#172033"/>
+  <circle cx="118" cy="93" r="7" fill="#f87171"/>
+  <circle cx="142" cy="93" r="7" fill="#fbbf24"/>
+  <circle cx="166" cy="93" r="7" fill="#34d399"/>
+  <text x="198" y="99" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">NeoGate installer</text>
+  <text x="124" y="166" fill="#22c55e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">✓ Node.js found</text>
+  <text x="124" y="212" fill="#22c55e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">✓ Codex CLI configured</text>
+  <text x="154" y="250" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">~/.codex/config.toml</text>
+  <text x="154" y="286" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">~/.codex/auth.json</text>
+  <text x="124" y="342" fill="#22c55e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">✓ Setup complete</text>
+  <text x="124" y="390" fill="#e5edf7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">Run codex or claude to verify the configuration.</text>
+  </g>
+</svg>

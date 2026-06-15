@@ -536,6 +536,20 @@
   word-break: break-word;
 }
 
+.install-help-link {
+  color: var(--brand-blue);
+  font-size: 14px;
+  font-weight: 400;
+  justify-self: center;
+  line-height: 1.4;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.install-help-link:hover {
+  text-decoration: underline;
+}
+
 .docs-page {
   background: linear-gradient(180deg, #ffffff 0, #f6f8fb 38%, #eef3f8 100%);
   color: #172033;
@@ -972,6 +986,56 @@
 }
 
 .docs-step-card p {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.docs-mini-heading h3 {
+  color: var(--public-text);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.docs-screenshot-steps {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 1fr;
+  margin-top: -10px;
+}
+
+.docs-screenshot-step {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.docs-screenshot-step img {
+  border-radius: 8px;
+  display: block;
+  height: auto;
+  justify-self: start;
+  max-width: 680px;
+  width: 100%;
+}
+
+.docs-screenshot-step > div {
+  display: grid;
+  gap: 7px;
+}
+
+.docs-screenshot-step h3 {
+  color: var(--public-text);
+  font-size: 16px;
+  font-weight: 780;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.docs-screenshot-step p {
   color: #64748b;
   font-size: 14px;
   line-height: 1.55;

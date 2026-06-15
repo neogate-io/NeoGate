@@ -2,16 +2,19 @@
 import { computed } from 'vue'
 import { DocumentCopy, Key, Link, Money } from '@element-plus/icons-vue'
 import PublicHeader from '../../components/PublicHeader.vue'
-import { useInstallScript } from '../../composables/useInstallScript'
 import { useLocale } from '../../composables/useLocale'
 import { useScrollTo, useCopyText } from '../../composables/usePublicPage'
 
 const { locale, t } = useLocale()
-const { installScript, copyInstallScript } = useInstallScript(t)
 const scrollToSection = useScrollTo()
 const copyDocText = useCopyText()
 const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const anthropicBaseUrl = computed(() => `${window.location.origin}/anthropic`)
+const shellInstallScript = computed(() => `curl -fsSL ${window.location.origin}/install | bash`)
+const powershellInstallScript = computed(
+  () =>
+    `powershell -ExecutionPolicy Bypass -Command "iex (irm ${window.location.origin}/install.ps1)"`
+)
 
 const claudeInstall = `npm install -g @anthropic-ai/claude-code
 claude`
@@ -21,8 +24,14 @@ const claudeCodeConfig = computed(
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "YOUR_NEOGATE_API_KEY",
     "ANTHROPIC_BASE_URL": "${anthropicBaseUrl.value}",
-    "ANTHROPIC_MODEL": "gpt-5.5"
-  }
+    "ANTHROPIC_MODEL": "claude-sonnet-4-5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-4-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4-5",
+    "ANTHROPIC_REASONING_MODEL": "claude-sonnet-4-5",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "claude-sonnet-4-5"
+  },
+  "model": "claude-sonnet-4-5"
 }`
 )
 
@@ -55,24 +64,59 @@ const content = computed(() => {
         '用 NeoGate 统一管理 API 密钥、余额、用量和上游模型，并通过 OpenAI / Anthropic 兼容接口接入。',
       menuTitle: '目录',
       menu: [
-        ['start', '开始使用', '1. 开始使用'],
-        ['software-config', '软件配置', '2. 软件配置'],
-        ['claude-code', '使用 Claude Code', '2.1 使用 Claude Code', 'sub'],
-        ['codex', '使用 Codex', '2.2 使用 Codex', 'sub'],
-        ['billing', '余额与用量', '3. 余额与用量'],
-        ['faq', '常见问题', '4. 常见问题']
+        ['start', '准备工作', '1. 准备工作'],
+        ['auto-config', '自动配置', '2. 自动配置'],
+        ['software-config', '手动配置', '3. 手动配置'],
+        ['claude-code', '使用 Claude Code', '3.1 使用 Claude Code', 'sub'],
+        ['codex', '使用 Codex', '3.2 使用 Codex', 'sub'],
+        ['billing', '余额与用量', '4. 余额与用量'],
+        ['faq', '常见问题', '5. 常见问题']
       ],
-      startTitle: '开始使用',
-      startIntro: '第一次使用只需要完成两步：取得 API 密钥，然后执行安装脚本。',
+      startTitle: '准备工作',
+      startIntro:
+        '第一次使用先取得 NeoGate API Key，并确认要接入的本机工具。准备完成后，可以选择自动配置或手动配置。',
       startCards: [
         [
           '获取 API 密钥',
           '如果已开放注册，可在首页填写邮箱领取；如果未开放注册，请登录用户后台创建，或联系管理员分配。'
         ],
-        ['执行安装脚本', '复制并运行安装脚本，把 NeoGate 写入本机常用 AI 工具配置。']
+        [
+          '确认客户端',
+          '确认要配置 Claude Code 还是 Codex；自动配置一次选择一个客户端，后续步骤会用到对应客户端和模型名。'
+        ]
       ],
-      installTitle: '一键配置本机工具',
-      installText: '安装脚本会把当前服务写入常用本地 AI 工具配置。',
+      installShellTitle: 'Linux / macOS / WSL 自动配置',
+      installShellText:
+        '在 bash、zsh 或 WSL 终端中运行下面的命令。脚本会提示输入 NeoGate API Key、选择要配置的客户端和模型，并可检查或安装 Node.js、Codex、Claude Code 等依赖。',
+      installWindowsTitle: 'Windows PowerShell 自动配置',
+      installWindowsText:
+        '在 Windows PowerShell 中运行 install.ps1；如果在 WSL 里使用，请运行上面的 shell 命令。',
+      autoConfigIntro:
+        '自动配置会从当前 NeoGate 服务获取安装脚本。按终端提示完成选择后，脚本会把 Base URL、API Key 和模型名写入本机工具配置。',
+      autoConfigCommandTitle: '2.1 安装命令',
+      autoConfigStepsTitle: '2.2 配置步骤',
+      autoConfigSteps: [
+        [
+          '1) 复制并运行安装命令',
+          '从首页或本页复制对应系统的安装命令，在终端中执行。',
+          '/docs/auto-config-run-command.svg',
+          '运行 NeoGate 安装命令的终端截图'
+        ],
+        [
+          '2) 按提示填写配置',
+          '输入 NeoGate API Key，选择要配置的客户端和模型。需要时脚本会检查或安装依赖。',
+          '/docs/auto-config-answer-prompts.svg',
+          '填写 API Key、客户端和模型的终端截图'
+        ],
+        [
+          '3) 完成后验证客户端',
+          '看到配置写入成功后，重新运行 codex 或 claude，发送一条测试消息确认可用。',
+          '/docs/auto-config-complete.svg',
+          '自动配置完成的终端截图'
+        ]
+      ],
+      manualConfigIntro:
+        '手动配置不依赖安装脚本。先安装目标客户端，再把 NeoGate 的 Base URL、API Key 和模型名写入对应配置文件。',
       endpointIntro:
         '下游应用只需要使用 NeoGate 地址和自己的 NeoGate API Key；上游密钥由后台统一管理。',
       routes: [
@@ -94,7 +138,7 @@ const content = computed(() => {
         'Claude Code 官方使用 settings.json 管理配置。首次运行 claude 成功后，本地配置目录才会生成；没有 settings.json 时，可以手动创建。',
       claudeConfigPaths: [
         'macOS / Linux / WSL：~/.claude/settings.json',
-        'Windows：%userprofile%\\.claude\\settings.json'
+        'Windows：%USERPROFILE%\\.claude\\settings.json'
       ],
       writeConfigTitle: '写入 settings.json',
       verifyTitle: '验证配置',
@@ -105,11 +149,19 @@ const content = computed(() => {
       installCodexTitle: '安装 Codex',
       codexConfigFileTitle: '打开配置文件',
       codexConfigFileText:
-        '在用户目录下打开 ~/.codex/config.toml；如果文件不存在，请手动创建。模型、提供商和 Base URL 写入 config.toml。',
+        'Codex 将配置文件放在用户目录下。按你的系统打开 config.toml；如果文件不存在，请手动创建。模型、提供商和 Base URL 写入 config.toml。',
+      codexConfigPaths: [
+        'macOS / Linux / WSL：~/.codex/config.toml',
+        'Windows：%USERPROFILE%\\.codex\\config.toml'
+      ],
       writeCodexConfigTitle: '写入 config.toml',
       codexAuthFileTitle: '打开认证文件',
       codexAuthFileText:
-        '在用户目录下打开 ~/.codex/auth.json；如果文件不存在，请手动创建。API Key 和认证模式写入 auth.json。',
+        '按你的系统打开 auth.json；如果文件不存在，请手动创建。API Key 和认证模式写入 auth.json。',
+      codexAuthPaths: [
+        'macOS / Linux / WSL：~/.codex/auth.json',
+        'Windows：%USERPROFILE%\\.codex\\auth.json'
+      ],
       writeCodexAuthTitle: '写入 auth.json',
       codexVerifyText: '重新运行 codex。如果能正常进入会话并收到回复，说明配置完成。',
       billingTitle: '余额与用量',
@@ -138,27 +190,59 @@ const content = computed(() => {
       'Use NeoGate to manage API keys, balance, usage, and upstream models behind OpenAI / Anthropic-compatible APIs.',
     menuTitle: 'Contents',
     menu: [
-      ['start', 'Start', '1. Start'],
-      ['software-config', 'Software Config', '2. Software Config'],
-      ['claude-code', 'Use Claude Code', '2.1 Use Claude Code', 'sub'],
-      ['codex', 'Use Codex', '2.2 Use Codex', 'sub'],
-      ['billing', 'Billing', '3. Billing'],
-      ['faq', 'FAQ', '4. FAQ']
+      ['start', 'Preparation', '1. Preparation'],
+      ['auto-config', 'Automatic Config', '2. Automatic Config'],
+      ['software-config', 'Manual Config', '3. Manual Config'],
+      ['claude-code', 'Use Claude Code', '3.1 Use Claude Code', 'sub'],
+      ['codex', 'Use Codex', '3.2 Use Codex', 'sub'],
+      ['billing', 'Billing', '4. Billing'],
+      ['faq', 'FAQ', '5. FAQ']
     ],
-    startTitle: 'Start',
-    startIntro: 'First-time setup has two steps: get an API key, then run the install script.',
+    startTitle: 'Preparation',
+    startIntro:
+      'First get a NeoGate API key and confirm which local tool you want to connect. After preparation, choose automatic or manual configuration.',
     startCards: [
       [
         'Get an API key',
         'If registration is open, request one from the home page. If registration is closed, create one after signing in or ask an admin to issue it.'
       ],
       [
-        'Run the install script',
-        'Copy and run the script to write NeoGate into common local AI tool configuration.'
+        'Confirm client',
+        'Decide whether to configure Claude Code or Codex. Automatic configuration configures one client at a time, and the next steps use the matching client and model name.'
       ]
     ],
-    installTitle: 'Configure local tools',
-    installText: 'The install script writes this service into common local AI tool configuration.',
+    installShellTitle: 'Linux / macOS / WSL automatic config',
+    installShellText:
+      'Run this command in bash, zsh, or a WSL terminal. The script prompts for the NeoGate API key, target client, and model, and can check or install dependencies such as Node.js, Codex, and Claude Code.',
+    installWindowsTitle: 'Windows PowerShell automatic config',
+    installWindowsText:
+      'Run install.ps1 in Windows PowerShell. If you are using WSL, use the shell command above.',
+    autoConfigIntro:
+      'Automatic configuration downloads the install script from this NeoGate service. After you answer the terminal prompts, the script writes the Base URL, API key, and model name into local tool configuration.',
+    autoConfigCommandTitle: '2.1 Install Commands',
+    autoConfigStepsTitle: '2.2 Steps',
+    autoConfigSteps: [
+      [
+        '1) Copy and run the install command',
+        'Copy the command for your operating system from the home page or this page, then run it in a terminal.',
+        '/docs/auto-config-run-command.svg',
+        'Terminal screenshot running the NeoGate install command'
+      ],
+      [
+        '2) Answer the prompts',
+        'Enter the NeoGate API key, select the client and model, and let the script check or install dependencies if needed.',
+        '/docs/auto-config-answer-prompts.svg',
+        'Terminal screenshot entering API key, client, and model'
+      ],
+      [
+        '3) Verify the client',
+        'After the script reports successful writes, run codex or claude again and send one test message.',
+        '/docs/auto-config-complete.svg',
+        'Terminal screenshot showing automatic configuration completed'
+      ]
+    ],
+    manualConfigIntro:
+      'Manual configuration does not use the install script. Install the target client first, then write the NeoGate Base URL, API key, and model name into the matching config file.',
     endpointIntro:
       'Apps use NeoGate URLs and a NeoGate API key. Upstream credentials are managed in the admin console.',
     routes: [
@@ -180,7 +264,7 @@ const content = computed(() => {
       'Claude Code officially uses settings.json for configuration. The local config directory is created after the first successful claude launch. Create settings.json manually if it does not exist.',
     claudeConfigPaths: [
       'macOS / Linux / WSL: ~/.claude/settings.json',
-      'Windows: %userprofile%\\.claude\\settings.json'
+      'Windows: %USERPROFILE%\\.claude\\settings.json'
     ],
     writeConfigTitle: 'Write settings.json',
     verifyTitle: 'Verify setup',
@@ -191,11 +275,19 @@ const content = computed(() => {
     installCodexTitle: 'Install Codex',
     codexConfigFileTitle: 'Open the config file',
     codexConfigFileText:
-      'Open ~/.codex/config.toml in your home directory. Create it if it does not exist. Put the model, provider, and Base URL in config.toml.',
+      'Codex stores its config in your home directory. Open config.toml for your operating system. Create it if it does not exist, then put the model, provider, and Base URL in config.toml.',
+    codexConfigPaths: [
+      'macOS / Linux / WSL: ~/.codex/config.toml',
+      'Windows: %USERPROFILE%\\.codex\\config.toml'
+    ],
     writeCodexConfigTitle: 'Write config.toml',
     codexAuthFileTitle: 'Open the auth file',
     codexAuthFileText:
-      'Open ~/.codex/auth.json in your home directory. Create it if it does not exist. Put the API key and auth mode in auth.json.',
+      'Open auth.json for your operating system. Create it if it does not exist, then put the API key and auth mode in auth.json.',
+    codexAuthPaths: [
+      'macOS / Linux / WSL: ~/.codex/auth.json',
+      'Windows: %USERPROFILE%\\.codex\\auth.json'
+    ],
     writeCodexAuthTitle: 'Write auth.json',
     codexVerifyText:
       'Run codex again. If it enters a session and receives a reply, setup is complete.',
@@ -270,28 +362,73 @@ const content = computed(() => {
                 <p>{{ text }}</p>
               </article>
             </div>
+          </section>
+
+          <section id="auto-config" class="docs-section">
+            <div class="docs-section-heading">
+              <h2>{{ content.menu[1][2] }}</h2>
+              <p>{{ content.autoConfigIntro }}</p>
+            </div>
+            <div class="docs-mini-heading">
+              <h3>{{ content.autoConfigCommandTitle }}</h3>
+            </div>
             <article class="docs-step-card">
-              <h3>{{ content.installTitle }}</h3>
+              <h3>{{ content.installShellTitle }}</h3>
+              <p>{{ content.installShellText }}</p>
               <div class="docs-copy-block">
                 <el-button
                   :icon="DocumentCopy"
                   text
                   :aria-label="t('copy')"
-                  @click="copyInstallScript"
+                  @click="copyDocText(shellInstallScript)"
                 />
-                <pre class="docs-code-sample docs-inner-code"><code>{{ installScript }}</code></pre>
+                <pre
+                  class="docs-code-sample docs-inner-code"
+                ><code>{{ shellInstallScript }}</code></pre>
               </div>
             </article>
+            <article class="docs-step-card">
+              <h3>{{ content.installWindowsTitle }}</h3>
+              <p>{{ content.installWindowsText }}</p>
+              <div class="docs-copy-block">
+                <el-button
+                  :icon="DocumentCopy"
+                  text
+                  :aria-label="t('copy')"
+                  @click="copyDocText(powershellInstallScript)"
+                />
+                <pre
+                  class="docs-code-sample docs-inner-code"
+                ><code>{{ powershellInstallScript }}</code></pre>
+              </div>
+            </article>
+            <div class="docs-mini-heading">
+              <h3>{{ content.autoConfigStepsTitle }}</h3>
+            </div>
+            <div class="docs-screenshot-steps">
+              <article
+                v-for="[title, text, image, alt] in content.autoConfigSteps"
+                :key="title"
+                class="docs-screenshot-step"
+              >
+                <div>
+                  <h3>{{ title }}</h3>
+                  <p>{{ text }}</p>
+                </div>
+                <img :src="image" :alt="alt" loading="lazy" />
+              </article>
+            </div>
           </section>
 
           <section id="software-config" class="docs-section">
             <div class="docs-section-heading">
-              <h2>{{ content.menu[1][2] }}</h2>
+              <h2>{{ content.menu[2][2] }}</h2>
+              <p>{{ content.manualConfigIntro }}</p>
             </div>
 
             <section id="claude-code" class="docs-subsection">
               <div class="docs-section-heading docs-subsection-heading">
-                <h2>{{ content.menu[2][2] }}</h2>
+                <h2>{{ content.menu[3][2] }}</h2>
                 <p>{{ content.claudeCodeIntro }}</p>
               </div>
               <div class="docs-guide-flow">
@@ -358,7 +495,7 @@ const content = computed(() => {
 
             <section id="codex" class="docs-subsection">
               <div class="docs-section-heading docs-subsection-heading">
-                <h2>{{ content.menu[3][2] }}</h2>
+                <h2>{{ content.menu[4][2] }}</h2>
                 <p>{{ content.codexIntro }}</p>
               </div>
               <div class="docs-guide-flow">
@@ -379,16 +516,14 @@ const content = computed(() => {
                 <article class="docs-step-card">
                   <h3>{{ content.codexConfigFileTitle }}</h3>
                   <p>{{ content.codexConfigFileText }}</p>
-                  <div class="docs-copy-block">
+                  <div class="docs-copy-block" v-for="item in content.codexConfigPaths" :key="item">
                     <el-button
                       :icon="DocumentCopy"
                       text
                       :aria-label="t('copy')"
-                      @click="copyDocText('~/.codex/config.toml')"
+                      @click="copyDocText(item)"
                     />
-                    <pre
-                      class="docs-code-sample docs-inner-code"
-                    ><code>~/.codex/config.toml</code></pre>
+                    <pre class="docs-code-sample docs-inner-code"><code>{{ item }}</code></pre>
                   </div>
                 </article>
                 <article class="docs-step-card">
@@ -408,16 +543,14 @@ const content = computed(() => {
                 <article class="docs-step-card">
                   <h3>{{ content.codexAuthFileTitle }}</h3>
                   <p>{{ content.codexAuthFileText }}</p>
-                  <div class="docs-copy-block">
+                  <div class="docs-copy-block" v-for="item in content.codexAuthPaths" :key="item">
                     <el-button
                       :icon="DocumentCopy"
                       text
                       :aria-label="t('copy')"
-                      @click="copyDocText('~/.codex/auth.json')"
+                      @click="copyDocText(item)"
                     />
-                    <pre
-                      class="docs-code-sample docs-inner-code"
-                    ><code>~/.codex/auth.json</code></pre>
+                    <pre class="docs-code-sample docs-inner-code"><code>{{ item }}</code></pre>
                   </div>
                 </article>
                 <article class="docs-step-card">
@@ -451,7 +584,7 @@ const content = computed(() => {
 
           <section id="billing" class="docs-section">
             <div class="docs-section-heading">
-              <h2>{{ content.menu[4][2] }}</h2>
+              <h2>{{ content.menu[5][2] }}</h2>
               <p>{{ content.billingIntro }}</p>
             </div>
             <div class="docs-check-list">
@@ -469,7 +602,7 @@ const content = computed(() => {
 
           <section id="faq" class="docs-section">
             <div class="docs-section-heading">
-              <h2>{{ content.menu[5][2] }}</h2>
+              <h2>{{ content.menu[6][2] }}</h2>
             </div>
             <div class="docs-faq-list">
               <article

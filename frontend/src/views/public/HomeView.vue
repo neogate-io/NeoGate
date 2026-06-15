@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import type { InputInstance } from 'element-plus/es/components/input/index'
 import { DocumentCopy, Key } from '@element-plus/icons-vue'
 import { computed, nextTick, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { getSetupStatus, type ServicePolicy } from '../../api/policy'
 import { createUserKey, createUserKeyDraft } from '../../api/userKeys'
 import PublicHeader from '../../components/PublicHeader.vue'
@@ -180,6 +181,7 @@ function resetHomeApiKey() {
             {{ t('copy') }}
           </el-button>
         </div>
+        <RouterLink class="install-help-link" to="/docs">{{ t('viewHelpDocs') }}</RouterLink>
       </section>
     </section>
   </div>

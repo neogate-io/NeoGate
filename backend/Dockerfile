@@ -4,12 +4,15 @@ ARG DEBIAN_IMAGE=${DOCKER_HUB_PREFIX}library/debian:bookworm-slim
 
 FROM ${RUST_IMAGE} AS builder
 
-ARG CARGO_REGISTRY_MIRROR=sparse+https://rsproxy.cn/index/
+ARG CARGO_REGISTRY_MIRROR=sparse+https://mirrors.ustc.edu.cn/crates.io-index/
+ARG CARGO_HTTP_TIMEOUT=600
+ARG CARGO_HTTP_LOW_SPEED_LIMIT=1
+ARG CARGO_NET_RETRY=10
 
 WORKDIR /app/backend
 
 RUN mkdir -p /usr/local/cargo \
-    && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' "${CARGO_REGISTRY_MIRROR}" > /usr/local/cargo/config.toml
+    && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n\n[net]\nretry = %s\n\n[http]\ntimeout = %s\nlow-speed-limit = %s\nmultiplexing = false\n' "${CARGO_REGISTRY_MIRROR}" "${CARGO_NET_RETRY}" "${CARGO_HTTP_TIMEOUT}" "${CARGO_HTTP_LOW_SPEED_LIMIT}" > /usr/local/cargo/config.toml
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/migrations ./migrations

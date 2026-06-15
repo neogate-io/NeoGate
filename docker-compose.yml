@@ -19,7 +19,10 @@ services:
       dockerfile: backend/Dockerfile
       args:
         DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.m.daocloud.io/}
-        CARGO_REGISTRY_MIRROR: ${CARGO_REGISTRY_MIRROR:-sparse+https://rsproxy.cn/index/}
+        CARGO_REGISTRY_MIRROR: ${CARGO_REGISTRY_MIRROR:-sparse+https://mirrors.ustc.edu.cn/crates.io-index/}
+        CARGO_HTTP_TIMEOUT: ${CARGO_HTTP_TIMEOUT:-600}
+        CARGO_HTTP_LOW_SPEED_LIMIT: ${CARGO_HTTP_LOW_SPEED_LIMIT:-1}
+        CARGO_NET_RETRY: ${CARGO_NET_RETRY:-10}
         APT_MIRROR: ${APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
     restart: unless-stopped
     depends_on:

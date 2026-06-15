@@ -11,10 +11,7 @@ const copyDocText = useCopyText()
 const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const anthropicBaseUrl = computed(() => `${window.location.origin}/anthropic`)
 const shellInstallScript = computed(() => `curl -fsSL ${window.location.origin}/install | bash`)
-const powershellInstallScript = computed(
-  () =>
-    `powershell -ExecutionPolicy Bypass -Command "iex (irm ${window.location.origin}/install.ps1)"`
-)
+const powershellInstallScript = computed(() => `irm ${window.location.origin}/install.ps1 | iex`)
 
 const claudeInstall = `npm install -g @anthropic-ai/claude-code
 claude`

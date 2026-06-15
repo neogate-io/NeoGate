@@ -41,7 +41,7 @@ function Show-Usage {
   Write-Host @"
 NeoGate Windows installer
 Usage:
-  powershell -ExecutionPolicy Bypass -Command "iex (irm __NEOGATE_INSTALL_ORIGIN__/install.ps1)"
+  irm __NEOGATE_INSTALL_ORIGIN__/install.ps1 | iex
 
 Options:
   -BaseUrl URL          NeoGate OpenAI-compatible base URL. Default: __NEOGATE_DEFAULT_BASE_URL__
@@ -163,6 +163,16 @@ function Assert-Command([string]$Name) {
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Update-SessionPath {
+  $paths = @(
+    [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+    [Environment]::GetEnvironmentVariable('Path', 'User'),
+    $env:Path
+  ) | Where-Object { $_ }
+
+  $env:Path = (($paths -join ';') -split ';' | Where-Object { $_ } | Select-Object -Unique) -join ';'
+}
+
 function Run-Command {
   param([string]$FilePath, [string[]]$Arguments)
   if ($DryRun) {
@@ -220,6 +230,15 @@ function Selected-BaseUrl {
 function Selected-Model {
   if ($Client -eq 'claude') { return $ClaudeModel }
   return $CodexModel
+}
+
+function Selected-ConfigFile {
+  if ($Client -eq 'claude') {
+    $claudeHome = if ($env:CLAUDE_HOME) { $env:CLAUDE_HOME } else { Join-Path $env:USERPROFILE '.claude' }
+    return (Join-Path $claudeHome 'settings.json')
+  }
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+  return "$(Join-Path $codexHome 'config.toml'), $(Join-Path $codexHome 'auth.json')"
 }
 
 function Get-Models {
@@ -286,12 +305,17 @@ function Install-Node {
   if (-not (Confirm-DefaultYes 'Node.js/npm is missing. Install it now?')) { Fail 'Node.js/npm is required.' }
 
   if (Assert-Command 'winget') {
-    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS')
+    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements')
   } elseif (Assert-Command 'choco') {
     Run-Command 'choco' @('install', 'nodejs-lts', '-y')
   } else {
     Fail 'Could not find winget or choco. Install Node.js LTS, then re-run this script.'
   }
+  Update-SessionPath
+  if (-not (Assert-Command 'node')) { Fail 'Node.js installation did not put node on PATH. Open a new terminal, then re-run this script.' }
+  if (-not (Assert-Command 'npm')) { Fail 'Node.js installation did not put npm on PATH. Open a new terminal, then re-run this script.' }
+  Detail "Node.js $(& node --version)"
+  Detail "npm $(& npm --version)"
 }
 
 function Install-CodexCli {
@@ -302,7 +326,9 @@ function Install-CodexCli {
   if ($SkipInstall) { Fail 'Codex CLI is missing and installation is disabled.' }
   if (-not (Confirm-DefaultYes 'Codex CLI is missing. Install @openai/codex with npm now?')) { Fail 'Codex CLI is required.' }
   Run-Command 'npm' @('install', '-g', '@openai/codex')
-  if (-not (Assert-Command 'codex')) { Warn 'Codex CLI was installed but is not on PATH in this shell. Open a new terminal if needed.' }
+  Update-SessionPath
+  if (-not (Assert-Command 'codex')) { Fail 'Codex CLI was installed but is not on PATH. Open a new terminal, then re-run this script.' }
+  Detail "Codex CLI $(& codex --version 2>$null)"
 }
 
 function Install-ClaudeCode {
@@ -313,7 +339,9 @@ function Install-ClaudeCode {
   if ($SkipInstall) { Fail 'Claude Code is missing and installation is disabled.' }
   if (-not (Confirm-DefaultYes 'Claude Code is missing. Install @anthropic-ai/claude-code with npm now?')) { Fail 'Claude Code is required.' }
   Run-Command 'npm' @('install', '-g', '@anthropic-ai/claude-code')
-  if (-not (Assert-Command 'claude')) { Warn 'Claude Code was installed but is not on PATH in this shell. Open a new terminal if needed.' }
+  Update-SessionPath
+  if (-not (Assert-Command 'claude')) { Fail 'Claude Code was installed but is not on PATH. Open a new terminal, then re-run this script.' }
+  Detail "Claude Code $(& claude --version 2>$null)"
 }
 
 function Write-JsonFile {
@@ -517,6 +545,7 @@ Write-Host 'Config summary'
 Write-Host "Client     $(Selected-ClientName)"
 Write-Host "Base URL   $(Selected-BaseUrl)"
 Write-Host "Model      $(Selected-Model)"
+Write-Host "Config     $(Selected-ConfigFile)"
 
 Step 'Check dependencies'
 if (Confirm-DefaultYes 'Check dependencies?') {

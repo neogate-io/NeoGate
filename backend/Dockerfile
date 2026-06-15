@@ -1,17 +1,31 @@
-FROM rust:1.94-bookworm AS builder
+ARG DOCKER_HUB_PREFIX=docker.m.daocloud.io/
+ARG RUST_IMAGE=${DOCKER_HUB_PREFIX}library/rust:1.94-bookworm
+ARG DEBIAN_IMAGE=${DOCKER_HUB_PREFIX}library/debian:bookworm-slim
+
+FROM ${RUST_IMAGE} AS builder
+
+ARG CARGO_REGISTRY_MIRROR=sparse+https://rsproxy.cn/index/
 
 WORKDIR /app/backend
+
+RUN mkdir -p /usr/local/cargo \
+    && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' "${CARGO_REGISTRY_MIRROR}" > /usr/local/cargo/config.toml
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/migrations ./migrations
 COPY backend/src ./src
 COPY backend/templates ./templates
 
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release
 
-FROM debian:bookworm-slim AS runtime
+FROM ${DEBIAN_IMAGE} AS runtime
 
-RUN apt-get update \
+ARG APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian
+
+RUN sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}|g; s|http://deb.debian.org/debian-security|${APT_MIRROR}-security|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 

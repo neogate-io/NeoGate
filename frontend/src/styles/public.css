@@ -528,9 +528,12 @@
   border-radius: 7px;
   color: #f8fafc;
   display: block;
-  overflow-x: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
   padding: 16px 18px;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .docs-page {
@@ -1220,7 +1223,6 @@
 
   .install-command code {
     padding: 14px;
-    white-space: pre;
   }
 
   .api-key-dialog .el-dialog__header {

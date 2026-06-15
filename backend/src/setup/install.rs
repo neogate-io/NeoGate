@@ -14,24 +14,25 @@ use crate::{
 };
 
 const INSTALL_TEMPLATE: &str = include_str!("../../templates/install.template");
+const INSTALL_PS1_TEMPLATE: &str = include_str!("../../templates/install.ps1.template");
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/install", get(install_script))
+    Router::new()
+        .route("/install", get(install_script))
+        .route("/install.ps1", get(install_ps1_script))
 }
 
 pub fn bootstrap_router() -> Router {
-    Router::new().route("/install", get(bootstrap_install_script))
+    Router::new()
+        .route("/install", get(bootstrap_install_script))
+        .route("/install.ps1", get(bootstrap_install_ps1_script))
 }
 
 async fn install_script(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let origin = state
-        .config
-        .public_base_url
-        .clone()
-        .or_else(|| inferred_public_base_url(&headers))
+    let origin = install_origin(state.config.public_base_url.as_deref(), &headers)
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
     install_response(&origin)
 }
@@ -40,6 +41,21 @@ async fn bootstrap_install_script(headers: HeaderMap) -> AppResult<Response> {
     let origin = inferred_public_base_url(&headers)
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
     install_response(&origin)
+}
+
+async fn install_ps1_script(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let origin = install_origin(state.config.public_base_url.as_deref(), &headers)
+        .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
+    install_ps1_response(&origin)
+}
+
+async fn bootstrap_install_ps1_script(headers: HeaderMap) -> AppResult<Response> {
+    let origin = inferred_public_base_url(&headers)
+        .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
+    install_ps1_response(&origin)
 }
 
 fn install_response(origin: &str) -> AppResult<Response> {
@@ -54,9 +70,28 @@ fn install_response(origin: &str) -> AppResult<Response> {
     Ok(response)
 }
 
+fn install_ps1_response(origin: &str) -> AppResult<Response> {
+    let script = render_install_ps1_script(origin);
+    let mut response = script.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
 fn render_install_script(origin: &str) -> String {
     let origin = origin.trim().trim_end_matches('/');
     INSTALL_TEMPLATE
+        .replace("__NEOGATE_DEFAULT_BASE_URL__", &format!("{origin}/v1"))
+        .replace("__NEOGATE_INSTALL_ORIGIN__", origin)
+}
+
+fn render_install_ps1_script(origin: &str) -> String {
+    let origin = origin.trim().trim_end_matches('/');
+    INSTALL_PS1_TEMPLATE
         .replace("__NEOGATE_DEFAULT_BASE_URL__", &format!("{origin}/v1"))
         .replace("__NEOGATE_INSTALL_ORIGIN__", origin)
 }
@@ -77,6 +112,40 @@ pub fn inferred_public_base_url(headers: &HeaderMap) -> Option<String> {
     }
 
     Some(format!("{proto}://{}", host.trim().trim_end_matches('/')))
+}
+
+fn install_origin(configured_origin: Option<&str>, headers: &HeaderMap) -> Option<String> {
+    let inferred_origin = inferred_public_base_url(headers);
+    match (configured_origin, inferred_origin) {
+        (Some(configured), Some(inferred))
+            if is_loopback_origin(configured) && !is_loopback_origin(&inferred) =>
+        {
+            Some(inferred)
+        }
+        (Some(configured), _) => Some(configured.to_string()),
+        (None, inferred) => inferred,
+    }
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let origin = origin.trim().to_ascii_lowercase();
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = if let Some(ipv6_end) = authority
+        .strip_prefix('[')
+        .and_then(|value| value.find(']'))
+    {
+        &authority[1..=ipv6_end]
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+
+    matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
 }
 
 fn header_first_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -135,6 +204,30 @@ mod tests {
     }
 
     #[test]
+    fn install_origin_uses_forwarded_host_when_configured_origin_is_loopback() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
+        headers.insert("x-forwarded-host", "43.156.216.56:8080".parse().unwrap());
+
+        assert_eq!(
+            install_origin(Some("http://localhost:8080"), &headers).as_deref(),
+            Some("http://43.156.216.56:8080")
+        );
+    }
+
+    #[test]
+    fn install_origin_keeps_configured_public_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
+        headers.insert("x-forwarded-host", "43.156.216.56:8080".parse().unwrap());
+
+        assert_eq!(
+            install_origin(Some("https://neogate.example.com"), &headers).as_deref(),
+            Some("https://neogate.example.com")
+        );
+    }
+
+    #[test]
     fn renders_install_script_with_origin() {
         let script = render_install_script("https://dev.moligate.com/");
 
@@ -143,6 +236,16 @@ mod tests {
         assert!(script.contains(r#"api_key_prompt) printf '%s' "请输入 API 密钥：""#));
         assert!(script.contains(r#"api_key_prompt) printf '%s' "Enter API key: ""#));
         assert!(!script.contains("Enter emailed API key"));
+        assert!(!script.contains("__NEOGATE_DEFAULT_BASE_URL__"));
+        assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
+    }
+
+    #[test]
+    fn renders_install_ps1_script_with_origin() {
+        let script = render_install_ps1_script("https://dev.moligate.com/");
+
+        assert!(script.contains("$DefaultBaseUrl = 'https://dev.moligate.com/v1'"));
+        assert!(script.contains("irm https://dev.moligate.com/install.ps1"));
         assert!(!script.contains("__NEOGATE_DEFAULT_BASE_URL__"));
         assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
     }
@@ -172,6 +275,33 @@ mod tests {
         let script = String::from_utf8(body.to_vec()).unwrap();
         assert!(script.starts_with("#!/usr/bin/env bash"));
         assert!(script.contains("DEFAULT_BASE_URL=\"http://localhost:8080/v1\""));
+    }
+
+    #[tokio::test]
+    async fn install_ps1_route_returns_powershell_script() {
+        let state = test_state();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/install.ps1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+
+        let body = to_bytes(response.into_body(), 128 * 1024).await.unwrap();
+        let script = String::from_utf8(body.to_vec()).unwrap();
+        assert!(script.starts_with("param("));
+        assert!(script.contains("$DefaultBaseUrl = 'http://localhost:8080/v1'"));
     }
 
     #[tokio::test]

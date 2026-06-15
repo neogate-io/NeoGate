@@ -328,7 +328,8 @@ async function load() {
       return
     }
     bootstrapForm.siteName = status.value.site_name || bootstrapForm.siteName
-    bootstrapForm.publicBaseUrl = status.value.public_base_url || bootstrapForm.publicBaseUrl
+    bootstrapForm.publicBaseUrl =
+      preferredPublicBaseUrl(status.value.public_base_url) || bootstrapForm.publicBaseUrl
     paymentForm.siteName = status.value.site_name || paymentForm.siteName
 
     if (!status.value.bootstrap_required) {
@@ -913,6 +914,22 @@ function buildDatabaseUrl(maskPassword: boolean) {
 function defaultPublicBaseUrl() {
   if (typeof window === 'undefined') return 'http://127.0.0.1:8080'
   return window.location.origin
+}
+
+function preferredPublicBaseUrl(value?: string | null) {
+  const browserOrigin = defaultPublicBaseUrl()
+  if (!value) return browserOrigin
+  if (isLoopbackUrl(value) && !isLoopbackUrl(browserOrigin)) return browserOrigin
+  return value
+}
+
+function isLoopbackUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'].includes(url.hostname)
+  } catch {
+    return false
+  }
 }
 
 function sleep(ms: number) {

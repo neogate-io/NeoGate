@@ -11,11 +11,11 @@ server {
 
     root /usr/share/nginx/html;
 
-    location ~ ^/(api|v1|anthropic|readyz|livez|install)(/|$) {
+    location ~ ^/(api|v1|anthropic|readyz|livez|install(?:\.ps1)?)(/|$) {
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 

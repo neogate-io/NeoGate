@@ -5,6 +5,9 @@ import { copyTextToClipboard } from '../utils/clipboard'
 
 export function useInstallScript(t: (key: MessageKey) => string) {
   const installScript = computed(() => {
+    if (navigator.userAgent.includes('Windows')) {
+      return `powershell -ExecutionPolicy Bypass -Command "iex (irm ${window.location.origin}/install.ps1)"`
+    }
     return `curl -fsSL ${window.location.origin}/install | bash`
   })
 

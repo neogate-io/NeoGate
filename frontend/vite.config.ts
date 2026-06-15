@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import { readFileSync } from 'node:fs'
 
 const installTemplatePath = new URL('../backend/templates/install.template', import.meta.url)
+const installPs1TemplatePath = new URL('../backend/templates/install.ps1.template', import.meta.url)
 const localBackendOrigin = 'http://127.0.0.1:8080'
 const apiProxy = {
   target: localBackendOrigin,
@@ -44,6 +45,12 @@ function renderInstallScript(installOrigin: string) {
     .replaceAll('__NEOGATE_INSTALL_ORIGIN__', installOrigin)
 }
 
+function renderInstallPs1Script(installOrigin: string) {
+  return readFileSync(installPs1TemplatePath, 'utf8')
+    .replaceAll('__NEOGATE_DEFAULT_BASE_URL__', `${installOrigin}/v1`)
+    .replaceAll('__NEOGATE_INSTALL_ORIGIN__', installOrigin)
+}
+
 function isIgnorablePureAnnotationWarning(log: { code?: string; id?: string; message: string }) {
   const source = `${log.id || ''}\n${log.message}`
   return (
@@ -62,14 +69,19 @@ function installMiddleware(
   },
   next: () => void
 ) {
-  if ((req.url || '').split('?')[0] !== '/install') {
+  const path = (req.url || '').split('?')[0]
+  if (path !== '/install' && path !== '/install.ps1') {
     next()
     return
   }
 
-  const script = renderInstallScript(requestOrigin(req.headers))
+  const origin = requestOrigin(req.headers)
+  const script = path === '/install.ps1' ? renderInstallPs1Script(origin) : renderInstallScript(origin)
   res.statusCode = 200
-  res.setHeader('content-type', 'text/x-shellscript; charset=utf-8')
+  res.setHeader(
+    'content-type',
+    path === '/install.ps1' ? 'text/plain; charset=utf-8' : 'text/x-shellscript; charset=utf-8'
+  )
   res.setHeader('cache-control', 'no-store')
   res.end(script)
 }

@@ -1,0 +1,548 @@
+param(
+  [string]$BaseUrl = $env:NEOGATE_BASE_URL,
+  [string]$Model = $env:NEOGATE_MODEL,
+  [string]$CodexModel = $env:NEOGATE_CODEX_MODEL,
+  [string]$ClaudeModel = $env:NEOGATE_CLAUDE_MODEL,
+  [string]$Client = $env:NEOGATE_CLIENT,
+  [string]$ApiKey = $env:NEOGATE_API_KEY,
+  [switch]$Yes,
+  [switch]$SkipInstall,
+  [switch]$SkipRelayTest,
+  [switch]$DryRun,
+  [switch]$Help
+)
+
+$ErrorActionPreference = 'Stop'
+
+try {
+  Add-Type -AssemblyName System.Net.Http
+} catch {
+  Write-Error "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)"
+  exit 1
+}
+
+$AppName = 'NeoGate'
+$ProviderId = 'neogate'
+$ProviderName = 'NeoGate'
+$DefaultBaseUrl = '__NEOGATE_DEFAULT_BASE_URL__'
+$DefaultCodexModel = 'gpt-5.5'
+$DefaultClaudeModel = 'claude-sonnet-4-5'
+$CodexModelExplicit = $PSBoundParameters.ContainsKey('CodexModel') -or $PSBoundParameters.ContainsKey('Model') -or [bool]$env:NEOGATE_CODEX_MODEL -or [bool]$env:NEOGATE_MODEL
+$ClaudeModelExplicit = $PSBoundParameters.ContainsKey('ClaudeModel') -or [bool]$env:NEOGATE_CLAUDE_MODEL
+
+if (-not $BaseUrl) { $BaseUrl = $DefaultBaseUrl }
+if (-not $CodexModel) { $CodexModel = $(if ($Model) { $Model } else { $DefaultCodexModel }) }
+if (-not $ClaudeModel) { $ClaudeModel = $DefaultClaudeModel }
+if (-not $Yes -and $env:NEOGATE_ASSUME_YES -eq '1') { $Yes = $true }
+if (-not $SkipInstall -and $env:NEOGATE_SKIP_INSTALL -eq '1') { $SkipInstall = $true }
+if (-not $SkipRelayTest -and $env:NEOGATE_SKIP_RELAY_TEST -eq '1') { $SkipRelayTest = $true }
+
+function Show-Usage {
+  Write-Host @"
+NeoGate Windows installer
+Usage:
+  powershell -ExecutionPolicy Bypass -Command "iex (irm __NEOGATE_INSTALL_ORIGIN__/install.ps1)"
+
+Options:
+  -BaseUrl URL          NeoGate OpenAI-compatible base URL. Default: __NEOGATE_DEFAULT_BASE_URL__
+  -Model MODEL         Codex model name. Default: gpt-5.5
+  -CodexModel MODEL    Codex model name.
+  -ClaudeModel MODEL   Claude Code model name. Default: claude-sonnet-4-5
+  -Client CLIENT       codex or claude
+  -Yes                 Continue without confirmation prompts after API key verification
+  -SkipInstall         Do not install missing Node.js or client CLI
+  -SkipRelayTest       Skip the final gateway relay test
+  -DryRun              Print planned config changes without writing files
+
+Environment variables:
+  NEOGATE_API_KEY, NEOGATE_BASE_URL, NEOGATE_MODEL, NEOGATE_CODEX_MODEL,
+  NEOGATE_CLAUDE_MODEL, NEOGATE_CLIENT, NEOGATE_ASSUME_YES=1,
+  NEOGATE_SKIP_INSTALL=1, NEOGATE_SKIP_RELAY_TEST=1, CODEX_HOME, CLAUDE_HOME
+"@
+}
+
+if ($Help) {
+  Show-Usage
+  exit 0
+}
+
+function Step([string]$Text) {
+  $script:InstallStep += 1
+  Write-Host ''
+  Write-Host "[$script:InstallStep/$script:InstallTotalSteps] $Text" -ForegroundColor Blue
+}
+
+function Detail([string]$Text) {
+  Write-Host "  $Text"
+}
+
+function Success([string]$Text) {
+  Write-Host "OK $Text" -ForegroundColor Green
+}
+
+function Warn([string]$Text) {
+  Write-Warning $Text
+}
+
+function Fail([string]$Text) {
+  [Console]::Error.WriteLine($Text)
+  exit 1
+}
+
+function Confirm-DefaultYes([string]$Prompt) {
+  if ($Yes) { return $true }
+  $answer = Read-Host "$Prompt [Y/n]"
+  return $answer -eq '' -or $answer -match '^(y|yes)$'
+}
+
+function Normalize-BaseUrl {
+  $script:BaseUrl = $BaseUrl.Trim().TrimEnd('/')
+  if ($script:BaseUrl.EndsWith('/anthropic')) {
+    $script:BaseUrl = $script:BaseUrl.Substring(0, $script:BaseUrl.Length - '/anthropic'.Length)
+  }
+  if (-not $script:BaseUrl.EndsWith('/v1')) {
+    $script:BaseUrl = "$script:BaseUrl/v1"
+  }
+  $script:ApiRoot = $script:BaseUrl.Substring(0, $script:BaseUrl.Length - '/v1'.Length)
+  $script:AnthropicBaseUrl = "$script:ApiRoot/anthropic"
+}
+
+function Read-SecretText([string]$Prompt) {
+  $secure = Read-Host "$Prompt (input hidden)" -AsSecureString
+  $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try {
+    return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+  } finally {
+    if ($ptr -ne [IntPtr]::Zero) {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    }
+  }
+}
+
+function Invoke-NeoGateRequest {
+  param(
+    [Parameter(Mandatory=$true)][string]$Uri,
+    [string]$Method = 'GET',
+    [hashtable]$Headers = @{},
+    [string]$Body = $null,
+    [string]$ContentType = 'application/json'
+  )
+
+  $client = $null
+  $request = $null
+  $content = $null
+  try {
+    $client = [System.Net.Http.HttpClient]::new()
+    $request = [System.Net.Http.HttpRequestMessage]::new(
+      [System.Net.Http.HttpMethod]::new($Method.ToUpperInvariant()),
+      [Uri]$Uri
+    )
+
+    foreach ($header in $Headers.GetEnumerator()) {
+      [void]$request.Headers.TryAddWithoutValidation([string]$header.Key, [string]$header.Value)
+    }
+
+    if (-not [string]::IsNullOrEmpty($Body)) {
+      $content = [System.Net.Http.StringContent]::new($Body, [System.Text.Encoding]::UTF8, $ContentType)
+      $request.Content = $content
+    }
+
+    $response = $client.SendAsync($request).GetAwaiter().GetResult()
+    $bodyText = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    return @{ Status = [int]$response.StatusCode; Body = $bodyText }
+  } catch {
+    return @{ Status = 0; Body = $_.Exception.Message }
+  } finally {
+    if ($null -ne $content) { $content.Dispose() }
+    if ($null -ne $request) { $request.Dispose() }
+    if ($null -ne $client) { $client.Dispose() }
+  }
+}
+
+function Assert-Command([string]$Name) {
+  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Run-Command {
+  param([string]$FilePath, [string[]]$Arguments)
+  if ($DryRun) {
+    Write-Host "+ $FilePath $($Arguments -join ' ')"
+    return
+  }
+  & $FilePath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    Fail "$FilePath failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Verify-ApiKey {
+  $result = Invoke-NeoGateRequest -Uri "$ApiRoot/api/user-key/verify" -Headers @{ authorization = "Bearer $ApiKey" }
+  switch ($result.Status) {
+    200 { Success 'API key verified'; return }
+    401 { Fail "API key was rejected by $ApiRoot" }
+    403 { Fail "API key was rejected by $ApiRoot" }
+    404 { Fail 'Verification endpoint was not found. Make sure NeoGate is up to date and BaseUrl is correct.' }
+    0 { Fail "Could not connect to $ApiRoot. $($result.Body)" }
+    default { Fail "API key verification failed with HTTP $($result.Status). $($result.Body)" }
+  }
+}
+
+function Normalize-Client([string]$Value) {
+  switch -Regex ($Value.ToLowerInvariant()) {
+    '^(1|codex)$' { return 'codex' }
+    '^(2|claude|claude-code)$' { return 'claude' }
+    default { Fail "Unsupported client: $Value. Choose codex or claude." }
+  }
+}
+
+function Select-Client {
+  if ($Client) {
+    $script:Client = Normalize-Client $Client
+    return
+  }
+
+  Write-Host '1. Codex CLI'
+  Write-Host '2. Claude Code'
+  $answer = Read-Host 'Choose client [1-2]'
+  $script:Client = Normalize-Client $answer
+}
+
+function Selected-ClientName {
+  if ($Client -eq 'claude') { return 'Claude Code' }
+  return 'Codex CLI'
+}
+
+function Selected-BaseUrl {
+  if ($Client -eq 'claude') { return $AnthropicBaseUrl }
+  return $BaseUrl
+}
+
+function Selected-Model {
+  if ($Client -eq 'claude') { return $ClaudeModel }
+  return $CodexModel
+}
+
+function Get-Models {
+  if ($Client -eq 'claude') {
+    $result = Invoke-NeoGateRequest -Uri "$AnthropicBaseUrl/v1/messages/models" -Headers @{
+      'x-api-key' = $ApiKey
+      'anthropic-version' = '2023-06-01'
+    }
+  } else {
+    $result = Invoke-NeoGateRequest -Uri "$BaseUrl/models" -Headers @{ authorization = "Bearer $ApiKey" }
+  }
+
+  switch ($result.Status) {
+    200 {
+      $json = $result.Body | ConvertFrom-Json
+      $models = @($json.data | ForEach-Object { $_.id } | Where-Object { $_ })
+      if ($models.Count -eq 0) { Fail 'No models are available. Ask an admin to configure an available upstream channel and price.' }
+      return $models
+    }
+    401 { Fail "Model list endpoint rejected the API key with HTTP $($result.Status)" }
+    403 { Fail "Model list endpoint rejected the API key with HTTP $($result.Status)" }
+    404 { Fail 'Model list endpoint was not found. Make sure NeoGate is up to date and BaseUrl is correct.' }
+    0 { Fail "Could not connect to $(Selected-BaseUrl)" }
+    default { Fail "Failed to fetch model list with HTTP $($result.Status). $($result.Body)" }
+  }
+}
+
+function Select-Model {
+  $models = @(Get-Models)
+  $current = Selected-Model
+  $explicit = if ($Client -eq 'claude') { $ClaudeModelExplicit } else { $CodexModelExplicit }
+
+  if ($explicit) {
+    if ($models -notcontains $current) { Fail "Unsupported model selection: $current" }
+    return
+  }
+
+  Write-Host 'Choose the default model (press Enter for 1):'
+  for ($i = 0; $i -lt $models.Count; $i++) {
+    Write-Host "$($i + 1). $($models[$i])"
+  }
+  $answer = Read-Host 'Enter number [1]'
+  if (-not $answer) { $answer = '1' }
+  $index = 0
+  if (-not [int]::TryParse($answer, [ref]$index) -or $index -lt 1 -or $index -gt $models.Count) {
+    Fail "Unsupported model selection: $answer"
+  }
+  if ($Client -eq 'claude') {
+    $script:ClaudeModel = $models[$index - 1]
+  } else {
+    $script:CodexModel = $models[$index - 1]
+  }
+  Success (Selected-Model)
+}
+
+function Install-Node {
+  if ((Assert-Command 'node') -and (Assert-Command 'npm')) {
+    Detail "Node.js $(& node --version)"
+    Detail "npm $(& npm --version)"
+    return
+  }
+
+  if ($SkipInstall) { Fail 'Node.js/npm is missing and installation is disabled.' }
+  if (-not (Confirm-DefaultYes 'Node.js/npm is missing. Install it now?')) { Fail 'Node.js/npm is required.' }
+
+  if (Assert-Command 'winget') {
+    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS')
+  } elseif (Assert-Command 'choco') {
+    Run-Command 'choco' @('install', 'nodejs-lts', '-y')
+  } else {
+    Fail 'Could not find winget or choco. Install Node.js LTS, then re-run this script.'
+  }
+}
+
+function Install-CodexCli {
+  if (Assert-Command 'codex') {
+    Detail "Codex CLI $(& codex --version 2>$null)"
+    return
+  }
+  if ($SkipInstall) { Fail 'Codex CLI is missing and installation is disabled.' }
+  if (-not (Confirm-DefaultYes 'Codex CLI is missing. Install @openai/codex with npm now?')) { Fail 'Codex CLI is required.' }
+  Run-Command 'npm' @('install', '-g', '@openai/codex')
+  if (-not (Assert-Command 'codex')) { Warn 'Codex CLI was installed but is not on PATH in this shell. Open a new terminal if needed.' }
+}
+
+function Install-ClaudeCode {
+  if (Assert-Command 'claude') {
+    Detail "Claude Code $(& claude --version 2>$null)"
+    return
+  }
+  if ($SkipInstall) { Fail 'Claude Code is missing and installation is disabled.' }
+  if (-not (Confirm-DefaultYes 'Claude Code is missing. Install @anthropic-ai/claude-code with npm now?')) { Fail 'Claude Code is required.' }
+  Run-Command 'npm' @('install', '-g', '@anthropic-ai/claude-code')
+  if (-not (Assert-Command 'claude')) { Warn 'Claude Code was installed but is not on PATH in this shell. Open a new terminal if needed.' }
+}
+
+function Write-JsonFile {
+  param([string]$Path, [object]$Value)
+  $json = $Value | ConvertTo-Json -Depth 20
+  if ($DryRun) {
+    Write-Host "# $Path"
+    Write-Host $json
+    return
+  }
+  $dir = Split-Path -Parent $Path
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  if (Test-Path $Path) {
+    Copy-Item $Path "$Path.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+  }
+  [System.IO.File]::WriteAllText($Path, "$json`n", [System.Text.UTF8Encoding]::new($false))
+}
+
+function Escape-Toml([string]$Value) {
+  return $Value.Replace('\', '\\').Replace('"', '\"')
+}
+
+function Write-CodexConfig {
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+  $configFile = Join-Path $codexHome 'config.toml'
+  $authFile = Join-Path $codexHome 'auth.json'
+  $timestamp = Get-Date -Format yyyyMMddHHmmss
+
+  $existing = ''
+  if (Test-Path $configFile) {
+    $existing = Get-Content $configFile -Raw
+  }
+  $lines = @()
+  $skip = $false
+  foreach ($line in ($existing -split "`r?`n")) {
+    if ($line -match '^\[model_providers\.("?neogate"?)\]') {
+      $skip = $true
+      continue
+    }
+    if ($line -match '^\[') { $skip = $false }
+    if ($skip) { continue }
+    if ($line -match '^(model|model_provider|openai_base_url|preferred_auth_method|model_reasoning_effort|OPENAI_API_KEY)\s*=') { continue }
+    $lines += $line
+  }
+
+  $next = @(
+    "model = `"$(Escape-Toml $CodexModel)`"",
+    "model_provider = `"$ProviderId`"",
+    ''
+  ) + $lines + @(
+    '',
+    "[model_providers.$ProviderId]",
+    "name = `"$(Escape-Toml $ProviderName)`"",
+    "base_url = `"$(Escape-Toml $BaseUrl)`"",
+    'wire_api = "responses"',
+    'requires_openai_auth = false'
+  )
+
+  if ($DryRun) {
+    Write-Host "# $configFile"
+    Write-Host ($next -join [Environment]::NewLine)
+  } else {
+    New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
+    if (Test-Path $configFile) { Copy-Item $configFile "$configFile.bak-$timestamp" }
+    [System.IO.File]::WriteAllText(
+      $configFile,
+      (($next -join [Environment]::NewLine) + [Environment]::NewLine),
+      [System.Text.UTF8Encoding]::new($false)
+    )
+  }
+
+  $auth = @{}
+  if (Test-Path $authFile) {
+    try {
+      $authObject = Get-Content $authFile -Raw | ConvertFrom-Json
+      foreach ($property in $authObject.PSObject.Properties) {
+        $auth[$property.Name] = $property.Value
+      }
+    } catch {
+      $auth = @{}
+    }
+  }
+  $auth.OPENAI_API_KEY = $ApiKey
+  $auth.auth_mode = 'apikey'
+  Write-JsonFile -Path $authFile -Value $auth
+  Success 'Config updated'
+}
+
+function Write-ClaudeConfig {
+  $claudeHome = if ($env:CLAUDE_HOME) { $env:CLAUDE_HOME } else { Join-Path $env:USERPROFILE '.claude' }
+  $configFile = Join-Path $claudeHome 'settings.json'
+  $settings = [ordered]@{}
+
+  if (Test-Path $configFile) {
+    try {
+      $settingsObject = Get-Content $configFile -Raw | ConvertFrom-Json
+      foreach ($property in $settingsObject.PSObject.Properties) {
+        $settings[$property.Name] = $property.Value
+      }
+    } catch {
+      $settings = [ordered]@{}
+    }
+  }
+
+  $envSettings = [ordered]@{}
+  if ($settings.env) {
+    foreach ($property in $settings.env.PSObject.Properties) {
+      if ($property.Name -ne 'ANTHROPIC_API_KEY') {
+        $envSettings[$property.Name] = $property.Value
+      }
+    }
+  }
+
+  $envSettings.ANTHROPIC_BASE_URL = $AnthropicBaseUrl
+  $envSettings.ANTHROPIC_AUTH_TOKEN = $ApiKey
+  $envSettings.ANTHROPIC_MODEL = $ClaudeModel
+  $envSettings.ANTHROPIC_DEFAULT_OPUS_MODEL = $ClaudeModel
+  $envSettings.ANTHROPIC_DEFAULT_SONNET_MODEL = $ClaudeModel
+  $envSettings.ANTHROPIC_DEFAULT_HAIKU_MODEL = $ClaudeModel
+  $envSettings.ANTHROPIC_REASONING_MODEL = $ClaudeModel
+  $envSettings.ANTHROPIC_CUSTOM_MODEL_OPTION = $ClaudeModel
+  $settings.env = $envSettings
+  $settings.model = $ClaudeModel
+
+  Write-JsonFile -Path $configFile -Value $settings
+  Success 'Config updated'
+}
+
+function Test-CodexRelay {
+  if ($SkipRelayTest) {
+    Warn 'Skipping final relay test'
+    return
+  }
+  $payload = @{ model = $CodexModel; input = 'Reply with OK only.'; max_output_tokens = 16 } | ConvertTo-Json -Compress
+  $result = Invoke-NeoGateRequest -Uri "$BaseUrl/responses" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $payload
+  if ($result.Status -ge 200 -and $result.Status -lt 300) {
+    Success 'Gateway relay test succeeded'
+  } elseif ($result.Status -eq 401 -or $result.Status -eq 403) {
+    Fail "Gateway relay rejected the API key with HTTP $($result.Status)"
+  } elseif ($result.Status -eq 0) {
+    Fail "Could not connect to $BaseUrl"
+  } else {
+    Warn "Test failed: HTTP $($result.Status). The upstream or price config for model $CodexModel may not be ready."
+    if ($result.Body) { Detail $result.Body }
+  }
+}
+
+function Test-ClaudeRelay {
+  if ($SkipRelayTest) {
+    Warn 'Skipping final relay test'
+    return
+  }
+  $payload = @{
+    model = $ClaudeModel
+    messages = @(@{ role = 'user'; content = 'Reply with OK only.' })
+    max_tokens = 16
+  } | ConvertTo-Json -Depth 10 -Compress
+  $result = Invoke-NeoGateRequest -Uri "$AnthropicBaseUrl/v1/messages" -Method POST -Headers @{
+    authorization = "Bearer $ApiKey"
+    'anthropic-version' = '2023-06-01'
+  } -Body $payload
+  if ($result.Status -ge 200 -and $result.Status -lt 300) {
+    Success 'Gateway relay test succeeded'
+  } elseif ($result.Status -eq 401 -or $result.Status -eq 403) {
+    Fail "Gateway relay rejected the API key with HTTP $($result.Status)"
+  } elseif ($result.Status -eq 0) {
+    Fail "Could not connect to $AnthropicBaseUrl"
+  } else {
+    Warn "Test failed: HTTP $($result.Status). The upstream or price config for model $ClaudeModel may not be ready."
+    if ($result.Body) { Detail $result.Body }
+  }
+}
+
+$InstallStep = 0
+$InstallTotalSteps = 6
+
+if ($BaseUrl -eq '__NEOGATE_' + 'DEFAULT_BASE_URL__') {
+  Fail 'install script was not dynamically generated. Use the install command from the NeoGate page.'
+}
+
+Normalize-BaseUrl
+
+Write-Host "$AppName Windows installer"
+
+Step 'Verify API key'
+if (-not $ApiKey) {
+  $ApiKey = Read-SecretText 'Enter API key'
+}
+if (-not $ApiKey) { Fail 'API key cannot be empty' }
+Verify-ApiKey
+
+Step 'Choose client'
+Select-Client
+Success (Selected-ClientName)
+
+Step 'Choose default model'
+Select-Model
+
+Write-Host ''
+Write-Host 'Config summary'
+Write-Host "Client     $(Selected-ClientName)"
+Write-Host "Base URL   $(Selected-BaseUrl)"
+Write-Host "Model      $(Selected-Model)"
+
+Step 'Check dependencies'
+if (Confirm-DefaultYes 'Check dependencies?') {
+  Install-Node
+  if ($Client -eq 'claude') {
+    Install-ClaudeCode
+  } else {
+    Install-CodexCli
+  }
+} else {
+  Warn 'Skipped dependency check/install'
+}
+
+Step 'Write config'
+if (Confirm-DefaultYes 'Write config?') {
+  if ($Client -eq 'claude') {
+    Write-ClaudeConfig
+    Step 'Test gateway'
+    Test-ClaudeRelay
+    Success 'Claude Code configured'
+  } else {
+    Write-CodexConfig
+    Step 'Test gateway'
+    Test-CodexRelay
+    Success 'Codex CLI configured'
+  }
+} else {
+  Warn 'Skipped config update'
+}

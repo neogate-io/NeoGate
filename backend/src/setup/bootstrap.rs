@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
+use axum::{extract::State, http::{HeaderMap, StatusCode}, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Row};
 use tokio::sync::watch;
@@ -100,6 +100,8 @@ pub fn router(restart_tx: watch::Sender<bool>) -> Router {
     });
 
     Router::new()
+        .route("/healthz", get(bootstrap_liveness))
+        .route("/readyz", get(bootstrap_readiness))
         .route("/api/setup/status", get(setup_status))
         .route(
             "/api/setup/bootstrap",
@@ -114,6 +116,14 @@ pub fn router(restart_tx: watch::Sender<bool>) -> Router {
             axum::routing::post(cluster_env_template),
         )
         .with_state(state)
+}
+
+pub async fn bootstrap_liveness() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn bootstrap_readiness() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
 pub async fn setup_status(

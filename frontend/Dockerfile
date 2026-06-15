@@ -2,10 +2,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app/frontend
 
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 RUN corepack enable
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --registry https://registry.npmmirror.com
 
 COPY frontend ./
 RUN pnpm build

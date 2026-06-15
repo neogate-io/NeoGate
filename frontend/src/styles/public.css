@@ -1020,6 +1020,21 @@
   width: 180px;
 }
 
+.docs-extension-badge {
+  align-items: center;
+  background: #0f766e;
+  border: 1px solid #0d9488;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+  margin: 0 8px 4px 0;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
 .docs-params-table code {
   color: #172033;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

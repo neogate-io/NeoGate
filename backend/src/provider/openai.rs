@@ -2,12 +2,13 @@ use std::{sync::Arc, time::Instant};
 
 use axum::{
     body::Body,
-    extract::{OriginalUri, Path, State},
+    extract::{OriginalUri, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::Response,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
@@ -41,6 +42,12 @@ struct ImageRequestMeta {
     model: String,
     stream: bool,
     content_type: HeaderValue,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ResponseAssetQuery {
+    expires: i64,
+    sig: String,
 }
 
 pub(crate) async fn openai_chat_completions(
@@ -153,6 +160,14 @@ pub(crate) async fn openai_response(
         return finish_stream_response(state, auth, task, upstream, response);
     }
     finish_task_json_response(state, auth, task, response).await
+}
+
+pub(crate) async fn openai_response_asset(
+    State(state): State<Arc<AppState>>,
+    Path((response_id, index)): Path<(String, usize)>,
+    Query(query): Query<ResponseAssetQuery>,
+) -> AppResult<Response> {
+    jobs::asset_response(&state, &response_id, index, query.expires, &query.sig).await
 }
 
 pub(crate) async fn openai_response_input_items(
@@ -544,6 +559,7 @@ async fn create_background_response(
     output_tokens: i64,
 ) -> AppResult<Response> {
     let started = Instant::now();
+    let prepared = jobs::prepare_request_body(body)?;
     let upstream = state
         .selector
         .select(
@@ -563,13 +579,23 @@ async fn create_background_response(
         &state,
         &auth,
         user_key_model_credit_account.as_ref(),
-        &body,
+        &prepared.body,
         output_tokens,
         &price,
     )
     .await?;
-    if newapi::is_newapi_provider(&upstream.provider) && jobs::has_image_generation_tool(&body) {
-        let response = match jobs::create(&state, &auth, &upstream, &model, body, &hold).await {
+    if newapi::is_newapi_provider(&upstream.provider) && prepared.has_image_generation_tool {
+        let response = match jobs::create(
+            &state,
+            &auth,
+            &upstream,
+            &model,
+            prepared.body.clone(),
+            prepared.image_format,
+            &hold,
+        )
+        .await
+        {
             Ok(response) => response,
             Err(err) => {
                 release_empty_hold(&state, hold, "neogate response create error").await;
@@ -578,11 +604,17 @@ async fn create_background_response(
         };
         return jobs::response(response).await;
     }
+    if prepared.image_format.requires_neogate_asset_url() {
+        release_empty_hold(&state, hold, "unsupported neogate image_format").await;
+        return Err(AppError::BadRequest(
+            "image_format=url or both is only supported for NeoGate async image tasks".to_string(),
+        ));
+    }
     let response = forward_openai(
         &state,
         &upstream,
         UpstreamProtocol::Openai,
-        body,
+        prepared.body,
         "/v1/responses",
     )
     .await;

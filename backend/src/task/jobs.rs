@@ -2,13 +2,14 @@ use std::path::{Path, PathBuf};
 
 use axum::{
     body::Body,
-    http::{header, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     response::Response,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::Utc;
 use futures_util::StreamExt;
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -37,11 +38,57 @@ const STATUS_COMPLETED: &str = "completed";
 const STATUS_FAILED: &str = "failed";
 const STATUS_CANCELLED: &str = "cancelled";
 const SSE_BUFFER_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+const ASSET_URL_TTL_SECONDS: u64 = 3600;
+
+type HmacSha256 = Hmac<Sha256>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum NeogateImageResponseFormat {
+    Base64,
+    Url,
+    Both,
+}
+
+impl Default for NeogateImageResponseFormat {
+    fn default() -> Self {
+        Self::Base64
+    }
+}
+
+impl NeogateImageResponseFormat {
+    fn from_value(value: &Value) -> AppResult<Self> {
+        match value.as_str() {
+            Some("base64") => Ok(Self::Base64),
+            Some("url") => Ok(Self::Url),
+            Some("both") => Ok(Self::Both),
+            Some(_) => Err(AppError::BadRequest(
+                "image_format must be one of base64, url, or both".to_string(),
+            )),
+            None => Err(AppError::BadRequest(
+                "image_format must be a string".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn requires_neogate_asset_url(self) -> bool {
+        matches!(self, Self::Url | Self::Both)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedNeogateResponseRequest {
+    pub(crate) body: Bytes,
+    pub(crate) image_format: NeogateImageResponseFormat,
+    pub(crate) has_image_generation_tool: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NeogateResponseMetadata {
     request: Value,
     response: Value,
+    #[serde(default)]
+    image_format: NeogateImageResponseFormat,
     #[serde(default)]
     assets: Vec<NeogateResponseAsset>,
     #[serde(default)]
@@ -87,12 +134,30 @@ pub(crate) fn has_image_generation_tool(body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn prepare_request_body(body: Bytes) -> AppResult<PreparedNeogateResponseRequest> {
+    let mut request: Value = serde_json::from_slice(&body)?;
+    let image_format = request
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("request body must be an object".to_string()))?
+        .remove("image_format")
+        .map(|value| NeogateImageResponseFormat::from_value(&value))
+        .transpose()?
+        .unwrap_or_default();
+    let sanitized = Bytes::from(serde_json::to_vec(&request)?);
+    Ok(PreparedNeogateResponseRequest {
+        has_image_generation_tool: has_image_generation_tool(&sanitized),
+        body: sanitized,
+        image_format,
+    })
+}
+
 pub(crate) async fn create(
     state: &AppState,
     auth: &UserAuth,
     upstream: &SelectedUpstream,
     model: &str,
     request_body: Bytes,
+    image_format: NeogateImageResponseFormat,
     hold: &DebitHold,
 ) -> AppResult<Value> {
     let response_id = format!("resp_{}", Uuid::new_v4().simple());
@@ -101,6 +166,7 @@ pub(crate) async fn create(
     let metadata = NeogateResponseMetadata {
         request,
         response: response.clone(),
+        image_format,
         assets: Vec::new(),
         error: None,
         cancel_requested: false,
@@ -133,7 +199,14 @@ pub(crate) async fn response_for_task(state: &AppState, task: &UpstreamTask) -> 
     response["status"] = Value::String(task.status.clone());
     response["id"] = Value::String(task.upstream_task_id.clone());
     if task.status == STATUS_COMPLETED {
-        match outputs_from_assets(state, &metadata.assets).await {
+        match outputs_from_assets(
+            state,
+            &task.upstream_task_id,
+            metadata.image_format,
+            &metadata.assets,
+        )
+        .await
+        {
             Ok(output) => response["output"] = Value::Array(output),
             Err(err) => {
                 response["status"] = Value::String(STATUS_FAILED.to_string());
@@ -440,6 +513,7 @@ fn stream_request(request: &Value) -> AppResult<Value> {
     object.insert("stream".to_string(), Value::Bool(true));
     object.insert("store".to_string(), Value::Bool(true));
     object.remove("background");
+    object.remove("image_format");
     Ok(value)
 }
 
@@ -477,22 +551,141 @@ async fn save_image_asset(
 
 async fn outputs_from_assets(
     state: &AppState,
+    response_id: &str,
+    image_format: NeogateImageResponseFormat,
     assets: &[NeogateResponseAsset],
 ) -> AppResult<Vec<Value>> {
     let mut outputs = Vec::with_capacity(assets.len());
     for asset in assets {
         let path = asset_path(&state.config.response_assets.dir, &asset.path)?;
-        let bytes = fs::read(path).await.map_err(|err| {
-            AppError::BadRequest(format!("neogate response image asset is missing: {err}"))
-        })?;
-        outputs.push(json!({
+        let mut output = json!({
             "id": format!("ig_{}", asset.index),
             "type": "image_generation_call",
             "status": "completed",
-            "result": STANDARD.encode(bytes),
-        }));
+        });
+        if matches!(
+            image_format,
+            NeogateImageResponseFormat::Base64 | NeogateImageResponseFormat::Both
+        ) {
+            let bytes = fs::read(&path).await.map_err(|err| {
+                AppError::BadRequest(format!("neogate response image asset is missing: {err}"))
+            })?;
+            output["result"] = Value::String(STANDARD.encode(bytes));
+        } else {
+            fs::metadata(&path).await.map_err(|err| {
+                AppError::BadRequest(format!("neogate response image asset is missing: {err}"))
+            })?;
+        }
+        if image_format.requires_neogate_asset_url() {
+            output["url"] = Value::String(signed_asset_url(state, response_id, asset.index));
+        }
+        outputs.push(output);
     }
     Ok(outputs)
+}
+
+pub(crate) async fn asset_response(
+    state: &AppState,
+    response_id: &str,
+    index: usize,
+    expires: i64,
+    sig: &str,
+) -> AppResult<Response> {
+    verify_asset_signature(state, response_id, index, expires, sig)?;
+    if Utc::now().timestamp() > expires {
+        return Err(AppError::Unauthorized);
+    }
+
+    let row = sqlx::query(
+        r#"
+        SELECT upstream_metadata
+        FROM task_upstream
+        WHERE task_type = 'neogate_response' AND upstream_task_id = $1
+        "#,
+    )
+    .bind(response_id)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    let Some(row) = row else {
+        return Err(AppError::NotFound);
+    };
+    let value: Value = row.try_get("upstream_metadata")?;
+    let metadata: NeogateResponseMetadata = serde_json::from_value(value)?;
+    let asset = metadata
+        .assets
+        .iter()
+        .find(|asset| asset.index == index)
+        .ok_or(AppError::NotFound)?;
+    let path = asset_path(&state.config.response_assets.dir, &asset.path)?;
+    let bytes = fs::read(path).await.map_err(|err| {
+        AppError::BadRequest(format!("neogate response image asset is missing: {err}"))
+    })?;
+    let content_type = HeaderValue::from_str(&asset.mime)
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+    let max_age = (expires - Utc::now().timestamp()).max(0);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, format!("private, max-age={max_age}"))
+        .body(Body::from(bytes))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+fn signed_asset_url(state: &AppState, response_id: &str, index: usize) -> String {
+    let ttl = state
+        .config
+        .response_assets
+        .retention
+        .as_secs()
+        .min(ASSET_URL_TTL_SECONDS)
+        .max(1);
+    let expires = Utc::now().timestamp() + ttl as i64;
+    let sig = asset_signature(state, response_id, index, expires);
+    let path = format!("/v1/responses/{response_id}/assets/{index}?expires={expires}&sig={sig}");
+    state
+        .config
+        .public_base_url
+        .as_deref()
+        .map(|base| format!("{}{}", base.trim_end_matches('/'), path))
+        .unwrap_or(path)
+}
+
+fn verify_asset_signature(
+    state: &AppState,
+    response_id: &str,
+    index: usize,
+    expires: i64,
+    sig: &str,
+) -> AppResult<()> {
+    let provided = hex::decode(sig).map_err(|_| AppError::Unauthorized)?;
+    let mut mac =
+        <HmacSha256 as KeyInit>::new_from_slice(state.config.upstream_secret_key.as_bytes())
+            .expect("hmac accepts any key length");
+    mac.update(&asset_signature_payload(response_id, index, expires));
+    mac.verify_slice(&provided)
+        .map_err(|_| AppError::Unauthorized)?;
+    Ok(())
+}
+
+fn asset_signature(state: &AppState, response_id: &str, index: usize, expires: i64) -> String {
+    hex::encode(asset_signature_bytes(state, response_id, index, expires))
+}
+
+fn asset_signature_bytes(
+    state: &AppState,
+    response_id: &str,
+    index: usize,
+    expires: i64,
+) -> Vec<u8> {
+    let mut mac =
+        <HmacSha256 as KeyInit>::new_from_slice(state.config.upstream_secret_key.as_bytes())
+            .expect("hmac accepts any key length");
+    mac.update(&asset_signature_payload(response_id, index, expires));
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn asset_signature_payload(response_id: &str, index: usize, expires: i64) -> Vec<u8> {
+    format!("neogate_asset.v1.{response_id}.{index}.{expires}").into_bytes()
 }
 
 fn outputs_without_results(outputs: &[Value]) -> Vec<Value> {
@@ -648,17 +841,47 @@ mod tests {
     }
 
     #[test]
+    fn prepare_request_body_extracts_image_format_extension() {
+        let prepared = prepare_request_body(Bytes::from_static(
+            br#"{"model":"gpt","image_format":"url","tools":[{"type":"image_generation"}]}"#,
+        ))
+        .unwrap();
+        assert_eq!(prepared.image_format, NeogateImageResponseFormat::Url);
+        assert!(prepared.has_image_generation_tool);
+        let sanitized: Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert!(sanitized.get("image_format").is_none());
+        assert_eq!(sanitized["model"], "gpt");
+    }
+
+    #[test]
+    fn prepare_request_body_defaults_to_base64_and_rejects_invalid_format() {
+        let prepared = prepare_request_body(Bytes::from_static(
+            br#"{"model":"gpt","tools":[{"type":"image_generation"}]}"#,
+        ))
+        .unwrap();
+        assert_eq!(prepared.image_format, NeogateImageResponseFormat::Base64);
+
+        let err = prepare_request_body(Bytes::from_static(
+            br#"{"model":"gpt","image_format":"file"}"#,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("image_format must be one of"));
+    }
+
+    #[test]
     fn stream_request_removes_background_and_enables_stream() {
         let request = json!({
             "model": "gpt",
             "background": true,
             "store": true,
+            "image_format": "url",
             "tools": [{"type": "image_generation"}]
         });
         let value = stream_request(&request).unwrap();
         assert_eq!(value["stream"], true);
         assert_eq!(value["store"], true);
         assert!(value.get("background").is_none());
+        assert!(value.get("image_format").is_none());
     }
 
     #[test]

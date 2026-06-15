@@ -68,6 +68,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/responses", post(openai::openai_responses))
         .route("/v1/responses/{response_id}", get(openai::openai_response))
         .route(
+            "/v1/responses/{response_id}/assets/{index}",
+            get(openai::openai_response_asset),
+        )
+        .route(
             "/v1/responses/{response_id}/input_items",
             get(openai::openai_response_input_items),
         )

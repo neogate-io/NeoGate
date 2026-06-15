@@ -16,6 +16,10 @@ function isSupportedStatus(status: string) {
   return status.startsWith('已支持') || status.startsWith('Supported')
 }
 
+function isNeoGateExtensionParam(name: string) {
+  return name === 'image_format' || name === 'output[].url'
+}
+
 const openAiQuickStart = computed(
   () => `curl ${openAiBaseUrl.value}/chat/completions \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -87,6 +91,7 @@ const openAiResponseImageGeneration = computed(
   -d '{
     "model": "gpt-5.5",
     "input": "生成一张赛博朋克风格的白猫坐在霓虹灯下的图片",
+    "image_format": "url",
     "tools": [
       {
         "type": "image_generation",
@@ -111,6 +116,7 @@ curl ${openAiBaseUrl.value}/responses \\
   "model": "gpt-5.5",
   "background": true,
   "store": true,
+  "image_format": "both",
   "tools": [
     {
       "type": "image_generation",
@@ -664,7 +670,7 @@ const content = computed(() => {
         'Images 支持文生图、图生图/局部编辑和图片变体。生成接口使用 JSON 请求体，编辑接口支持 JSON images 数组或 multipart/form-data 上传图片，变体接口使用 multipart/form-data；流式输出会以 text/event-stream 返回生成过程中的 partial image，适合展示预览进度。',
       imageAsyncTitle: '图片生成（异步）',
       openAiImageAsync:
-        '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
+        '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。NeoGate 扩展支持通过 image_format 控制异步图片结果返回 base64 或 URL。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
       requestParamsTitle: '调用参数',
       responseParamsTitle: '返回参数',
       paramFieldHeaders: ['参数', '类型 / 示例', '说明'],
@@ -805,7 +811,8 @@ const content = computed(() => {
           'stream',
           'boolean',
           '创建后台任务时不要设置为 true；需要流式结果时在查询接口追加 ?stream=true。'
-        ]
+        ],
+        ['image_format', 'string', '控制异步图片结果格式，可选 base64、url 或 both；默认 base64。']
       ],
       imageAsyncResponseParams: [
         ['id', 'string', 'Response ID，例如 resp_123；用于查询、恢复流式结果或取消。'],
@@ -819,7 +826,8 @@ const content = computed(() => {
         ],
         ['output[]', 'array', '完成后包含模型输出；图片结果位于 image_generation_call 项中。'],
         ['output[].type', '"image_generation_call"', '标识该输出项来自图片生成工具。'],
-        ['output[].result', 'string', '完成时返回 Base64 图片内容。'],
+        ['output[].result', 'string', '完成时返回 Base64 图片内容；image_format=url 时可省略。'],
+        ['output[].url', 'string', '仅在 image_format 为 url 或 both 时返回。'],
         ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
         ['usage', 'object | null', '终态返回的用量信息，NeoGate 会用于记录和结算。']
       ],
@@ -1316,7 +1324,7 @@ const content = computed(() => {
       'Images supports text-to-image, image edits, and image variations. Generations use a JSON body; edits support a JSON images array or multipart/form-data image uploads, while variations use multipart/form-data. Streaming returns partial images over text/event-stream, which is useful for showing generation progress.',
     imageAsyncTitle: 'Image generation async',
     openAiImageAsync:
-      'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
+      'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. NeoGate extends the request with image_format so async image results can return base64 or a URL. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
     requestParamsTitle: 'Request parameters',
     responseParamsTitle: 'Response parameters',
     paramFieldHeaders: ['Parameter', 'Type / example', 'Description'],
@@ -1524,6 +1532,11 @@ const content = computed(() => {
       ['tools[].quality', 'string', 'Image quality, such as auto, low, medium, or high.'],
       ['tools[].output_format', 'string', 'Output image format, such as png, jpeg, or webp.'],
       [
+        'image_format',
+        'string',
+        'Controls the async image result format. Use base64, url, or both; the default is base64.'
+      ],
+      [
         'background',
         'boolean',
         'Set true to create a background Response; NeoGate async image tasks use this mode.'
@@ -1563,7 +1576,16 @@ const content = computed(() => {
         '"image_generation_call"',
         'Identifies output produced by the image generation tool.'
       ],
-      ['output[].result', 'string', 'Base64 image content returned when generation completes.'],
+      [
+        'output[].result',
+        'string',
+        'Base64 image content returned when generation completes; omitted when image_format=url.'
+      ],
+      [
+        'output[].url',
+        'string',
+        'Returned when image_format is url or both.'
+      ],
       ['error', 'object | null', 'On failure, includes code and message; usually null on success.'],
       ['usage', 'object | null', 'Final usage data used by NeoGate for records and settlement.']
     ],
@@ -2195,7 +2217,12 @@ const content = computed(() => {
                             <code>{{ name }}</code>
                           </td>
                           <td>{{ type }}</td>
-                          <td>{{ description }}</td>
+                          <td>
+                            <span v-if="isNeoGateExtensionParam(name)" class="docs-extension-badge">
+                              NeoGate {{ locale.startsWith('zh') ? '扩展' : 'extension' }}
+                            </span>
+                            {{ description }}
+                          </td>
                         </tr>
                       </tbody>
                     </table>
@@ -2221,7 +2248,12 @@ const content = computed(() => {
                             <code>{{ name }}</code>
                           </td>
                           <td>{{ type }}</td>
-                          <td>{{ description }}</td>
+                          <td>
+                            <span v-if="isNeoGateExtensionParam(name)" class="docs-extension-badge">
+                              NeoGate {{ locale.startsWith('zh') ? '扩展' : 'extension' }}
+                            </span>
+                            {{ description }}
+                          </td>
                         </tr>
                       </tbody>
                     </table>

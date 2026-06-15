@@ -2,6 +2,10 @@ server {
     listen 80;
     server_name _;
 
+    # Required for Docker overlay2: sendfile can return empty responses
+    # when the file sits on a different filesystem layer.
+    sendfile off;
+
     client_max_body_size 64m;
 
     root /usr/share/nginx/html;

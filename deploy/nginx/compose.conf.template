@@ -20,7 +20,11 @@ server {
         proxy_request_buffering off;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
-        proxy_pass ${API_UPSTREAM};
+
+        # Use variable to defer DNS resolution so nginx doesn't crash if backend isn't ready at startup
+        resolver 127.0.0.11 valid=30s ipv6=off;
+        set $backend_upstream ${API_UPSTREAM};
+        proxy_pass $backend_upstream;
     }
 
     location / {

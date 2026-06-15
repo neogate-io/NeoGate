@@ -3,8 +3,10 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+    restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     environment:
       API_UPSTREAM: http://api:8080
       NEOGATE_PUBLIC_ORIGIN: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}

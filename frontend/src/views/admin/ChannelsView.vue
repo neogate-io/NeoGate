@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CircleCheckFilled,
+  CircleCloseFilled,
   Coin,
   Delete,
   Edit,
@@ -175,9 +176,7 @@ const channelTotalPages = computed(() =>
   Math.ceil(filteredChannels.value.length / channelPageSize.value)
 )
 
-const channelHasPagination = computed(
-  () => filteredChannels.value.length > channelPageSize.value
-)
+const channelHasPagination = computed(() => filteredChannels.value.length > channelPageSize.value)
 
 function handleChannelPageSizeChange(size: number) {
   channelPageSize.value = size
@@ -321,6 +320,16 @@ function diagnosticStatusType(status: DiagnosticStatus) {
   return types[status]
 }
 
+function diagnosticStepIcon(status: DiagnosticStatus) {
+  const icons = {
+    ok: CircleCheckFilled,
+    warning: WarningFilled,
+    failed: CircleCloseFilled,
+    skipped: VideoPause
+  }
+  return icons[status]
+}
+
 function diagnosticStepLabel(name: string) {
   if (name === 'models') return t('diagnosticStepModels')
   if (name === 'probe') return t('diagnosticStepProbe')
@@ -400,22 +409,70 @@ function probeTrendStats(row: Channel) {
   }
 }
 
-function probeTrendPoints(row: Channel) {
-  const samples = row.probe_samples.filter((sample) => sample.latency_ms != null)
-  if (samples.length === 0) return ''
-  const values = samples.map((sample) => sample.latency_ms ?? 0)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const range = Math.max(max - min, 1)
+function probeSampleTone(sample: ChannelProbeSample) {
+  if (sample.status === 'skipped') return 'is-skipped'
+  if (sample.status !== 'ok') return 'is-failed'
+  if (sample.latency_ms == null) return 'is-empty'
+  if (sample.latency_ms > 5000) return 'is-very-slow'
+  if (sample.latency_ms > 2000) return 'is-slow'
+  return 'is-ok'
+}
+
+function probeSampleStatusText(sample: ChannelProbeSample) {
+  if (sample.status === 'ok') return t('diagnosticStatusOk')
+  if (sample.status === 'skipped') return t('diagnosticStatusSkipped')
+  return t('diagnosticStatusFailed')
+}
+
+function probeSampleTitle(sample: ChannelProbeSample) {
+  return [
+    `${t('time')}: ${formatCompactDateTime(sample.created_at)}`,
+    `${t('model')}: ${sample.model || '-'}`,
+    `${t('channelStatus')}: ${probeSampleStatusText(sample)}`,
+    `${t('latency')}: ${probeLatencyLabel(sample)}`,
+    sample.status_code ? `${t('probeStatusCode')}: ${sample.status_code}` : '',
+    sample.error_summary ? `${t('error')}: ${sample.error_summary}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function probeTrendBars(row: Channel) {
+  const samples = row.probe_samples
+  if (samples.length === 0) return []
+
   const width = 132
-  const height = 34
-  return values
-    .map((value, index) => {
-      const x = samples.length === 1 ? width : (index / (samples.length - 1)) * width
-      const y = height - ((value - min) / range) * (height - 10) - 5
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
+  const baseline = 39
+  const maxHeight = 34
+  const gap = samples.length > 18 ? 2 : 3
+  const barWidth = Math.max(3, Math.min(10, (width - gap * (samples.length - 1)) / samples.length))
+  const totalWidth = barWidth * samples.length + gap * (samples.length - 1)
+  const offsetX = Math.max(0, (width - totalWidth) / 2)
+  const maxLatency = Math.max(
+    ...samples.map((sample) => sample.latency_ms ?? 0).filter((value) => value > 0),
+    1
+  )
+
+  return samples.map((sample, index) => {
+    const latency = sample.latency_ms ?? 0
+    const valueHeight =
+      sample.status === 'ok' && latency > 0
+        ? Math.max(4, (latency / maxLatency) * maxHeight)
+        : sample.status === 'failed'
+          ? 16
+          : 8
+    const height = Math.min(maxHeight, valueHeight)
+
+    return {
+      key: `${sample.created_at}-${index}`,
+      x: Number((offsetX + index * (barWidth + gap)).toFixed(2)),
+      y: Number((baseline - height).toFixed(2)),
+      width: Number(barWidth.toFixed(2)),
+      height: Number(height.toFixed(2)),
+      tone: probeSampleTone(sample),
+      title: probeSampleTitle(sample)
+    }
+  })
 }
 
 function probeTrendClass(row: Channel) {
@@ -460,7 +517,9 @@ function probeTooltip(row: Channel) {
     `${t('channelStatus')}: ${status}`,
     `${t('latency')}: ${probeLatencyLabel(sample)}`,
     `${t('probeSuccessRatio')}: ${stats.okCount}/${stats.total}`,
-    stats.avgLatency != null ? `${t('probeAverageLatency')}: ${formatDurationMs(stats.avgLatency)}` : '',
+    stats.avgLatency != null
+      ? `${t('probeAverageLatency')}: ${formatDurationMs(stats.avgLatency)}`
+      : '',
     stats.minLatency != null && stats.maxLatency != null
       ? `${t('probeLatencyRange')}: ${formatDurationMs(stats.minLatency)} - ${formatDurationMs(stats.maxLatency)}`
       : '',
@@ -1018,7 +1077,12 @@ onMounted(loadInitialData)
             <span class="channel-key-count">{{ channelCredentialSummary(row).label }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('probeTrend')" min-width="220" align="center" header-align="center">
+        <el-table-column
+          :label="t('probeTrend')"
+          min-width="220"
+          align="center"
+          header-align="center"
+        >
           <template #default="{ row }">
             <el-tooltip
               placement="top"
@@ -1028,7 +1092,12 @@ onMounted(loadInitialData)
             >
               <template #content>
                 <div class="probe-tooltip-content">
-                  <div class="probe-tooltip-title">{{ latestProbeSample(row)?.model || '-' }}</div>
+                  <div class="probe-tooltip-head">
+                    <div class="probe-tooltip-title">{{ t('probeLatestResult') }}</div>
+                    <div class="probe-tooltip-subtitle">
+                      {{ latestProbeSample(row)?.model || '-' }}
+                    </div>
+                  </div>
                   <div class="probe-tooltip-grid">
                     <span>{{ t('time') }}</span>
                     <strong>{{
@@ -1072,31 +1141,35 @@ onMounted(loadInitialData)
                 :class="probeTrendClass(row)"
                 :aria-label="probeTooltip(row)"
               >
-                <svg class="probe-trend-chart" viewBox="0 0 132 34" aria-hidden="true">
+                <svg class="probe-trend-chart" viewBox="0 0 132 44" aria-hidden="true">
                   <line
                     x1="0"
-                    y1="29"
+                    y1="39"
                     x2="132"
-                    y2="29"
+                    y2="39"
                     class="probe-trend-baseline"
                     stroke-linecap="round"
                   />
-                  <polyline
-                    v-if="probeTrendPoints(row)"
-                    :points="probeTrendPoints(row)"
-                    fill="none"
-                    class="probe-trend-line"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2.4"
-                  />
+                  <rect
+                    v-for="bar in probeTrendBars(row)"
+                    :key="bar.key"
+                    :x="bar.x"
+                    :y="bar.y"
+                    :width="bar.width"
+                    :height="bar.height"
+                    rx="1.8"
+                    class="probe-trend-bar"
+                    :class="bar.tone"
+                  >
+                    <title>{{ bar.title }}</title>
+                  </rect>
                   <line
-                    v-else
+                    v-if="probeTrendBars(row).length === 0"
                     x1="14"
-                    y1="17"
+                    y1="22"
                     x2="118"
-                    y2="17"
-                    class="probe-trend-line"
+                    y2="22"
+                    class="probe-trend-empty-line"
                     stroke-width="2.4"
                     stroke-linecap="round"
                   />
@@ -1110,7 +1183,7 @@ onMounted(loadInitialData)
           </template>
         </el-table-column>
         <el-table-column
-          :label="t('channelStatus')"
+          :label="t('channelRuntimeSwitch')"
           min-width="190"
           align="center"
           header-align="center"
@@ -1137,7 +1210,13 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" width="150" fixed="right" align="center" header-align="center">
+        <el-table-column
+          :label="t('actions')"
+          width="150"
+          fixed="right"
+          align="center"
+          header-align="center"
+        >
           <template #default="{ row }">
             <div class="table-row-actions">
               <AdminActionTooltip :content="t('configurePrice')">
@@ -1208,12 +1287,7 @@ onMounted(loadInitialData)
             class="admin-page-size"
             @change="handleChannelPageSizeChange"
           >
-            <el-option
-              v-for="s in channelPageSizes"
-              :key="s"
-              :value="s"
-              :label="String(s)"
-            />
+            <el-option v-for="s in channelPageSizes" :key="s" :value="s" :label="String(s)" />
           </el-select>
         </div>
         <div class="admin-page-buttons">
@@ -1319,28 +1393,37 @@ onMounted(loadInitialData)
           <span>{{ t('diagnosticCurrentModel') }}</span>
           <strong>{{ diagnosticCurrentModel }}</strong>
         </div>
-        <div ref="diagnosticLiveListRef" class="diagnostic-live-list">
-          <div v-if="diagnosticLiveSteps.length === 0" class="diagnostic-live-empty">
-            {{ t('diagnosticWaitingFirstResult') }}
-          </div>
-          <div
-            v-for="event in diagnosticLiveSteps"
-            :key="`${event.endpoint_id}-${event.key_id ?? event.key_name}-${event.model}`"
-            class="diagnostic-step"
-            :class="`is-${event.step.status}`"
-          >
-            <span class="diagnostic-step-dot"></span>
-            <div class="diagnostic-step-copy">
-              <strong>{{ diagnosticStepLabel(event.step.name) }}</strong>
-              <span>{{ event.step.message }}</span>
+        <div class="diagnostic-live-panel">
+          <div ref="diagnosticLiveListRef" class="diagnostic-live-list">
+            <div v-if="diagnosticLiveSteps.length === 0" class="diagnostic-live-empty">
+              {{ t('diagnosticWaitingFirstResult') }}
             </div>
-            <span class="diagnostic-step-meta">{{ diagnosticStepMeta(event.step) }}</span>
+            <div
+              v-for="event in diagnosticLiveSteps"
+              :key="`${event.endpoint_id}-${event.key_id ?? event.key_name}-${event.model}`"
+              class="diagnostic-step"
+              :class="`is-${event.step.status}`"
+            >
+              <el-icon class="diagnostic-step-icon">
+                <component :is="diagnosticStepIcon(event.step.status)" />
+              </el-icon>
+              <div class="diagnostic-step-copy">
+                <strong>{{ diagnosticStepLabel(event.step.name) }}</strong>
+                <span>{{ event.step.message }}</span>
+              </div>
+              <span class="diagnostic-step-meta">{{ diagnosticStepMeta(event.step) }}</span>
+            </div>
           </div>
         </div>
       </div>
 
       <div v-else-if="diagnosticError" class="diagnostic-error">
-        <el-alert :title="t('diagnosticFailedTitle')" :description="diagnosticError" type="error" show-icon />
+        <el-alert
+          :title="t('diagnosticFailedTitle')"
+          :description="diagnosticError"
+          type="error"
+          show-icon
+        />
         <el-button
           v-if="diagnosticChannel"
           class="admin-action-button"
@@ -1452,7 +1535,9 @@ onMounted(loadInitialData)
                   class="diagnostic-step"
                   :class="`is-${step.status}`"
                 >
-                  <span class="diagnostic-step-dot"></span>
+                  <el-icon class="diagnostic-step-icon">
+                    <component :is="diagnosticStepIcon(step.status)" />
+                  </el-icon>
                   <div class="diagnostic-step-copy">
                     <strong>{{ diagnosticStepLabel(step.name) }}</strong>
                     <span>{{ step.message }}</span>
@@ -1605,6 +1690,14 @@ onMounted(loadInitialData)
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-key-count),
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch-text) {
   color: #94a3b8;
+}
+
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch) {
+  border-color: #e5e7eb;
+}
+
+.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch-icon) {
+  background: #cbd5e1;
 }
 
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch) {
@@ -1839,9 +1932,10 @@ onMounted(loadInitialData)
   color: #17a169;
   display: inline-grid;
   gap: 3px;
+  justify-items: center;
   min-width: 156px;
   padding: 4px 0;
-  text-align: left;
+  text-align: center;
 }
 
 .probe-trend-cell.is-failed {
@@ -1856,7 +1950,7 @@ onMounted(loadInitialData)
   align-items: center;
   display: flex;
   gap: 4px;
-  justify-content: flex-start;
+  justify-content: center;
   min-width: 0;
 }
 
@@ -1869,7 +1963,7 @@ onMounted(loadInitialData)
 .probe-trend-chart {
   color: inherit;
   display: block;
-  height: 34px;
+  height: 44px;
   width: 132px;
 }
 
@@ -1878,8 +1972,33 @@ onMounted(loadInitialData)
   stroke-width: 1;
 }
 
-.probe-trend-line {
+.probe-trend-empty-line {
   stroke: currentColor;
+}
+
+.probe-trend-bar {
+  fill: currentColor;
+}
+
+.probe-trend-bar.is-ok {
+  fill: #16a34a;
+}
+
+.probe-trend-bar.is-slow {
+  fill: #f59e0b;
+}
+
+.probe-trend-bar.is-very-slow {
+  fill: #f97316;
+}
+
+.probe-trend-bar.is-failed {
+  fill: #dc2626;
+}
+
+.probe-trend-bar.is-skipped,
+.probe-trend-bar.is-empty {
+  fill: #94a3b8;
 }
 
 .probe-trend-foot {
@@ -1917,10 +2036,21 @@ onMounted(loadInitialData)
   min-width: 230px;
 }
 
+.probe-tooltip-head {
+  display: grid;
+  gap: 2px;
+}
+
 .probe-tooltip-title {
   color: #111827;
   font-size: 13px;
   font-weight: 760;
+}
+
+.probe-tooltip-subtitle {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 620;
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2232,23 +2362,37 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
-.diagnostic-live-list {
-  display: grid;
-  gap: 8px;
-  max-height: 280px;
-  overflow: auto;
-  padding: 2px;
+.diagnostic-live-panel {
+  background: #ffffff;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  box-sizing: border-box;
+  height: 302px;
+  padding: 0 0 0 10px;
   width: min(100%, 620px);
 }
 
+.diagnostic-live-list {
+  align-content: start;
+  box-sizing: border-box;
+  display: grid;
+  gap: 8px;
+  grid-auto-rows: max-content;
+  height: 100%;
+  overflow: auto;
+  padding: 10px 8px 10px 0;
+  scrollbar-gutter: stable;
+  width: 100%;
+}
+
 .diagnostic-live-empty {
-  background: #f8fafc;
-  border: 1px dashed #d8e0ea;
-  border-radius: 8px;
   color: #667085;
   font-size: 13px;
   font-weight: 620;
-  padding: 12px;
+  line-height: 1.5;
+  padding: 2px 0;
+  text-align: center;
 }
 
 .diagnostic-running-icon {
@@ -2449,27 +2593,26 @@ onMounted(loadInitialData)
   border-radius: 8px;
   display: grid;
   gap: 10px;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  min-height: 74px;
   padding: 9px 10px;
 }
 
-.diagnostic-step-dot {
-  background: #22c55e;
-  border-radius: 999px;
-  height: 8px;
-  width: 8px;
+.diagnostic-step-icon {
+  color: #16a34a;
+  font-size: 18px;
 }
 
-.diagnostic-step.is-warning .diagnostic-step-dot {
-  background: #eab308;
+.diagnostic-step.is-warning .diagnostic-step-icon {
+  color: #d97706;
 }
 
-.diagnostic-step.is-failed .diagnostic-step-dot {
-  background: #ef4444;
+.diagnostic-step.is-failed .diagnostic-step-icon {
+  color: #dc2626;
 }
 
-.diagnostic-step.is-skipped .diagnostic-step-dot {
-  background: #94a3b8;
+.diagnostic-step.is-skipped .diagnostic-step-icon {
+  color: #64748b;
 }
 
 .diagnostic-step-copy {

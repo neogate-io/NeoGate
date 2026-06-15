@@ -200,6 +200,7 @@ export const adminMessages = {
     healthyKeyCount: '健康 Key',
     abnormalKeyCount: '异常 Key',
     channelStatus: '运行状态',
+    channelRuntimeSwitch: '运行开关',
     channelSearchPlaceholder: '搜索名称、供应商或模型',
     channelRunningNormal: '运行正常',
     channelRunningDegraded: '部分异常',
@@ -210,6 +211,7 @@ export const adminMessages = {
     fullDiagnoseChannel: '完整测试',
     channelDiagnosticReport: '通道诊断报告',
     probeTrend: '延迟趋势',
+    probeLatestResult: '最新一次探测结果',
     probeNoData: '等待探测',
     probeNoDataHint: '后台将每 10 分钟选择一个文本模型进行轻量探测。',
     probeFailed: '探测失败',
@@ -294,7 +296,7 @@ export const adminMessages = {
     credentialNoQuotaData: '暂无配额数据',
     credentialDisabledHint: '已禁用，停止参与使用',
     credentialEnabledHint: '已启用，可参与使用',
-    providerOpenAI: 'OpenAI',
+    providerOpenAI: 'OpenAI'
   },
   'en-US': {
     admin: 'Admin',
@@ -329,7 +331,8 @@ export const adminMessages = {
     noUsers: 'No users yet',
     afterAdjustment: 'After adjustment',
     creditAdjustment: 'Adjustment',
-    projectCreditAdjustHint: 'Enter a positive amount to add credit, or a negative amount to deduct it.',
+    projectCreditAdjustHint:
+      'Enter a positive amount to add credit, or a negative amount to deduct it.',
     project: 'Project',
     projectName: 'Project name',
     projectNamePlaceholder: 'Enter project name',
@@ -503,6 +506,7 @@ export const adminMessages = {
     healthyKeyCount: 'Healthy keys',
     abnormalKeyCount: 'Abnormal keys',
     channelStatus: 'Runtime',
+    channelRuntimeSwitch: 'Toggle',
     channelSearchPlaceholder: 'Search name, provider, or model',
     channelRunningNormal: 'Running normally',
     channelRunningDegraded: 'Partially degraded',
@@ -513,9 +517,9 @@ export const adminMessages = {
     fullDiagnoseChannel: 'Full test',
     channelDiagnosticReport: 'Channel diagnostic report',
     probeTrend: 'Latency trend',
+    probeLatestResult: 'Latest probe result',
     probeNoData: 'Waiting',
-    probeNoDataHint:
-      'The background worker probes one text model every 10 minutes.',
+    probeNoDataHint: 'The background worker probes one text model every 10 minutes.',
     probeFailed: 'Probe failed',
     probeSuccessRatio: 'Success',
     probeAverageLatency: 'Average latency',
@@ -602,6 +606,6 @@ export const adminMessages = {
     credentialNoQuotaData: 'No quota data',
     credentialDisabledHint: 'Disabled and excluded from use',
     credentialEnabledHint: 'Enabled and available for use',
-    providerOpenAI: 'OpenAI',
-  },
+    providerOpenAI: 'OpenAI'
+  }
 } satisfies LocaleMessages

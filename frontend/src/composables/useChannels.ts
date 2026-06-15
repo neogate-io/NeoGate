@@ -13,6 +13,7 @@ import {
 } from '../api/channels'
 import { getProviders } from '../api/providers'
 import type { MessageKey } from '../i18n'
+import { copyTextToClipboard } from '../utils/clipboard'
 import { confirmAction } from '../utils/confirm'
 import type {
   Channel,
@@ -434,7 +435,7 @@ export function useChannels(t: Translate) {
     copyingKeyId.value = key.id
     try {
       const { secret } = await revealChannelKeySecret(key.channel_id, key.id)
-      await navigator.clipboard.writeText(secret)
+      await copyTextToClipboard(secret)
       ElMessage.success(t('channelKeyCopied'))
     } catch (err) {
       ElMessage.error(readError(err))

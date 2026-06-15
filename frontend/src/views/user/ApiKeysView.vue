@@ -12,6 +12,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
 import type { UserKey } from '../../types/admin'
 import type { ServicePolicy } from '../../api/policy'
+import { copyTextToClipboard } from '../../utils/clipboard'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, maskApiKey } from '../../utils/format'
@@ -44,7 +45,7 @@ function formatLastActiveAt(value?: string | null) {
 
 async function copyText(value: string, successMessage = t('apiKeyCopied')) {
   try {
-    await navigator.clipboard.writeText(value)
+    await copyTextToClipboard(value)
     ElMessage.success(successMessage)
   } catch (err) {
     ElMessage.error(readError(err))

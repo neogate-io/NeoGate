@@ -292,7 +292,7 @@ message() {
     summary_config_file_label) printf '%s' "Config file" ;;
     codex_model) printf 'Codex model: %s' "$1" ;;
     claude_model) printf 'Claude Code model: %s' "$1" ;;
-    api_key_prompt) printf '%s' "Enter emailed API key: " ;;
+    api_key_prompt) printf '%s' "Enter API key: " ;;
     choose_client_codex) printf '%s' "1. Codex CLI" ;;
     choose_client_claude) printf '%s' "2. Claude Code" ;;
     choose_client_prompt) printf '%s' "Choose client [1-2]: " ;;

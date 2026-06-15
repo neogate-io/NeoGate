@@ -140,6 +140,9 @@ mod tests {
 
         assert!(script.contains("DEFAULT_BASE_URL=\"https://dev.moligate.com/v1\""));
         assert!(script.contains("curl -fsSL https://dev.moligate.com/install | bash"));
+        assert!(script.contains(r#"api_key_prompt) printf '%s' "请输入 API 密钥：""#));
+        assert!(script.contains(r#"api_key_prompt) printf '%s' "Enter API key: ""#));
+        assert!(!script.contains("Enter emailed API key"));
         assert!(!script.contains("__NEOGATE_DEFAULT_BASE_URL__"));
         assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
     }

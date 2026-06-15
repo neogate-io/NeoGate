@@ -195,7 +195,7 @@ const setupSteps = computed(() => [
     key: 'runtime',
     title: t('setupStepRuntime'),
     description: t('setupStepRuntimeDescription'),
-    done: !status.value?.bootstrap_required && !reviewingRuntimeConfig.value,
+    done: status.value ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value : false,
     active: Boolean(status.value?.bootstrap_required) || reviewingRuntimeConfig.value
   },
   {

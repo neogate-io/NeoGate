@@ -1,5 +1,6 @@
 import { ElMessage } from 'element-plus'
 import { useLocale } from './useLocale'
+import { copyTextToClipboard } from '../utils/clipboard'
 
 /** Smooth-scroll to a section by element id. */
 export function useScrollTo() {
@@ -12,7 +13,7 @@ export function useScrollTo() {
 export function useCopyText() {
   const { t } = useLocale()
   return async (text: string) => {
-    await navigator.clipboard.writeText(text)
+    await copyTextToClipboard(text)
     ElMessage.success(t('apiKeyCopied'))
   }
 }

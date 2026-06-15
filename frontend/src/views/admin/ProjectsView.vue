@@ -36,6 +36,7 @@ import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
+import { copyTextToClipboard } from '../../utils/clipboard'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
@@ -387,7 +388,7 @@ async function toggleProjectStatus(row: Project) {
 
 async function copyApiKeyValue(value: string) {
   try {
-    await navigator.clipboard.writeText(value)
+    await copyTextToClipboard(value)
     ElMessage.success(t('apiKeyCopied'))
   } catch (err) {
     ElMessage.error(readError(err))

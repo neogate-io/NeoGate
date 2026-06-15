@@ -35,6 +35,7 @@ import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
 import { confirmAction } from '../../utils/confirm'
+import { copyTextToClipboard } from '../../utils/clipboard'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -298,7 +299,7 @@ async function openUserKeysDialog(row: User) {
 
 async function copyApiKey(row: UserKey) {
   try {
-    await navigator.clipboard.writeText(row.key)
+    await copyTextToClipboard(row.key)
     ElMessage.success(t('apiKeyCopied'))
   } catch (err) {
     ElMessage.error(readError(err))

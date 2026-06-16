@@ -151,7 +151,11 @@ Docker installation does not require Rust, Node.js, or pnpm on the host. The flo
 Standalone deployment is suitable for most starting scenarios. Compose starts frontend Nginx, the backend, and PostgreSQL together, so you do not need to prepare PostgreSQL or Redis separately.
 
 ```bash
+# Overseas (Docker Hub directly accessible)
 docker compose up -d --build
+
+# Mainland China (uses domestic mirrors)
+docker compose -f docker-compose.cn.yml up -d --build
 ```
 
 After startup, open `http://SERVER_IP:8080` and complete the first-run wizard for the admin account, service mode, initial upstream, prices, SMTP, and payment settings.
@@ -161,19 +165,31 @@ After startup, open `http://SERVER_IP:8080` and complete the first-run wizard fo
 After standalone deployment starts, check whether all containers are `running` or `healthy`:
 
 ```bash
+# Overseas
 docker compose ps
+
+# Mainland China
+docker compose -f docker-compose.cn.yml ps
 ```
 
 You should normally see `postgres`, `backend`, and `web`. If a service is not `running` or `healthy`, check logs:
 
 ```bash
+# Overseas
 docker compose logs -f
+
+# Mainland China
+docker compose -f docker-compose.cn.yml logs -f
 ```
 
 You can also inspect one service, such as the standalone backend:
 
 ```bash
+# Overseas
 docker compose logs -f backend
+
+# Mainland China
+docker compose -f docker-compose.cn.yml logs -f backend
 ```
 
 Finally, open `http://SERVER_IP:8080` in a browser. If the first-run wizard or login page loads, the frontend, backend, and reverse proxy path are usually working.

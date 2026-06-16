@@ -151,7 +151,11 @@ Docker 安装不需要在宿主机单独安装 Rust、Node.js 或 pnpm。下面�
 单机部署适合大多数起步场景。Compose 会同时启动前端 Nginx、后端和 PostgreSQL，不需要额外准备 PostgreSQL 或 Redis。
 
 ```bash
+# 海外（Docker Hub 可直接访问）
 docker compose up -d --build
+
+# 中国大陆（使用国内镜像源）
+docker compose -f docker-compose.cn.yml up -d --build
 ```
 
 启动后访问 `http://服务器IP:8080`，通过首次运行向导完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
@@ -161,19 +165,31 @@ docker compose up -d --build
 单机部署启动完成后，可以先查看容器是否都处于 `running` 或 `healthy` 状态：
 
 ```bash
+# 海外
 docker compose ps
+
+# 中国大陆
+docker compose -f docker-compose.cn.yml ps
 ```
 
 通常会看到 `postgres`、`backend`、`web` 三个服务。若服务状态不是 `running`/`healthy`，可以查看日志定位原因：
 
 ```bash
+# 海外
 docker compose logs -f
+
+# 中国大陆
+docker compose -f docker-compose.cn.yml logs -f
 ```
 
 也可以只查看某个服务的日志，例如单机部署的后端：
 
 ```bash
+# 海外
 docker compose logs -f backend
+
+# 中国大陆
+docker compose -f docker-compose.cn.yml logs -f backend
 ```
 
 最后在浏览器访问 `http://服务器IP:8080`，如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。

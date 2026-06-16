@@ -1,7 +1,7 @@
 use std::{
     env,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -607,23 +607,7 @@ fn configured_secret(value: Option<&str>, default: &str) -> bool {
 }
 
 fn default_env_file() -> PathBuf {
-    default_env_file_for(Path::new("."))
-}
-
-fn default_env_file_for(base: &Path) -> PathBuf {
-    if is_backend_crate_dir(base) {
-        PathBuf::from(".env")
-    } else if base.join("backend").join("Cargo.toml").is_file() {
-        PathBuf::from("backend/.env")
-    } else {
-        PathBuf::from(".env")
-    }
-}
-
-fn is_backend_crate_dir(path: &Path) -> bool {
-    path.join("Cargo.toml").is_file()
-        && path.join("src").join("main.rs").is_file()
-        && path.join("src").join("config.rs").is_file()
+    PathBuf::from(".env")
 }
 
 #[cfg(test)]
@@ -659,30 +643,6 @@ mod tests {
             ProcessRole::Worker
         );
         assert!(ProcessRole::from_env_value("scheduler").is_err());
-    }
-
-    #[test]
-    fn default_env_file_uses_current_file_inside_backend_crate() {
-        let base = test_dir("backend-crate");
-        fs::create_dir_all(base.join("src")).unwrap();
-        fs::write(base.join("Cargo.toml"), "").unwrap();
-        fs::write(base.join("src").join("main.rs"), "").unwrap();
-        fs::write(base.join("src").join("config.rs"), "").unwrap();
-
-        assert_eq!(default_env_file_for(&base), PathBuf::from(".env"));
-
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn default_env_file_uses_backend_file_from_project_root() {
-        let base = test_dir("project-root");
-        fs::create_dir_all(base.join("backend")).unwrap();
-        fs::write(base.join("backend").join("Cargo.toml"), "").unwrap();
-
-        assert_eq!(default_env_file_for(&base), PathBuf::from("backend/.env"));
-
-        fs::remove_dir_all(base).unwrap();
     }
 
     fn test_dir(name: &str) -> PathBuf {

@@ -291,7 +291,7 @@ async fn relay_openai(
                 let status = StatusCode::from_u16(upstream_response.status().as_u16())
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
-                    mark_credential_model_available(&ctx);
+                    mark_credential_model_available(&ctx).await?;
                     return finish_relay(ctx, Ok(upstream_response)).await;
                 }
 
@@ -1095,6 +1095,8 @@ async fn mark_credential_model_unavailable(
             ctx.protocol,
             &ctx.model,
             unavailable_until,
+            &failure.summary,
+            status.as_u16() as i32,
         )
         .await?;
     if !blocked {
@@ -1116,7 +1118,11 @@ async fn mark_credential_model_unavailable(
     Ok(true)
 }
 
-fn mark_credential_model_available(ctx: &RelayContext) {
+async fn mark_credential_model_available(ctx: &RelayContext) -> AppResult<()> {
+    ctx.state
+        .selector
+        .mark_model_available(&ctx.state.db.pool, &ctx.upstream, &ctx.model)
+        .await?;
     if let Some(credential_id) = ctx.upstream.credential_id {
         ctx.state.credential_models.record_available(
             credential_id,
@@ -1124,6 +1130,7 @@ fn mark_credential_model_available(ctx: &RelayContext) {
             &ctx.model,
         );
     }
+    Ok(())
 }
 
 fn should_retry_after_model_unavailable(

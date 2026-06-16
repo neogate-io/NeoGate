@@ -6,7 +6,6 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use crate::{
-    admin::diagnostics,
     billing::{parse_usage_from_bytes, TokenUsage},
     error::AppResult,
     relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
@@ -48,7 +47,6 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
     }
     release_stale_terminal_holds(state).await?;
     cleanup_expired_tasks(state).await?;
-    diagnostics::probe_due_channels(state).await?;
     Ok(())
 }
 

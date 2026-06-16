@@ -2,6 +2,7 @@ import type {
   Channel,
   ChannelDiagnosticReport,
   ChannelKey,
+  ChannelModel,
   ChannelProvider,
   DiagnosticStep,
   EndpointProtocol
@@ -134,6 +135,16 @@ export function updateChannel(id: number, payload: {
       use_credentials: payload.use_credentials
     })
   })
+}
+
+export function updateChannelModel(channelId: number, model: string, payload: { enabled: boolean }) {
+  return adminRequest<ChannelModel>(
+    `/api/admin/channels/${channelId}/models/${encodeURIComponent(model)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }
+  )
 }
 
 export function deleteChannel(id: number) {

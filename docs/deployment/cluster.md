@@ -11,8 +11,9 @@ The cluster Compose file is `docker-compose.cluster.yml` and includes these serv
 | `web` | Frontend Nginx service that serves static assets and proxies API traffic. |
 | `api` | Backend API process for the admin console and model relay requests. |
 | `worker` | Backend worker process for background jobs and usage flushing. |
+| `scheduler` | Scheduled jobs process for upstream channel probes and model catalog sync. |
 
-The cluster Compose file does not include PostgreSQL or Redis. All API and worker nodes must connect to the same external PostgreSQL and Redis instances, and they must share the same secrets.
+The cluster Compose file does not include PostgreSQL or Redis. API and worker nodes must connect to the same external PostgreSQL and Redis instances; the scheduler must connect to the same PostgreSQL instance. All roles must share the same secrets.
 
 ## Prerequisites
 
@@ -21,7 +22,7 @@ Prepare these before going live:
 - External PostgreSQL, preferably a managed database or dedicated instance.
 - External Redis for cross-node coordination and shared state.
 - A stable public URL, such as `https://neogate.example.com`.
-- Long random shared secrets that are identical across every API and worker node.
+- Long random shared secrets that are identical across every API, worker, and scheduler node.
 - A host with Docker and Docker Compose available.
 
 ## Configure Environment Variables
@@ -69,7 +70,7 @@ Check service status:
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml ps
 ```
 
-You should normally see `web`, `api`, and `worker`. The `web` and `api` services include health checks and should become `running` or `healthy`.
+You should normally see `web`, `api`, `worker`, and `scheduler`. The `web` and `api` services include health checks and should become `running` or `healthy`.
 
 View all logs:
 
@@ -87,6 +88,12 @@ View worker logs only:
 
 ```bash
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml logs -f worker
+```
+
+View scheduler logs only:
+
+```bash
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml logs -f scheduler
 ```
 
 Finally, open the URL configured by `PUBLIC_BASE_URL`. If the bootstrap wizard or login page loads, the frontend, backend, and reverse proxy path are usually working.
@@ -111,7 +118,13 @@ Restart the API service:
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml restart api
 ```
 
-Scale API or worker replicas with your external load balancer and orchestration layer. If you use Docker Compose replicas directly, make sure port exposure, reverse proxy routing, and shared storage match your production requirements.
+Restart scheduled jobs:
+
+```bash
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml restart scheduler
+```
+
+Scale API or worker replicas with your external load balancer and orchestration layer. Keep only one scheduler instance unless you have reviewed the scheduled job behavior for your production topology. If you use Docker Compose replicas directly, make sure port exposure, reverse proxy routing, and shared storage match your production requirements.
 
 ## Troubleshooting
 
@@ -122,6 +135,7 @@ If services do not become `running` or `healthy`, check:
 - `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY` are not empty and are not still example values.
 - `WEB_PORT` is not already used by another process.
 - The `api` logs for migration, database connection, or missing configuration errors.
+- The `scheduler` logs if upstream probes or model catalog sync do not run.
 
 ## Production Recommendations
 

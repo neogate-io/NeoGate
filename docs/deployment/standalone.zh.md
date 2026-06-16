@@ -13,7 +13,7 @@ docker compose up -d --build
 它会启动：
 
 - `web`：前端 Nginx，提供前端静态资源并反向代理后端 API。
-- `backend`：后端 API 和 worker。
+- `backend`：后端 API、worker 和 scheduler。
 - `postgres`：PostgreSQL 数据库。
 
 启动后访问：
@@ -40,7 +40,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-只查看后端日志：
+只查看 backend 容器日志：
 
 ```bash
 docker compose logs -f backend
@@ -62,7 +62,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-重启后端：
+重启 backend 容器：
 
 ```bash
 docker compose restart backend
@@ -92,7 +92,7 @@ node --version
 pnpm --version
 ```
 
-如果 `cargo --version` 显示的是 1.75 等较旧版本，请升级 Rust 工具链后再运行后端。
+如果 `cargo --version` 显示的是 1.75 等较旧版本，请升级 Rust 工具链后再运行后端或定时任务。
 
 建议创建 NeoGate 专用数据库用户和数据库：
 
@@ -114,7 +114,7 @@ CREATE DATABASE neogate OWNER neogate;
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `backend/.env`。
+首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `.env`。
 
 ### 开发部署
 
@@ -122,20 +122,20 @@ postgres://neogate:change-me@localhost:5432/neogate
 
 | 服务 | 命令 | 默认地址 |
 | --- | --- | --- |
-| 后端 | `cd backend && cargo run` | `http://127.0.0.1:8080` |
+| 后端 | `cargo run -p neogate` | `http://127.0.0.1:8080` |
+| 定时任务 | `cargo run -p neogate-scheduler` | 无 HTTP 地址 |
 | 前端 | `cd frontend && pnpm install && pnpm dev --host 0.0.0.0` | `http://服务器IP:5173` |
 
 打开 `http://服务器IP:5173`，页面会自动跳转到首次运行向导。按提示完成运行配置、管理员账号、服务模式、初始上游和可选 SMTP；如果保存运行配置后提示需要重启，请重新运行后端并刷新页面。
 
 ### 正式部署
 
-正式部署时建议使用 release 构建运行后端，并用 Nginx 托管前端静态文件。后端可交给 systemd、supervisord 或其他进程管理工具保持常驻。
+正式部署时建议使用 release 构建运行后端和定时任务，并用 Nginx 托管前端静态文件。后端和定时任务可交给 systemd、supervisord 或其他进程管理工具保持常驻。
 
-构建后端：
+构建后端和定时任务：
 
 ```bash
-cd backend
-cargo build --release
+cargo build --release -p neogate -p neogate-scheduler
 ```
 
 运行后端：
@@ -144,20 +144,29 @@ cargo build --release
 BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
 ```
 
-也可以使用 systemd 托管后端进程。下面示例假设项目放在 `/opt/neogate`：
+运行定时任务：
+
+```bash
+./target/release/neogate-scheduler
+```
+
+也可以使用 systemd 托管两个进程。下面示例假设项目放在 `/opt/neogate`，并已在仓库根目录完成 release 构建：
 
 ```ini
 [Unit]
 Description=NeoGate backend
 
 [Service]
-WorkingDirectory=/opt/neogate/backend
+WorkingDirectory=/opt/neogate
 Environment=BIND_ADDR=127.0.0.1:8080
 Environment=RUST_LOG=info
-ExecStart=/opt/neogate/backend/target/release/neogate
+Environment=NEOGATE_ENV_FILE=/opt/neogate/.env
+ExecStart=/opt/neogate/deploy/systemd/start-neogate.sh
+KillMode=control-group
+TimeoutStopSec=30
 Restart=always
 StandardOutput=append:/var/log/neogate/backend.log
-StandardError=append:/var/log/neogate/error.log
+StandardError=append:/var/log/neogate/backend-error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -172,7 +181,7 @@ sudo systemctl enable --now neogate
 sudo systemctl status neogate
 ```
 
-建议为后端日志添加 logrotate，避免日志文件长期运行后持续增长：
+建议为 NeoGate 日志添加 logrotate，避免日志文件长期运行后持续增长：
 
 ```bash
 sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
@@ -193,6 +202,7 @@ EOF
 cd frontend
 pnpm install
 pnpm build
+cd ..
 ```
 
 构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/standalone.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。

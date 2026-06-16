@@ -287,6 +287,8 @@ impl Selector {
         protocol: UpstreamProtocol,
         model: &str,
         unavailable_until: DateTime<Utc>,
+        last_error: &str,
+        last_status_code: i32,
     ) -> AppResult<bool> {
         if !self
             .has_alternate_channel_for_model(pool, protocol, model)
@@ -296,7 +298,50 @@ impl Selector {
         }
         self.mark_model_unavailable_local(upstream, protocol, model, unavailable_until)
             .await;
+        sqlx::query(
+            "UPDATE channel_model
+             SET runtime_status = 'cooldown',
+                 cooldown_until = $3,
+                 last_error = $4,
+                 last_status_code = $5,
+                 failure_count = failure_count + 1,
+                 updated_at = now()
+             WHERE channel_id = $1
+               AND model = $2",
+        )
+        .bind(upstream.channel_id)
+        .bind(model)
+        .bind(unavailable_until)
+        .bind(last_error.chars().take(500).collect::<String>())
+        .bind(last_status_code)
+        .execute(pool)
+        .await?;
         Ok(true)
+    }
+
+    pub async fn mark_model_available(
+        &self,
+        pool: &PgPool,
+        upstream: &SelectedUpstream,
+        model: &str,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE channel_model
+             SET runtime_status = 'normal',
+                 cooldown_until = NULL,
+                 last_error = NULL,
+                 last_status_code = NULL,
+                 last_probe_at = now(),
+                 success_count = success_count + 1,
+                 updated_at = now()
+             WHERE channel_id = $1
+               AND model = $2",
+        )
+        .bind(upstream.channel_id)
+        .bind(model)
+        .execute(pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn mark_key_failure_local(
@@ -497,15 +542,26 @@ fn build_route_indexes(channels: &[ChannelCandidate]) -> (RouteIndex, WildcardRo
 async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandidate>> {
     let rows = sqlx::query(
         "SELECT c.id, ce.id AS endpoint_id, ce.protocol, c.provider, c.name,
-                ce.base_url, ce.models, c.priority, c.weight, c.key_selection_mode,
-                ce.cooldown_until, c.use_credentials
+                ce.base_url, array_agg(cm.model ORDER BY cm.model ASC) AS models,
+                c.priority, c.weight, c.key_selection_mode, ce.cooldown_until, c.use_credentials
          FROM channel c
          JOIN provider p ON p.code = c.provider
          JOIN channel_endpoint ce ON ce.channel_id = c.id
+         JOIN channel_model cm ON cm.channel_id = c.id
+         JOIN provider_price pp
+           ON pp.provider = c.provider
+          AND pp.model = cm.model
+          AND pp.enabled = TRUE
          WHERE p.enabled = TRUE
            AND c.enabled = TRUE
            AND ce.enabled = TRUE
            AND ce.healthy = TRUE
+           AND cm.enabled = TRUE
+           AND cm.status = 'available'
+           AND (
+               cm.runtime_status = 'normal'
+               OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+           )
            AND (
                (
                    c.use_credentials = FALSE
@@ -525,6 +581,7 @@ async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandida
                    )
                )
            )
+         GROUP BY c.id, ce.id
          ORDER BY c.priority DESC, c.created_at ASC",
     )
     .fetch_all(pool)

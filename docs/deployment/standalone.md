@@ -13,7 +13,7 @@ docker compose up -d --build
 It starts:
 
 - `web`: frontend Nginx service that serves static assets and proxies backend API traffic.
-- `backend`: backend API and worker.
+- `backend`: backend API, worker, and scheduler.
 - `postgres`: PostgreSQL database.
 
 After startup, open:
@@ -40,7 +40,7 @@ View all logs:
 docker compose logs -f
 ```
 
-View backend logs only:
+View backend container logs only:
 
 ```bash
 docker compose logs -f backend
@@ -62,7 +62,7 @@ Rebuild and start:
 docker compose up -d --build
 ```
 
-Restart the backend:
+Restart the backend container:
 
 ```bash
 docker compose restart backend
@@ -70,7 +70,7 @@ docker compose restart backend
 
 ## Source Deployment
 
-Source deployment can be used for development or for manually managed production processes. Development mode is useful for debugging and trying the bootstrap flow; production mode uses a release backend build and a static frontend served by Nginx. Docker Compose is still the recommended production path for most standalone deployments.
+Source deployment can be used for development or for manually managed production processes. Development mode is useful for debugging and trying the bootstrap flow; production mode uses release backend and scheduler builds plus a static frontend served by Nginx. Docker Compose is still the recommended production path for most standalone deployments.
 
 ### Prerequisites
 
@@ -92,7 +92,7 @@ node --version
 pnpm --version
 ```
 
-If `cargo --version` shows an older version such as 1.75, upgrade the Rust toolchain before running the backend.
+If `cargo --version` shows an older version such as 1.75, upgrade the Rust toolchain before running the backend or scheduler.
 
 Create a dedicated NeoGate database user and database:
 
@@ -114,7 +114,7 @@ Use this PostgreSQL connection URL in the bootstrap wizard:
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The bootstrap page writes the database connection, site settings, and random secrets. You usually do not need to edit `backend/.env` manually first.
+On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The bootstrap page writes the database connection, site settings, and random secrets. You usually do not need to edit `.env` manually first.
 
 ### Development Mode
 
@@ -122,20 +122,20 @@ Development mode uses the Rust debug build and the Vite dev server.
 
 | Service | Command | Default URL |
 | --- | --- | --- |
-| Backend | `cd backend && cargo run` | `http://127.0.0.1:8080` |
+| Backend | `cargo run -p neogate` | `http://127.0.0.1:8080` |
+| Scheduler | `cargo run -p neogate-scheduler` | No HTTP URL |
 | Frontend | `cd frontend && pnpm install && pnpm dev --host 0.0.0.0` | `http://SERVER_IP:5173` |
 
 Open `http://SERVER_IP:5173`. The page will redirect to the bootstrap wizard. Complete runtime configuration, admin account setup, service mode, initial upstream, and optional SMTP settings. If saving runtime configuration asks for a restart, restart the backend and refresh the page.
 
 ### Production Mode
 
-For manual production deployment, build the backend in release mode and serve the frontend static files with Nginx. Keep the backend running with systemd, supervisord, or another process manager.
+For manual production deployment, build the backend and scheduler in release mode and serve the frontend static files with Nginx. Keep both Rust processes running with systemd, supervisord, or another process manager.
 
-Build the backend:
+Build the backend and scheduler:
 
 ```bash
-cd backend
-cargo build --release
+cargo build --release -p neogate -p neogate-scheduler
 ```
 
 Run the backend:
@@ -144,20 +144,29 @@ Run the backend:
 BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
 ```
 
-You can also manage the backend with systemd. This example assumes the project is installed at `/opt/neogate`:
+Run the scheduler:
+
+```bash
+./target/release/neogate-scheduler
+```
+
+You can also manage both processes with systemd. This example assumes the project is installed at `/opt/neogate` and has already been built in release mode from the repository root:
 
 ```ini
 [Unit]
 Description=NeoGate backend
 
 [Service]
-WorkingDirectory=/opt/neogate/backend
+WorkingDirectory=/opt/neogate
 Environment=BIND_ADDR=127.0.0.1:8080
 Environment=RUST_LOG=info
-ExecStart=/opt/neogate/backend/target/release/neogate
+Environment=NEOGATE_ENV_FILE=/opt/neogate/.env
+ExecStart=/opt/neogate/deploy/systemd/start-neogate.sh
+KillMode=control-group
+TimeoutStopSec=30
 Restart=always
 StandardOutput=append:/var/log/neogate/backend.log
-StandardError=append:/var/log/neogate/error.log
+StandardError=append:/var/log/neogate/backend-error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -172,7 +181,7 @@ sudo systemctl enable --now neogate
 sudo systemctl status neogate
 ```
 
-Add logrotate for backend logs to avoid unbounded log growth:
+Add logrotate for NeoGate logs to avoid unbounded log growth:
 
 ```bash
 sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
@@ -193,6 +202,7 @@ Build the frontend:
 cd frontend
 pnpm install
 pnpm build
+cd ..
 ```
 
 After the build, serve `frontend/dist` with Nginx or another static web server. The repository includes `deploy/nginx/standalone.conf.example`; it assumes `/usr/share/nginx/html` for static files and proxies backend API and health-check paths to `http://127.0.0.1:8080`.

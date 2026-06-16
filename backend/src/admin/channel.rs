@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 
 use crate::{
-    AppState,
     auth::key_prefix,
     error::{AppError, AppResult},
     id::DbId,
+    AppState,
 };
 
-use super::diagnostics::{ChannelProbeSampleRecord, recent_probe_samples_by_channel};
+use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
-    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, ensure_custom_provider,
-    ensure_newapi_provider, provider_default_endpoint_base_url, provider_default_endpoints,
-    provider_default_models, record_provider_models,
+    ensure_custom_provider, ensure_newapi_provider, provider_default_endpoint_base_url,
+    provider_default_endpoints, provider_default_models, record_provider_models,
+    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +45,7 @@ pub struct ChannelRecord {
     pub key_selection_mode: String,
     pub use_credentials: bool,
     pub endpoints: Vec<ChannelEndpointRecord>,
+    pub models: Vec<ChannelModelRecord>,
     pub probe_samples: Vec<ChannelProbeSampleRecord>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -61,6 +62,33 @@ pub struct ChannelEndpointRecord {
     pub healthy: bool,
     pub last_error: Option<String>,
     pub cooldown_until: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelModelRecord {
+    pub id: DbId,
+    pub channel_id: DbId,
+    pub provider: String,
+    pub model: String,
+    pub enabled: bool,
+    pub status: String,
+    pub runtime_status: String,
+    pub cooldown_until: Option<DateTime<Utc>>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub missing_since: Option<DateTime<Utc>>,
+    pub last_probe_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub last_status_code: Option<i32>,
+    pub success_count: i64,
+    pub failure_count: i64,
+    pub billing_enabled: bool,
+    pub price_configured: bool,
+    pub input_price_usd_micros: Option<i64>,
+    pub output_price_usd_micros: Option<i64>,
+    pub cache_read_price_usd_micros: Option<i64>,
+    pub cache_write_price_usd_micros: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -152,6 +180,11 @@ pub struct UpdateChannelKeyRequest {
     pub last_error: Option<Option<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateChannelModelRequest {
+    pub enabled: Option<bool>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -182,6 +215,7 @@ pub async fn create_channel(
     ensure_provider_exists(state, &provider_code).await?;
     let endpoints = normalize_create_endpoints(state, &provider_code, &req).await?;
     let endpoint_models = models_from_endpoints(&endpoints);
+    record_provider_models(state, &provider_code, &endpoint_models, "channel", true).await?;
 
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
@@ -204,8 +238,8 @@ pub async fn create_channel(
     for endpoint in endpoints {
         insert_endpoint(&mut tx, channel_id, endpoint).await?;
     }
+    sync_channel_models_for_channel(&mut tx, channel_id, &provider_code).await?;
     tx.commit().await?;
-    record_provider_models(state, &provider_code, &endpoint_models, "channel", true).await?;
 
     get_channel(state, channel_id).await
 }
@@ -223,6 +257,7 @@ pub async fn list_channels(state: &AppState) -> AppResult<Vec<ChannelRecord>> {
         .map(|row| row.try_get("id"))
         .collect::<Result<_, _>>()?;
     let endpoints = endpoints_by_channel(state, &channel_ids).await?;
+    let models = models_by_channel(state, &channel_ids).await?;
     let probe_samples = recent_probe_samples_by_channel(state, &channel_ids, 12).await?;
 
     rows.iter()
@@ -231,6 +266,7 @@ pub async fn list_channels(state: &AppState) -> AppResult<Vec<ChannelRecord>> {
             channel_from_row(
                 row,
                 endpoints.get(&id).cloned().unwrap_or_default(),
+                models.get(&id).cloned().unwrap_or_default(),
                 probe_samples.get(&id).cloned().unwrap_or_default(),
             )
         })
@@ -262,6 +298,9 @@ pub async fn update_channel(
     let endpoint_models = endpoints
         .as_ref()
         .map(|endpoints| models_from_endpoints(endpoints));
+    if let Some(endpoint_models) = &endpoint_models {
+        record_provider_models(state, &provider_code, endpoint_models, "channel", true).await?;
+    }
     let mode = req.key_selection_mode.map(|mode| mode.as_str().to_string());
 
     let mut tx = state.db.pool.begin().await?;
@@ -304,17 +343,17 @@ pub async fn update_channel(
         for endpoint in endpoints {
             upsert_endpoint(&mut tx, id, endpoint).await?;
         }
+        sync_channel_models_for_channel(&mut tx, id, &provider_code).await?;
     }
     tx.commit().await?;
-    if let Some(endpoint_models) = endpoint_models {
-        record_provider_models(state, &provider_code, &endpoint_models, "channel", true).await?;
-    }
 
     let endpoints = endpoints_by_channel(state, &[id]).await?;
+    let models = models_by_channel(state, &[id]).await?;
     let probe_samples = recent_probe_samples_by_channel(state, &[id], 12).await?;
     channel_from_row(
         &row,
         endpoints.get(&id).cloned().unwrap_or_default(),
+        models.get(&id).cloned().unwrap_or_default(),
         probe_samples.get(&id).cloned().unwrap_or_default(),
     )
 }
@@ -330,12 +369,55 @@ pub async fn delete_channel(state: &AppState, id: DbId) -> AppResult<()> {
     Ok(())
 }
 
+pub async fn update_channel_model(
+    state: &AppState,
+    channel_id: DbId,
+    model: &str,
+    req: UpdateChannelModelRequest,
+) -> AppResult<ChannelModelRecord> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AppError::BadRequest("model is required".to_string()));
+    }
+
+    if req.enabled == Some(true) {
+        ensure_channel_model_has_enabled_price(state, channel_id, model).await?;
+    }
+
+    let row = sqlx::query(
+        "UPDATE channel_model
+         SET enabled = COALESCE($3, enabled),
+             status = CASE
+                 WHEN COALESCE($3, enabled) = FALSE THEN 'disabled'
+                 WHEN status = 'disabled' THEN 'available'
+                 ELSE status
+             END,
+             updated_at = now()
+         WHERE channel_id = $1
+           AND model = $2
+         RETURNING id",
+    )
+    .bind(channel_id)
+    .bind(model)
+    .bind(req.enabled)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let model_id: DbId = row.try_get("id")?;
+    let models = models_by_channel(state, &[channel_id]).await?;
+    models
+        .get(&channel_id)
+        .and_then(|items| items.iter().find(|item| item.id == model_id).cloned())
+        .ok_or(AppError::NotFound)
+}
+
 pub async fn create_channel_key(
     state: &AppState,
     channel_id: DbId,
     req: CreateChannelKeyRequest,
 ) -> AppResult<ChannelKeyRecord> {
     let secret_ciphertext = state.secrets.encrypt(&req.secret)?;
+    let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         "INSERT INTO channel_key (channel_id, name, key_prefix, secret_ciphertext, enabled)
          VALUES ($1, $2, $3, $4, $5)
@@ -347,8 +429,10 @@ pub async fn create_channel_key(
     .bind(key_prefix(&req.secret))
     .bind(secret_ciphertext)
     .bind(req.enabled)
-    .fetch_one(&state.db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+    reset_channel_endpoint_health(&mut tx, channel_id).await?;
+    tx.commit().await?;
     channel_key_from_row(&row)
 }
 
@@ -414,10 +498,25 @@ pub async fn update_channel_key(
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    let channel_id: DbId = current.try_get("channel_id")?;
     let current_last_error: Option<String> = current.try_get("last_error")?;
     let current_cooldown_until: Option<DateTime<Utc>> = current.try_get("cooldown_until")?;
-    let last_error = req.last_error.unwrap_or(current_last_error);
-    let cooldown_until = req.cooldown_until.unwrap_or(current_cooldown_until);
+    let replacing_secret = req.secret.is_some();
+    let last_error = if replacing_secret {
+        None
+    } else {
+        req.last_error.unwrap_or(current_last_error)
+    };
+    let cooldown_until = if replacing_secret {
+        None
+    } else {
+        req.cooldown_until.unwrap_or(current_cooldown_until)
+    };
+    let healthy = if replacing_secret {
+        Some(true)
+    } else {
+        req.healthy
+    };
     let key_prefix_value = req.secret.as_ref().map(|secret| key_prefix(secret));
     let secret_ciphertext = req
         .secret
@@ -425,6 +524,7 @@ pub async fn update_channel_key(
         .map(|secret| state.secrets.encrypt(secret))
         .transpose()?;
 
+    let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         "UPDATE channel_key
          SET name = COALESCE($2, name),
@@ -444,12 +544,16 @@ pub async fn update_channel_key(
     .bind(secret_ciphertext)
     .bind(key_prefix_value)
     .bind(req.enabled)
-    .bind(req.healthy)
+    .bind(healthy)
     .bind(cooldown_until)
     .bind(last_error)
-    .fetch_one(&state.db.pool)
+    .fetch_one(&mut *tx)
     .await?;
-    if req.secret.is_some() {
+    if replacing_secret {
+        reset_channel_endpoint_health(&mut tx, channel_id).await?;
+    }
+    tx.commit().await?;
+    if replacing_secret {
         state.secrets.forget(id);
     }
     channel_key_from_row(&row)
@@ -783,6 +887,116 @@ async fn upsert_endpoint(
     Ok(())
 }
 
+async fn sync_channel_models_for_channel(
+    tx: &mut Transaction<'_, Postgres>,
+    channel_id: DbId,
+    provider: &str,
+) -> AppResult<()> {
+    let rows = sqlx::query("SELECT models FROM channel_endpoint WHERE channel_id = $1")
+        .bind(channel_id)
+        .fetch_all(&mut **tx)
+        .await?;
+
+    let mut active_models = Vec::<String>::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in rows {
+        let models: Vec<String> = row.try_get("models")?;
+        for model in models {
+            let model = model.trim();
+            if model.is_empty() || !seen.insert(model.to_string()) {
+                continue;
+            }
+            let price_configured = model_has_enabled_price(tx, provider, model).await?;
+            active_models.push(model.to_string());
+            sqlx::query(
+                "INSERT INTO channel_model
+                 (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
+                 VALUES ($1, $2, $3, $4, 'available', 'normal', now())
+                 ON CONFLICT (channel_id, model)
+                 DO UPDATE SET
+                     provider = EXCLUDED.provider,
+                     enabled = EXCLUDED.enabled,
+                     status = 'available',
+                     missing_since = NULL,
+                     last_seen_at = COALESCE(channel_model.last_seen_at, now()),
+                     updated_at = now()",
+            )
+            .bind(channel_id)
+            .bind(provider)
+            .bind(model)
+            .bind(price_configured)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+
+    if !active_models.is_empty() {
+        sqlx::query(
+            "UPDATE channel_model
+             SET enabled = FALSE,
+                 status = 'disabled',
+                 updated_at = now()
+             WHERE channel_id = $1
+               AND NOT (model = ANY($2))",
+        )
+        .bind(channel_id)
+        .bind(&active_models)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE channel_model
+             SET enabled = FALSE,
+                 status = 'disabled',
+                 updated_at = now()
+             WHERE channel_id = $1",
+        )
+        .bind(channel_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn model_has_enabled_price(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    model: &str,
+) -> AppResult<bool> {
+    let exists: Option<i32> = sqlx::query_scalar(
+        "SELECT 1
+         FROM provider_price
+         WHERE provider = $1
+           AND model = $2
+           AND enabled = TRUE
+         LIMIT 1",
+    )
+    .bind(provider)
+    .bind(model)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(exists.is_some())
+}
+
+async fn reset_channel_endpoint_health(
+    tx: &mut Transaction<'_, Postgres>,
+    channel_id: DbId,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET healthy = TRUE,
+             last_error = NULL,
+             cooldown_until = NULL,
+             updated_at = now()
+         WHERE channel_id = $1",
+    )
+    .bind(channel_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn get_channel(state: &AppState, id: DbId) -> AppResult<ChannelRecord> {
     let row = sqlx::query(
         "SELECT id, provider, name, enabled, priority, weight,
@@ -794,10 +1008,12 @@ async fn get_channel(state: &AppState, id: DbId) -> AppResult<ChannelRecord> {
     .await?
     .ok_or(AppError::NotFound)?;
     let endpoints = endpoints_by_channel(state, &[id]).await?;
+    let models = models_by_channel(state, &[id]).await?;
     let probe_samples = recent_probe_samples_by_channel(state, &[id], 12).await?;
     channel_from_row(
         &row,
         endpoints.get(&id).cloned().unwrap_or_default(),
+        models.get(&id).cloned().unwrap_or_default(),
         probe_samples.get(&id).cloned().unwrap_or_default(),
     )
 }
@@ -813,11 +1029,11 @@ async fn endpoints_by_channel(
     let rows = sqlx::query(
         "SELECT id, channel_id, protocol, base_url, models, enabled, healthy,
                 last_error, cooldown_until, created_at, updated_at
-         FROM channel_endpoint
-         WHERE channel_id = ANY($1)
-         ORDER BY channel_id ASC,
-                  CASE protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END,
-                  created_at ASC",
+         FROM channel_endpoint ce
+         WHERE ce.channel_id = ANY($1)
+         ORDER BY ce.channel_id ASC,
+                  CASE ce.protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END,
+                  ce.created_at ASC",
     )
     .bind(channel_ids)
     .fetch_all(&state.db.pool)
@@ -834,6 +1050,70 @@ async fn endpoints_by_channel(
     Ok(endpoints)
 }
 
+async fn models_by_channel(
+    state: &AppState,
+    channel_ids: &[DbId],
+) -> AppResult<HashMap<DbId, Vec<ChannelModelRecord>>> {
+    if channel_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = sqlx::query(
+        "SELECT cm.id, cm.channel_id, cm.provider, cm.model, cm.enabled,
+                cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
+                cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
+                cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
+                COALESCE(pp.enabled, FALSE) AS billing_enabled,
+                (pp.id IS NOT NULL) AS price_configured,
+                pp.input_price_usd_micros, pp.output_price_usd_micros,
+                pp.cache_read_price_usd_micros, pp.cache_write_price_usd_micros
+         FROM channel_model cm
+         LEFT JOIN provider_price pp
+           ON pp.provider = cm.provider
+          AND pp.model = cm.model
+         WHERE cm.channel_id = ANY($1)
+         ORDER BY cm.model ASC",
+    )
+    .bind(channel_ids)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let mut models: HashMap<DbId, Vec<ChannelModelRecord>> = HashMap::new();
+    for row in rows {
+        let model = channel_model_from_row(&row)?;
+        models.entry(model.channel_id).or_default().push(model);
+    }
+    Ok(models)
+}
+
+async fn ensure_channel_model_has_enabled_price(
+    state: &AppState,
+    channel_id: DbId,
+    model: &str,
+) -> AppResult<()> {
+    let row = sqlx::query(
+        "SELECT 1
+         FROM channel_model cm
+         JOIN provider_price pp
+           ON pp.provider = cm.provider
+          AND pp.model = cm.model
+          AND pp.enabled = TRUE
+         WHERE cm.channel_id = $1
+           AND cm.model = $2
+         LIMIT 1",
+    )
+    .bind(channel_id)
+    .bind(model)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    if row.is_none() {
+        return Err(AppError::BadRequest(format!(
+            "price is not configured for model {model}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_weight(weight: i32) -> AppResult<()> {
     if weight < 1 {
         return Err(AppError::BadRequest("weight must be >= 1".to_string()));
@@ -844,6 +1124,7 @@ fn validate_weight(weight: i32) -> AppResult<()> {
 pub fn channel_from_row(
     row: &sqlx::postgres::PgRow,
     endpoints: Vec<ChannelEndpointRecord>,
+    models: Vec<ChannelModelRecord>,
     probe_samples: Vec<ChannelProbeSampleRecord>,
 ) -> AppResult<ChannelRecord> {
     Ok(ChannelRecord {
@@ -856,6 +1137,7 @@ pub fn channel_from_row(
         key_selection_mode: row.try_get("key_selection_mode")?,
         use_credentials: row.try_get("use_credentials")?,
         endpoints,
+        models,
         probe_samples,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -873,6 +1155,34 @@ fn endpoint_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelEndpointRe
         healthy: row.try_get("healthy")?,
         last_error: row.try_get("last_error")?,
         cooldown_until: row.try_get("cooldown_until")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn channel_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelModelRecord> {
+    Ok(ChannelModelRecord {
+        id: row.try_get("id")?,
+        channel_id: row.try_get("channel_id")?,
+        provider: row.try_get("provider")?,
+        model: row.try_get("model")?,
+        enabled: row.try_get("enabled")?,
+        status: row.try_get("status")?,
+        runtime_status: row.try_get("runtime_status")?,
+        cooldown_until: row.try_get("cooldown_until")?,
+        last_seen_at: row.try_get("last_seen_at")?,
+        missing_since: row.try_get("missing_since")?,
+        last_probe_at: row.try_get("last_probe_at")?,
+        last_error: row.try_get("last_error")?,
+        last_status_code: row.try_get("last_status_code")?,
+        success_count: row.try_get("success_count")?,
+        failure_count: row.try_get("failure_count")?,
+        billing_enabled: row.try_get("billing_enabled")?,
+        price_configured: row.try_get("price_configured")?,
+        input_price_usd_micros: row.try_get("input_price_usd_micros")?,
+        output_price_usd_micros: row.try_get("output_price_usd_micros")?,
+        cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
+        cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

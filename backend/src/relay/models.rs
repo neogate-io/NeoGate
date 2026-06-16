@@ -123,21 +123,16 @@ async fn available_models(
         FROM (
             SELECT
                 c.provider,
-                available_model.model,
+                cm.model,
                 pp.input_price_usd_micros,
                 pp.output_price_usd_micros
             FROM channel c
             JOIN provider p ON p.code = c.provider
             JOIN channel_endpoint ce ON ce.channel_id = c.id
-            CROSS JOIN LATERAL unnest(
-                CASE
-                    WHEN cardinality(ce.models) > 0 THEN ce.models
-                    ELSE p.default_models
-                END
-            ) AS available_model(model)
+            JOIN channel_model cm ON cm.channel_id = c.id
             JOIN provider_price pp
               ON pp.provider = c.provider
-             AND pp.model = available_model.model
+             AND pp.model = cm.model
              AND pp.enabled = TRUE
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
@@ -145,7 +140,13 @@ async fn available_models(
               AND ce.enabled = TRUE
               AND ce.healthy = TRUE
               AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
-              AND ($2::TEXT[] IS NULL OR available_model.model = ANY($2))
+              AND cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND ($2::TEXT[] IS NULL OR cm.model = ANY($2))
               AND (
                   (
                       c.use_credentials = FALSE

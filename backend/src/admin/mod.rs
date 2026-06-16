@@ -11,76 +11,77 @@ mod user;
 use std::{convert::Infallible, sync::Arc};
 
 use axum::{
-    Json, Router,
     extract::{Multipart, Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, patch, post},
+    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    AppState,
     auth::{self, AdminAuth},
     billing::CreditAccountType,
     cache::InvalidationEvent,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
+    AppState,
 };
 
 use self::{
     channel::{
-        ChannelKeyRecord, ChannelRecord, CreateChannelKeyRequest, CreateChannelRequest,
-        UpdateChannelKeyRequest, UpdateChannelRequest, create_channel, create_channel_key,
-        delete_channel, delete_channel_key, list_all_channel_keys, list_channel_keys,
-        list_channels, reveal_channel_key_secret, update_channel, update_channel_key,
+        create_channel, create_channel_key, delete_channel, delete_channel_key,
+        list_all_channel_keys, list_channel_keys, list_channels, reveal_channel_key_secret,
+        update_channel, update_channel_key, update_channel_model, ChannelKeyRecord,
+        ChannelModelRecord, ChannelRecord, CreateChannelKeyRequest, CreateChannelRequest,
+        UpdateChannelKeyRequest, UpdateChannelModelRequest, UpdateChannelRequest,
     },
     credentials::{
-        CredentialModelRecord, CredentialRecord, CredentialUploadResult, delete_credential,
-        disable_credential, enable_credential, list_credential_models, list_credentials,
-        refresh_credential, reset_credential_model, runtime_secret_from_enabled_credential,
-        upload_credentials,
+        delete_credential, disable_credential, enable_credential, list_credential_models,
+        list_credentials, refresh_credential, reset_credential_model,
+        runtime_secret_from_enabled_credential, upload_credentials, CredentialModelRecord,
+        CredentialRecord, CredentialUploadResult,
     },
     diagnostics::{
-        ChannelDiagnosticEvent, ChannelDiagnosticReport, diagnose_channel,
-        diagnose_channel_with_progress,
+        diagnose_channel, diagnose_channel_with_progress, ChannelDiagnosticEvent,
+        ChannelDiagnosticReport,
     },
     price::{
-        PricingPolicyRecord, PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord,
-        ProviderPriceRecord, SyncPricingTemplatesRequest, UpsertPricingPolicyRequest,
-        UpsertProviderPriceRequest, list_pricing_policies, list_pricing_templates,
-        list_provider_models, list_provider_prices, sync_pricing_templates, upsert_pricing_policy,
-        upsert_provider_price,
+        list_pricing_policies, list_pricing_templates, list_provider_models, list_provider_prices,
+        sync_pricing_templates, upsert_pricing_policy, upsert_provider_price, PricingPolicyRecord,
+        PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
+        SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
     project::{
+        add_project_member, create_project, delete_project, delete_project_member,
+        list_project_members, list_projects, update_project, update_project_member,
         CreateProjectRequest, CreatedProject, CreatedProjectMember, ListProjectsQuery,
         ProjectMemberRecord, ProjectPage, ProjectRecord, UpdateProjectMemberRequest,
-        UpdateProjectRequest, UpsertProjectMemberRequest, add_project_member, create_project,
-        delete_project, delete_project_member, list_project_members, list_projects, update_project,
-        update_project_member,
+        UpdateProjectRequest, UpsertProjectMemberRequest,
     },
     provider::{
-        CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, ProviderRecord,
         ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
-        record_provider_models,
+        record_provider_models, ProviderRecord, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE,
+        OPENAI_OAUTH_PROTOCOL,
     },
     setting::{
-        SmtpSettingRecord, TestSmtpSettingResponse, UpsertSmtpSettingRequest, get_smtp_setting,
-        test_smtp_setting, upsert_smtp_setting,
+        get_smtp_setting, test_smtp_setting, upsert_smtp_setting, SmtpSettingRecord,
+        TestSmtpSettingResponse, UpsertSmtpSettingRequest,
     },
     user::{
-        CreateUserKeyRequest, CreateUserRequest, CreatedUserKey, ListUserKeysQuery, ListUsersQuery,
-        UpdateUserKeyRequest, UpdateUserRequest, UserGroupRecord, UserKeyModelCreditRecord,
-        UserKeyPage, UserKeyRecord, UserPage, UserRecord, adjust_credit,
-        adjust_user_key_model_credit, create_user, create_user_key, delete_user, delete_user_key,
-        list_user_groups, list_user_keys, list_users, update_user, update_user_key,
+        adjust_credit, adjust_user_key_model_credit, create_user, create_user_key, delete_user,
+        delete_user_key, list_user_groups, list_user_keys, list_users, update_user,
+        update_user_key, CreateUserKeyRequest, CreateUserRequest, CreatedUserKey,
+        ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
+        UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
+        UserRecord,
     },
 };
 use crate::payment::settings::{
-    PaymentSettingRecord, UpsertPaymentSettingRequest, get_payment_setting, upsert_payment_setting,
+    get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
 };
 
 pub use user::public_router;
@@ -191,6 +192,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/channels/{id}",
             patch(update_channel_handler).delete(delete_channel_handler),
+        )
+        .route(
+            "/api/admin/channels/{id}/models/{model}",
+            patch(update_channel_model_handler),
         )
         .route(
             "/api/admin/channels/{id}/diagnose",
@@ -530,6 +535,17 @@ async fn upstream_models(
             return Err(AppError::BadRequest("no models returned".to_string()));
         }
         record_provider_models(&state, provider_code, &models, "upstream", false).await?;
+        if let Some(channel_id) = req.channel_id {
+            sync_channel_models_from_upstream(
+                &state,
+                channel_id,
+                provider_code,
+                &protocol,
+                base_url,
+                &models,
+            )
+            .await?;
+        }
         return Ok(Json(FetchUpstreamModelsResponse { models }));
     }
 
@@ -553,7 +569,90 @@ async fn upstream_models(
         return Err(AppError::BadRequest("no models returned".to_string()));
     }
     record_provider_models(&state, provider_code, &models, "upstream", false).await?;
+    if let Some(channel_id) = req.channel_id {
+        sync_channel_models_from_upstream(
+            &state,
+            channel_id,
+            provider_code,
+            &protocol,
+            base_url,
+            &models,
+        )
+        .await?;
+    }
     Ok(Json(FetchUpstreamModelsResponse { models }))
+}
+
+async fn sync_channel_models_from_upstream(
+    state: &AppState,
+    channel_id: DbId,
+    provider: &str,
+    protocol: &str,
+    base_url: &str,
+    models: &[String],
+) -> AppResult<()> {
+    let exists = sqlx::query(
+        "SELECT 1
+         FROM channel_endpoint ce
+         JOIN channel c ON c.id = ce.channel_id
+         WHERE ce.channel_id = $1
+           AND c.provider = $2
+           AND ce.protocol = $3
+           AND ce.base_url = $4",
+    )
+    .bind(channel_id)
+    .bind(provider)
+    .bind(protocol)
+    .bind(base_url)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    if exists.is_none() {
+        return Ok(());
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let models: Vec<String> = models
+        .iter()
+        .map(|model| model.trim())
+        .filter(|model| !model.is_empty())
+        .filter(|model| seen.insert((*model).to_string()))
+        .map(str::to_string)
+        .collect();
+
+    for model in &models {
+        sqlx::query(
+            "INSERT INTO channel_model
+             (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
+             VALUES ($1, $2, $3, FALSE, 'available', 'normal', now())
+             ON CONFLICT (channel_id, model)
+             DO UPDATE SET
+                 status = 'available',
+                 missing_since = NULL,
+                 last_seen_at = now(),
+                 updated_at = now()",
+        )
+        .bind(channel_id)
+        .bind(provider)
+        .bind(model)
+        .execute(&state.db.pool)
+        .await?;
+    }
+
+    sqlx::query(
+        "UPDATE channel_model
+         SET status = 'missing',
+             missing_since = COALESCE(missing_since, now()),
+             updated_at = now()
+         WHERE channel_id = $1
+           AND status = 'available'
+           AND NOT (model = ANY($2))",
+    )
+    .bind(channel_id)
+    .bind(&models)
+    .execute(&state.db.pool)
+    .await?;
+
+    Ok(())
 }
 
 async fn openai_oauth_catalog_models(state: &AppState) -> AppResult<Vec<String>> {
@@ -882,6 +981,17 @@ async fn update_channel_handler(
     let channel = update_channel(&state, id, req).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(channel))
+}
+
+async fn update_channel_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, model)): Path<(DbId, String)>,
+    Json(req): Json<UpdateChannelModelRequest>,
+) -> AppResult<Json<ChannelModelRecord>> {
+    let model = update_channel_model(&state, id, &model, req).await?;
+    invalidate_cache(&state, InvalidationEvent::Routing).await;
+    Ok(Json(model))
 }
 
 async fn delete_channel_handler(

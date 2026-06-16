@@ -3,22 +3,21 @@ use std::time::Instant;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    AppState,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     relay::upstream_url,
+    AppState,
 };
 
 use super::credentials::runtime_secret_from_enabled_credential;
 use super::provider::OPENAI_OAUTH_PROTOCOL;
 
 const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
-const PROBE_SAMPLE_RETENTION_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelDiagnosticReport {
@@ -96,28 +95,6 @@ pub enum ProbeStatus {
     Ok,
     Failed,
     Skipped,
-}
-
-impl ProbeStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Failed => "failed",
-            Self::Skipped => "skipped",
-        }
-    }
-}
-
-struct ProbeOutcome {
-    endpoint_id: Option<DbId>,
-    key_id: Option<DbId>,
-    provider: String,
-    protocol: String,
-    model: String,
-    status: ProbeStatus,
-    latency_ms: Option<i64>,
-    status_code: Option<u16>,
-    error_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -266,69 +243,6 @@ fn select_diagnostic_endpoint(endpoints: &[EndpointTarget]) -> Option<&EndpointT
         .or_else(|| endpoints.first())
 }
 
-pub async fn probe_channel_once(state: &AppState, channel_id: DbId) -> AppResult<()> {
-    let channel = load_channel(state, channel_id).await?;
-    let endpoints = load_endpoints(state, channel_id).await?;
-    let keys = load_keys(state, &channel).await?;
-    let outcome = run_channel_probe(state, &channel, &endpoints, &keys).await;
-    persist_probe_sample(state, channel.id, &outcome).await?;
-    if let Some(endpoint_id) = outcome.endpoint_id {
-        persist_endpoint_probe_health(state, endpoint_id, &outcome).await?;
-    }
-    if let Some(key_id) = outcome.key_id {
-        persist_key_probe_health(state, key_id, &outcome).await?;
-    }
-    Ok(())
-}
-
-pub async fn probe_due_channels(state: &AppState) -> AppResult<()> {
-    let rows = sqlx::query(
-        r#"
-        SELECT c.id
-        FROM channel c
-        WHERE c.enabled = TRUE
-          AND EXISTS (
-              SELECT 1
-              FROM channel_endpoint ce
-              WHERE ce.channel_id = c.id
-                AND ce.enabled = TRUE
-                AND cardinality(ce.models) > 0
-                AND ce.protocol <> 'openai_oauth'
-          )
-          AND (
-              (
-                  SELECT cps.created_at
-                  FROM channel_probe cps
-                  WHERE cps.channel_id = c.id
-                  ORDER BY cps.created_at DESC, cps.id DESC
-                  LIMIT 1
-              ) IS NULL
-              OR (
-                  SELECT cps.created_at
-                  FROM channel_probe cps
-                  WHERE cps.channel_id = c.id
-                  ORDER BY cps.created_at DESC, cps.id DESC
-                  LIMIT 1
-              ) <= now() - interval '10 minutes'
-          )
-        ORDER BY c.priority DESC, c.created_at ASC
-        LIMIT 50
-        "#,
-    )
-    .fetch_all(&state.db.pool)
-    .await?;
-
-    for row in rows {
-        let channel_id: DbId = row.try_get("id")?;
-        if let Err(err) = probe_channel_once(state, channel_id).await {
-            tracing::warn!(channel_id, error = %err, "failed to probe upstream channel");
-        }
-    }
-
-    cleanup_probe_samples(state).await?;
-    Ok(())
-}
-
 pub async fn recent_probe_samples_by_channel(
     state: &AppState,
     channel_ids: &[DbId],
@@ -461,77 +375,6 @@ async fn diagnose_endpoint(
     }
 }
 
-async fn run_channel_probe(
-    state: &AppState,
-    channel: &ChannelDiagnosticTarget,
-    endpoints: &[EndpointTarget],
-    keys: &[KeyTarget],
-) -> ProbeOutcome {
-    let Some(endpoint) = endpoints.iter().find(|endpoint| {
-        endpoint.enabled
-            && endpoint.protocol != OPENAI_OAUTH_PROTOCOL
-            && probe_model(endpoint).is_some()
-    }) else {
-        return ProbeOutcome {
-            endpoint_id: None,
-            key_id: None,
-            provider: channel.provider.clone(),
-            protocol: String::new(),
-            model: String::new(),
-            status: ProbeStatus::Skipped,
-            latency_ms: None,
-            status_code: None,
-            error_summary: Some("没有可探测的文本模型端点".to_string()),
-        };
-    };
-
-    if !channel.enabled {
-        return ProbeOutcome {
-            endpoint_id: Some(endpoint.id),
-            key_id: None,
-            provider: channel.provider.clone(),
-            protocol: endpoint.protocol.clone(),
-            model: probe_model(endpoint).unwrap_or_default(),
-            status: ProbeStatus::Skipped,
-            latency_ms: None,
-            status_code: None,
-            error_summary: Some("通道已停用".to_string()),
-        };
-    }
-
-    let Some(key) = keys.iter().find(|key| key.enabled) else {
-        return ProbeOutcome {
-            endpoint_id: Some(endpoint.id),
-            key_id: None,
-            provider: channel.provider.clone(),
-            protocol: endpoint.protocol.clone(),
-            model: probe_model(endpoint).unwrap_or_default(),
-            status: ProbeStatus::Failed,
-            latency_ms: None,
-            status_code: None,
-            error_summary: Some("没有启用的上游 Key 或凭证".to_string()),
-        };
-    };
-
-    let model = probe_model(endpoint).unwrap_or_default();
-    let step = run_probe_step(state, endpoint, key, &model).await;
-    ProbeOutcome {
-        endpoint_id: Some(endpoint.id),
-        key_id: key.id,
-        provider: channel.provider.clone(),
-        protocol: endpoint.protocol.clone(),
-        model,
-        status: if step.status == DiagnosticStatus::Ok {
-            ProbeStatus::Ok
-        } else {
-            ProbeStatus::Failed
-        },
-        latency_ms: Some(step.duration_ms),
-        status_code: step.status_code,
-        error_summary: (step.status != DiagnosticStatus::Ok).then_some(step.message),
-    }
-}
-
 async fn diagnose_key(
     state: &AppState,
     _channel: &ChannelDiagnosticTarget,
@@ -644,80 +487,6 @@ fn send_model_result_event(
             step: step.clone(),
         });
     }
-}
-
-async fn persist_probe_sample(
-    state: &AppState,
-    channel_id: DbId,
-    outcome: &ProbeOutcome,
-) -> AppResult<()> {
-    sqlx::query(
-        r#"
-        INSERT INTO channel_probe
-            (channel_id, channel_endpoint_id, channel_key_id, provider, protocol, model,
-             status, latency_ms, status_code, error_summary)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
-    )
-    .bind(channel_id)
-    .bind(outcome.endpoint_id)
-    .bind(outcome.key_id)
-    .bind(&outcome.provider)
-    .bind(&outcome.protocol)
-    .bind(&outcome.model)
-    .bind(outcome.status.as_str())
-    .bind(outcome.latency_ms)
-    .bind(outcome.status_code.map(i32::from))
-    .bind(&outcome.error_summary)
-    .execute(&state.db.pool)
-    .await?;
-    Ok(())
-}
-
-async fn persist_endpoint_probe_health(
-    state: &AppState,
-    endpoint_id: DbId,
-    outcome: &ProbeOutcome,
-) -> AppResult<()> {
-    let status = match outcome.status {
-        ProbeStatus::Ok => DiagnosticStatus::Ok,
-        ProbeStatus::Failed => DiagnosticStatus::Failed,
-        ProbeStatus::Skipped => return Ok(()),
-    };
-    persist_endpoint_health(
-        state,
-        endpoint_id,
-        status,
-        outcome.error_summary.as_deref().unwrap_or("定时探测失败"),
-    )
-    .await
-}
-
-async fn persist_key_probe_health(
-    state: &AppState,
-    key_id: DbId,
-    outcome: &ProbeOutcome,
-) -> AppResult<()> {
-    let status = match outcome.status {
-        ProbeStatus::Ok => DiagnosticStatus::Ok,
-        ProbeStatus::Failed => DiagnosticStatus::Failed,
-        ProbeStatus::Skipped => return Ok(()),
-    };
-    persist_key_health(
-        state,
-        key_id,
-        status,
-        outcome.error_summary.as_deref().unwrap_or("定时探测失败"),
-    )
-    .await
-}
-
-async fn cleanup_probe_samples(state: &AppState) -> AppResult<()> {
-    sqlx::query("DELETE FROM channel_probe WHERE created_at < now() - $1::interval")
-        .bind(format!("{PROBE_SAMPLE_RETENTION_DAYS} days"))
-        .execute(&state.db.pool)
-        .await?;
-    Ok(())
 }
 
 struct ModelsStepResult {

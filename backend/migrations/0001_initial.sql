@@ -385,6 +385,29 @@ CREATE TABLE credential_model (
     UNIQUE (credential_id, channel_endpoint_id, model)
 );
 
+CREATE TABLE channel_model (
+    id BIGSERIAL PRIMARY KEY,
+    channel_id BIGINT NOT NULL REFERENCES channel(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL REFERENCES provider(code) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'missing', 'disabled')),
+    runtime_status TEXT NOT NULL DEFAULT 'normal' CHECK (runtime_status IN ('normal', 'cooldown', 'failed')),
+    cooldown_until TIMESTAMPTZ,
+    last_seen_at TIMESTAMPTZ,
+    missing_since TIMESTAMPTZ,
+    last_probe_at TIMESTAMPTZ,
+    last_error TEXT,
+    last_status_code INTEGER,
+    success_count BIGINT NOT NULL DEFAULT 0,
+    failure_count BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (channel_id, model),
+    CONSTRAINT channel_model_provider_model_fk
+        FOREIGN KEY (provider, model) REFERENCES provider_model(provider, model) ON DELETE CASCADE
+);
+
 CREATE TABLE pricing_policy (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -566,6 +589,10 @@ CREATE INDEX idx_credential_model_unavailable
     WHERE status = 'unavailable';
 CREATE INDEX idx_credential_model_credential_status
     ON credential_model(credential_id, status, unavailable_until);
+CREATE INDEX idx_channel_model_route
+    ON channel_model(channel_id, enabled, status, runtime_status, cooldown_until, model);
+CREATE INDEX idx_channel_model_provider_model
+    ON channel_model(provider, model);
 CREATE INDEX idx_pricing_template_provider_model ON pricing_template(provider, model) WHERE enabled = TRUE;
 CREATE INDEX idx_pricing_policy_user_group_enabled
     ON pricing_policy(user_group, enabled, priority DESC);
@@ -649,7 +676,6 @@ ON CONFLICT (provider, model) DO NOTHING;
 CREATE TABLE channel_probe (
     id BIGSERIAL PRIMARY KEY,
     channel_id BIGINT NOT NULL REFERENCES channel(id) ON DELETE CASCADE,
-    channel_endpoint_id BIGINT REFERENCES channel_endpoint(id) ON DELETE SET NULL,
     channel_key_id BIGINT REFERENCES channel_key(id) ON DELETE SET NULL,
     provider TEXT NOT NULL,
     protocol TEXT NOT NULL,

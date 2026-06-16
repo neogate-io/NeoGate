@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{
-    AppState,
     error::{AppError, AppResult},
     id::DbId,
+    AppState,
 };
 
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
@@ -201,7 +201,7 @@ pub async fn upsert_provider_price(
     req: UpsertProviderPriceRequest,
 ) -> AppResult<ProviderPriceRecord> {
     validate_price(&req)?;
-    ensure_model_is_configured_on_channel(state, &req.provider, &req.model).await?;
+    ensure_model_is_known(state, &req.provider, &req.model).await?;
     let row = sqlx::query(
         "INSERT INTO provider_price
          (provider, model, input_price_usd_micros,
@@ -231,7 +231,44 @@ pub async fn upsert_provider_price(
     .fetch_one(&state.db.pool)
     .await?;
     let price = provider_price_from_row(&row)?;
+    sync_channel_model_enabled_for_price(state, &price).await?;
     Ok(price)
+}
+
+async fn sync_channel_model_enabled_for_price(
+    state: &AppState,
+    price: &ProviderPriceRecord,
+) -> AppResult<()> {
+    if price.enabled {
+        sqlx::query(
+            "UPDATE channel_model cm
+             SET enabled = TRUE,
+                 updated_at = now()
+             FROM channel_endpoint ce
+             WHERE cm.channel_id = ce.channel_id
+               AND cm.provider = $1
+               AND cm.model = $2
+               AND cm.model = ANY(ce.models)
+               AND cm.status = 'available'",
+        )
+        .bind(&price.provider)
+        .bind(&price.model)
+        .execute(&state.db.pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE channel_model
+             SET enabled = FALSE,
+                 updated_at = now()
+             WHERE provider = $1
+               AND model = $2",
+        )
+        .bind(&price.provider)
+        .bind(&price.model)
+        .execute(&state.db.pool)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn sync_models_dev_pricing_templates(
@@ -513,18 +550,13 @@ fn validate_pricing_policy(req: &UpsertPricingPolicyRequest) -> AppResult<()> {
     Ok(())
 }
 
-async fn ensure_model_is_configured_on_channel(
-    state: &AppState,
-    provider: &str,
-    model: &str,
-) -> AppResult<()> {
+async fn ensure_model_is_known(state: &AppState, provider: &str, model: &str) -> AppResult<()> {
     let row = sqlx::query(
         r#"
         SELECT 1
         FROM provider_model
         WHERE provider = $1
           AND model = $2
-          AND enabled = TRUE
         LIMIT 1
         "#,
     )
@@ -535,7 +567,7 @@ async fn ensure_model_is_configured_on_channel(
 
     if row.is_none() {
         return Err(AppError::BadRequest(
-            "model is not configured on any upstream channel".to_string(),
+            "model is not known for this provider".to_string(),
         ));
     }
 

@@ -290,9 +290,11 @@ pub async fn probe_due_channels(state: &AppState) -> AppResult<()> {
           AND EXISTS (
               SELECT 1
               FROM channel_endpoint ce
+              JOIN channel_model cm ON cm.channel_id = c.id
               WHERE ce.channel_id = c.id
                 AND ce.enabled = TRUE
-                AND cardinality(ce.models) > 0
+                AND cm.enabled = TRUE
+                AND cm.status = 'available'
                 AND ce.protocol <> 'openai_oauth'
           )
           AND (
@@ -654,13 +656,12 @@ async fn persist_probe_sample(
     sqlx::query(
         r#"
         INSERT INTO channel_probe
-            (channel_id, channel_endpoint_id, channel_key_id, provider, protocol, model,
+            (channel_id, channel_key_id, provider, protocol, model,
              status, latency_ms, status_code, error_summary)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(channel_id)
-    .bind(outcome.endpoint_id)
     .bind(outcome.key_id)
     .bind(&outcome.provider)
     .bind(&outcome.protocol)

@@ -100,6 +100,7 @@ export type Channel = {
   key_selection_mode: 'polling' | 'random'
   use_credentials: boolean
   endpoints: ChannelEndpoint[]
+  models: ChannelModel[]
   probe_samples: ChannelProbeSample[]
   created_at?: string
   updated_at?: string
@@ -117,6 +118,32 @@ export type ChannelEndpoint = {
   cooldown_until?: string | null
   created_at?: string
   updated_at?: string
+}
+
+export type ChannelModel = {
+  id: number
+  channel_id: number
+  provider: string
+  model: string
+  enabled: boolean
+  status: 'available' | 'missing' | 'disabled'
+  runtime_status: 'normal' | 'cooldown' | 'failed'
+  cooldown_until?: string | null
+  last_seen_at?: string | null
+  missing_since?: string | null
+  last_probe_at?: string | null
+  last_error?: string | null
+  last_status_code?: number | null
+  success_count: number
+  failure_count: number
+  billing_enabled: boolean
+  price_configured: boolean
+  input_price_usd_micros?: number | null
+  output_price_usd_micros?: number | null
+  cache_read_price_usd_micros?: number | null
+  cache_write_price_usd_micros?: number | null
+  created_at: string
+  updated_at: string
 }
 
 export type ProviderRecord = {

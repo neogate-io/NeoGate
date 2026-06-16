@@ -27,6 +27,7 @@ import {
 } from '../../api/prices'
 import {
   streamChannelDiagnostic,
+  updateChannelModel,
   updateChannel,
   type ChannelDiagnosticStreamEvent
 } from '../../api/channels'
@@ -44,6 +45,7 @@ import type {
   Channel,
   ChannelDiagnosticReport,
   ChannelKey,
+  ChannelModel,
   ChannelProbeSample,
   DiagnosticStep,
   DiagnosticStatus,
@@ -198,54 +200,54 @@ function clearChannelSearch() {
 }
 
 function channelModelList(row: Channel) {
-  const models = row.endpoints.flatMap((endpoint) => endpoint.models)
+  const models = row.models?.length
+    ? row.models.map((model) => model.model)
+    : row.endpoints.flatMap((endpoint) => endpoint.models)
   return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
 }
 
-function modelEndpoint(row: Channel, model: string) {
-  return row.endpoints.find((ep) => ep.models.map((m) => m.trim()).includes(model)) ?? null
+function channelModelRecords(row: Channel) {
+  if (row.models?.length) return row.models
+  return channelModelList(row).map(
+    (model) =>
+      ({
+        id: 0,
+        channel_id: row.id,
+        provider: row.provider,
+        model,
+        enabled: true,
+        status: 'available',
+        runtime_status: 'normal',
+        success_count: 0,
+        failure_count: 0,
+        billing_enabled: Boolean(priceByModel.value.get(priceKey(row.provider, model))?.enabled),
+        price_configured: Boolean(priceByModel.value.get(priceKey(row.provider, model))),
+        created_at: '',
+        updated_at: ''
+      }) as ChannelModel
+  )
 }
 
-function modelOperationalStatus(
-  row: Channel,
-  model: string,
-  runtimeEnabled: boolean
-): 'normal' | 'rate_limited' | 'cooldown' | 'failed' | 'disabled' {
-  if (!runtimeEnabled) return 'disabled'
-
-  const ep = modelEndpoint(row, model)
-  if (!ep || !row.enabled) return 'failed'
-
-  const latestProbe = row.probe_samples
-    .filter((s) => s.model === model)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
-
-  if (latestProbe?.status === 'ok') return 'normal'
-
-  const error = (latestProbe?.error_summary ?? ep.last_error ?? '').toLowerCase()
-  if (error.includes('rate') || error.includes('quota') || error.includes('429'))
-    return 'rate_limited'
-
-  if (ep.cooldown_until && new Date(ep.cooldown_until) > new Date()) return 'cooldown'
-
-  if (!ep.healthy || latestProbe?.status === 'failed') return 'failed'
-
-  return 'normal'
-}
-
-function modelOperationalStatusLabel(status: ReturnType<typeof modelOperationalStatus>) {
-  const labels: Record<string, string> = {
-    normal: t('modelStatusNormal'),
-    rate_limited: t('modelStatusRateLimited'),
-    cooldown: t('modelStatusCooldown'),
-    failed: t('modelStatusFailed'),
+function modelStatusLabel(status: ChannelModel['status']) {
+  const labels: Record<ChannelModel['status'], string> = {
+    available: t('modelStatusAvailable'),
+    missing: t('modelStatusMissing'),
     disabled: t('modelStatusDisabled')
   }
   return labels[status]
 }
 
+function runtimeStatusLabel(status: ChannelModel['runtime_status']) {
+  const labels: Record<ChannelModel['runtime_status'], string> = {
+    normal: t('modelStatusNormal'),
+    cooldown: t('modelStatusCooldown'),
+    failed: t('modelStatusFailed')
+  }
+  return labels[status]
+}
+
 function channelPriceStatus(row: Channel) {
-  const models = channelModelList(row)
+  const models = channelModelRecords(row)
   if (models.length === 0) {
     return { missing: 0, total: 0, type: 'info' as const, label: '-' }
   }
@@ -254,9 +256,7 @@ function channelPriceStatus(row: Channel) {
     return { missing: 0, total: models.length, type: 'info' as const, label: '-' }
   }
 
-  const missing = models.filter(
-    (model) => !isProviderPriceConfigured(priceByModel.value.get(priceKey(row.provider, model)))
-  ).length
+  const missing = models.filter((model) => !model.billing_enabled).length
   if (missing === 0) {
     return { missing, total: models.length, type: 'success' as const, label: t('priceReady') }
   }
@@ -274,8 +274,10 @@ function channelPriceStatus(row: Channel) {
 }
 
 function channelPriceRows(row: Channel) {
-  return channelModelList(row).map((model) => {
+  return channelModelRecords(row).map((channelModel) => {
+    const model = channelModel.model
     const price = priceByModel.value.get(priceKey(row.provider, model))
+    const hasConfiguredPrice = channelModel.price_configured || isProviderPriceConfigured(price)
     if (pricingLoading.value && prices.value.length === 0) {
       return {
         model,
@@ -289,36 +291,45 @@ function channelPriceRows(row: Channel) {
       }
     }
 
-    const inputPrice = price
-      ? formatUsdPerMillion(microUsdToUsd(price.input_price_usd_micros))
-      : t('priceMissing')
-    const outputPrice = price
-      ? formatUsdPerMillion(microUsdToUsd(price.output_price_usd_micros))
-      : t('priceMissing')
-    const cacheReadPrice = price
-      ? formatUsdPerMillion(
-          microUsdToUsd(
-            price.cache_read_price_usd_micros ?? derivedCacheReadPrice(price.input_price_usd_micros)
-          )
-        )
-      : t('priceMissing')
-    const cacheWriteMicros = price?.cache_write_price_usd_micros
-    const cacheWritePrice = price
+    const inputMicros = channelModel.input_price_usd_micros ?? price?.input_price_usd_micros
+    const outputMicros = channelModel.output_price_usd_micros ?? price?.output_price_usd_micros
+    const cacheReadMicros =
+      channelModel.cache_read_price_usd_micros ??
+      price?.cache_read_price_usd_micros ??
+      (inputMicros === undefined ? undefined : derivedCacheReadPrice(inputMicros))
+    const cacheWriteMicros =
+      channelModel.cache_write_price_usd_micros ?? price?.cache_write_price_usd_micros
+    const billingEnabled = Boolean(channelModel.billing_enabled)
+    const modelEnabled = Boolean(channelModel.enabled)
+    const inputPrice =
+      inputMicros !== undefined && inputMicros !== null
+        ? formatUsdPerMillion(microUsdToUsd(inputMicros))
+        : t('priceMissing')
+    const outputPrice =
+      outputMicros !== undefined && outputMicros !== null
+        ? formatUsdPerMillion(microUsdToUsd(outputMicros))
+        : t('priceMissing')
+    const cacheReadPrice =
+      cacheReadMicros !== undefined && cacheReadMicros !== null
+        ? formatUsdPerMillion(microUsdToUsd(cacheReadMicros))
+        : t('priceMissing')
+    const cacheWritePrice = hasConfiguredPrice
       ? cacheWriteMicros === undefined || cacheWriteMicros === null
         ? '$0'
         : formatUsdPerMillion(microUsdToUsd(cacheWriteMicros as number))
       : t('priceMissing')
-    const hasConfiguredPrice = isProviderPriceConfigured(price)
-    const runtimeEnabled = isProviderPriceReady(price)
-    const modelStatus = modelOperationalStatus(row, model, runtimeEnabled)
+    const modelStatus = channelModel.status
     return {
       model,
-      disabled: Boolean(price && !price.enabled),
+      disabled: !modelEnabled,
       missing: !hasConfiguredPrice,
-      runtimeToggleDisabled: !hasConfiguredPrice || isRuntimeToggling(row.provider, model),
-      runtimeEnabled,
+      billingEnabled,
+      runtimeStatus: channelModel.runtime_status,
+      runtimeStatusLabel: runtimeStatusLabel(channelModel.runtime_status),
+      runtimeToggleDisabled: !billingEnabled || isRuntimeToggling(row.id, model),
+      runtimeEnabled: modelEnabled,
       modelStatus,
-      modelStatusLabel: modelOperationalStatusLabel(modelStatus),
+      modelStatusLabel: modelStatusLabel(modelStatus),
       inputPrice,
       outputPrice,
       cacheReadPrice,
@@ -337,8 +348,12 @@ function channelPriceOverflowCount(row: Channel) {
   return Math.max(channelModelList(row).length - channelPricePreviewRows(row).length, 0)
 }
 
-function isRuntimeToggling(provider: string, model: string) {
-  return togglingRuntimeKeys.has(priceKey(provider, model))
+function runtimeKey(channelId: number, model: string) {
+  return `${channelId}:${model}`
+}
+
+function isRuntimeToggling(channelId: number, model: string) {
+  return togglingRuntimeKeys.has(runtimeKey(channelId, model))
 }
 
 function isChannelToggling(channelId: number) {
@@ -803,27 +818,17 @@ async function saveChannelPrices() {
   }
 }
 
-async function toggleChannelModelRuntime(provider: string, model: string, enabled: boolean) {
-  const price = priceByModel.value.get(priceKey(provider, model))
-  if (!price || !isProviderPriceConfigured(price) || isRuntimeToggling(provider, model)) return
+async function toggleChannelModelRuntime(channelId: number, model: string, enabled: boolean) {
+  if (isRuntimeToggling(channelId, model)) return
 
-  togglingRuntimeKeys.add(priceKey(provider, model))
+  togglingRuntimeKeys.add(runtimeKey(channelId, model))
   try {
-    await upsertProviderPrice({
-      provider,
-      model,
-      input_price_usd_micros: price.input_price_usd_micros,
-      output_price_usd_micros: price.output_price_usd_micros,
-      cache_read_price_usd_micros: price.cache_read_price_usd_micros ?? null,
-      cache_write_price_usd_micros: price.cache_write_price_usd_micros ?? null,
-      enabled
-    })
-    await loadPricingData()
+    await updateChannelModel(channelId, model, { enabled })
     await loadChannels()
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    togglingRuntimeKeys.remove(priceKey(provider, model))
+    togglingRuntimeKeys.remove(runtimeKey(channelId, model))
   }
 }
 
@@ -1034,6 +1039,7 @@ onMounted(loadInitialData)
                   <span class="channel-head-label">{{ t('inputOutputPriceShort') }}</span>
                   <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
                   <span>{{ t('priceStatus') }}</span>
+                  <span>{{ t('runtimeStatus') }}</span>
                   <span>{{ t('modelRuntimeStatus') }}</span>
                   <span>{{ t('modelRuntimeSwitch') }}</span>
                 </div>
@@ -1048,13 +1054,23 @@ onMounted(loadInitialData)
                   <span class="channel-detail-price">{{ item.cachePrice }}</span>
                   <span
                     class="channel-detail-status"
-                    :class="{ 'is-missing': item.missing }"
-                    :aria-label="item.missing ? t('priceMissing') : t('priceReady')"
+                    :class="{ 'is-missing': item.missing, 'is-disabled': !item.billingEnabled }"
+                    :aria-label="
+                      item.missing
+                        ? t('priceMissing')
+                        : item.billingEnabled
+                          ? t('enabled')
+                          : t('disabled')
+                    "
                   >
                     <el-icon>
                       <Warning v-if="item.missing" />
-                      <CircleCheck v-else />
+                      <CircleCheck v-else-if="item.billingEnabled" />
+                      <CircleCloseFilled v-else />
                     </el-icon>
+                  </span>
+                  <span class="channel-detail-runtime-raw" :class="`is-${item.runtimeStatus}`">
+                    {{ item.runtimeStatusLabel }}
                   </span>
                   <span class="channel-detail-runtime-status" :class="`is-${item.modelStatus}`">
                     {{ item.modelStatusLabel }}
@@ -1067,7 +1083,7 @@ onMounted(loadInitialData)
                       :model-value="item.runtimeEnabled"
                       :disabled="item.runtimeToggleDisabled"
                       size="small"
-                      @change="toggleChannelModelRuntime(row.provider, item.model, Boolean($event))"
+                      @change="toggleChannelModelRuntime(row.id, item.model, Boolean($event))"
                     />
                   </span>
                 </div>
@@ -2308,6 +2324,7 @@ onMounted(loadInitialData)
     minmax(160px, 0.7fr)
     minmax(160px, 0.7fr)
     80px
+    92px
     90px
     84px;
   min-height: 46px;
@@ -2347,7 +2364,8 @@ onMounted(loadInitialData)
 
 .channel-expand-price-row.is-head span:nth-child(4),
 .channel-expand-price-row.is-head span:nth-child(5),
-.channel-expand-price-row.is-head span:nth-child(6) {
+.channel-expand-price-row.is-head span:nth-child(6),
+.channel-expand-price-row.is-head span:nth-child(7) {
   text-align: center;
 }
 
@@ -2389,6 +2407,10 @@ onMounted(loadInitialData)
   color: #94a3b8;
 }
 
+.channel-expand-panel.is-channel-disabled .channel-detail-runtime-raw {
+  color: #94a3b8;
+}
+
 .channel-expand-panel.is-channel-disabled .channel-detail-runtime-switch :deep(.el-switch) {
   --el-switch-on-color: #cbd5e1;
   --el-switch-off-color: #cbd5e1;
@@ -2397,6 +2419,7 @@ onMounted(loadInitialData)
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-price-model,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-price,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status,
+.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-raw,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-status,
 .channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-switch {
   color: #94a3b8;
@@ -2465,11 +2488,46 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
+.channel-detail-runtime-raw {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  color: #475569;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  justify-content: center;
+  line-height: 1;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.channel-detail-runtime-raw.is-normal {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.channel-detail-runtime-raw.is-cooldown {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.channel-detail-runtime-raw.is-failed {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #64748b;
+}
+
+.channel-detail-runtime-status.is-available,
 .channel-detail-runtime-status.is-normal {
   background: #f0fdf4;
   color: #15803d;
 }
 
+.channel-detail-runtime-status.is-missing,
 .channel-detail-runtime-status.is-rate_limited {
   background: #fff7ed;
   color: #c2410c;

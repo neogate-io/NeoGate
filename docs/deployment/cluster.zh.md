@@ -11,8 +11,9 @@
 | `web` | 前端 Nginx，负责提供前端静态资源并反向代理后端 API。 |
 | `api` | 后端 API 进程，处理管理后台和模型转发请求。 |
 | `worker` | 后端 worker 进程，处理后台任务、用量刷新等异步工作。 |
+| `scheduler` | 定时任务进程，负责上游通道探测和模型目录同步。 |
 
-集群版 Compose 不内置 PostgreSQL 和 Redis。所有 API/worker 节点必须连接同一套外部 PostgreSQL、Redis，并使用相同的共享密钥。
+集群版 Compose 不内置 PostgreSQL 和 Redis。API 和 worker 节点必须连接同一套外部 PostgreSQL、Redis；scheduler 必须连接同一套外部 PostgreSQL。所有角色都必须使用相同的共享密钥。
 
 ## 前置准备
 
@@ -21,7 +22,7 @@
 - 外部 PostgreSQL，建议使用托管数据库或独立数据库实例。
 - 外部 Redis，用于跨节点协调和共享状态。
 - 稳定的公开访问地址，例如 `https://neogate.example.com`。
-- 长随机共享密钥，所有 API/worker 节点必须保持一致。
+- 长随机共享密钥，所有 API、worker、scheduler 节点必须保持一致。
 - 可访问的 Docker 和 Docker Compose 环境。
 
 ## 配置环境变量
@@ -69,7 +70,7 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --bui
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml ps
 ```
 
-正常情况下应看到 `web`、`api`、`worker` 三个服务。其中 `web` 和 `api` 配置了 healthcheck，状态应逐步变为 `running` 或 `healthy`。
+正常情况下应看到 `web`、`api`、`worker`、`scheduler` 四个服务。其中 `web` 和 `api` 配置了 healthcheck，状态应逐步变为 `running` 或 `healthy`。
 
 查看全部日志：
 
@@ -87,6 +88,12 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml logs -f api
 
 ```bash
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml logs -f worker
+```
+
+只查看 scheduler 日志：
+
+```bash
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml logs -f scheduler
 ```
 
 最后访问 `PUBLIC_BASE_URL` 对应的地址。如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。
@@ -111,7 +118,13 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml up -d --bui
 docker compose --env-file .env.cluster -f docker-compose.cluster.yml restart api
 ```
 
-扩展 API 或 worker 副本时，可以结合外部负载均衡和编排系统进行。若直接使用 Docker Compose 多副本，请确保端口暴露、反向代理和共享存储策略符合生产环境要求。
+重启定时任务：
+
+```bash
+docker compose --env-file .env.cluster -f docker-compose.cluster.yml restart scheduler
+```
+
+扩展 API 或 worker 副本时，可以结合外部负载均衡和编排系统进行。除非已经评估定时任务在生产拓扑下的行为，否则建议只保留一个 scheduler 实例。若直接使用 Docker Compose 多副本，请确保端口暴露、反向代理和共享存储策略符合生产环境要求。
 
 ## 故障排查
 
@@ -122,6 +135,7 @@ docker compose --env-file .env.cluster -f docker-compose.cluster.yml restart api
 - `ADMIN_TOKEN_SECRET`、`UPSTREAM_SECRET_KEY` 是否为空或仍为示例值。
 - `WEB_PORT` 是否被宿主机其他进程占用。
 - `api` 日志中是否有数据库迁移、连接失败或配置缺失错误。
+- 如果上游探测或模型目录同步没有执行，检查 `scheduler` 日志。
 
 ## 生产建议
 

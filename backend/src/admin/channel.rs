@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 
 use crate::{
-    AppState,
     auth::key_prefix,
     error::{AppError, AppResult},
     id::DbId,
+    AppState,
 };
 
-use super::diagnostics::{ChannelProbeSampleRecord, recent_probe_samples_by_channel};
+use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
-    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, ensure_custom_provider,
-    ensure_newapi_provider, provider_default_endpoint_base_url, provider_default_endpoints,
-    provider_default_models, record_provider_models,
+    ensure_custom_provider, ensure_newapi_provider, provider_default_endpoint_base_url,
+    provider_default_endpoints, provider_default_models, record_provider_models,
+    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -336,6 +336,7 @@ pub async fn create_channel_key(
     req: CreateChannelKeyRequest,
 ) -> AppResult<ChannelKeyRecord> {
     let secret_ciphertext = state.secrets.encrypt(&req.secret)?;
+    let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         "INSERT INTO channel_key (channel_id, name, key_prefix, secret_ciphertext, enabled)
          VALUES ($1, $2, $3, $4, $5)
@@ -347,8 +348,10 @@ pub async fn create_channel_key(
     .bind(key_prefix(&req.secret))
     .bind(secret_ciphertext)
     .bind(req.enabled)
-    .fetch_one(&state.db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+    reset_channel_endpoint_health(&mut tx, channel_id).await?;
+    tx.commit().await?;
     channel_key_from_row(&row)
 }
 
@@ -414,10 +417,25 @@ pub async fn update_channel_key(
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    let channel_id: DbId = current.try_get("channel_id")?;
     let current_last_error: Option<String> = current.try_get("last_error")?;
     let current_cooldown_until: Option<DateTime<Utc>> = current.try_get("cooldown_until")?;
-    let last_error = req.last_error.unwrap_or(current_last_error);
-    let cooldown_until = req.cooldown_until.unwrap_or(current_cooldown_until);
+    let replacing_secret = req.secret.is_some();
+    let last_error = if replacing_secret {
+        None
+    } else {
+        req.last_error.unwrap_or(current_last_error)
+    };
+    let cooldown_until = if replacing_secret {
+        None
+    } else {
+        req.cooldown_until.unwrap_or(current_cooldown_until)
+    };
+    let healthy = if replacing_secret {
+        Some(true)
+    } else {
+        req.healthy
+    };
     let key_prefix_value = req.secret.as_ref().map(|secret| key_prefix(secret));
     let secret_ciphertext = req
         .secret
@@ -425,6 +443,7 @@ pub async fn update_channel_key(
         .map(|secret| state.secrets.encrypt(secret))
         .transpose()?;
 
+    let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
         "UPDATE channel_key
          SET name = COALESCE($2, name),
@@ -444,12 +463,16 @@ pub async fn update_channel_key(
     .bind(secret_ciphertext)
     .bind(key_prefix_value)
     .bind(req.enabled)
-    .bind(req.healthy)
+    .bind(healthy)
     .bind(cooldown_until)
     .bind(last_error)
-    .fetch_one(&state.db.pool)
+    .fetch_one(&mut *tx)
     .await?;
-    if req.secret.is_some() {
+    if replacing_secret {
+        reset_channel_endpoint_health(&mut tx, channel_id).await?;
+    }
+    tx.commit().await?;
+    if replacing_secret {
         state.secrets.forget(id);
     }
     channel_key_from_row(&row)
@@ -778,6 +801,24 @@ async fn upsert_endpoint(
     .bind(endpoint.base_url)
     .bind(endpoint.models)
     .bind(endpoint.enabled)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn reset_channel_endpoint_health(
+    tx: &mut Transaction<'_, Postgres>,
+    channel_id: DbId,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET healthy = TRUE,
+             last_error = NULL,
+             cooldown_until = NULL,
+             updated_at = now()
+         WHERE channel_id = $1",
+    )
+    .bind(channel_id)
     .execute(&mut **tx)
     .await?;
     Ok(())

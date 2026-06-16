@@ -62,7 +62,7 @@ export function maskApiKey(value: string) {
 
 export function formatDurationMs(ms?: number | null) {
   if (ms == null) return '-'
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 }
 
 export function formatTokenRate(

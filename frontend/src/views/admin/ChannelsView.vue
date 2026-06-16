@@ -134,6 +134,7 @@ const diagnosticLiveSteps = ref<
 >([])
 const diagnosticCurrentModel = ref('')
 const diagnosticLiveListRef = ref<HTMLElement | null>(null)
+const channelTableRef = ref()
 const togglingRuntimeKeys = useReactiveSet<string>()
 const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
@@ -222,7 +223,8 @@ function modelOperationalStatus(
   if (latestProbe?.status === 'ok') return 'normal'
 
   const error = (latestProbe?.error_summary ?? ep.last_error ?? '').toLowerCase()
-  if (error.includes('rate') || error.includes('quota') || error.includes('429')) return 'rate_limited'
+  if (error.includes('rate') || error.includes('quota') || error.includes('429'))
+    return 'rate_limited'
 
   if (ep.cooldown_until && new Date(ep.cooldown_until) > new Date()) return 'cooldown'
 
@@ -588,6 +590,10 @@ function channelRuntimeStatus(row: Channel) {
 
 function channelRowClassName({ row }: { row: Channel }) {
   return row.enabled ? '' : 'channel-row-is-disabled'
+}
+
+function toggleChannelRowExpansion(row: Channel) {
+  channelTableRef.value?.toggleRowExpansion(row)
 }
 
 function channelCredentialSummary(row: Channel) {
@@ -999,6 +1005,7 @@ onMounted(loadInitialData)
 
     <div v-else class="service-table-panel" :class="{ 'has-pagination': channelHasPagination }">
       <el-table
+        ref="channelTableRef"
         v-loading="loading"
         class="admin-table service-table channel-table"
         :data="paginatedChannels"
@@ -1008,10 +1015,7 @@ onMounted(loadInitialData)
       >
         <el-table-column type="expand" width="44">
           <template #default="{ row }">
-            <div
-              class="channel-expand-panel"
-              :class="{ 'is-channel-disabled': !row.enabled }"
-            >
+            <div class="channel-expand-panel" :class="{ 'is-channel-disabled': !row.enabled }">
               <div class="channel-expand-head">
                 <div>
                   <strong>{{ t('modelPriceDetails') }}</strong>
@@ -1052,10 +1056,7 @@ onMounted(loadInitialData)
                       <CircleCheck v-else />
                     </el-icon>
                   </span>
-                  <span
-                    class="channel-detail-runtime-status"
-                    :class="`is-${item.modelStatus}`"
-                  >
+                  <span class="channel-detail-runtime-status" :class="`is-${item.modelStatus}`">
                     {{ item.modelStatusLabel }}
                   </span>
                   <span
@@ -1074,18 +1075,23 @@ onMounted(loadInitialData)
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="name" :label="t('name')" min-width="160">
+        <el-table-column prop="name" :label="t('name')" min-width="120">
           <template #default="{ row }">
-            <span class="channel-name-cell">
+            <button
+              type="button"
+              class="channel-expand-toggle channel-name-cell"
+              :aria-label="`${row.name} ${t('modelPriceDetails')}`"
+              @click="toggleChannelRowExpansion(row)"
+            >
               <ProviderIcon :provider="row.provider" />
               <span class="channel-name-stack">
                 <span class="channel-name-text">{{ row.name }}</span>
                 <span class="channel-provider-text">{{ row.provider }}</span>
               </span>
-            </span>
+            </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('modelPrices')" min-width="420">
+        <el-table-column :label="t('modelPrices')" min-width="170">
           <template #default="{ row }">
             <div class="channel-price-summary">
               <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
@@ -1101,25 +1107,34 @@ onMounted(loadInitialData)
                 </el-tag>
               </div>
               <div class="channel-price-list">
-                <span
+                <button
                   v-for="item in channelPricePreviewRows(row)"
                   :key="item.model"
                   class="channel-price-item"
                   :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
+                  type="button"
+                  :aria-label="`${item.model} ${t('modelPriceDetails')}`"
+                  @click="toggleChannelRowExpansion(row)"
                 >
                   <span class="channel-price-model">{{ item.model }}</span>
                   <span class="channel-price-value">{{ item.price }}</span>
-                </span>
-                <span v-if="channelPriceOverflowCount(row) > 0" class="channel-price-more">
+                </button>
+                <button
+                  v-if="channelPriceOverflowCount(row) > 0"
+                  class="channel-price-more"
+                  type="button"
+                  :aria-label="`${row.name} ${t('modelPriceDetails')}`"
+                  @click="toggleChannelRowExpansion(row)"
+                >
                   +{{ channelPriceOverflowCount(row) }}
-                </span>
+                </button>
               </div>
             </div>
           </template>
         </el-table-column>
         <el-table-column
           :label="t('channelKeyCountShort')"
-          min-width="150"
+          min-width="100"
           class-name="channel-key-count-column"
           label-class-name="channel-key-count-header"
         >
@@ -1129,7 +1144,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('probeTrend')"
-          min-width="220"
+          min-width="140"
           align="center"
           header-align="center"
         >
@@ -1234,15 +1249,12 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelStatus')"
-          min-width="130"
+          min-width="100"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
-            <span
-              class="channel-runtime-status-tag"
-              :class="`is-${channelRuntimeStatus(row)}`"
-            >
+            <span class="channel-runtime-status-tag" :class="`is-${channelRuntimeStatus(row)}`">
               <template v-if="channelRuntimeStatus(row) === 'normal'">
                 {{ t('channelRunningNormal') }}
               </template>
@@ -1257,7 +1269,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelRuntimeSwitch')"
-          min-width="190"
+          min-width="130"
           align="center"
           header-align="center"
         >
@@ -1285,7 +1297,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('actions')"
-          width="150"
+          width="130"
           fixed="right"
           align="center"
           header-align="center"
@@ -1695,9 +1707,8 @@ onMounted(loadInitialData)
   border-bottom: 1px solid #dfe8f2;
   display: grid;
   gap: 36px;
-  grid-template-columns: 180px minmax(260px, 1fr) 140px 160px;
+  grid-template-columns: 160px minmax(200px, 1fr) 120px 140px;
   height: 48px;
-  min-width: 1118px;
   padding: 0 72px 0 82px;
 }
 
@@ -1732,9 +1743,8 @@ onMounted(loadInitialData)
   border-bottom: 1px solid #edf3f8;
   display: grid;
   gap: 36px;
-  grid-template-columns: 180px minmax(260px, 1fr);
+  grid-template-columns: 160px minmax(200px, 1fr);
   height: 82px;
-  min-width: 1118px;
   padding: 0 72px 0 82px;
 }
 
@@ -1744,6 +1754,10 @@ onMounted(loadInitialData)
 
 .channel-table-loading-row::after {
   width: min(420px, 100%);
+}
+
+.channel-table {
+  min-width: 0 !important;
 }
 
 .channel-table :deep(.el-table__body td) {
@@ -1784,7 +1798,14 @@ onMounted(loadInitialData)
 .channel-table :deep(.el-table__expanded-cell) {
   background: #f6f9fc;
   height: auto !important;
+  max-width: 100%;
+  overflow: hidden;
   padding: 0 !important;
+}
+
+.channel-table :deep(.el-table__expanded-cell .cell) {
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .channel-table :deep(.el-table__expand-icon) {
@@ -1812,10 +1833,6 @@ onMounted(loadInitialData)
   color: var(--brand-blue);
 }
 
-.channel-table :deep(.el-table__expand-icon--expanded .el-icon) {
-  transform: rotate(90deg);
-}
-
 .channel-table :deep(.channel-key-count-header .cell) {
   white-space: nowrap;
 }
@@ -1823,6 +1840,32 @@ onMounted(loadInitialData)
 .channel-table :deep(.el-table__body .cell) {
   align-items: center;
   display: flex;
+}
+
+.channel-expand-toggle {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.channel-expand-toggle:focus-visible {
+  outline: 2px solid var(--brand-blue);
+  outline-offset: 3px;
+}
+
+.channel-expand-toggle:hover .channel-name-text,
+.channel-expand-toggle:hover .channel-price-model {
+  color: var(--brand-blue);
 }
 
 .channel-table :deep(.el-table__expand-column .cell) {
@@ -1895,12 +1938,28 @@ onMounted(loadInitialData)
 
 .channel-price-item {
   align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
   display: inline-flex;
+  font: inherit;
   gap: 0;
   inline-size: fit-content;
   min-width: 0;
   overflow: hidden;
+  padding: 0;
   width: fit-content;
+}
+
+.channel-price-item:focus-visible,
+.channel-price-more:focus-visible {
+  outline: 2px solid var(--brand-blue);
+  outline-offset: 2px;
+}
+
+.channel-price-item:hover .channel-price-model {
+  color: var(--brand-blue);
 }
 
 .channel-price-model {
@@ -1951,15 +2010,22 @@ onMounted(loadInitialData)
 
 .channel-price-more {
   align-items: center;
+  appearance: none;
   background: #f1f5f9;
   border: 1px solid #dbe4ef;
   border-radius: 999px;
   color: #64748b;
+  cursor: pointer;
   display: inline-flex;
   font-size: 12px;
   font-weight: 720;
   min-height: 24px;
   padding: 0 9px;
+}
+
+.channel-price-more:hover {
+  border-color: #b9dff3;
+  color: var(--brand-blue);
 }
 
 .channel-key-count {
@@ -2236,17 +2302,16 @@ onMounted(loadInitialData)
   align-items: center;
   background: #ffffff;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns:
-    minmax(160px, 2fr)
-    minmax(130px, 0.7fr)
-    minmax(130px, 0.7fr)
+    minmax(120px, 1.5fr)
+    minmax(160px, 0.7fr)
+    minmax(160px, 0.7fr)
+    80px
     90px
-    100px
     84px;
   min-height: 46px;
-  min-width: 834px;
-  padding: 0 16px;
+  padding: 0 12px;
 }
 
 .channel-expand-price-row + .channel-expand-price-row {
@@ -2263,6 +2328,8 @@ onMounted(loadInitialData)
 
 .channel-expand-price-row.is-head span {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .channel-head-label {
@@ -2370,6 +2437,7 @@ onMounted(loadInitialData)
   align-items: center;
   display: inline-flex;
   justify-content: center;
+  justify-self: center;
   padding-left: 20px;
 }
 

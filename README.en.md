@@ -241,7 +241,7 @@ Use this PostgreSQL connection URL in the first-run wizard:
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The first-run page writes the database connection, site identity, and generated secrets for you. In the usual standalone flow, you do not need to edit `backend/.env` before starting.
+On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The first-run page writes the database connection, site identity, and generated secrets for you. In the usual standalone flow, you do not need to edit `.env` before starting.
 
 #### Development Deployment
 
@@ -258,8 +258,13 @@ Development deployment uses the Rust debug build and the Vite dev server. Use it
   <tbody>
     <tr>
       <td>Backend</td>
-      <td><code>cd backend &amp;&amp; cargo run</code></td>
+      <td><code>cargo run -p neogate</code></td>
       <td><code>http://127.0.0.1:8080</code></td>
+    </tr>
+    <tr>
+      <td>Scheduled jobs</td>
+      <td><code>cargo run -p neogate-scheduler</code></td>
+      <td>No HTTP URL</td>
     </tr>
     <tr>
       <td>Frontend</td>
@@ -273,13 +278,12 @@ Open `http://SERVER_IP:5173`; the app redirects to the first-run wizard automati
 
 #### Production Deployment
 
-For production deployment, build the backend in release mode and serve the frontend static files with Nginx. Use systemd, supervisord, or another process manager to keep the backend running.
+For production deployment, build the backend and scheduled jobs in release mode and serve the frontend static files with Nginx. Use systemd, supervisord, or another process manager to keep the backend and scheduled jobs running.
 
-Build the backend:
+Build the backend and scheduled jobs:
 
 ```bash
-cd backend
-cargo build --release
+cargo build --release -p neogate -p neogate-scheduler
 ```
 
 Run the backend:
@@ -288,20 +292,29 @@ Run the backend:
 BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
 ```
 
-You can also run the backend with systemd. This example assumes the project is located at `/opt/neogate`:
+Run the scheduled jobs:
+
+```bash
+./target/release/neogate-scheduler
+```
+
+You can also run the backend with systemd and have it start the scheduled jobs automatically. This example assumes the project is located at `/opt/neogate` and the release build was created from the repository root:
 
 ```ini
 [Unit]
 Description=NeoGate backend
 
 [Service]
-WorkingDirectory=/opt/neogate/backend
+WorkingDirectory=/opt/neogate
 Environment=BIND_ADDR=127.0.0.1:8080
 Environment=RUST_LOG=info
-ExecStart=/opt/neogate/backend/target/release/neogate
+Environment=NEOGATE_ENV_FILE=/opt/neogate/.env
+ExecStart=/opt/neogate/deploy/systemd/start-neogate.sh
+KillMode=control-group
+TimeoutStopSec=30
 Restart=always
 StandardOutput=append:/var/log/neogate/backend.log
-StandardError=append:/var/log/neogate/error.log
+StandardError=append:/var/log/neogate/backend-error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -316,7 +329,7 @@ sudo systemctl enable --now neogate
 sudo systemctl status neogate
 ```
 
-Add logrotate for backend logs to avoid unbounded log file growth:
+Add logrotate for service logs to avoid unbounded log file growth:
 
 ```bash
 sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
@@ -407,6 +420,10 @@ Check by scenario:
     <tr>
       <td>⏱️ Long-running requests</td>
       <td>For 504s on long image edits, increase <code>UPSTREAM_TIMEOUT_SECONDS</code>; it defaults to 600 seconds, and the old <code>REQUEST_TIMEOUT_SECONDS</code> name remains a compatibility alias.</td>
+    </tr>
+    <tr>
+      <td>🩺 Upstream monitoring</td>
+      <td>Channel availability is probed by the scheduled jobs process every 10 minutes by default; adjust <code>CHANNEL_PROBE_INTERVAL_SECONDS</code> if needed. Upstream model lists are synced once per day by default; adjust <code>UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS</code> if needed.</td>
     </tr>
     <tr>
       <td>💳 Billing mode</td>

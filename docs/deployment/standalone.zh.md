@@ -114,7 +114,7 @@ CREATE DATABASE neogate OWNER neogate;
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `backend/.env`。
+首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `.env`。
 
 ### 开发部署
 

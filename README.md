@@ -241,7 +241,7 @@ CREATE DATABASE neogate OWNER neogate;
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `backend/.env`。
+首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `.env`。
 
 #### 开发部署
 
@@ -258,8 +258,13 @@ postgres://neogate:change-me@localhost:5432/neogate
   <tbody>
     <tr>
       <td>后端</td>
-      <td><code>cd backend &amp;&amp; cargo run</code></td>
+      <td><code>cargo run -p neogate</code></td>
       <td><code>http://127.0.0.1:8080</code></td>
+    </tr>
+    <tr>
+      <td>定时任务</td>
+      <td><code>cargo run -p neogate-scheduler</code></td>
+      <td>无 HTTP 地址</td>
     </tr>
     <tr>
       <td>前端</td>
@@ -273,13 +278,12 @@ postgres://neogate:change-me@localhost:5432/neogate
 
 #### 正式部署
 
-正式部署时建议使用 release 构建运行后端，并用 Nginx 托管前端静态文件。后端可交给 systemd、supervisord 或其他进程管理工具保持常驻。
+正式部署时建议使用 release 构建运行后端和定时任务，并用 Nginx 托管前端静态文件。后端和定时任务可交给 systemd、supervisord 或其他进程管理工具保持常驻。
 
-构建后端：
+构建后端和定时任务：
 
 ```bash
-cd backend
-cargo build --release
+cargo build --release -p neogate -p neogate-scheduler
 ```
 
 运行后端：
@@ -288,20 +292,29 @@ cargo build --release
 BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
 ```
 
-也可以使用 systemd 托管后端进程。下面示例假设项目放在 `/opt/neogate`：
+运行定时任务：
+
+```bash
+./target/release/neogate-scheduler
+```
+
+也可以使用 systemd 托管后端进程，并在启动后端时自动拉起定时任务。下面示例假设项目放在 `/opt/neogate`，并已在仓库根目录完成 release 构建：
 
 ```ini
 [Unit]
 Description=NeoGate backend
 
 [Service]
-WorkingDirectory=/opt/neogate/backend
+WorkingDirectory=/opt/neogate
 Environment=BIND_ADDR=127.0.0.1:8080
 Environment=RUST_LOG=info
-ExecStart=/opt/neogate/backend/target/release/neogate
+Environment=NEOGATE_ENV_FILE=/opt/neogate/.env
+ExecStart=/opt/neogate/deploy/systemd/start-neogate.sh
+KillMode=control-group
+TimeoutStopSec=30
 Restart=always
 StandardOutput=append:/var/log/neogate/backend.log
-StandardError=append:/var/log/neogate/error.log
+StandardError=append:/var/log/neogate/backend-error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -316,7 +329,7 @@ sudo systemctl enable --now neogate
 sudo systemctl status neogate
 ```
 
-建议为后端日志添加 logrotate，避免日志文件长期运行后持续增长：
+建议为服务日志添加 logrotate，避免日志文件长期运行后持续增长：
 
 ```bash
 sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
@@ -409,6 +422,10 @@ sudo systemctl reload nginx
     <tr>
       <td>⏱️ 长耗时请求</td>
       <td>图片编辑等长耗时请求如果出现 504，可调大 <code>UPSTREAM_TIMEOUT_SECONDS</code>（默认 600 秒；旧的 <code>REQUEST_TIMEOUT_SECONDS</code> 仍作为兼容别名）。</td>
+    </tr>
+    <tr>
+      <td>🩺 上游监控</td>
+      <td>通道可用性由定时任务进程探测，默认每 10 分钟执行一次；可通过 <code>CHANNEL_PROBE_INTERVAL_SECONDS</code> 调整。上游模型列表默认每天同步一次，可通过 <code>UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS</code> 调整。</td>
     </tr>
     <tr>
       <td>💳 计费模式</td>

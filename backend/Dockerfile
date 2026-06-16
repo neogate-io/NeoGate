@@ -6,7 +6,7 @@ FROM ${RUST_IMAGE} AS builder
 
 ARG CARGO_REGISTRY_MIRROR=
 
-WORKDIR /app/backend
+WORKDIR /app/neogate
 
 # 只在设置了国内镜像时才替换 Cargo 源，否则走官方 crates.io
 RUN if [ -n "${CARGO_REGISTRY_MIRROR}" ]; then \
@@ -14,14 +14,18 @@ RUN if [ -n "${CARGO_REGISTRY_MIRROR}" ]; then \
       && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' "${CARGO_REGISTRY_MIRROR}" > /usr/local/cargo/config.toml; \
     fi
 
-COPY backend/Cargo.toml backend/Cargo.lock ./
-COPY backend/migrations ./migrations
-COPY backend/src ./src
-COPY backend/templates ./templates
+COPY Cargo.toml Cargo.lock ./
+COPY backend/Cargo.toml ./backend/Cargo.toml
+COPY scheduler/Cargo.toml ./scheduler/Cargo.toml
+COPY backend/migrations ./backend/migrations
+COPY backend/src ./backend/src
+COPY backend/templates ./backend/templates
+COPY scheduler/src ./scheduler/src
+COPY deploy/systemd/start-neogate.sh ./deploy/systemd/start-neogate.sh
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release
+    cargo build --release -p neogate -p neogate-scheduler
 
 FROM ${DEBIAN_IMAGE} AS runtime
 
@@ -36,11 +40,14 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --create-home --home-dir /app neogate \
-    && mkdir -p /app-config \
-    && chown neogate:neogate /app-config
+    && mkdir -p /app/neogate /app-config /var/log/neogate \
+    && chown neogate:neogate /app/neogate /app-config /var/log/neogate
 
-WORKDIR /app
-COPY --from=builder /app/backend/target/release/neogate /usr/local/bin/neogate
+WORKDIR /app/neogate
+COPY --from=builder /app/neogate/target/release/neogate /usr/local/bin/neogate
+COPY --from=builder /app/neogate/target/release/neogate-scheduler /usr/local/bin/neogate-scheduler
+COPY --from=builder /app/neogate/deploy/systemd/start-neogate.sh /usr/local/bin/start-neogate
+RUN chmod +x /usr/local/bin/start-neogate
 
 VOLUME ["/app-config"]
 USER neogate

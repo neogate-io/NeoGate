@@ -675,7 +675,6 @@ fn load_dotenv() {
         dotenvy::from_path(path).ok();
     }
     dotenvy::from_filename(".env").ok();
-    dotenvy::from_filename("../.env").ok();
 }
 
 #[cfg(test)]

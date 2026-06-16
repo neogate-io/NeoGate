@@ -45,6 +45,10 @@ services:
       - SITE_NAME=${SITE_NAME:-NeoGate}
       - USAGE_QUEUE_SIZE=${USAGE_QUEUE_SIZE:-32768}
       - USAGE_FLUSH_INTERVAL_MS=${USAGE_FLUSH_INTERVAL_MS:-200}
+      - NEOGATE_BIN=/usr/local/bin/neogate
+      - NEOGATE_SCHEDULER_BIN=/usr/local/bin/neogate-scheduler
+      - NEOGATE_SCHEDULER_LOG_STDOUT=1
+    command: ["/usr/local/bin/start-neogate"]
     volumes:
       - backend-config:/app-config
     expose:

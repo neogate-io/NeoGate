@@ -114,7 +114,7 @@ Use this PostgreSQL connection URL in the bootstrap wizard:
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The bootstrap page writes the database connection, site settings, and random secrets. You usually do not need to edit `backend/.env` manually first.
+On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The bootstrap page writes the database connection, site settings, and random secrets. You usually do not need to edit `.env` manually first.
 
 ### Development Mode
 

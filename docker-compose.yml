@@ -29,9 +29,6 @@ services:
       - BIND_ADDR=0.0.0.0:8080
       - DATABASE_URL=postgres://${POSTGRES_USER:-neogate}:${POSTGRES_PASSWORD:-neogate-change-me}@postgres:5432/${POSTGRES_DB:-neogate}
       - NEOGATE_ENV_FILE=/app-config/.env
-      # Optional. Set PUBLIC_BASE_URL in the host environment or project .env
-      # to force a canonical URL; when absent, /install infers it from request headers.
-      - PUBLIC_BASE_URL
       - RUNTIME_MODE=standalone
       - SITE_NAME=${SITE_NAME:-NeoGate}
       - USAGE_QUEUE_SIZE=${USAGE_QUEUE_SIZE:-32768}

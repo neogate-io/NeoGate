@@ -17,7 +17,8 @@ $ErrorActionPreference = 'Stop'
 try {
   Add-Type -AssemblyName System.Net.Http
 } catch {
-  throw "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)"
+  Write-Host "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)" -ForegroundColor Red
+  exit 1
 }
 
 $AppName = 'NeoGate'
@@ -84,7 +85,8 @@ function Warn([string]$Text) {
 }
 
 function Fail([string]$Text) {
-  throw $Text
+  Write-Host $Text -ForegroundColor Red
+  exit 1
 }
 
 function Confirm-DefaultYes([string]$Prompt) {

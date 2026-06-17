@@ -646,10 +646,6 @@ CREATE INDEX idx_task_upstream_stale_held
     WHERE terminal = TRUE
       AND billing_status = 'held'
       AND usage_summary = '{}'::JSONB;
-CREATE INDEX idx_task_upstream_held_billing_hold
-    ON task_upstream USING GIN (billing_hold jsonb_path_ops)
-    WHERE billing_status = 'held'
-      AND billing_hold IS NOT NULL;
 
 INSERT INTO provider_model (provider, model, display_name, source, enabled)
 SELECT provider.code, model, model, 'seed', FALSE

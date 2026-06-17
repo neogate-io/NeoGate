@@ -9,17 +9,17 @@ use sqlx::Row;
 use zip::ZipArchive;
 
 use crate::{
-    AppState,
     error::{AppError, AppResult},
     id::DbId,
+    AppState,
 };
 
 use super::openai::{
-    OPENAI_PROVIDER, credential_refresh_token, detect_openai_credential, refresh_openai_quota,
-    refresh_openai_token, update_token_value,
+    credential_refresh_token, detect_openai_credential, refresh_openai_quota, refresh_openai_token,
+    update_token_value, OPENAI_PROVIDER,
 };
 pub use super::openai::{
-    OpenAiRuntimeCredential, openai_runtime_credential, openai_runtime_secret,
+    openai_runtime_credential, openai_runtime_secret, OpenAiRuntimeCredential,
 };
 
 #[derive(Debug, Clone, Serialize)]

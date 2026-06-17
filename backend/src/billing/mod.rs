@@ -821,7 +821,7 @@ async fn fetch_stale_allocations(
                    COALESCE(b.payload->'billing'->'parts', '[]'::jsonb) ||
                    COALESCE(b.payload->'billing'->'returned_parts', '[]'::jsonb)
                ) part
-               WHERE b.status = 'pending'
+               WHERE b.status IN ('pending', 'failed')
                  AND part->>'allocation_id' = credit_allocation.id::TEXT
            )
            AND NOT EXISTS (

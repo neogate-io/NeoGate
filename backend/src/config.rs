@@ -1,9 +1,4 @@
-use std::{
-    env,
-    net::SocketAddr,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 

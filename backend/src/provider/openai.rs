@@ -55,6 +55,14 @@ pub(crate) async fn openai_chat_completions(
     auth: UserAuth,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
+    openai_chat_completion_response(state, auth, body).await
+}
+
+pub(crate) async fn openai_chat_completion_response(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    body: Bytes,
+) -> AppResult<Response> {
     relay_openai(
         state,
         auth,

@@ -29,7 +29,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    admin, auth,
+    admin, apps, auth,
     billing::{outbox::BillingOutbox, Billing},
     cache,
     config::{Config, RuntimeProbe, DEFAULT_RELAY_BODY_LIMIT_BYTES},
@@ -585,6 +585,7 @@ fn router(state: Arc<AppState>) -> Router {
         .merge(payment::router())
         .merge(policy::router())
         .merge(admin::public_router())
+        .merge(apps::router())
         .merge(relay::router())
         .with_state(state)
 }

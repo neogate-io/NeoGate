@@ -465,6 +465,57 @@ impl UserAuth {
     }
 }
 
+pub(crate) async fn user_auth_for_key_id(
+    state: &AppState,
+    user_key_id: DbId,
+) -> AppResult<UserAuth> {
+    let row = sqlx::query(
+        r#"
+        SELECT uk.id AS user_key_id, uk.user_id, uk.project_id, uk.status AS key_status,
+               p.status AS project_status,
+               uk.expires_at, uk.model_limits, u.status AS user_status,
+               pw.id AS project_credit_account_id, ukw.id AS user_key_credit_account_id,
+               ug.code AS user_group
+        FROM user_key uk
+        JOIN "user" u ON u.id = uk.user_id
+        JOIN project p ON p.id = uk.project_id
+        JOIN user_group ug ON ug.id = u.user_group_id
+        JOIN credit_account pw ON pw.owner_type = 'project' AND pw.owner_id = p.id
+        JOIN credit_account ukw ON ukw.owner_type = 'user_key' AND ukw.owner_id = uk.id
+        WHERE uk.id = $1
+        "#,
+    )
+    .bind(user_key_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let user_status: String = row.try_get("user_status")?;
+    let key_status: String = row.try_get("key_status")?;
+    let project_status: String = row.try_get("project_status")?;
+    if user_status != "enabled" || project_status != "enabled" || key_status != "enabled" {
+        return Err(AppError::Forbidden);
+    }
+    let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
+    if expires_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+
+    Ok(UserAuth {
+        user_id: row.try_get("user_id")?,
+        project_id: row.try_get("project_id")?,
+        user_key_id,
+        project_credit_account: CreditAccountId::new(row.try_get("project_credit_account_id")?),
+        user_key_credit_account: CreditAccountId::new(row.try_get("user_key_credit_account_id")?),
+        user_key_model_credit_accounts: fetch_user_key_model_credit_accounts(state, user_key_id)
+            .await?,
+        user_group: row.try_get("user_group")?,
+        model_limits: row
+            .try_get::<Option<Vec<String>>, _>("model_limits")?
+            .map(Arc::new),
+    })
+}
+
 async fn fetch_user_key_model_credit_accounts(
     state: &AppState,
     user_key_id: DbId,

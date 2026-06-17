@@ -98,6 +98,12 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/admin/channels' },
         {
+          path: 'apps',
+          name: 'apps',
+          component: () => import('../views/admin/AppsView.vue'),
+          meta: { messageKey: 'apps', subtitleKey: 'adminAppsSubtitle' }
+        },
+        {
           path: 'credentials',
           name: 'credentials',
           component: () => import('../views/admin/CredentialsView.vue'),

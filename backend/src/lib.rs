@@ -1,5 +1,6 @@
 mod admin;
 mod app;
+mod apps;
 mod auth;
 mod billing;
 mod config;

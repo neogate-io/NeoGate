@@ -343,6 +343,70 @@ export type PaymentSetting = {
   updated_at?: string | null
 }
 
+export type AppType = 'wecom' | 'webhook' | 'widget' | 'feishu' | 'dingtalk'
+export type AppStatus = 'enabled' | 'disabled'
+export type AppEndpointType = 'wecom' | 'webhook' | 'widget'
+
+export type AppEndpoint = {
+  id: number
+  app_id: number
+  endpoint_type: AppEndpointType
+  name: string
+  enabled: boolean
+  config: Record<string, unknown>
+  secrets_set: string[]
+  callback_url?: string | null
+  invoke_url?: string | null
+  widget_script_url?: string | null
+  last_active_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AppRecord = {
+  id: number
+  name: string
+  description: string
+  app_type: AppType
+  status: AppStatus
+  model: string
+  system_prompt: string
+  context_turns: number
+  max_output_tokens: number
+  user_key_id: number
+  user_key_name: string
+  project_id: number
+  project_name: string
+  endpoint?: AppEndpoint | null
+  today_message_count: number
+  today_cost_micro_usd: number
+  last_active_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AppRunLog = {
+  id: number
+  app_id?: number | null
+  endpoint_id?: number | null
+  conversation_id?: number | null
+  external_user_id?: string | null
+  external_conversation_id?: string | null
+  external_message_id?: string | null
+  trace_id?: string | null
+  app_type: AppType | string
+  model?: string | null
+  status: 'success' | 'failed' | 'duplicate' | 'ignored'
+  status_code?: number | null
+  latency_ms: number
+  input_tokens?: number | null
+  output_tokens?: number | null
+  total_tokens?: number | null
+  cost_micro_usd?: number | null
+  error_summary?: string | null
+  created_at: string
+}
+
 export type CredentialQuotaWindow = {
   percent?: number | null
   used?: number | null

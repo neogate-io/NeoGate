@@ -1,3 +1,4 @@
+pub(crate) mod apps;
 pub(crate) mod channel;
 pub(crate) mod credentials;
 pub(crate) mod diagnostics;
@@ -89,6 +90,7 @@ pub use user::public_router;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(apps::router())
         .route("/api/admin/users", get(users).post(create_user_handler))
         .route("/api/admin/user-groups", get(user_groups))
         .route(

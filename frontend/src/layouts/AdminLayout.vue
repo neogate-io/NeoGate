@@ -7,6 +7,7 @@ import {
   Key,
   Menu,
   Monitor,
+  Promotion,
   Setting,
   SwitchButton,
   User
@@ -32,6 +33,7 @@ const navGroups = [
     key: 'adminNavOperations',
     items: [
       { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
+      { path: '/admin/apps', key: 'apps', icon: Promotion },
       { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
       { path: '/admin/usage', key: 'usage', icon: Monitor }
     ]

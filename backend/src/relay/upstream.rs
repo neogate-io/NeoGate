@@ -90,7 +90,10 @@ async fn forward_openai_oauth(
     };
     drop(response);
     let refreshed = refresh_openai_runtime_credential(state, credential_id).await?;
-    state.selector.invalidate().await;
+    state
+        .selector
+        .invalidate_refreshed_credential(credential_id)
+        .await;
     let refreshed_account_id = refreshed.account_id.as_deref().unwrap_or(account_id);
     let refreshed_upstream = SelectedUpstream {
         secret: refreshed.access_token,

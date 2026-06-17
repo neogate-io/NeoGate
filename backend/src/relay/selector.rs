@@ -204,6 +204,14 @@ impl Selector {
         self.model_blocks.clear_expired(Utc::now());
     }
 
+    pub async fn invalidate_refreshed_credential(&self, credential_id: DbId) {
+        self.credential_runtime_secrets.remove(credential_id);
+        let mut cache = self.routing_cache.write().await;
+        let mut next = (**cache).clone();
+        next.loaded_at = None;
+        *cache = Arc::new(next);
+    }
+
     pub async fn select(
         &self,
         pool: &PgPool,
@@ -451,6 +459,13 @@ impl RuntimeSecretCache {
             .expect("credential runtime secret cache poisoned")
             .clear();
     }
+
+    fn remove(&self, credential_id: DbId) {
+        self.entries
+            .write()
+            .expect("credential runtime secret cache poisoned")
+            .remove(&credential_id);
+    }
 }
 
 impl ModelBlockCache {
@@ -542,25 +557,47 @@ fn build_route_indexes(channels: &[ChannelCandidate]) -> (RouteIndex, WildcardRo
 async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandidate>> {
     let rows = sqlx::query(
         "SELECT c.id, ce.id AS endpoint_id, ce.protocol, c.provider, c.name,
-                ce.base_url, array_agg(cm.model ORDER BY cm.model ASC) AS models,
+                ce.base_url,
+                COALESCE(
+                    array_agg(cm.model ORDER BY cm.model ASC)
+                        FILTER (WHERE cm.model IS NOT NULL),
+                    ARRAY[]::TEXT[]
+                ) AS models,
                 c.priority, c.weight, c.key_selection_mode, ce.cooldown_until, c.use_credentials
          FROM channel c
          JOIN provider p ON p.code = c.provider
          JOIN channel_endpoint ce ON ce.channel_id = c.id
-         JOIN channel_model cm ON cm.channel_id = c.id
-         JOIN provider_price pp
-           ON pp.provider = c.provider
-          AND pp.model = cm.model
-          AND pp.enabled = TRUE
+         LEFT JOIN channel_model cm
+           ON cm.channel_id = c.id
+          AND EXISTS (
+              SELECT 1
+              FROM unnest(ce.models) AS endpoint_model(model)
+              WHERE btrim(endpoint_model.model) = cm.model
+          )
+          AND cm.enabled = TRUE
+          AND cm.status = 'available'
+          AND (
+              cm.runtime_status = 'normal'
+              OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM provider_price pp
+              WHERE pp.provider = c.provider
+                AND pp.model = cm.model
+                AND pp.enabled = TRUE
+          )
          WHERE p.enabled = TRUE
            AND c.enabled = TRUE
            AND ce.enabled = TRUE
            AND ce.healthy = TRUE
-           AND cm.enabled = TRUE
-           AND cm.status = 'available'
            AND (
-               cm.runtime_status = 'normal'
-               OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+               cm.id IS NOT NULL
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM unnest(ce.models) AS endpoint_model(model)
+                   WHERE btrim(endpoint_model.model) <> ''
+               )
            )
            AND (
                (
@@ -1085,6 +1122,70 @@ mod tests {
         let channel = candidate("strict", 0, 1, vec!["gpt-4.1"]);
         assert!(channel_matches_model(&channel, "gpt-4.1"));
         assert!(!channel_matches_model(&channel, "gpt-4o-mini"));
+    }
+
+    #[test]
+    fn route_indexes_keep_wildcard_channels_reachable() {
+        let wildcard = candidate("any", 0, 1, vec![]);
+        let strict = candidate("strict", 0, 1, vec!["gpt-4.1"]);
+        let (route_index, wildcard_index) = build_route_indexes(&[wildcard, strict]);
+
+        assert_eq!(
+            wildcard_index
+                .get(&UpstreamProtocol::Openai)
+                .expect("wildcard protocol entry"),
+            &[0]
+        );
+        assert_eq!(
+            route_index
+                .get(&UpstreamProtocol::Openai)
+                .and_then(|models| models.get("gpt-4.1"))
+                .expect("strict model entry"),
+            &[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshed_credential_invalidation_is_targeted_and_stales_routing_cache() {
+        let selector = Selector::with_cache_ttl(Duration::from_secs(30));
+        {
+            let mut cache = selector.routing_cache.write().await;
+            let mut routing = RoutingCache::default();
+            routing.loaded_at = Some(Instant::now());
+            *cache = Arc::new(routing);
+        }
+        selector.credential_runtime_secrets.insert(
+            1,
+            CachedRuntimeSecret {
+                ciphertext: "cipher-1".to_string(),
+                secret: "secret-1".to_string(),
+                account_id: Some("acct-1".to_string()),
+            },
+        );
+        selector.credential_runtime_secrets.insert(
+            2,
+            CachedRuntimeSecret {
+                ciphertext: "cipher-2".to_string(),
+                secret: "secret-2".to_string(),
+                account_id: Some("acct-2".to_string()),
+            },
+        );
+
+        selector.invalidate_refreshed_credential(1).await;
+
+        assert!(selector
+            .credential_runtime_secrets
+            .get(1, "cipher-1")
+            .is_none());
+        assert_eq!(
+            selector
+                .credential_runtime_secrets
+                .get(2, "cipher-2")
+                .expect("untouched credential")
+                .secret,
+            "secret-2"
+        );
+        assert!(selector.routing_cache.read().await.loaded_at.is_none());
     }
 
     #[test]

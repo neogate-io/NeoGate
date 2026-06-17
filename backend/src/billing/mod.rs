@@ -824,6 +824,17 @@ async fn fetch_stale_allocations(
                WHERE b.status = 'pending'
                  AND part->>'allocation_id' = credit_allocation.id::TEXT
            )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM task_upstream task
+               WHERE task.billing_status = 'held'
+                 AND task.billing_hold @> jsonb_build_object(
+                     'parts',
+                     jsonb_build_array(
+                         jsonb_build_object('allocation_id', credit_allocation.id)
+                     )
+                 )
+           )
          ORDER BY id ASC
          LIMIT 500",
     )

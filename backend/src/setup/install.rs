@@ -246,6 +246,9 @@ mod tests {
 
         assert!(script.contains("$DefaultBaseUrl = 'https://dev.moligate.com/v1'"));
         assert!(script.contains("irm https://dev.moligate.com/install.ps1 | iex"));
+        assert!(!script
+            .lines()
+            .any(|line| line.trim_start().starts_with("exit")));
         assert!(!script.contains("__NEOGATE_DEFAULT_BASE_URL__"));
         assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
     }

@@ -2,6 +2,7 @@
 #
 # 使用方式：
 #   docker compose -f docker-compose.cn.yml up -d --build
+#   DOCKER_HUB_PREFIX=docker.m.daocloud.io/ docker compose -f docker-compose.cn.yml up -d --build
 #
 # 所有镜像和依赖源已预配置为国内镜像，无需额外配置 .env 或 Docker daemon。
 # 海外部署请使用 docker-compose.yml。
@@ -11,7 +12,7 @@
 
 services:
   postgres:
-    image: docker.1ms.run/library/postgres:16-alpine
+    image: ${DOCKER_HUB_PREFIX:-docker.1panel.live/}library/postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-neogate}
       POSTGRES_USER: ${POSTGRES_USER:-neogate}
@@ -29,7 +30,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       args:
-        DOCKER_HUB_PREFIX: docker.1ms.run/
+        DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.1panel.live/}
         CARGO_REGISTRY_MIRROR: sparse+https://rsproxy.cn/index/
         APT_MIRROR: http://mirrors.tuna.tsinghua.edu.cn/debian
     restart: unless-stopped
@@ -40,7 +41,6 @@ services:
       - BIND_ADDR=0.0.0.0:8080
       - DATABASE_URL=postgres://${POSTGRES_USER:-neogate}:${POSTGRES_PASSWORD:-neogate-change-me}@postgres:5432/${POSTGRES_DB:-neogate}
       - NEOGATE_ENV_FILE=/app-config/.env
-      - PUBLIC_BASE_URL
       - RUNTIME_MODE=standalone
       - SITE_NAME=${SITE_NAME:-NeoGate}
       - USAGE_QUEUE_SIZE=${USAGE_QUEUE_SIZE:-32768}
@@ -64,7 +64,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        DOCKER_HUB_PREFIX: docker.1ms.run/
+        DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.1panel.live/}
         NPM_REGISTRY: https://registry.npmmirror.com
     restart: unless-stopped
     depends_on:

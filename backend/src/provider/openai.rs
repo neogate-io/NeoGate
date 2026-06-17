@@ -29,7 +29,7 @@ use crate::{
         log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
         record_upstream_http_failure, release_empty_hold, reserve_credit,
         respond_upstream_http_failure,
-        selector::{SelectedUpstream, UpstreamProtocol},
+        selector::{ModelCooldown, SelectedUpstream, UpstreamProtocol},
         task_status_from_value, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
     },
 };
@@ -1094,9 +1094,11 @@ async fn mark_credential_model_unavailable(
             &ctx.upstream,
             ctx.protocol,
             &ctx.model,
-            unavailable_until,
-            &failure.summary,
-            status.as_u16() as i32,
+            ModelCooldown {
+                unavailable_until,
+                last_error: &failure.summary,
+                last_status_code: status.as_u16() as i32,
+            },
         )
         .await?;
     if !blocked {

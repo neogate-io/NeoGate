@@ -28,6 +28,7 @@ use crate::{
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
+    pagination::{created_id_cursor_page, parse_created_id_cursor},
     AppState,
 };
 
@@ -1274,9 +1275,10 @@ async fn usage(
         Some("failed") => Some("failed"),
         _ => None,
     };
-    let (cursor_created_at, cursor_id) = parse_usage_cursor(params.cursor.as_deref())?
-        .map(|cursor| (Some(cursor.0), Some(cursor.1)))
-        .unwrap_or((None, None));
+    let (cursor_created_at, cursor_id) =
+        parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
+            .map(|cursor| (Some(cursor.0), Some(cursor.1)))
+            .unwrap_or((None, None));
     let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
     let query_pattern = query_pattern.as_deref();
     let rows = sqlx::query(
@@ -1320,13 +1322,7 @@ async fn usage(
     .bind(limit + 1)
     .fetch_all(&state.db.pool)
     .await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(usage_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
     Ok(Json(UsagePage {
         items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
         total: rows.len() as i64,
@@ -1335,28 +1331,6 @@ async fn usage(
         next_cursor,
         has_more,
     }))
-}
-
-fn parse_usage_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some((created_at, id)) = cursor.rsplit_once('|') else {
-        return Err(AppError::BadRequest("invalid usage cursor".to_string()));
-    };
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .map_err(|_| AppError::BadRequest("invalid usage cursor".to_string()))?
-        .with_timezone(&Utc);
-    let id = id
-        .parse::<DbId>()
-        .map_err(|_| AppError::BadRequest("invalid usage cursor".to_string()))?;
-    Ok(Some((created_at, id)))
-}
-
-fn usage_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
-    let created_at: DateTime<Utc> = row.try_get("created_at")?;
-    let id: DbId = row.try_get("id")?;
-    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppResult<Json<Value>> {

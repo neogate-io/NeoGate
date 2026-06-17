@@ -42,18 +42,13 @@ const ASSET_URL_TTL_SECONDS: u64 = 3600;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum NeogateImageResponseFormat {
+    #[default]
     Base64,
     Url,
     Both,
-}
-
-impl Default for NeogateImageResponseFormat {
-    fn default() -> Self {
-        Self::Base64
-    }
 }
 
 impl NeogateImageResponseFormat {
@@ -685,8 +680,7 @@ fn signed_asset_url(state: &AppState, response_id: &str, index: usize) -> String
         .response_assets
         .retention
         .as_secs()
-        .min(ASSET_URL_TTL_SECONDS)
-        .max(1);
+        .clamp(1, ASSET_URL_TTL_SECONDS);
     let expires = Utc::now().timestamp() + ttl as i64;
     let sig = asset_signature(state, response_id, index, expires);
     let path = format!("/v1/responses/{response_id}/assets/{index}?expires={expires}&sig={sig}");

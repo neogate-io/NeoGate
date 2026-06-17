@@ -16,7 +16,7 @@ mod usage;
 mod user;
 
 pub use app::AppState;
-pub use core::{cache, db, email, error, id, secrets};
+pub use core::{cache, db, email, error, id, pagination, secrets};
 
 pub async fn run() -> anyhow::Result<()> {
     app::run().await

@@ -608,7 +608,6 @@ fn default_env_file() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn runtime_mode_accepts_known_values_case_insensitively() {
@@ -638,13 +637,5 @@ mod tests {
             ProcessRole::Worker
         );
         assert!(ProcessRole::from_env_value("scheduler").is_err());
-    }
-
-    fn test_dir(name: &str) -> PathBuf {
-        let mut path = env::temp_dir();
-        path.push(format!("neogate-config-test-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        path
     }
 }

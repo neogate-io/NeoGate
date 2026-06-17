@@ -120,6 +120,12 @@ pub struct SelectedUpstream {
     pub account_id: Option<String>,
 }
 
+pub struct ModelCooldown<'a> {
+    pub unavailable_until: DateTime<Utc>,
+    pub last_error: &'a str,
+    pub last_status_code: i32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChannelCandidate {
     pub id: DbId,
@@ -294,9 +300,7 @@ impl Selector {
         upstream: &SelectedUpstream,
         protocol: UpstreamProtocol,
         model: &str,
-        unavailable_until: DateTime<Utc>,
-        last_error: &str,
-        last_status_code: i32,
+        cooldown: ModelCooldown<'_>,
     ) -> AppResult<bool> {
         if !self
             .has_alternate_channel_for_model(pool, protocol, model)
@@ -304,7 +308,7 @@ impl Selector {
         {
             return Ok(false);
         }
-        self.mark_model_unavailable_local(upstream, protocol, model, unavailable_until)
+        self.mark_model_unavailable_local(upstream, protocol, model, cooldown.unavailable_until)
             .await;
         sqlx::query(
             "UPDATE channel_model
@@ -319,9 +323,9 @@ impl Selector {
         )
         .bind(upstream.channel_id)
         .bind(model)
-        .bind(unavailable_until)
-        .bind(last_error.chars().take(500).collect::<String>())
-        .bind(last_status_code)
+        .bind(cooldown.unavailable_until)
+        .bind(cooldown.last_error.chars().take(500).collect::<String>())
+        .bind(cooldown.last_status_code)
         .execute(pool)
         .await?;
         Ok(true)
@@ -1150,8 +1154,10 @@ mod tests {
         let selector = Selector::with_cache_ttl(Duration::from_secs(30));
         {
             let mut cache = selector.routing_cache.write().await;
-            let mut routing = RoutingCache::default();
-            routing.loaded_at = Some(Instant::now());
+            let routing = RoutingCache {
+                loaded_at: Some(Instant::now()),
+                ..Default::default()
+            };
             *cache = Arc::new(routing);
         }
         selector.credential_runtime_secrets.insert(

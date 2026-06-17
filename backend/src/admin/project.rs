@@ -7,6 +7,7 @@ use crate::{
     billing::{account, CreditAccountId, CreditAccountType, DebitPart},
     error::{AppError, AppResult},
     id::DbId,
+    pagination::{created_id_cursor_page, parse_created_id_cursor},
     AppState,
 };
 
@@ -105,7 +106,7 @@ fn default_enabled_status() -> String {
 
 pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppResult<ProjectPage> {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
-    let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
+    let cursor = parse_created_id_cursor(query.cursor.as_deref(), "invalid cursor")?;
     let search = query
         .search
         .as_deref()
@@ -212,13 +213,7 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
         );
 
     let rows = query_builder.build().fetch_all(&state.db.pool).await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(created_id_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
 
     Ok(ProjectPage {
         items: rows
@@ -834,28 +829,6 @@ async fn recover_hot_credit_in_tx(
     }
 
     Ok(())
-}
-
-fn parse_created_id_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some((created_at, id)) = cursor.rsplit_once('|') else {
-        return Err(AppError::BadRequest("invalid cursor".to_string()));
-    };
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?
-        .with_timezone(&Utc);
-    let id = id
-        .parse::<DbId>()
-        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?;
-    Ok(Some((created_at, id)))
-}
-
-fn created_id_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
-    let created_at: DateTime<Utc> = row.try_get("created_at")?;
-    let id: DbId = row.try_get("id")?;
-    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 fn validate_project_status(status: &str) -> AppResult<()> {

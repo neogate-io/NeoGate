@@ -408,9 +408,9 @@ async fn diagnose_key(
     let probe_models: Vec<_> = endpoint
         .models
         .iter()
+        .filter(|&model| is_text_probe_model(model))
+        .filter(|&model| discovered_models.is_empty() || discovered_models.contains(model))
         .cloned()
-        .filter(|model| is_text_probe_model(model))
-        .filter(|model| discovered_models.is_empty() || discovered_models.contains(model))
         .collect();
     if !probe_models.is_empty() {
         for model in probe_models {

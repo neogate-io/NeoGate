@@ -273,11 +273,12 @@ void bootstrap()
       <div class="admin-page-toolbar-actions">
         <el-button
           class="admin-action-button"
+          type="primary"
           :icon="Upload"
           :loading="uploading"
           @click="openCredentialUpload"
         >
-          {{ t('upload') }}
+          {{ t('credentialUploadFile') }}
         </el-button>
         <el-button
           class="admin-action-button"

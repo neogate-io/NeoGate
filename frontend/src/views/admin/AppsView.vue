@@ -4,13 +4,10 @@ import {
   ChatDotRound,
   Connection,
   Delete,
-  Edit,
   Link,
   Plus,
   Promotion,
   Refresh,
-  Search,
-  Select,
   SwitchButton,
   View
 } from '@element-plus/icons-vue'
@@ -24,6 +21,7 @@ import {
   updateApp,
   type CreateAppInput
 } from '../../api/apps'
+import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { getUserKeys } from '../../api/userKeys'
 import { useLocale } from '../../composables/useLocale'
 import type { AppRecord, AppRunLog, AppType, UserKey } from '../../types/admin'
@@ -43,16 +41,13 @@ const createOpen = ref(false)
 const detailOpen = ref(false)
 const activeDetailTab = ref('overview')
 const selectedApp = ref<AppRecord | null>(null)
-const search = ref('')
-const statusFilter = ref('')
-const typeFilter = ref('')
 
 const appTypes = [
   { type: 'wecom', label: '企业微信应用', icon: ChatDotRound, enabled: true },
-  { type: 'webhook', label: 'Webhook 应用', icon: Link, enabled: true },
-  { type: 'widget', label: '网页组件应用', icon: Connection, enabled: true },
   { type: 'feishu', label: '飞书应用', icon: Promotion, enabled: false },
-  { type: 'dingtalk', label: '钉钉应用', icon: Promotion, enabled: false }
+  { type: 'dingtalk', label: '钉钉应用', icon: Promotion, enabled: false },
+  { type: 'webhook', label: 'Webhook 应用', icon: Link, enabled: true },
+  { type: 'widget', label: '网页组件应用', icon: Connection, enabled: true }
 ] as const
 
 const form = reactive({
@@ -194,10 +189,7 @@ function payload(): CreateAppInput {
 async function load() {
   loading.value = true
   try {
-    const [nextApps, keyPage] = await Promise.all([
-      getApps({ search: search.value, status: statusFilter.value, appType: typeFilter.value }),
-      getUserKeys({ limit: 200 })
-    ])
+    const [nextApps, keyPage] = await Promise.all([getApps(), getUserKeys({ limit: 200 })])
     apps.value = nextApps
     userKeys.value = keyPage.items
     if (!form.userKeyId) form.userKeyId = userKeys.value[0]?.id ?? 0
@@ -291,44 +283,21 @@ onMounted(load)
 </script>
 
 <template>
-  <section v-loading="loading" class="apps-view">
-    <div class="apps-toolbar">
-      <div class="apps-toolbar-filters">
-        <el-input
-          v-model="search"
-          clearable
-          class="apps-search-input"
-          :prefix-icon="Search"
-          placeholder="搜索应用名称或描述"
-          @keyup.enter="load"
-          @clear="load"
-        />
-        <el-select v-model="statusFilter" clearable placeholder="全部状态" @change="load">
-          <el-option label="已启用" value="enabled" />
-          <el-option label="已禁用" value="disabled" />
-        </el-select>
-        <el-select v-model="typeFilter" clearable placeholder="全部类型" @change="load">
-          <el-option
-            v-for="item in appTypes"
-            :key="item.type"
-            :label="item.label"
-            :value="item.type"
-          />
-        </el-select>
-      </div>
-      <div class="apps-toolbar-actions">
-        <el-button class="admin-action-button" :icon="Refresh" @click="load">刷新</el-button>
+  <section class="grid apps-view">
+    <div class="table-toolbar admin-page-toolbar apps-toolbar">
+      <div class="admin-page-toolbar-actions">
         <el-button class="admin-action-button" type="primary" :icon="Plus" @click="openCreate">
           新建应用
         </el-button>
       </div>
     </div>
 
-    <el-empty v-if="filteredApps.length === 0" description="暂无应用">
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建应用</el-button>
-    </el-empty>
+    <div v-loading="loading" class="apps-grid">
+      <div v-if="!loading && filteredApps.length === 0" class="apps-empty">
+        <el-icon><Promotion /></el-icon>
+        <p>暂无应用</p>
+      </div>
 
-    <div v-else class="apps-grid">
       <article v-for="app in filteredApps" :key="app.id" class="app-card">
         <header class="app-card-header">
           <span class="app-type-icon">
@@ -368,20 +337,35 @@ onMounted(load)
           </div>
         </dl>
         <footer class="app-card-actions">
-          <el-button class="admin-action-button" :icon="View" @click="openDetail(app)">
-            详情
-          </el-button>
-          <el-button class="admin-action-button" :icon="SwitchButton" @click="toggleApp(app)">
-            {{ app.status === 'enabled' ? '禁用' : '启用' }}
-          </el-button>
-          <el-button class="admin-action-button" :icon="Delete" @click="removeApp(app)">
-            删除
-          </el-button>
+          <span class="app-updated-at">
+            更新 {{ formatCompactDateTime(app.updated_at) }}
+          </span>
+          <div class="app-actions">
+            <AdminActionTooltip content="详情">
+              <el-button circle class="app-icon-button" :icon="View" @click="openDetail(app)" />
+            </AdminActionTooltip>
+            <AdminActionTooltip :content="app.status === 'enabled' ? '禁用' : '启用'">
+              <el-button
+                circle
+                class="app-icon-button"
+                :icon="SwitchButton"
+                @click="toggleApp(app)"
+              />
+            </AdminActionTooltip>
+            <AdminActionTooltip content="删除">
+              <el-button
+                circle
+                class="app-icon-button is-danger"
+                :icon="Delete"
+                @click="removeApp(app)"
+              />
+            </AdminActionTooltip>
+          </div>
         </footer>
       </article>
     </div>
 
-    <el-dialog v-model="createOpen" title="新建应用" width="860px">
+    <el-dialog v-model="createOpen" class="app-dialog" title="新建应用" width="680px">
       <div v-if="form.step === 1" class="app-type-grid">
         <button
           v-for="item in appTypes"
@@ -398,119 +382,127 @@ onMounted(load)
       </div>
 
       <el-form v-else class="app-create-form" label-position="top" @submit.prevent="submitCreate">
-        <section class="admin-settings-section">
-          <header class="admin-settings-section-header">
-            <el-icon><Edit /></el-icon>
-            <h3>基础信息</h3>
-          </header>
-          <div class="admin-settings-grid app-form-grid">
-            <el-form-item label="应用名称">
-              <el-input v-model="form.name" placeholder="例如 研发知识助手" />
+        <div class="app-provider-row">
+          <el-form-item class="app-type-field" label="应用类型">
+            <el-select v-model="form.appType" disabled>
+              <template #prefix>
+                <el-icon><component :is="typeMeta(form.appType).icon" /></el-icon>
+              </template>
+              <el-option
+                v-for="item in appTypes"
+                :key="item.type"
+                :label="item.label"
+                :value="item.type"
+              />
+            </el-select>
+          </el-form-item>
+
+          <label class="app-status-toggle">
+            <span>状态</span>
+            <el-switch v-model="form.status" active-value="enabled" inactive-value="disabled" />
+          </label>
+        </div>
+
+        <el-form-item class="app-name-field" label="应用名称">
+          <el-input v-model="form.name" placeholder="例如 研发知识助手" />
+        </el-form-item>
+
+        <el-form-item label="描述">
+          <el-input v-model="form.description" type="textarea" :rows="2" />
+        </el-form-item>
+
+        <div class="app-form-grid">
+          <el-form-item label="默认模型">
+            <el-input v-model="form.model" placeholder="例如 gpt-4.1 或 qwen-plus" />
+          </el-form-item>
+          <el-form-item label="绑定 API Key">
+            <el-select v-model="form.userKeyId" filterable placeholder="选择 API Key">
+              <el-option
+                v-for="key in userKeys"
+                :key="key.id"
+                :label="`${key.name} · ${key.project_name} · ${key.key_prefix}`"
+                :value="key.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="上下文轮数">
+            <el-input-number v-model="form.contextTurns" :min="0" :max="50" />
+          </el-form-item>
+          <el-form-item label="最大输出 Token">
+            <el-input-number v-model="form.maxOutputTokens" :min="1" :max="128000" />
+          </el-form-item>
+        </div>
+
+        <el-form-item label="系统提示词">
+          <el-input v-model="form.systemPrompt" type="textarea" :rows="3" />
+        </el-form-item>
+
+        <div class="app-form-divider">接入配置</div>
+
+        <el-form-item label="入口名称">
+          <el-input v-model="form.endpointName" placeholder="默认使用应用名称" />
+        </el-form-item>
+
+        <template v-if="form.appType === 'wecom'">
+          <div class="app-form-grid">
+            <el-form-item label="企业 ID CorpID">
+              <el-input v-model="form.corpId" />
             </el-form-item>
-            <el-form-item label="启用状态">
-              <el-switch v-model="form.status" active-value="enabled" inactive-value="disabled" />
+            <el-form-item label="应用 AgentID">
+              <el-input v-model="form.agentId" />
             </el-form-item>
-            <el-form-item class="app-wide-field" label="描述">
-              <el-input v-model="form.description" type="textarea" :rows="2" />
+            <el-form-item label="应用 Secret">
+              <el-input v-model="form.corpSecret" show-password type="password" />
+            </el-form-item>
+            <el-form-item label="回调 Token">
+              <el-input v-model="form.callbackToken" show-password type="password" />
             </el-form-item>
           </div>
-        </section>
+          <el-form-item label="EncodingAESKey">
+            <el-input v-model="form.encodingAesKey" show-password type="password" />
+          </el-form-item>
+        </template>
 
-        <section class="admin-settings-section">
-          <header class="admin-settings-section-header">
-            <el-icon><Connection /></el-icon>
-            <h3>模型与计费</h3>
-          </header>
-          <div class="admin-settings-grid app-form-grid">
-            <el-form-item label="默认模型">
-              <el-input v-model="form.model" placeholder="例如 gpt-4.1 或 qwen-plus" />
+        <template v-if="form.appType === 'webhook'">
+          <el-form-item label="Webhook Secret">
+            <el-input v-model="form.webhookSecret" show-password type="password" />
+          </el-form-item>
+        </template>
+
+        <template v-if="form.appType === 'widget'">
+          <el-form-item label="允许嵌入域名（一行一个）">
+            <el-input v-model="form.allowedDomains" type="textarea" :rows="3" />
+          </el-form-item>
+          <div class="app-form-grid">
+            <el-form-item label="欢迎语">
+              <el-input v-model="form.welcome" />
             </el-form-item>
-            <el-form-item label="绑定 API Key">
-              <el-select v-model="form.userKeyId" filterable placeholder="选择 API Key">
-                <el-option
-                  v-for="key in userKeys"
-                  :key="key.id"
-                  :label="`${key.name} · ${key.project_name} · ${key.key_prefix}`"
-                  :value="key.id"
-                />
-              </el-select>
+            <el-form-item label="主题色">
+              <el-color-picker v-model="form.themeColor" />
             </el-form-item>
-            <el-form-item label="上下文轮数">
-              <el-input-number v-model="form.contextTurns" :min="0" :max="50" />
-            </el-form-item>
-            <el-form-item label="最大输出 Token">
-              <el-input-number v-model="form.maxOutputTokens" :min="1" :max="128000" />
-            </el-form-item>
-            <el-form-item class="app-wide-field" label="系统提示词">
-              <el-input v-model="form.systemPrompt" type="textarea" :rows="3" />
+            <el-form-item label="匿名访问">
+              <el-switch v-model="form.anonymousAccess" />
             </el-form-item>
           </div>
-        </section>
+        </template>
 
-        <section class="admin-settings-section">
-          <header class="admin-settings-section-header">
-            <el-icon><Link /></el-icon>
-            <h3>接入配置</h3>
-          </header>
-          <div class="admin-settings-grid app-form-grid">
-            <el-form-item label="入口名称">
-              <el-input v-model="form.endpointName" placeholder="默认使用应用名称" />
-            </el-form-item>
+        <button class="hidden-submit" type="submit" />
+      </el-form>
 
-            <template v-if="form.appType === 'wecom'">
-              <el-form-item label="企业 ID CorpID">
-                <el-input v-model="form.corpId" />
-              </el-form-item>
-              <el-form-item label="应用 AgentID">
-                <el-input v-model="form.agentId" />
-              </el-form-item>
-              <el-form-item label="应用 Secret">
-                <el-input v-model="form.corpSecret" show-password type="password" />
-              </el-form-item>
-              <el-form-item label="回调 Token">
-                <el-input v-model="form.callbackToken" show-password type="password" />
-              </el-form-item>
-              <el-form-item class="app-wide-field" label="EncodingAESKey">
-                <el-input v-model="form.encodingAesKey" show-password type="password" />
-              </el-form-item>
-            </template>
-
-            <template v-if="form.appType === 'webhook'">
-              <el-form-item class="app-wide-field" label="Webhook Secret">
-                <el-input v-model="form.webhookSecret" show-password type="password" />
-              </el-form-item>
-            </template>
-
-            <template v-if="form.appType === 'widget'">
-              <el-form-item class="app-wide-field" label="允许嵌入域名（一行一个）">
-                <el-input v-model="form.allowedDomains" type="textarea" :rows="3" />
-              </el-form-item>
-              <el-form-item label="欢迎语">
-                <el-input v-model="form.welcome" />
-              </el-form-item>
-              <el-form-item label="主题色">
-                <el-color-picker v-model="form.themeColor" />
-              </el-form-item>
-              <el-form-item label="匿名访问">
-                <el-switch v-model="form.anonymousAccess" />
-              </el-form-item>
-            </template>
-          </div>
-        </section>
-
-        <div class="admin-settings-actions">
-          <el-button class="admin-action-button" @click="form.step = 1">返回</el-button>
+      <template #footer>
+        <div class="app-dialog-footer">
+          <el-button v-if="form.step === 2" @click="form.step = 1">返回</el-button>
+          <el-button @click="createOpen = false">{{ t('cancel') }}</el-button>
           <el-button
-            class="admin-action-button"
-            native-type="submit"
+            v-if="form.step === 2"
             type="primary"
-            :icon="Select"
             :loading="saving"
+            @click="submitCreate"
           >
             创建应用
           </el-button>
         </div>
-      </el-form>
+      </template>
     </el-dialog>
 
     <el-drawer v-model="detailOpen" size="760px" :title="selectedApp?.name || '应用详情'">
@@ -595,42 +587,62 @@ onMounted(load)
   justify-content: space-between;
 }
 
-.apps-toolbar-filters,
-.apps-toolbar-actions {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.apps-search-input {
-  width: 240px;
-}
-
 .apps-grid {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  justify-content: start;
+  min-height: 220px;
+}
+
+.apps-empty {
+  align-items: center;
+  background: #fff;
+  border: 1px dashed var(--admin-border);
+  border-radius: 8px;
+  color: var(--admin-text-muted);
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  min-height: 220px;
+  padding: 28px;
+}
+
+.apps-empty .el-icon {
+  font-size: 28px;
 }
 
 .app-card,
 .app-type-card {
-  background: var(--admin-surface);
+  background: #ffffff;
   border: 1px solid var(--admin-border);
   border-radius: 8px;
 }
 
 .app-card {
+  box-shadow: var(--admin-shadow);
   display: grid;
-  gap: 14px;
-  min-height: 258px;
-  padding: 16px;
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+  width: 100%;
+}
+
+.app-card:hover {
+  background: #fbfdff;
+  border-color: #c8d4e2;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
 }
 
 .app-card-header {
   align-items: center;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
@@ -640,9 +652,9 @@ onMounted(load)
   border-radius: 8px;
   color: var(--admin-primary);
   display: inline-flex;
-  height: 38px;
+  height: 34px;
   justify-content: center;
-  width: 38px;
+  width: 34px;
 }
 
 .app-card-title {
@@ -651,8 +663,10 @@ onMounted(load)
 
 .app-card-title h3 {
   color: var(--admin-heading);
-  font-size: 16px;
-  margin: 0 0 3px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0 0 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -698,15 +712,49 @@ onMounted(load)
 
 .app-card-actions {
   align-items: center;
+  border-top: 1px solid var(--admin-border-soft);
+  display: grid;
+  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-top: 9px;
+}
+
+.app-updated-at {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
+  justify-content: flex-end;
+  min-width: max-content;
+}
+
+.app-icon-button.el-button {
+  --el-button-bg-color: #f8fafc;
+  --el-button-border-color: var(--admin-border);
+  --el-button-hover-bg-color: var(--brand-blue-soft);
+  --el-button-hover-border-color: #cbd5e1;
+  --el-button-hover-text-color: var(--brand-blue-hover);
+  height: 28px;
+  width: 28px;
+}
+
+.app-icon-button.is-danger.el-button {
+  --el-button-hover-bg-color: #fff1f2;
+  --el-button-hover-border-color: #fecdd3;
+  --el-button-hover-text-color: #e11d48;
 }
 
 .app-type-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .app-type-card {
@@ -738,16 +786,146 @@ onMounted(load)
 }
 
 .app-create-form {
-  max-height: 68vh;
-  overflow: auto;
+  display: grid;
+  gap: 13px;
+}
+
+.app-provider-row {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 50%) max-content;
+  justify-content: start;
+}
+
+.app-type-field {
+  margin-bottom: 0;
+  width: 100%;
+}
+
+.app-status-toggle {
+  align-items: center;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  color: #475569;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 640;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 14px;
+  white-space: nowrap;
 }
 
 .app-form-grid {
+  display: grid;
+  gap: 13px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.app-wide-field {
-  grid-column: 1 / -1;
+.app-form-divider {
+  align-items: center;
+  color: #64748b;
+  display: flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 10px;
+  letter-spacing: 0;
+  margin-top: 2px;
+}
+
+.app-form-divider::after {
+  background: #edf1f6;
+  content: '';
+  flex: 1;
+  height: 1px;
+}
+
+.app-dialog-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.hidden-submit {
+  display: none;
+}
+
+:global(.app-dialog) {
+  border-radius: 8px;
+  max-width: calc(100vw - 32px);
+}
+
+:global(.app-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 18px 22px 14px;
+}
+
+:global(.app-dialog .el-dialog__title) {
+  color: #111827;
+  font-size: 18px;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+:global(.app-dialog .el-dialog__headerbtn) {
+  right: 12px;
+  top: 10px;
+}
+
+:global(.app-dialog .el-dialog__body) {
+  padding: 18px 22px;
+}
+
+:global(.app-dialog .el-dialog__footer) {
+  border-top: 1px solid #edf1f6;
+  padding: 14px 22px 18px;
+}
+
+.app-create-form :deep(.el-form-item),
+.app-type-field {
+  margin-bottom: 0;
+}
+
+.app-create-form :deep(.el-form-item__label) {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 680;
+  line-height: 1.25;
+  margin-bottom: 7px;
+}
+
+.app-type-field :deep(.el-form-item__content),
+.app-name-field :deep(.el-form-item__content) {
+  width: 100%;
+}
+
+.app-create-form :deep(.el-input__wrapper),
+.app-create-form :deep(.el-select__wrapper) {
+  border-radius: 7px;
+  min-height: 38px;
+}
+
+.app-create-form :deep(.el-input__inner) {
+  font-size: 14px;
+}
+
+.app-create-form :deep(.el-textarea__inner) {
+  border-radius: 7px;
+  font-size: 14px;
+  min-height: 92px;
+  padding: 12px 14px;
+}
+
+.app-create-form :deep(.el-input-number) {
+  width: 100%;
+}
+
+.app-dialog-footer :deep(.el-button) {
+  border-radius: 7px;
+  font-weight: 680;
+  min-height: 34px;
+  min-width: 86px;
 }
 
 .app-detail-list {
@@ -783,14 +961,42 @@ onMounted(load)
     flex-direction: column;
   }
 
-  .apps-search-input,
-  .apps-toolbar-filters .el-select {
-    width: 100%;
+  .app-type-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app-provider-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .app-card-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .app-actions {
+    justify-content: flex-start;
   }
 
   .app-form-grid,
   .app-detail-list {
     grid-template-columns: 1fr;
+  }
+
+  :global(.app-dialog .el-dialog__header) {
+    padding: 16px 18px 12px;
+  }
+
+  :global(.app-dialog .el-dialog__body) {
+    padding: 16px 18px;
+  }
+
+  :global(.app-dialog .el-dialog__footer) {
+    padding: 12px 18px 16px;
+  }
+
+  .app-dialog-footer {
+    flex-wrap: wrap;
   }
 }
 </style>

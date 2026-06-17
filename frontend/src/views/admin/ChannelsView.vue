@@ -183,6 +183,13 @@ const channelTotalPages = computed(() =>
 
 const channelHasPagination = computed(() => filteredChannels.value.length > channelPageSize.value)
 
+const probeTrendLatencyScale = computed(() => {
+  const latencies = channels.value.flatMap((channel) =>
+    channel.probe_samples.map((sample) => sample.latency_ms ?? 0).filter((latency) => latency > 0)
+  )
+  return Math.max(...latencies, 1)
+})
+
 function handleChannelPageSizeChange(size: number) {
   channelPageSize.value = size
   channelCurrentPage.value = 1
@@ -319,6 +326,7 @@ function channelPriceRows(row: Channel) {
         : formatUsdPerMillion(microUsdToUsd(cacheWriteMicros as number))
       : t('priceMissing')
     const modelStatus = channelModel.status
+    const upstreamMissing = modelStatus === 'missing'
     return {
       model,
       disabled: !modelEnabled,
@@ -326,8 +334,9 @@ function channelPriceRows(row: Channel) {
       billingEnabled,
       runtimeStatus: channelModel.runtime_status,
       runtimeStatusLabel: runtimeStatusLabel(channelModel.runtime_status),
-      runtimeToggleDisabled: !billingEnabled || isRuntimeToggling(row.id, model),
+      runtimeToggleDisabled: !billingEnabled || upstreamMissing || isRuntimeToggling(row.id, model),
       runtimeEnabled: modelEnabled,
+      upstreamMissing,
       modelStatus,
       modelStatusLabel: modelStatusLabel(modelStatus),
       inputPrice,
@@ -512,10 +521,7 @@ function probeTrendBars(row: Channel) {
   const barWidth = Math.max(3, Math.min(10, (width - gap * (samples.length - 1)) / samples.length))
   const totalWidth = barWidth * samples.length + gap * (samples.length - 1)
   const offsetX = Math.max(0, (width - totalWidth) / 2)
-  const maxLatency = Math.max(
-    ...samples.map((sample) => sample.latency_ms ?? 0).filter((value) => value > 0),
-    1
-  )
+  const maxLatency = probeTrendLatencyScale.value
 
   return samples.map((sample, index) => {
     const latency = sample.latency_ms ?? 0
@@ -1040,14 +1046,17 @@ onMounted(loadInitialData)
                   <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
                   <span>{{ t('priceStatus') }}</span>
                   <span>{{ t('runtimeStatus') }}</span>
-                  <span>{{ t('modelRuntimeStatus') }}</span>
                   <span>{{ t('modelRuntimeSwitch') }}</span>
                 </div>
                 <div
                   v-for="item in channelPriceRows(row)"
                   :key="item.model"
                   class="channel-expand-price-row"
-                  :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
+                  :class="{
+                    'is-missing': item.missing,
+                    'is-disabled': item.disabled,
+                    'is-upstream-missing': item.upstreamMissing
+                  }"
                 >
                   <span class="channel-price-model">{{ item.model }}</span>
                   <span class="channel-detail-price">{{ item.price }}</span>
@@ -1072,12 +1081,15 @@ onMounted(loadInitialData)
                   <span class="channel-detail-runtime-raw" :class="`is-${item.runtimeStatus}`">
                     {{ item.runtimeStatusLabel }}
                   </span>
-                  <span class="channel-detail-runtime-status" :class="`is-${item.modelStatus}`">
-                    {{ item.modelStatusLabel }}
-                  </span>
                   <span
                     class="channel-detail-runtime-switch"
-                    :aria-label="item.runtimeEnabled ? t('enabled') : t('disabled')"
+                    :aria-label="
+                      item.upstreamMissing
+                        ? t('modelUpstreamMissing')
+                        : item.runtimeEnabled
+                          ? t('enabled')
+                          : t('disabled')
+                    "
                   >
                     <el-switch
                       :model-value="item.runtimeEnabled"
@@ -1085,6 +1097,17 @@ onMounted(loadInitialData)
                       size="small"
                       @change="toggleChannelModelRuntime(row.id, item.model, Boolean($event))"
                     />
+                    <span class="channel-detail-switch-copy">
+                      <strong>
+                        {{
+                          item.upstreamMissing
+                            ? t('modelUpstreamMissing')
+                            : item.runtimeEnabled
+                              ? t('enabled')
+                              : t('disabled')
+                        }}
+                      </strong>
+                    </span>
                   </span>
                 </div>
               </div>
@@ -2324,9 +2347,8 @@ onMounted(loadInitialData)
     minmax(160px, 0.7fr)
     minmax(160px, 0.7fr)
     80px
-    92px
-    90px
-    84px;
+    56px
+    132px;
   min-height: 46px;
   padding: 0 12px;
 }
@@ -2364,20 +2386,24 @@ onMounted(loadInitialData)
 
 .channel-expand-price-row.is-head span:nth-child(4),
 .channel-expand-price-row.is-head span:nth-child(5),
-.channel-expand-price-row.is-head span:nth-child(6),
-.channel-expand-price-row.is-head span:nth-child(7) {
+.channel-expand-price-row.is-head span:nth-child(6) {
   text-align: center;
 }
 
-.channel-expand-price-row.is-missing {
+.channel-expand-price-row.is-missing,
+.channel-expand-price-row.is-upstream-missing {
   background: #fffaf3;
 }
 
-.channel-expand-price-row.is-disabled:not(.is-missing) {
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing) {
   background: #f8fafc;
 }
 
 .channel-expand-price-row.is-missing .channel-price-model {
+  color: #c2410c;
+}
+
+.channel-expand-price-row.is-upstream-missing .channel-price-model {
   color: #c2410c;
 }
 
@@ -2416,16 +2442,22 @@ onMounted(loadInitialData)
   --el-switch-off-color: #cbd5e1;
 }
 
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-price-model,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-price,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-raw,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-status,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-switch {
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-price-model,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-price,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-status,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-runtime-raw,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-runtime-switch {
   color: #94a3b8;
 }
 
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status .el-icon {
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-status
+  .el-icon {
   color: #cbd5e1;
 }
 
@@ -2499,7 +2531,7 @@ onMounted(loadInitialData)
   font-weight: 700;
   justify-content: center;
   line-height: 1;
-  padding: 4px 10px;
+  padding: 2px 5px;
   white-space: nowrap;
 }
 
@@ -2550,13 +2582,34 @@ onMounted(loadInitialData)
 
 .channel-detail-runtime-switch {
   align-items: center;
-  display: inline-flex;
+  display: inline-grid;
+  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr);
   justify-content: center;
+  justify-self: center;
 }
 
 .channel-detail-runtime-switch :deep(.el-switch) {
   --el-switch-on-color: #22c55e;
   --el-switch-off-color: #94a3b8;
+}
+
+.channel-detail-switch-copy {
+  display: inline-flex;
+  line-height: 1.1;
+  min-width: 0;
+  text-align: center;
+}
+
+.channel-detail-switch-copy strong {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.channel-expand-price-row.is-upstream-missing .channel-detail-switch-copy strong {
+  color: #c2410c;
 }
 
 .channel-expand-price-row.is-missing .channel-detail-price,

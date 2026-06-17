@@ -6,6 +6,7 @@ use tokio::time::{self, Duration, MissedTickBehavior};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::{
+    cache::CacheInvalidator,
     config::Config,
     jobs::{self, JobCadence},
 };
@@ -16,6 +17,7 @@ pub(crate) struct AppContext {
     pub db: PgPool,
     pub http: reqwest::Client,
     pub secrets: crate::secrets::SecretStore,
+    pub cache_invalidator: CacheInvalidator,
 }
 
 pub(crate) async fn run() -> anyhow::Result<()> {
@@ -65,11 +67,18 @@ async fn build_context() -> anyhow::Result<AppContext> {
         .await
         .context("failed to connect scheduler database")?;
     let secrets = crate::secrets::SecretStore::new(&config.upstream_secret_key);
+    let cache_invalidator = CacheInvalidator::new(
+        config.redis_url.as_deref(),
+        &config.redis_key_prefix,
+    )
+    .await
+    .context("failed to initialize scheduler cache invalidator")?;
     Ok(AppContext {
         config,
         db,
         http,
         secrets,
+        cache_invalidator,
     })
 }
 

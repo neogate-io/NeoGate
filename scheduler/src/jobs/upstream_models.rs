@@ -71,7 +71,10 @@ pub(crate) async fn run(context: &AppContext) -> Result<()> {
 
     for (channel_id, sync) in channel_models {
         let models = normalized_models(&sync.models);
-        sync_channel_models(context, channel_id, &sync.provider, &models).await?;
+        let changed = sync_channel_models(context, channel_id, &sync.provider, &models).await?;
+        if changed {
+            context.cache_invalidator.invalidate_routing().await;
+        }
         tracing::info!(
             channel_id,
             provider = %sync.provider,
@@ -238,16 +241,21 @@ async fn sync_channel_models(
     channel_id: DbId,
     provider: &str,
     models: &[String],
-) -> Result<()> {
+) -> Result<bool> {
     let models = normalized_models(models);
+    let mut changed = false;
     for model in &models {
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO channel_model
              (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
              VALUES ($1, $2, $3, FALSE, 'available', 'normal', now())
              ON CONFLICT (channel_id, model)
              DO UPDATE SET
                  status = 'available',
+                 runtime_status = 'normal',
+                 cooldown_until = NULL,
+                 last_error = NULL,
+                 last_status_code = NULL,
                  missing_since = NULL,
                  last_seen_at = now(),
                  updated_at = now()",
@@ -257,11 +265,17 @@ async fn sync_channel_models(
         .bind(model)
         .execute(&context.db)
         .await?;
+        changed |= result.rows_affected() > 0;
     }
 
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE channel_model
-         SET status = 'missing',
+         SET enabled = FALSE,
+             status = 'missing',
+             runtime_status = 'failed',
+             cooldown_until = NULL,
+             last_error = 'upstream model is missing',
+             last_status_code = NULL,
              missing_since = COALESCE(missing_since, now()),
              updated_at = now()
          WHERE channel_id = $1
@@ -272,8 +286,9 @@ async fn sync_channel_models(
     .bind(&models)
     .execute(&context.db)
     .await?;
+    changed |= result.rows_affected() > 0;
 
-    Ok(())
+    Ok(changed)
 }
 
 fn normalized_models(models: &[String]) -> Vec<String> {

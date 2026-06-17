@@ -1503,6 +1503,7 @@ dependencies = [
  "base64",
  "chrono",
  "dotenvy",
+ "redis",
  "reqwest",
  "serde_json",
  "sha2 0.11.0",

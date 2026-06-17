@@ -545,6 +545,7 @@ async fn upstream_models(
                 &models,
             )
             .await?;
+            invalidate_cache(&state, InvalidationEvent::Routing).await;
         }
         return Ok(Json(FetchUpstreamModelsResponse { models }));
     }
@@ -579,6 +580,7 @@ async fn upstream_models(
             &models,
         )
         .await?;
+        invalidate_cache(&state, InvalidationEvent::Routing).await;
     }
     Ok(Json(FetchUpstreamModelsResponse { models }))
 }
@@ -627,6 +629,10 @@ async fn sync_channel_models_from_upstream(
              ON CONFLICT (channel_id, model)
              DO UPDATE SET
                  status = 'available',
+                 runtime_status = 'normal',
+                 cooldown_until = NULL,
+                 last_error = NULL,
+                 last_status_code = NULL,
                  missing_since = NULL,
                  last_seen_at = now(),
                  updated_at = now()",
@@ -640,7 +646,12 @@ async fn sync_channel_models_from_upstream(
 
     sqlx::query(
         "UPDATE channel_model
-         SET status = 'missing',
+         SET enabled = FALSE,
+             status = 'missing',
+             runtime_status = 'failed',
+             cooldown_until = NULL,
+             last_error = 'upstream model is missing',
+             last_status_code = NULL,
              missing_since = COALESCE(missing_since, now()),
              updated_at = now()
          WHERE channel_id = $1

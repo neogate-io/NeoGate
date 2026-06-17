@@ -1,4 +1,5 @@
 mod app;
+mod cache;
 mod config;
 mod jobs;
 mod secrets;

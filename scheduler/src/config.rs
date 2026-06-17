@@ -7,6 +7,8 @@ const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-prod
 #[derive(Clone, Debug)]
 pub(crate) struct Config {
     pub database_url: String,
+    pub redis_url: Option<String>,
+    pub redis_key_prefix: String,
     pub upstream_secret_key: String,
     pub tick_interval: Duration,
     pub channel_probe_interval: Duration,
@@ -19,6 +21,11 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             database_url: required("DATABASE_URL")?,
+            redis_url: optional("REDIS_URL"),
+            redis_key_prefix: env::var("REDIS_KEY_PREFIX")
+                .unwrap_or_else(|_| "neogate".to_string())
+                .trim()
+                .to_string(),
             upstream_secret_key: required_secret("UPSTREAM_SECRET_KEY")?,
             tick_interval: duration_ms("SCHEDULER_TICK_INTERVAL_MS", 1_000)?,
             channel_probe_interval: duration_secs_with_alias(
@@ -34,6 +41,13 @@ impl Config {
             upstream_timeout: duration_secs("UPSTREAM_TIMEOUT_SECONDS", 60)?,
         })
     }
+}
+
+fn optional(name: &str) -> Option<String> {
+    env::var(name)
+        .map(|value| value.trim().to_string())
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 fn required(name: &str) -> Result<String> {

@@ -225,7 +225,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/apps/widget/{endpoint_id}/messages",
             post(endpoints::widget_message),
         )
-        .route("/widget/{endpoint_id}.js", get(endpoints::widget_script))
+        .route("/widget/{script_name}", get(endpoints::widget_script))
 }
 
 pub(crate) async fn list_app_records(

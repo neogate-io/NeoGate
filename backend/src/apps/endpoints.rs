@@ -94,8 +94,13 @@ pub(super) async fn widget_message(
 
 pub(super) async fn widget_script(
     State(state): State<Arc<AppState>>,
-    Path(endpoint_id): Path<DbId>,
+    Path(script_name): Path<String>,
 ) -> AppResult<Response> {
+    let endpoint_id = script_name
+        .strip_suffix(".js")
+        .ok_or(AppError::NotFound)?
+        .parse::<DbId>()
+        .map_err(|_| AppError::NotFound)?;
     let runtime = runtime_for_endpoint(&state, endpoint_id, "widget").await?;
     let title = runtime
         .endpoint_config

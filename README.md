@@ -4,7 +4,7 @@
 
 🚀 **极致性能、简单易用、企业私有化的大模型 API 网关**
 
-Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, app publishing to WeCom, webhooks, web widgets, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
 
 <p align="center">
   <strong>中文</strong> |
@@ -32,7 +32,9 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
 
 ## 📝 项目介绍
 
-NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有化部署场景，目标是提供极致的请求转发性能，并保持简单易用。它帮助团队把多个模型供应商收拢到统一入口，集中管理访问密钥、模型路由、项目用量和成本归集。
+NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有化部署场景，强调极致性能、简单易用和可控运维。它帮助企业把大模型调用统一到可管理、可观测、可计费的网关之下。
+
+通过「应用管理」，NeoGate 可以把大模型能力发布到企业微信、Webhook 和网页组件等入口，让员工、业务系统或外部应用直接使用 AI 能力。NeoGate 适用于企业内部 AI 网关、多项目多团队统一管理、多应用接入，以及面向客户或开发者的计费运营场景。
 
 仓库地址：[neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
@@ -43,7 +45,7 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 ## 🔎 Search Keywords
 
-`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `AI app management` · `WeCom integration` · `webhook AI app` · `web chat widget` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
 
 ---
 
@@ -59,39 +61,35 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
   <tbody>
     <tr>
       <td>🏢 企业统一入口</td>
-      <td>将多个模型供应商统一收拢到企业自己的大模型 API 入口，由网关集中托管上游凭证和访问策略。</td>
+      <td>提供企业自己的大模型 API 入口，兼容 OpenAI 和 Anthropic 接口，并集中托管上游凭证和访问策略。</td>
     </tr>
     <tr>
       <td>🧩 项目化管理</td>
-      <td>以项目作为业务应用、内部项目或成本单元，统一管理成员、API key、模型权限、预算额度和用量归集。</td>
+      <td>以项目承载业务、团队或成本单元，管理成员、模型权限、预算额度和成本归集。</td>
     </tr>
     <tr>
       <td>🔑 独立 API Key</td>
-      <td>给不同团队、项目、客户或内部应用分发独立 API key，支持按项目和 API key 隔离调用权限、额度和成本。</td>
+      <td>为团队、客户或内部应用分发独立 API Key，隔离调用权限、额度和用量追踪。</td>
+    </tr>
+    <tr>
+      <td>🧰 应用管理</td>
+      <td>创建企业微信、Webhook 和网页组件应用，让员工或外部系统直接与大模型对话。</td>
     </tr>
     <tr>
       <td>🧭 模型路由</td>
-      <td>在一个后台里集中管理 OpenAI、Anthropic 等上游模型服务，并按模型、优先级和权重分配请求。</td>
-    </tr>
-    <tr>
-      <td>🔌 兼容接口</td>
-      <td>对外提供 OpenAI 兼容和 Anthropic 兼容接口，让现有客户端少改配置即可接入企业统一网关。</td>
+      <td>按模型、优先级和权重分配请求，并在上游 key 异常时自动冷却和切换。</td>
     </tr>
     <tr>
       <td>📊 用量记录</td>
-      <td>记录用户、项目、API key、模型和上游通道维度的调用用量，方便排查问题、分析成本、内部核算和后续计费。</td>
+      <td>记录用户、项目、API Key、模型和通道维度的调用用量，便于排障、分析和核算。</td>
     </tr>
     <tr>
       <td>💳 服务计费</td>
-      <td>支持内部模式和计费模式，既可作为企业内部网关使用，也可开启额度、充值和支付能力面向客户或开发者收费。</td>
-    </tr>
-    <tr>
-      <td>🛡️ 故障切换</td>
-      <td>在上游 key 失败时自动冷却并切换可用 key，减少单个密钥或渠道异常对企业业务连续性的影响。</td>
+      <td>支持内部模式和计费模式，可开启额度、充值和支付能力，对内管理或对外收费。</td>
     </tr>
     <tr>
       <td>🚀 集群部署</td>
-      <td>支持从单机 Compose 起步，并在生产环境切换到基于外部 PostgreSQL 和 Redis 的多副本部署。</td>
+      <td>支持单机 Compose 部署，也支持基于外部 PostgreSQL 和 Redis 的生产多副本部署。</td>
     </tr>
   </tbody>
 </table>
@@ -100,18 +98,18 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 ## 🧠 为什么选择 NeoGate
 
-- **Rust 后端**：面向低延迟、高并发的大模型 API 转发场景设计。
-- **私有化优先**：默认自托管部署，适合企业内部网关、团队共享上游账号和受控访问。
-- **统一兼容接口**：同时提供 OpenAI 兼容和 Anthropic 兼容接口，方便现有客户端迁移。
-- **项目和 Key 隔离**：按项目、成员和 API key 管理权限、额度、用量和成本归集。
-- **内置计费模式**：支持内部模式和面向客户/开发者的计费模式，减少二次开发。
-- **从单机到集群**：Docker Compose 快速启动，后续可切换到 Redis 协调的集群部署。
+- **接入更省心**：现有客户端和内部服务少改配置，就能统一接入大模型能力，把试用和上线周期都缩短。
+- **密钥更安全**：上游凭证不用散落在各个应用里，权限、额度和访问策略集中管理，团队用起来更安心。
+- **成本更清楚**：谁在用、哪个项目在用、用了多少 Token 和费用，都能按维度看清楚，核算和排查更顺手。
+- **团队更好协作**：不同团队、客户或内部应用可以用项目隔开，边界清楚，统计清楚，协作也更轻松。
+- **AI 更容易落地**：通过企业微信、Webhook 和网页组件，把大模型能力放到员工和系统每天都会用到的入口里。
+- **场景覆盖更完整**：既能做企业内部 AI 网关，也能延伸到额度、充值、支付和计费运营，少做很多重复建设。
 
 ---
 
 ## 🧭 服务模式
 
-NeoGate 首次运行时需要选择内部模式或计费模式。两种模式都支持统一入口、上游凭证集中托管、模型路由和用量记录，主要区别在于是否要求用户先有额度、是否接入支付通道。
+NeoGate 首次运行时需要选择内部模式或计费模式。内部模式适合企业自用和团队协作，计费模式适合面向客户或开发者提供服务。两种模式都保留统一入口、凭证托管、模型路由和用量记录，主要区别在于是否要求可用额度，以及是否接入支付通道。
 
 <table>
   <thead>
@@ -125,13 +123,13 @@ NeoGate 首次运行时需要选择内部模式或计费模式。两种模式都
   <tbody>
     <tr>
       <td>🏠 内部模式</td>
-      <td>公司、部门、项目组自用，或给内部应用、自动化脚本和成员分发 API key。</td>
+      <td>公司、部门或项目组自用，给内部应用、自动化脚本和成员分发 API Key。</td>
       <td>默认不要求可用额度即可调用。</td>
-      <td>仍会记录用量和费用，便于成本分析和内部管理。</td>
+      <td>仍会记录用量和费用，便于成本分析和内部核算。</td>
     </tr>
     <tr>
       <td>💰 计费模式</td>
-      <td>面向客户、开发者或外部用户提供收费模型调用服务。</td>
+      <td>面向客户、开发者或外部用户提供收费的大模型调用服务。</td>
       <td>用户需要有可用额度后才能调用。</td>
       <td>上线前需要配置模型价格、充值套餐和支付通道。</td>
     </tr>
@@ -144,11 +142,11 @@ NeoGate 首次运行时需要选择内部模式或计费模式。两种模式都
 
 ### 🐳 Docker 安装
 
-Docker 安装不需要在宿主机单独安装 Rust、Node.js 或 pnpm。下面是适合大多数起步场景的单机部署；需要多副本和横向扩展的生产环境请查看：[集群部署文档](docs/deployment/cluster.zh.md)。
+Docker 安装是最快的部署方式，不需要在宿主机单独安装 Rust、Node.js 或 pnpm。需要多副本和横向扩展的生产环境，请查看：[集群部署文档](docs/deployment/cluster.zh.md)。
 
 #### 单机部署
 
-单机部署适合大多数起步场景。Compose 会同时启动前端 Nginx、后端和 PostgreSQL，不需要额外准备 PostgreSQL 或 Redis。
+单机部署适合试用、内部部署和中小规模场景。Compose 会同时启动前端 Nginx、后端和 PostgreSQL，不需要额外准备 PostgreSQL 或 Redis。
 
 ```bash
 # 海外（Docker Hub 可直接访问）
@@ -158,11 +156,11 @@ docker compose up -d --build
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
-启动后访问 `http://服务器IP:8080`，通过首次运行向导完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
+启动后访问 `http://服务器IP:8080`，首次运行向导会引导你完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
 
 #### 检查运行状态
 
-单机部署启动完成后，可以先查看容器是否都处于 `running` 或 `healthy` 状态：
+部署完成后，可以先查看容器是否都处于 `running` 或 `healthy` 状态：
 
 ```bash
 # 海外
@@ -192,15 +190,15 @@ docker compose logs -f backend
 docker compose -f docker-compose.cn.yml logs -f backend
 ```
 
-最后在浏览器访问 `http://服务器IP:8080`，如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。
+最后在浏览器访问 `http://服务器IP:8080`。如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。
 
 ### 🧑‍💻 源码本地运行
 
-源码本地运行分为开发部署和正式部署。开发部署适合调试或体验首次运行流程；正式部署适合希望从源码构建后自行托管进程和 Nginx 的场景。生产环境仍建议优先使用 Docker Compose。
+源码运行适合二次开发、调试和自定义部署。你可以使用开发部署体验完整流程，也可以使用 release 构建配合 Nginx、systemd 等工具自行托管。生产环境仍建议优先使用 Docker Compose 或集群部署方案。
 
 #### 公共准备
 
-先在服务器上准备这些依赖：
+先准备这些依赖：
 
 | 依赖 | 推荐版本 |
 | --- | --- |
@@ -241,11 +239,11 @@ CREATE DATABASE neogate OWNER neogate;
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。通常不需要先手动编辑 `.env`。
+首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。多数情况下不需要先手动编辑 `.env`。
 
 #### 开发部署
 
-开发部署使用 Rust 调试构建和 Vite 开发服务，适合本地开发、调试和体验首次运行流程。
+开发部署使用 Rust 调试构建和 Vite 开发服务，适合本地开发、联调和体验首次运行流程。
 
 <table>
   <thead>
@@ -278,7 +276,7 @@ postgres://neogate:change-me@localhost:5432/neogate
 
 #### 正式部署
 
-正式部署时建议使用 release 构建运行后端和定时任务，并用 Nginx 托管前端静态文件。后端和定时任务可交给 systemd、supervisord 或其他进程管理工具保持常驻。
+正式部署建议使用 release 构建运行后端和定时任务，并用 Nginx 托管前端静态文件。后端和定时任务可以交给 systemd、supervisord 或其他进程管理工具保持常驻。
 
 构建后端和定时任务：
 

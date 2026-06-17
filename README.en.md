@@ -2,9 +2,9 @@
 
 # NeoGate
 
-🚀 **An LLM API gateway built for maximum performance, simple operation, and enterprise private deployment**
+🚀 **A Rust-built LLM API gateway for maximum performance, ease of use, and enterprise private deployment**
 
-Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, app publishing to WeCom, webhooks, web widgets, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
 
 <p align="center">
   <a href="README.md">中文</a> |
@@ -32,7 +32,9 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
 
 ## 📝 Project Introduction
 
-NeoGate is an LLM API gateway built with Rust for enterprise private deployment. It is designed for maximum request forwarding performance while remaining simple to deploy and use. NeoGate helps teams bring multiple model providers behind one unified entry point for access keys, model routing, project usage, and cost attribution.
+NeoGate is a Rust-built LLM API gateway for enterprise private deployment, focused on maximum performance, ease of use, and operational control. It helps enterprises bring LLM calls into a gateway that is manageable, observable, and billable.
+
+With App Management, NeoGate can publish model capabilities to WeCom, webhook, and web widget entry points, so employees, business systems, and external apps can use AI directly. NeoGate is a fit for internal AI gateways, multi-project and multi-team management, multi-app access, and billing-oriented operations.
 
 Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
@@ -43,7 +45,7 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 ## 🔎 Search Keywords
 
-`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `AI app management` · `WeCom integration` · `webhook AI app` · `web chat widget` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
 
 ---
 
@@ -59,39 +61,35 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
   <tbody>
     <tr>
       <td>🏢 Enterprise gateway</td>
-      <td>Deploy a privately controlled enterprise LLM API entry point that centralizes upstream credentials and access policies for multiple model providers.</td>
+      <td>Provide a private enterprise LLM API entry point with OpenAI and Anthropic compatibility, while centralizing upstream credentials and access policies.</td>
     </tr>
     <tr>
       <td>🧩 Project management</td>
-      <td>Use projects as business applications, internal projects, or cost units, with unified management for members, API keys, model permissions, budgets, and usage attribution.</td>
+      <td>Use projects for business units, teams, or cost centers, with members, model permissions, budgets, and cost attribution in one place.</td>
     </tr>
     <tr>
       <td>🔑 Independent API keys</td>
-      <td>Issue independent API keys to teams, projects, customers, or internal apps, with permissions, quota, and cost isolation by project and API key.</td>
+      <td>Issue independent API keys to teams, customers, or internal apps, with isolated permissions, quotas, and usage tracking.</td>
+    </tr>
+    <tr>
+      <td>🧰 App management</td>
+      <td>Create WeCom, webhook, and web widget apps so employees or external systems can talk to models directly.</td>
     </tr>
     <tr>
       <td>🧭 Model routing</td>
-      <td>Manage OpenAI, Anthropic, and other upstream model services from one admin console, and route requests by model, priority, and weight.</td>
-    </tr>
-    <tr>
-      <td>🔌 Compatible APIs</td>
-      <td>Expose OpenAI-compatible and Anthropic-compatible endpoints so existing clients can connect to the enterprise gateway with minimal changes.</td>
+      <td>Route requests by model, priority, and weight, with automatic cooldown and switching when upstream keys fail.</td>
     </tr>
     <tr>
       <td>📊 Usage records</td>
-      <td>Track usage by user, project, API key, model, and upstream channel for troubleshooting, cost analysis, internal chargeback, and future billing.</td>
+      <td>Track usage by user, project, API key, model, and channel for troubleshooting, analysis, and accounting.</td>
     </tr>
     <tr>
       <td>💳 Service billing</td>
-      <td>Choose internal mode or billing mode, using NeoGate either as an internal enterprise gateway or as a paid service with quota, recharge, and payment support.</td>
-    </tr>
-    <tr>
-      <td>🛡️ Failover</td>
-      <td>Cool down failing upstream keys and continue routing through available keys to reduce the impact of a single credential or channel failure.</td>
+      <td>Support internal mode and billing mode, with quota, recharge, and payment features for internal or paid use.</td>
     </tr>
     <tr>
       <td>🚀 Cluster deployment</td>
-      <td>Start with standalone Compose and move to a multi-replica production deployment backed by external PostgreSQL and Redis.</td>
+      <td>Support standalone Compose deployment and production multi-replica deployment backed by PostgreSQL and Redis.</td>
     </tr>
   </tbody>
 </table>
@@ -100,18 +98,18 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 ## 🧠 Why NeoGate
 
-- **Rust backend**: Designed for low-latency, high-concurrency LLM API forwarding.
-- **Self-hosted first**: Built for private enterprise deployment, shared upstream accounts, and controlled internal access.
-- **Compatible APIs**: Provides OpenAI-compatible and Anthropic-compatible APIs for easier client migration.
-- **Project and key isolation**: Manage permissions, balance, usage, and cost attribution by project, member, and API key.
-- **Built-in billing mode**: Supports both internal gateway usage and paid access for customers or developers.
-- **Standalone to clustered**: Start with Docker Compose, then move to Redis-coordinated clustered deployment when needed.
+- **Easier to adopt**: Existing clients and internal services can connect with only a few configuration changes.
+- **Safer credentials**: Upstream secrets stay out of individual apps, while permissions, quotas, and policies stay in one place.
+- **Clearer cost tracking**: See who used what, which project used it, and how many tokens and dollars were spent.
+- **Better team boundaries**: Separate teams, customers, and internal apps by project, with clean isolation and reporting.
+- **Easier AI rollout**: Publish model access to WeCom, webhook, and web widget entry points your users already touch every day.
+- **Broader operating model**: Run NeoGate as an internal AI gateway or extend it into quota, recharge, payment, and billing operations.
 
 ---
 
 ## 🧭 Service Modes
 
-NeoGate asks you to choose internal mode or billing mode during first-run setup. Both modes provide a unified entry point, centralized upstream credential management, model routing, and usage records. The main difference is whether users need credit balance and whether payment gateways are enabled.
+NeoGate asks you to choose internal mode or billing mode during first-run setup. Internal mode is for company self-use and team collaboration, while billing mode is for customer-facing or developer-facing services. Both modes keep a unified entry point, centralized credentials, model routing, and usage records. The difference is whether usable credit is required and whether payment gateways are enabled.
 
 <table>
   <thead>
@@ -125,9 +123,9 @@ NeoGate asks you to choose internal mode or billing mode during first-run setup.
   <tbody>
     <tr>
       <td>🏠 Internal mode</td>
-      <td>Company, department, or project team usage, including API keys issued to internal apps, automation scripts, and team members.</td>
+      <td>Company, department, or project team usage, including API keys for internal apps, automation scripts, and team members.</td>
       <td>By default, users can call without available credit.</td>
-      <td>NeoGate still records usage and cost for analysis and internal management.</td>
+      <td>NeoGate still records usage and cost for analysis and internal accounting.</td>
     </tr>
     <tr>
       <td>💰 Billing mode</td>
@@ -144,11 +142,11 @@ NeoGate asks you to choose internal mode or billing mode during first-run setup.
 
 ### 🐳 Docker Installation
 
-Docker installation does not require Rust, Node.js, or pnpm on the host. The flow below is the standalone deployment path for most starting scenarios. For multi-replica and horizontally scalable production environments, see the [cluster deployment guide](docs/deployment/cluster.md).
+Docker installation is the fastest path and does not require Rust, Node.js, or pnpm on the host. For multi-replica and horizontally scalable production environments, see the [cluster deployment guide](docs/deployment/cluster.md).
 
 #### Standalone Deployment
 
-Standalone deployment is suitable for most starting scenarios. Compose starts frontend Nginx, the backend, and PostgreSQL together, so you do not need to prepare PostgreSQL or Redis separately.
+Standalone deployment is suitable for trials, internal deployments, and smaller environments. Compose starts frontend Nginx, the backend, and PostgreSQL together, so you do not need to prepare PostgreSQL or Redis separately.
 
 ```bash
 # Overseas (Docker Hub directly accessible)
@@ -158,11 +156,11 @@ docker compose up -d --build
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
-After startup, open `http://SERVER_IP:8080` and complete the first-run wizard for the admin account, service mode, initial upstream, prices, SMTP, and payment settings.
+After startup, open `http://SERVER_IP:8080`. The first-run wizard will guide you through the admin account, service mode, initial upstream, prices, SMTP, and payment settings.
 
 #### Check Runtime Status
 
-After standalone deployment starts, check whether all containers are `running` or `healthy`:
+After deployment starts, check whether all containers are `running` or `healthy`:
 
 ```bash
 # Overseas
@@ -196,11 +194,11 @@ Finally, open `http://SERVER_IP:8080` in a browser. If the first-run wizard or l
 
 ### 🧑‍💻 Local Source Run
 
-Running from source is split into development deployment and production deployment. Development deployment is for debugging or trying the first-run flow; production deployment is for users who want to build from source and manage the backend process and Nginx themselves. For production environments, Docker Compose is still recommended first.
+Running from source is suitable for development, debugging, and custom deployment. You can use the development flow to try the full setup, or use release builds with Nginx and systemd for self-managed deployments. For production environments, Docker Compose or the cluster deployment path is still recommended first.
 
 #### Shared Preparation
 
-Prepare these dependencies on the server first:
+Prepare these dependencies first:
 
 | Dependency | Recommended version |
 | --- | --- |
@@ -241,7 +239,7 @@ Use this PostgreSQL connection URL in the first-run wizard:
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The first-run page writes the database connection, site identity, and generated secrets for you. In the usual standalone flow, you do not need to edit `.env` before starting.
+On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The first-run page writes the database connection, site identity, and generated secrets for you. In most cases, you do not need to edit `.env` before starting.
 
 #### Development Deployment
 

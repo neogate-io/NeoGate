@@ -7,7 +7,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use base64::{engine::general_purpose, Engine as _};
+use base64::{
+    alphabet,
+    engine::general_purpose::{self, GeneralPurpose},
+    Engine as _,
+};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -25,6 +29,10 @@ const WECOM_TOKEN_SECRET_KEY: &str = "token";
 const WECOM_AES_SECRET_KEY: &str = "aes_key";
 const WECOM_CORP_SECRET_KEY: &str = "corp_secret";
 const WEBHOOK_SECRET_KEY: &str = "secret";
+pub(crate) const WECOM_ENCODING_AES_KEY_ENGINE: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    general_purpose::PAD.with_decode_allow_trailing_bits(true),
+);
 pub(crate) const DEFAULT_CONTEXT_TURNS: i32 = 10;
 pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 2048;
 const APP_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
@@ -497,7 +505,7 @@ fn validate_wecom_encoding_aes_key(value: &str) -> AppResult<()> {
             "EncodingAESKey must be 43 characters".to_string(),
         ));
     }
-    let key = general_purpose::STANDARD
+    let key = WECOM_ENCODING_AES_KEY_ENGINE
         .decode(format!("{value}="))
         .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
     if key.len() != 32 {

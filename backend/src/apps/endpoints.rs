@@ -23,6 +23,7 @@ use crate::{
     AppState,
 };
 
+use super::WECOM_ENCODING_AES_KEY_ENGINE;
 use super::{constant_time_eq, extract_xml_value, hmac_sha256_hex};
 use super::{
     runtime::run_app_message, runtime_for_endpoint, secret_plaintext, AppMessageResponse,
@@ -327,7 +328,7 @@ fn decrypt_wecom(
 }
 
 fn decrypt_wecom_payload(aes_key: &str, encrypted: &str) -> AppResult<WecomDecrypted> {
-    let key = general_purpose::STANDARD
+    let key = WECOM_ENCODING_AES_KEY_ENGINE
         .decode(format!("{aes_key}="))
         .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
     if key.len() != 32 {
@@ -478,6 +479,18 @@ mod tests {
     }
 
     #[test]
+    fn decrypt_wecom_payload_accepts_real_wecom_key_shape() {
+        let aes_key = "lFbb7s2MROtNqEWCZ4d8ZVyiQIEQO3HOJs4fDEoGdcD";
+        let xml = "<xml><ToUserName><![CDATA[corp-123]]></ToUserName><FromUserName><![CDATA[kevin]]></FromUserName><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello]]></Content><MsgId>42</MsgId></xml>";
+        let encrypted = encrypt_wecom_payload(aes_key, xml, "corp-123");
+
+        let decrypted = decrypt_wecom_payload(aes_key, &encrypted).expect("decrypt payload");
+
+        assert_eq!(decrypted.receive_id, "corp-123");
+        assert_eq!(decrypted.message, xml);
+    }
+
+    #[test]
     fn wecom_signature_uses_token_timestamp_nonce_and_ciphertext_sorted() {
         let signature = wecom_signature("token", "1700000000", "nonce", "encrypted");
 
@@ -501,7 +514,7 @@ mod tests {
     }
 
     fn encrypt_wecom_payload(aes_key: &str, xml: &str, receive_id: &str) -> String {
-        let key = general_purpose::STANDARD
+        let key = WECOM_ENCODING_AES_KEY_ENGINE
             .decode(format!("{aes_key}="))
             .expect("valid aes key");
         let mut plaintext = Vec::new();

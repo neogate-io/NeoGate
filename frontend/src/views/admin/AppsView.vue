@@ -15,16 +15,17 @@ import { ElMessage } from 'element-plus'
 import {
   createApp,
   deleteApp,
+  getAppModelOptions,
   getAppRunLogs,
   getApps,
   testApp,
   updateApp,
+  type AppModelOption,
   type CreateAppInput
 } from '../../api/apps'
 import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
-import { getUserKeys } from '../../api/userKeys'
 import { useLocale } from '../../composables/useLocale'
-import type { AppRecord, AppRunLog, AppType, UserKey } from '../../types/admin'
+import type { AppRecord, AppRunLog, AppType } from '../../types/admin'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, microUsdToUsd } from '../../utils/format'
@@ -33,7 +34,7 @@ const { t } = useLocale()
 
 const apps = ref<AppRecord[]>([])
 const logs = ref<AppRunLog[]>([])
-const userKeys = ref<UserKey[]>([])
+const modelOptions = ref<AppModelOption[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const logsLoading = ref(false)
@@ -41,6 +42,7 @@ const createOpen = ref(false)
 const detailOpen = ref(false)
 const activeDetailTab = ref('overview')
 const selectedApp = ref<AppRecord | null>(null)
+const createdApp = ref<AppRecord | null>(null)
 
 const appTypes = [
   { type: 'wecom', label: '企业微信应用', icon: ChatDotRound, enabled: true },
@@ -50,6 +52,56 @@ const appTypes = [
   { type: 'widget', label: '网页组件应用', icon: Connection, enabled: true }
 ] as const
 
+const usageScenarios = [
+  {
+    value: 'brief_qa',
+    label: '简短问答',
+    description: 'FAQ、轻量咨询',
+    contextTurns: 4,
+    maxOutputTokens: 1024,
+    systemPrompt:
+      '你是一个简洁准确的问答助手。优先直接回答用户问题，避免冗长解释。遇到不确定的信息时，说明不确定并给出可执行的下一步建议。'
+  },
+  {
+    value: 'customer_support',
+    label: '客服助手',
+    description: '多轮追问、售前售后',
+    contextTurns: 8,
+    maxOutputTokens: 1536,
+    systemPrompt:
+      '你是一个专业、耐心的客服助手。先理解用户诉求，再给出清晰步骤。回答要友好、具体、可执行；遇到账号、订单、付款等敏感问题时，引导用户联系人工处理。'
+  },
+  {
+    value: 'knowledge',
+    label: '内部知识助手',
+    description: '制度、文档、研发知识库',
+    contextTurns: 10,
+    maxOutputTokens: 2048,
+    systemPrompt:
+      '你是企业内部知识助手。根据已有知识和上下文回答问题，优先给出准确、结构清晰的结论。遇到缺少资料或不确定的问题时，明确说明不确定，不要编造。'
+  },
+  {
+    value: 'analysis',
+    label: '深度分析',
+    description: '报告总结、复杂推理',
+    contextTurns: 16,
+    maxOutputTokens: 4096,
+    systemPrompt:
+      '你是一个严谨的分析助手。回答前先梳理问题目标和关键约束，再给出结构化分析、判断依据和建议。对不确定因素要明确标注，并给出可验证的后续步骤。'
+  },
+  {
+    value: 'notification',
+    label: '简短通知',
+    description: 'Webhook 推送、状态解释',
+    contextTurns: 2,
+    maxOutputTokens: 512,
+    systemPrompt:
+      '你是一个简短通知助手。根据输入内容生成简洁、清楚、适合即时消息阅读的回复。优先保留关键信息、状态、时间和下一步动作，避免长篇解释。'
+  }
+] as const
+
+type UsageScenario = (typeof usageScenarios)[number]['value']
+
 const form = reactive({
   step: 1,
   appType: 'wecom' as AppType,
@@ -57,11 +109,10 @@ const form = reactive({
   description: '',
   status: 'enabled',
   model: '',
+  usageScenario: 'knowledge' as UsageScenario,
   systemPrompt: '',
   contextTurns: 10,
   maxOutputTokens: 2048,
-  userKeyId: 0,
-  endpointName: '',
   corpId: '',
   agentId: '',
   corpSecret: '',
@@ -73,9 +124,62 @@ const form = reactive({
   themeColor: '#176baf',
   anonymousAccess: true
 })
+const lastAutoSystemPrompt = ref('')
+const lastAutoModel = ref('')
 
 const filteredApps = computed(() => apps.value)
 const selectedEndpoint = computed(() => selectedApp.value?.endpoint ?? null)
+const createDialogTitle = computed(() => {
+  if (form.step === 3) {
+    return `${typeLabel(createdApp.value?.app_type ?? form.appType)}接入信息`
+  }
+  return form.step === 2 ? `新建${typeLabel(form.appType)}` : '新建应用'
+})
+const selectedUsageScenario = computed(
+  () => usageScenarios.find((item) => item.value === form.usageScenario) ?? usageScenarios[2]
+)
+const canApplyScenarioPrompt = computed(
+  () => form.systemPrompt !== selectedUsageScenario.value.systemPrompt
+)
+const modelCandidates = computed(() => modelOptions.value.map((item) => item.model))
+const createdEndpoint = computed(() => createdApp.value?.endpoint ?? null)
+const createdAccessUrls = computed(() => {
+  const endpoint = createdEndpoint.value
+  if (!endpoint) return []
+  if (endpoint.endpoint_type === 'wecom') {
+    return [
+      {
+        label: '接收消息 URL',
+        value: endpoint.callback_url,
+        helper: '复制到企业微信应用的接收消息 URL。Token 和 EncodingAESKey 使用刚才填写的值。'
+      }
+    ]
+  }
+  if (endpoint.endpoint_type === 'webhook') {
+    return [
+      {
+        label: 'Webhook URL',
+        value: endpoint.invoke_url,
+        helper: '外部系统向这个地址发送请求。'
+      }
+    ]
+  }
+  if (endpoint.endpoint_type === 'widget') {
+    return [
+      {
+        label: '嵌入脚本',
+        value: endpoint.widget_script_url,
+        helper: '把脚本地址加入允许域名下的页面。'
+      },
+      {
+        label: '消息接口',
+        value: endpoint.invoke_url,
+        helper: '网页组件向这个地址发送消息。'
+      }
+    ]
+  }
+  return []
+})
 
 function typeMeta(type: string) {
   return appTypes.find((item) => item.type === type) ?? appTypes[0]
@@ -93,18 +197,73 @@ function cost(value: number) {
   return `$${microUsdToUsd(value).toFixed(4)}`
 }
 
+function applyUsageScenario(
+  value: string | number | boolean,
+  options: { forcePrompt?: boolean } = {}
+) {
+  const scenario = usageScenarios.find((item) => item.value === value)
+  if (!scenario) return
+  form.contextTurns = scenario.contextTurns
+  form.maxOutputTokens = scenario.maxOutputTokens
+  if (
+    options.forcePrompt ||
+    !form.systemPrompt.trim() ||
+    form.systemPrompt === lastAutoSystemPrompt.value
+  ) {
+    form.systemPrompt = scenario.systemPrompt
+    lastAutoSystemPrompt.value = scenario.systemPrompt
+  }
+  applyRecommendedModel(options.forcePrompt)
+}
+
+function applySelectedScenarioPrompt() {
+  form.systemPrompt = selectedUsageScenario.value.systemPrompt
+  lastAutoSystemPrompt.value = selectedUsageScenario.value.systemPrompt
+}
+
+function recommendedModelForScenario() {
+  const candidates = modelCandidates.value
+  if (candidates.length === 0) return ''
+  const preferred: Record<UsageScenario, string[]> = {
+    brief_qa: ['mini', 'flash', 'turbo', 'lite'],
+    customer_support: ['plus', 'mini', 'flash', 'turbo'],
+    knowledge: ['plus', 'mini', 'pro'],
+    analysis: ['reasoner', 'reasoning', 'pro', 'max', 'gpt-4.1'],
+    notification: ['mini', 'flash', 'turbo', 'lite']
+  }
+  const keywords = preferred[form.usageScenario]
+  return (
+    keywords
+      .map((keyword) =>
+        candidates.find((model) => model.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))
+      )
+      .find(Boolean) ?? candidates[0]
+  )
+}
+
+function applyRecommendedModel(force = false) {
+  if (!force && form.model && form.model !== lastAutoModel.value) return
+  const model = recommendedModelForScenario()
+  if (!model) return
+  form.model = model
+  lastAutoModel.value = model
+}
+
 function resetForm(type: AppType = 'wecom') {
   form.step = 1
+  createdApp.value = null
   form.appType = type
   form.name = ''
   form.description = ''
   form.status = 'enabled'
   form.model = ''
+  lastAutoModel.value = ''
+  form.usageScenario = 'knowledge'
   form.systemPrompt = ''
   form.contextTurns = 10
   form.maxOutputTokens = 2048
-  form.userKeyId = userKeys.value[0]?.id ?? 0
-  form.endpointName = ''
+  lastAutoSystemPrompt.value = ''
+  applyUsageScenario(form.usageScenario, { forcePrompt: true })
   form.corpId = ''
   form.agentId = ''
   form.corpSecret = ''
@@ -176,9 +335,8 @@ function payload(): CreateAppInput {
     system_prompt: form.systemPrompt,
     context_turns: form.contextTurns,
     max_output_tokens: form.maxOutputTokens,
-    user_key_id: form.userKeyId,
     endpoint: {
-      name: form.endpointName || form.name,
+      name: form.name,
       enabled: form.status === 'enabled',
       config: endpointConfig(),
       secrets: endpointSecrets()
@@ -189,10 +347,10 @@ function payload(): CreateAppInput {
 async function load() {
   loading.value = true
   try {
-    const [nextApps, keyPage] = await Promise.all([getApps(), getUserKeys({ limit: 200 })])
+    const [nextApps, nextModelOptions] = await Promise.all([getApps(), getAppModelOptions()])
     apps.value = nextApps
-    userKeys.value = keyPage.items
-    if (!form.userKeyId) form.userKeyId = userKeys.value[0]?.id ?? 0
+    modelOptions.value = nextModelOptions
+    if (!form.model) applyRecommendedModel(true)
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
@@ -204,15 +362,21 @@ async function submitCreate() {
   saving.value = true
   try {
     const app = await createApp(payload())
+    createdApp.value = app
+    form.step = 3
     ElMessage.success('应用已创建。')
-    createOpen.value = false
     await load()
-    openDetail(app)
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
     saving.value = false
   }
+}
+
+async function showCreatedAppDetail() {
+  if (!createdApp.value) return
+  createOpen.value = false
+  await openDetail(createdApp.value)
 }
 
 async function toggleApp(app: AppRecord) {
@@ -365,7 +529,7 @@ onMounted(load)
       </article>
     </div>
 
-    <el-dialog v-model="createOpen" class="app-dialog" title="新建应用" width="680px">
+    <el-dialog v-model="createOpen" class="app-dialog" :title="createDialogTitle" width="680px">
       <div v-if="form.step === 1" class="app-type-grid">
         <button
           v-for="item in appTypes"
@@ -381,67 +545,95 @@ onMounted(load)
         </button>
       </div>
 
-      <el-form v-else class="app-create-form" label-position="top" @submit.prevent="submitCreate">
-        <div class="app-provider-row">
-          <el-form-item class="app-type-field" label="应用类型">
-            <el-select v-model="form.appType" disabled>
-              <template #prefix>
-                <el-icon><component :is="typeMeta(form.appType).icon" /></el-icon>
-              </template>
-              <el-option
-                v-for="item in appTypes"
-                :key="item.type"
-                :label="item.label"
-                :value="item.type"
-              />
-            </el-select>
+      <el-form
+        v-else-if="form.step === 2"
+        class="app-create-form"
+        label-position="top"
+        @submit.prevent="submitCreate"
+      >
+        <div class="app-half-field">
+          <el-form-item class="app-name-field" label="应用名称">
+            <el-input v-model="form.name" placeholder="例如 研发知识助手" />
           </el-form-item>
-
-          <label class="app-status-toggle">
-            <span>状态</span>
-            <el-switch v-model="form.status" active-value="enabled" inactive-value="disabled" />
-          </label>
         </div>
 
-        <el-form-item class="app-name-field" label="应用名称">
-          <el-input v-model="form.name" placeholder="例如 研发知识助手" />
+        <el-form-item label="描述（可选）">
+          <el-input
+            v-model="form.description"
+            placeholder="简单说明这个应用的用途，例如：回答研发制度、流程和常见问题"
+            type="textarea"
+            :rows="2"
+          />
         </el-form-item>
 
-        <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" />
-        </el-form-item>
+        <div class="app-form-divider">大模型设置</div>
 
         <div class="app-form-grid">
           <el-form-item label="默认模型">
-            <el-input v-model="form.model" placeholder="例如 gpt-4.1 或 qwen-plus" />
-          </el-form-item>
-          <el-form-item label="绑定 API Key">
-            <el-select v-model="form.userKeyId" filterable placeholder="选择 API Key">
+            <el-select v-model="form.model" filterable placeholder="选择可用模型">
               <el-option
-                v-for="key in userKeys"
-                :key="key.id"
-                :label="`${key.name} · ${key.project_name} · ${key.key_prefix}`"
-                :value="key.id"
-              />
+                v-for="item in modelOptions"
+                :key="item.model"
+                :label="item.model"
+                :value="item.model"
+              >
+                <div class="app-model-option">
+                  <span>{{ item.model }}</span>
+                  <small>{{ item.providers.join(', ') }} · {{ item.channel_count }} 个渠道</small>
+                </div>
+              </el-option>
+              <template #empty>
+                <span class="app-model-empty">暂无可用模型，请先配置渠道模型</span>
+              </template>
             </el-select>
           </el-form-item>
-          <el-form-item label="上下文轮数">
-            <el-input-number v-model="form.contextTurns" :min="0" :max="50" />
-          </el-form-item>
-          <el-form-item label="最大输出 Token">
-            <el-input-number v-model="form.maxOutputTokens" :min="1" :max="128000" />
-          </el-form-item>
         </div>
+
+        <el-form-item label="使用场景">
+          <el-radio-group
+            v-model="form.usageScenario"
+            class="usage-scenario-grid"
+            @change="applyUsageScenario"
+          >
+            <el-radio
+              v-for="item in usageScenarios"
+              :key="item.value"
+              class="usage-scenario-option"
+              :value="item.value"
+            >
+              <strong>{{ item.label }}</strong>
+              <span>{{ item.description }}</span>
+              <el-button
+                v-if="form.usageScenario === item.value && canApplyScenarioPrompt"
+                class="scenario-prompt-button"
+                link
+                type="primary"
+                @click.stop="applySelectedScenarioPrompt"
+              >
+                使用默认提示词
+              </el-button>
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
 
         <el-form-item label="系统提示词">
           <el-input v-model="form.systemPrompt" type="textarea" :rows="3" />
         </el-form-item>
 
-        <div class="app-form-divider">接入配置</div>
+        <el-collapse class="app-advanced-collapse">
+          <el-collapse-item title="高级设置" name="advanced">
+            <div class="app-form-grid">
+              <el-form-item label="上下文轮数">
+                <el-input-number v-model="form.contextTurns" :min="0" :max="50" />
+              </el-form-item>
+              <el-form-item label="最大输出 Token">
+                <el-input-number v-model="form.maxOutputTokens" :min="1" :max="128000" />
+              </el-form-item>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
 
-        <el-form-item label="入口名称">
-          <el-input v-model="form.endpointName" placeholder="默认使用应用名称" />
-        </el-form-item>
+        <div class="app-form-divider">接入配置</div>
 
         <template v-if="form.appType === 'wecom'">
           <div class="app-form-grid">
@@ -489,10 +681,52 @@ onMounted(load)
         <button class="hidden-submit" type="submit" />
       </el-form>
 
+      <div v-else class="app-create-success">
+        <div class="app-create-success-heading">
+          <span class="app-type-icon">
+            <el-icon><component :is="typeMeta(createdApp?.app_type || form.appType).icon" /></el-icon>
+          </span>
+          <div>
+            <strong>{{ createdApp?.name }}</strong>
+            <span>{{ typeLabel(createdApp?.app_type || form.appType) }}已创建</span>
+          </div>
+        </div>
+
+        <el-alert
+          v-if="createdAccessUrls.some((item) => !item.value)"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="未生成公开访问 URL，请先配置 PUBLIC_BASE_URL。"
+        />
+
+        <div class="app-access-url-list">
+          <div v-for="item in createdAccessUrls" :key="item.label" class="app-access-url-row">
+            <div class="app-access-url-meta">
+              <strong>{{ item.label }}</strong>
+              <span>{{ item.helper }}</span>
+            </div>
+            <div class="app-access-url-copy">
+              <code>{{ item.value || '未配置公开访问地址' }}</code>
+              <el-button
+                :disabled="!item.value"
+                :icon="Link"
+                type="primary"
+                @click="copyText(item.value)"
+              >
+                复制 URL
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <template #footer>
         <div class="app-dialog-footer">
           <el-button v-if="form.step === 2" @click="form.step = 1">返回</el-button>
-          <el-button @click="createOpen = false">{{ t('cancel') }}</el-button>
+          <el-button @click="createOpen = false">
+            {{ form.step === 3 ? '关闭' : t('cancel') }}
+          </el-button>
           <el-button
             v-if="form.step === 2"
             type="primary"
@@ -500,6 +734,9 @@ onMounted(load)
             @click="submitCreate"
           >
             创建应用
+          </el-button>
+          <el-button v-if="form.step === 3" type="primary" :icon="View" @click="showCreatedAppDetail">
+            查看详情
           </el-button>
         </div>
       </template>
@@ -790,37 +1027,128 @@ onMounted(load)
   gap: 13px;
 }
 
-.app-provider-row {
-  align-items: end;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 50%) max-content;
-  justify-content: start;
-}
-
-.app-type-field {
-  margin-bottom: 0;
-  width: 100%;
-}
-
-.app-status-toggle {
-  align-items: center;
-  border: 1px solid #d8e0ea;
-  border-radius: 7px;
-  color: #475569;
-  display: inline-flex;
-  font-size: 13px;
-  font-weight: 640;
-  gap: 12px;
-  min-height: 38px;
-  padding: 0 14px;
-  white-space: nowrap;
-}
-
 .app-form-grid {
   display: grid;
   gap: 13px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.app-half-field {
+  width: calc(50% - 6.5px);
+}
+
+.app-model-option {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.app-model-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-model-option small {
+  color: var(--admin-text-muted);
+  flex: none;
+  font-size: 12px;
+}
+
+.app-model-empty {
+  color: var(--admin-text-muted);
+  display: block;
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
+.usage-scenario-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  width: 100%;
+}
+
+.usage-scenario-option.el-radio {
+  align-items: flex-start;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  margin: 0;
+  min-height: 72px;
+  padding: 12px;
+  white-space: normal;
+}
+
+.usage-scenario-option.el-radio.is-checked {
+  background: var(--admin-primary-soft);
+  border-color: #9bbde3;
+}
+
+.usage-scenario-option :deep(.el-radio__input) {
+  padding-top: 2px;
+}
+
+.usage-scenario-option :deep(.el-radio__label) {
+  display: grid;
+  gap: 4px;
+  line-height: 1.35;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.usage-scenario-option :deep(.el-radio__label strong) {
+  color: var(--admin-heading);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.usage-scenario-option :deep(.el-radio__label span) {
+  color: var(--admin-text-muted);
+  font-size: 12px;
+}
+
+.scenario-prompt-button.el-button {
+  --el-button-hover-text-color: var(--admin-primary);
+  --el-button-text-color: var(--admin-primary);
+  background: #ffffff;
+  border: 1px solid #b9d1ec;
+  border-radius: 999px;
+  justify-self: start;
+  font-size: 12px;
+  font-weight: 680;
+  min-height: 24px;
+  padding: 0 10px;
+}
+
+.scenario-prompt-button.el-button:hover,
+.scenario-prompt-button.el-button:focus-visible {
+  background: #f8fbff;
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 2px rgba(23, 107, 175, 0.12);
+}
+
+.app-advanced-collapse {
+  border-bottom: 0;
+  border-top: 0;
+  margin-top: -4px;
+}
+
+.app-advanced-collapse :deep(.el-collapse-item__header) {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  height: 38px;
+  line-height: 38px;
+}
+
+.app-advanced-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: 0;
+}
+
+.app-advanced-collapse :deep(.el-collapse-item__content) {
+  padding-bottom: 0;
 }
 
 .app-form-divider {
@@ -845,6 +1173,99 @@ onMounted(load)
   display: flex;
   gap: 12px;
   justify-content: flex-end;
+}
+
+.app-create-success {
+  display: grid;
+  gap: 16px;
+}
+
+.app-create-success-heading {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 12px;
+}
+
+.app-create-success-heading strong {
+  color: var(--admin-heading);
+  display: block;
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-create-success-heading span {
+  color: var(--admin-text-muted);
+  display: block;
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.app-access-url-list {
+  display: grid;
+  gap: 12px;
+}
+
+.app-access-url-row {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.app-access-url-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.app-access-url-meta strong {
+  color: var(--admin-heading);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.app-access-url-meta span {
+  color: var(--admin-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.app-access-url-copy {
+  align-items: stretch;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.app-access-url-copy code {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 7px;
+  color: #0f172a;
+  display: flex;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  min-height: 38px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+}
+
+.app-access-url-copy :deep(.el-button) {
+  border-radius: 7px;
+  font-weight: 680;
+  min-height: 38px;
 }
 
 .hidden-submit {
@@ -882,8 +1303,7 @@ onMounted(load)
   padding: 14px 22px 18px;
 }
 
-.app-create-form :deep(.el-form-item),
-.app-type-field {
+.app-create-form :deep(.el-form-item) {
   margin-bottom: 0;
 }
 
@@ -895,7 +1315,6 @@ onMounted(load)
   margin-bottom: 7px;
 }
 
-.app-type-field :deep(.el-form-item__content),
 .app-name-field :deep(.el-form-item__content) {
   width: 100%;
 }
@@ -965,9 +1384,8 @@ onMounted(load)
     grid-template-columns: 1fr;
   }
 
-  .app-provider-row {
-    align-items: stretch;
-    grid-template-columns: 1fr;
+  .app-half-field {
+    width: 100%;
   }
 
   .app-card-actions {
@@ -980,6 +1398,10 @@ onMounted(load)
 
   .app-form-grid,
   .app-detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .app-access-url-copy {
     grid-template-columns: 1fr;
   }
 

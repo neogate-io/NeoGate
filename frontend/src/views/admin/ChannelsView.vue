@@ -1245,7 +1245,14 @@ onMounted(loadInitialData)
                 :class="probeTrendClass(row)"
                 :aria-label="probeTooltip(row)"
               >
-                <svg class="probe-trend-chart" viewBox="0 0 132 44" aria-hidden="true">
+                <div
+                  v-if="probeTrendBars(row).length === 0"
+                  class="probe-trend-empty"
+                  aria-hidden="true"
+                >
+                  <span>{{ t('probeNoData') }}</span>
+                </div>
+                <svg v-else class="probe-trend-chart" viewBox="0 0 132 44" aria-hidden="true">
                   <line
                     x1="0"
                     y1="39"
@@ -1267,18 +1274,8 @@ onMounted(loadInitialData)
                   >
                     <title>{{ bar.title }}</title>
                   </rect>
-                  <line
-                    v-if="probeTrendBars(row).length === 0"
-                    x1="14"
-                    y1="22"
-                    x2="118"
-                    y2="22"
-                    class="probe-trend-empty-line"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                  />
                 </svg>
-                <div class="probe-trend-foot">
+                <div v-if="probeTrendBars(row).length > 0" class="probe-trend-foot">
                   <span>{{ t('probeAverageLatency') }}</span>
                   <strong>{{ probeTrendAverageLabel(row) }}</strong>
                 </div>
@@ -2170,13 +2167,21 @@ onMounted(loadInitialData)
   width: 132px;
 }
 
+.probe-trend-empty {
+  align-items: center;
+  color: #86909c;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 620;
+  height: 44px;
+  justify-content: center;
+  line-height: 1;
+  width: 132px;
+}
+
 .probe-trend-baseline {
   stroke: #e5e7eb;
   stroke-width: 1;
-}
-
-.probe-trend-empty-line {
-  stroke: currentColor;
 }
 
 .probe-trend-bar {

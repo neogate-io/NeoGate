@@ -33,6 +33,12 @@ use super::{
 
 type Aes256CbcDec = Decryptor<Aes256>;
 
+#[derive(Debug, PartialEq, Eq)]
+struct WecomDecrypted {
+    message: String,
+    receive_id: String,
+}
+
 pub(super) async fn webhook_message(
     State(state): State<Arc<AppState>>,
     Path(endpoint_id): Path<DbId>,
@@ -169,8 +175,9 @@ pub(super) async fn wecom_verify(
     let nonce = query.nonce.as_deref().ok_or(AppError::Unauthorized)?;
     let echostr = query.echostr.as_deref().ok_or(AppError::Unauthorized)?;
     verify_wecom_signature(&state, &runtime, msg_signature, timestamp, nonce, echostr)?;
-    let plaintext = decrypt_wecom(&state, &runtime, echostr)?;
-    Ok(plaintext.into_response())
+    let decrypted = decrypt_wecom(&state, &runtime, echostr)?;
+    verify_wecom_receive_id(&runtime, &decrypted.receive_id)?;
+    Ok(decrypted.message.into_response())
 }
 
 pub(super) async fn wecom_message(
@@ -199,12 +206,13 @@ pub(super) async fn wecom_message(
         nonce,
         &encrypted,
     )?;
-    let plaintext = decrypt_wecom(&state, &runtime, &encrypted)?;
-    let content = extract_xml_value(plaintext.as_bytes(), "Content").unwrap_or_default();
-    let msg_type = extract_xml_value(plaintext.as_bytes(), "MsgType").unwrap_or_default();
-    let from_user = extract_xml_value(plaintext.as_bytes(), "FromUserName")
+    let decrypted = decrypt_wecom(&state, &runtime, &encrypted)?;
+    verify_wecom_receive_id(&runtime, &decrypted.receive_id)?;
+    let content = extract_xml_value(decrypted.message.as_bytes(), "Content").unwrap_or_default();
+    let msg_type = extract_xml_value(decrypted.message.as_bytes(), "MsgType").unwrap_or_default();
+    let from_user = extract_xml_value(decrypted.message.as_bytes(), "FromUserName")
         .unwrap_or_else(|| "wecom".to_string());
-    let msg_id = extract_xml_value(plaintext.as_bytes(), "MsgId");
+    let msg_id = extract_xml_value(decrypted.message.as_bytes(), "MsgId");
     if msg_type != "text" {
         return Ok("success".into_response());
     }
@@ -288,8 +296,15 @@ fn verify_wecom_signature(
     encrypted: &str,
 ) -> AppResult<()> {
     let token = secret_plaintext(state, runtime, WECOM_TOKEN_SECRET_KEY)?;
+    let expected = wecom_signature(&token, timestamp, nonce, encrypted);
+    constant_time_eq(msg_signature.as_bytes(), expected.as_bytes())
+        .then_some(())
+        .ok_or(AppError::Unauthorized)
+}
+
+fn wecom_signature(token: &str, timestamp: &str, nonce: &str, encrypted: &str) -> String {
     let mut parts = vec![
-        token,
+        token.to_string(),
         timestamp.to_string(),
         nonce.to_string(),
         encrypted.to_string(),
@@ -299,14 +314,19 @@ fn verify_wecom_signature(
     for part in parts {
         hasher.update(part.as_bytes());
     }
-    let expected = hex::encode(hasher.finalize());
-    constant_time_eq(msg_signature.as_bytes(), expected.as_bytes())
-        .then_some(())
-        .ok_or(AppError::Unauthorized)
+    hex::encode(hasher.finalize())
 }
 
-fn decrypt_wecom(state: &AppState, runtime: &AppRuntime, encrypted: &str) -> AppResult<String> {
+fn decrypt_wecom(
+    state: &AppState,
+    runtime: &AppRuntime,
+    encrypted: &str,
+) -> AppResult<WecomDecrypted> {
     let aes_key = secret_plaintext(state, runtime, WECOM_AES_SECRET_KEY)?;
+    decrypt_wecom_payload(&aes_key, encrypted)
+}
+
+fn decrypt_wecom_payload(aes_key: &str, encrypted: &str) -> AppResult<WecomDecrypted> {
     let key = general_purpose::STANDARD
         .decode(format!("{aes_key}="))
         .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
@@ -336,8 +356,29 @@ fn decrypt_wecom(state: &AppState, runtime: &AppRuntime, encrypted: &str) -> App
             "invalid decrypted payload".to_string(),
         ));
     }
-    String::from_utf8(plaintext[start..end].to_vec())
-        .map_err(|_| AppError::BadRequest("invalid decrypted utf8".to_string()))
+    let message = String::from_utf8(plaintext[start..end].to_vec())
+        .map_err(|_| AppError::BadRequest("invalid decrypted utf8".to_string()))?;
+    let receive_id = String::from_utf8(plaintext[end..].to_vec())
+        .map_err(|_| AppError::BadRequest("invalid decrypted utf8".to_string()))?;
+    Ok(WecomDecrypted {
+        message,
+        receive_id,
+    })
+}
+
+fn verify_wecom_receive_id(runtime: &AppRuntime, receive_id: &str) -> AppResult<()> {
+    let corp_id = runtime
+        .endpoint_config
+        .get("corp_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if corp_id.is_empty() {
+        return Err(AppError::BadRequest("corp_id is required".to_string()));
+    }
+    constant_time_eq(receive_id.as_bytes(), corp_id.as_bytes())
+        .then_some(())
+        .ok_or(AppError::Unauthorized)
 }
 
 fn wecom_unpad(input: &[u8]) -> AppResult<&[u8]> {
@@ -346,6 +387,14 @@ fn wecom_unpad(input: &[u8]) -> AppResult<&[u8]> {
     };
     let pad = if pad == 0 { 32 } else { pad as usize };
     if pad > 32 || pad > input.len() {
+        return Err(AppError::BadRequest(
+            "invalid decrypted padding".to_string(),
+        ));
+    }
+    if !input[input.len() - pad..]
+        .iter()
+        .all(|value| *value as usize == pad)
+    {
         return Err(AppError::BadRequest(
             "invalid decrypted padding".to_string(),
         ));
@@ -399,4 +448,74 @@ async fn send_wecom_text(
         return Err(AppError::BadRequest(format!("wecom send failed: {res}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cbc::{
+        cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit},
+        Encryptor,
+    };
+
+    type Aes256CbcEnc = Encryptor<Aes256>;
+
+    #[test]
+    fn decrypt_wecom_payload_extracts_message_and_receive_id() {
+        let aes_key = test_encoding_aes_key();
+        let xml = "<xml><ToUserName><![CDATA[corp-123]]></ToUserName><FromUserName><![CDATA[kevin]]></FromUserName><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello]]></Content><MsgId>42</MsgId></xml>";
+        let encrypted = encrypt_wecom_payload(&aes_key, xml, "corp-123");
+
+        let decrypted = decrypt_wecom_payload(&aes_key, &encrypted).expect("decrypt payload");
+
+        assert_eq!(
+            decrypted,
+            WecomDecrypted {
+                message: xml.to_string(),
+                receive_id: "corp-123".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn wecom_signature_uses_token_timestamp_nonce_and_ciphertext_sorted() {
+        let signature = wecom_signature("token", "1700000000", "nonce", "encrypted");
+
+        assert_eq!(signature, "a976d3f9651ff9c34c56c6f9774c36bca10ec1de");
+    }
+
+    #[test]
+    fn wecom_unpad_rejects_inconsistent_padding() {
+        let mut input = b"payload".to_vec();
+        input.extend_from_slice(&[4, 4, 4, 3]);
+
+        assert!(wecom_unpad(&input).is_err());
+    }
+
+    fn test_encoding_aes_key() -> String {
+        let key = [7u8; 32];
+        general_purpose::STANDARD
+            .encode(key)
+            .trim_end_matches('=')
+            .to_string()
+    }
+
+    fn encrypt_wecom_payload(aes_key: &str, xml: &str, receive_id: &str) -> String {
+        let key = general_purpose::STANDARD
+            .decode(format!("{aes_key}="))
+            .expect("valid aes key");
+        let mut plaintext = Vec::new();
+        plaintext.extend_from_slice(b"1234567890123456");
+        plaintext.extend_from_slice(&(xml.len() as u32).to_be_bytes());
+        plaintext.extend_from_slice(xml.as_bytes());
+        plaintext.extend_from_slice(receive_id.as_bytes());
+        let padding = 32 - plaintext.len() % 32;
+        plaintext.extend(std::iter::repeat_n(padding as u8, padding));
+        let len = plaintext.len();
+        let encrypted = Aes256CbcEnc::new_from_slices(&key, &key[..16])
+            .expect("valid cipher")
+            .encrypt_padded_mut::<NoPadding>(&mut plaintext, len)
+            .expect("encrypt payload");
+        general_purpose::STANDARD.encode(encrypted)
+    }
 }

@@ -8,6 +8,12 @@ export type AppEndpointInput = {
   secrets?: Record<string, string>
 }
 
+export type AppModelOption = {
+  model: string
+  providers: string[]
+  channel_count: number
+}
+
 export type CreateAppInput = {
   name: string
   description?: string
@@ -17,7 +23,6 @@ export type CreateAppInput = {
   system_prompt?: string
   context_turns?: number
   max_output_tokens?: number
-  user_key_id: number
   endpoint: AppEndpointInput
 }
 
@@ -32,6 +37,10 @@ export function getApps(filters: { search?: string; status?: string; appType?: s
   if (filters.appType) searchParams.set('app_type', filters.appType)
   const query = searchParams.toString()
   return adminRequest<AppRecord[]>(`/api/admin/apps${query ? `?${query}` : ''}`)
+}
+
+export function getAppModelOptions() {
+  return adminRequest<AppModelOption[]>('/api/admin/app-model-options')
 }
 
 export function createApp(payload: CreateAppInput) {

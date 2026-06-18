@@ -117,7 +117,6 @@ pub struct UpsertAppRequest {
     pub system_prompt: Option<String>,
     pub context_turns: Option<i32>,
     pub max_output_tokens: Option<i32>,
-    pub user_key_id: DbId,
     pub endpoint: UpsertEndpointRequest,
 }
 

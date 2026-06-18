@@ -22,6 +22,7 @@ pub use session::UserSessionAuth;
 const PASSWORD_RESET_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const LOGIN_VERIFICATION_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const MIN_USER_PASSWORD_LEN: usize = 8;
+const SYSTEM_APPS_USER_EMAIL: &str = "system-apps@neogate.local";
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/login", post(login))
@@ -108,6 +109,9 @@ async fn request_login_verification_code(
         .auth_rate_limiter
         .check_login_verification_request(&email, &client_key)
         .await?;
+    if is_system_apps_email(&email) {
+        return Ok(Json(OkResponse { ok: true }));
+    }
     if login_email_needs_verification(&state, &email).await? {
         let (_, registration_enabled) = registration_policy(&state).await?;
         if !registration_enabled {
@@ -153,6 +157,9 @@ async fn request_password_reset(
         .auth_rate_limiter
         .check_password_reset_request(&email, &client_key)
         .await?;
+    if is_system_apps_email(&email) {
+        return Ok(Json(OkResponse { ok: true }));
+    }
     if user_can_reset_password(&state, &email).await? {
         let token = issue_password_reset_token(
             PASSWORD_RESET_TTL,
@@ -188,6 +195,9 @@ async fn reset_password(
 
     let email = password_reset_email_from_token(&req.token, &state.config.admin_token_secret)
         .ok_or(AppError::Unauthorized)?;
+    if is_system_apps_email(&email) {
+        return Err(AppError::Unauthorized);
+    }
     let password_hash = hash_user_password(&req.password, &state.config.admin_token_secret);
     let result = sqlx::query(
         r#"
@@ -288,6 +298,9 @@ async fn login_or_create_user(
     verification_code: Option<&str>,
 ) -> AppResult<UserLogin> {
     let email = normalize_email(email)?;
+    if is_system_apps_email(&email) {
+        return Err(AppError::Unauthorized);
+    }
     validate_user_password_input(password)?;
 
     let password_hash = hash_user_password(password, &state.config.admin_token_secret);
@@ -485,6 +498,10 @@ fn normalize_email(email: &str) -> AppResult<String> {
     Ok(email)
 }
 
+fn is_system_apps_email(email: &str) -> bool {
+    email.eq_ignore_ascii_case(SYSTEM_APPS_USER_EMAIL)
+}
+
 async fn lock_user_login(tx: &mut Transaction<'_, Postgres>, email: &str) -> AppResult<()> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
         .bind(email)
@@ -561,6 +578,13 @@ mod tests {
             "https://app.example.com/reset-password?token=reset-token"
         );
         assert!(reset_url_from_config(None, "reset-token").is_err());
+    }
+
+    #[test]
+    fn system_apps_email_is_reserved_case_insensitively() {
+        assert!(is_system_apps_email("system-apps@neogate.local"));
+        assert!(is_system_apps_email("System-Apps@NeoGate.Local"));
+        assert!(!is_system_apps_email("user@example.com"));
     }
 
     #[test]

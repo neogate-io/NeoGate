@@ -316,7 +316,9 @@ export function useChannels(t: Translate) {
     const endpoint = modelFetchEndpoint(form)
     const baseUrl = visibleBaseUrl(form).trim()
     const secret =
-      formTarget === 'create' ? (splitSecretLines(createForm.secret)[0] ?? '') : undefined
+      formTarget === 'create'
+        ? (splitSecretLines(createForm.secret)[0] ?? '')
+        : splitSecretLines(editForm.secret)[0]
     if (!validateModelFetchInput(form, baseUrl, secret)) return
 
     modelPickerTarget.value = { form: formTarget }
@@ -330,7 +332,7 @@ export function useChannels(t: Translate) {
         provider: form.provider,
         protocol: endpoint.protocol,
         base_url: baseUrl,
-        secret: formTarget === 'create' ? secret : undefined,
+        secret,
         use_credentials: form.use_credentials
       })
       if (models.length === 0) {

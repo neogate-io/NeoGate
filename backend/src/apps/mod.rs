@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -438,6 +439,10 @@ pub(crate) async fn upsert_endpoint_tx(
         .map(|row| row.try_get::<Value, _>("secret_ciphertext"))
         .transpose()?
         .unwrap_or_else(|| json!({}));
+    let mut has_wecom_aes_key = secrets
+        .get(WECOM_AES_SECRET_KEY)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
     if let Some(next) = req.secrets {
         let object = secrets
             .as_object_mut()
@@ -445,9 +450,18 @@ pub(crate) async fn upsert_endpoint_tx(
         for (key, value) in next {
             let value = value.trim();
             if !value.is_empty() {
+                if endpoint_type == "wecom" && key == WECOM_AES_SECRET_KEY {
+                    validate_wecom_encoding_aes_key(value)?;
+                    has_wecom_aes_key = true;
+                }
                 object.insert(key, Value::String(state.secrets.encrypt(value)?));
             }
         }
+    }
+    if endpoint_type == "wecom" && !has_wecom_aes_key {
+        return Err(AppError::BadRequest(
+            "EncodingAESKey is required".to_string(),
+        ));
     }
     let name = req.name.unwrap_or_else(|| endpoint_type.to_string());
     let enabled = req.enabled.unwrap_or(true);
@@ -474,6 +488,21 @@ pub(crate) async fn upsert_endpoint_tx(
     .bind(secrets)
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+fn validate_wecom_encoding_aes_key(value: &str) -> AppResult<()> {
+    if value.len() != 43 {
+        return Err(AppError::BadRequest(
+            "EncodingAESKey must be 43 characters".to_string(),
+        ));
+    }
+    let key = general_purpose::STANDARD
+        .decode(format!("{value}="))
+        .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::BadRequest("invalid EncodingAESKey".to_string()));
+    }
     Ok(())
 }
 

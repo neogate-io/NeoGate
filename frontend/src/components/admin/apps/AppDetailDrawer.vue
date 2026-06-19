@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Refresh } from '@element-plus/icons-vue'
+import { Edit, Refresh } from '@element-plus/icons-vue'
 import type { AppRecord, AppRunLog } from '../../../types/admin'
 import { formatCompactDateTime } from '../../../utils/format'
 
@@ -16,6 +16,7 @@ defineProps<{
 
 const emit = defineEmits<{
   copy: [value?: string | null]
+  edit: [app: AppRecord]
   test: []
 }>()
 </script>
@@ -25,40 +26,59 @@ const emit = defineEmits<{
     <el-tabs v-if="app" v-model="activeTab">
       <el-tab-pane label="概览" name="overview">
         <dl class="app-detail-list">
-          <div><dt>应用类型</dt><dd>{{ typeLabel(app.app_type) }}</dd></div>
-          <div><dt>状态</dt><dd>{{ statusLabel(app.status) }}</dd></div>
-          <div><dt>默认模型</dt><dd>{{ app.model }}</dd></div>
-          <div><dt>绑定 API Key</dt><dd>{{ app.user_key_name }}</dd></div>
-          <div><dt>项目</dt><dd>{{ app.project_name }}</dd></div>
-          <div><dt>今日消息</dt><dd>{{ app.today_message_count }}</dd></div>
+          <div>
+            <dt>应用类型</dt>
+            <dd>{{ typeLabel(app.app_type) }}</dd>
+          </div>
+          <div>
+            <dt>状态</dt>
+            <dd>{{ statusLabel(app.status) }}</dd>
+          </div>
+          <div>
+            <dt>默认模型</dt>
+            <dd>{{ app.model }}</dd>
+          </div>
+          <div>
+            <dt>绑定 API Key</dt>
+            <dd>{{ app.user_key_name }}</dd>
+          </div>
+          <div>
+            <dt>项目</dt>
+            <dd>{{ app.project_name }}</dd>
+          </div>
+          <div>
+            <dt>今日消息</dt>
+            <dd>{{ app.today_message_count }}</dd>
+          </div>
         </dl>
       </el-tab-pane>
 
       <el-tab-pane label="接入配置" name="endpoint">
         <div v-if="app.endpoint" class="endpoint-panel">
-          <el-button class="admin-action-button" :icon="Refresh" @click="emit('test')">
-            测试连接
-          </el-button>
+          <div class="endpoint-actions">
+            <el-button class="admin-action-button" :icon="Edit" @click="emit('edit', app)">
+              编辑配置
+            </el-button>
+            <el-button class="admin-action-button" :icon="Refresh" @click="emit('test')">
+              测试连接
+            </el-button>
+          </div>
           <el-descriptions border :column="1">
             <el-descriptions-item label="入口类型">
               {{ app.endpoint.endpoint_type }}
             </el-descriptions-item>
-            <el-descriptions-item label="回调 URL">
+            <el-descriptions-item v-if="app.endpoint.callback_url" label="回调 URL">
               <el-button link type="primary" @click="emit('copy', app.endpoint.callback_url)">
-                {{ app.endpoint.callback_url || '-' }}
+                {{ app.endpoint.callback_url }}
               </el-button>
             </el-descriptions-item>
-            <el-descriptions-item label="调用 URL">
+            <el-descriptions-item v-if="app.endpoint.invoke_url" label="调用 URL">
               <el-button link type="primary" @click="emit('copy', app.endpoint.invoke_url)">
-                {{ app.endpoint.invoke_url || '-' }}
+                {{ app.endpoint.invoke_url }}
               </el-button>
             </el-descriptions-item>
             <el-descriptions-item v-if="app.endpoint.widget_script_url" label="嵌入脚本">
-              <el-button
-                link
-                type="primary"
-                @click="emit('copy', app.endpoint.widget_script_url)"
-              >
+              <el-button link type="primary" @click="emit('copy', app.endpoint.widget_script_url)">
                 {{ app.endpoint.widget_script_url }}
               </el-button>
             </el-descriptions-item>
@@ -80,9 +100,16 @@ const emit = defineEmits<{
           <el-table-column prop="model" label="模型" min-width="130" />
           <el-table-column prop="external_user_id" label="外部用户" min-width="120" />
           <el-table-column label="Token" width="100">
-            <template #default="{ row }: { row: AppRunLog }">{{ row.total_tokens ?? '-' }}</template>
+            <template #default="{ row }: { row: AppRunLog }">{{
+              row.total_tokens ?? '-'
+            }}</template>
           </el-table-column>
-          <el-table-column prop="error_summary" label="错误" min-width="180" show-overflow-tooltip />
+          <el-table-column
+            prop="error_summary"
+            label="错误"
+            min-width="180"
+            show-overflow-tooltip
+          />
         </el-table>
       </el-tab-pane>
 
@@ -119,6 +146,12 @@ const emit = defineEmits<{
 .endpoint-panel {
   display: grid;
   gap: 14px;
+}
+
+.endpoint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 @media (max-width: 760px) {

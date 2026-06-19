@@ -8,17 +8,24 @@ const open = defineModel<boolean>('open', { required: true })
 
 const props = defineProps<{
   create: UseAppCreate
+  mode?: 'create' | 'edit'
+  saving?: boolean
 }>()
 const create = props.create
 
 const emit = defineEmits<{
   copy: [value?: string | null]
+  save: []
   showDetail: [app: AppRecord]
 }>()
 
 const { t } = useLocale()
 
 function submitCreate() {
+  if (props.mode === 'edit') {
+    emit('save')
+    return
+  }
   void props.create.submitCreate()
 }
 
@@ -33,10 +40,14 @@ function showCreatedAppDetail() {
   <el-dialog
     v-model="open"
     class="app-dialog"
-    :title="create.createDialogTitle.value"
+    :title="
+      mode === 'edit'
+        ? `编辑${create.typeLabel(create.form.appType)}`
+        : create.createDialogTitle.value
+    "
     width="680px"
   >
-    <div v-if="create.form.step === 1" class="app-type-grid">
+    <div v-if="create.form.step === 1 && mode !== 'edit'" class="app-type-grid">
       <button
         v-for="item in create.appTypes"
         :key="item.type"
@@ -52,14 +63,20 @@ function showCreatedAppDetail() {
     </div>
 
     <el-form
-      v-else-if="create.form.step === 2"
+      v-else-if="create.form.step === 2 || mode === 'edit'"
       class="app-create-form"
       label-position="top"
       @submit.prevent="submitCreate"
     >
-      <div class="app-half-field">
+      <div class="app-form-grid">
         <el-form-item class="app-name-field" label="应用名称">
           <el-input v-model="create.form.name" placeholder="例如 研发知识助手" />
+        </el-form-item>
+        <el-form-item v-if="mode === 'edit'" label="状态">
+          <el-select v-model="create.form.status">
+            <el-option label="已启用" value="enabled" />
+            <el-option label="已禁用" value="disabled" />
+          </el-select>
         </el-form-item>
       </div>
 
@@ -93,9 +110,12 @@ function showCreatedAppDetail() {
             </template>
           </el-select>
         </el-form-item>
+        <el-form-item v-if="mode === 'edit'" label="入口状态">
+          <el-switch v-model="create.form.endpointEnabled" />
+        </el-form-item>
       </div>
 
-      <el-form-item label="使用场景">
+      <el-form-item v-if="mode !== 'edit'" label="使用场景">
         <el-radio-group
           v-model="create.form.usageScenario"
           class="usage-scenario-grid"
@@ -186,7 +206,12 @@ function showCreatedAppDetail() {
 
       <template v-if="create.form.appType === 'webhook'">
         <el-form-item label="Webhook Secret">
-          <el-input v-model="create.form.webhookSecret" show-password type="password" />
+          <el-input
+            v-model="create.form.webhookSecret"
+            :placeholder="mode === 'edit' ? '留空则保持当前密钥不变' : ''"
+            show-password
+            type="password"
+          />
         </el-form-item>
       </template>
 
@@ -313,17 +338,19 @@ function showCreatedAppDetail() {
 
     <template #footer>
       <div class="app-dialog-footer">
-        <el-button v-if="create.form.step === 2" @click="create.form.step = 1">返回</el-button>
+        <el-button v-if="create.form.step === 2 && mode !== 'edit'" @click="create.form.step = 1">
+          返回
+        </el-button>
         <el-button @click="open = false">
           {{ create.form.step === 3 ? '关闭' : t('cancel') }}
         </el-button>
         <el-button
-          v-if="create.form.step === 2"
+          v-if="create.form.step === 2 || mode === 'edit'"
           type="primary"
-          :loading="create.saving.value"
+          :loading="mode === 'edit' ? saving : create.saving.value"
           @click="submitCreate"
         >
-          创建应用
+          {{ mode === 'edit' ? '保存' : '创建应用' }}
         </el-button>
         <el-button
           v-if="create.form.step === 3"

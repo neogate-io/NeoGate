@@ -28,24 +28,31 @@ type AdminNavItem = { path: string; key: MessageKey; icon: Component }
 type SettingNavItem = { path: string; key: MessageKey }
 type AdminNavGroup = { key: MessageKey; items: AdminNavItem[] }
 
-const navGroups = [
-  {
-    key: 'adminNavOperations',
-    items: [
-      { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
-      { path: '/admin/apps', key: 'apps', icon: Promotion },
-      { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
-      { path: '/admin/usage', key: 'usage', icon: Monitor }
-    ]
-  },
-  {
-    key: 'adminNavAccounts',
-    items: [
-      { path: '/admin/keys', key: 'userManagement', icon: User },
-      { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened }
-    ]
+const navGroups = computed(() => {
+  const operationItems: AdminNavItem[] = [
+    { path: '/admin/channels', key: 'upstreamChannels', icon: Connection }
+  ]
+  if (servicePolicy.value?.service_mode === 'internal') {
+    operationItems.push({ path: '/admin/apps', key: 'apps', icon: Promotion })
   }
-] satisfies AdminNavGroup[]
+  operationItems.push(
+    { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
+    { path: '/admin/usage', key: 'usage', icon: Monitor }
+  )
+  return [
+    {
+      key: 'adminNavOperations',
+      items: operationItems
+    },
+    {
+      key: 'adminNavAccounts',
+      items: [
+        { path: '/admin/keys', key: 'userManagement', icon: User },
+        { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened }
+      ]
+    }
+  ] satisfies AdminNavGroup[]
+})
 
 const settingItems = computed(() => {
   const items: SettingNavItem[] = [
@@ -73,7 +80,7 @@ const activeRouteSubtitle = computed(() => {
 })
 const activeRouteGroupLabel = computed(() => {
   if (settingsOpen.value) return t('settings')
-  const matchedGroup = navGroups.find((group) =>
+  const matchedGroup = navGroups.value.find((group) =>
     group.items.some((item) => activeRoute.value.startsWith(item.path))
   )
   return t(matchedGroup?.key ?? 'adminNavOperations')

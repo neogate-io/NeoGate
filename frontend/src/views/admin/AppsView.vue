@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Delete, Plus, Promotion, SwitchButton, View } from '@element-plus/icons-vue'
+import { Delete, Edit, Plus, Promotion, SwitchButton, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { deleteApp, getAppRunLogs, getApps, testApp, updateApp } from '../../api/apps'
 import AppCreateDialog from '../../components/admin/apps/AppCreateDialog.vue'
@@ -19,10 +19,13 @@ const logs = ref<AppRunLog[]>([])
 const loading = ref(false)
 const logsLoading = ref(false)
 const createOpen = ref(false)
+const editOpen = ref(false)
+const editSaving = ref(false)
 const detailOpen = ref(false)
 const activeDetailTab = ref('overview')
 const selectedApp = ref<AppRecord | null>(null)
 const create = useAppCreate()
+const edit = useAppCreate()
 
 const filteredApps = computed(() => apps.value)
 
@@ -43,10 +46,17 @@ function openCreate() {
   createOpen.value = true
 }
 
+function replaceApp(nextApp: AppRecord) {
+  const index = apps.value.findIndex((app) => app.id === nextApp.id)
+  if (index >= 0) apps.value[index] = nextApp
+  if (selectedApp.value?.id === nextApp.id) selectedApp.value = nextApp
+}
+
 async function load() {
   loading.value = true
   try {
     const [nextApps] = await Promise.all([getApps(), create.loadModelOptions()])
+    edit.modelOptions.value = create.modelOptions.value
     apps.value = nextApps
   } catch (err) {
     ElMessage.error(readError(err))
@@ -63,14 +73,36 @@ async function showCreatedAppDetail(app: AppRecord) {
 async function toggleApp(app: AppRecord) {
   try {
     const status = app.status === 'enabled' ? 'disabled' : 'enabled'
-    await updateApp(app.id, {
+    const nextApp = await updateApp(app.id, {
       status,
       endpoint: { enabled: status === 'enabled' }
     })
     ElMessage.success('应用状态已更新。')
-    await load()
+    replaceApp(nextApp)
   } catch (err) {
     ElMessage.error(readError(err))
+  }
+}
+
+function openEdit(app: AppRecord) {
+  selectedApp.value = app
+  edit.modelOptions.value = create.modelOptions.value
+  edit.fillFromApp(app)
+  editOpen.value = true
+}
+
+async function saveApp() {
+  if (!selectedApp.value) return
+  editSaving.value = true
+  try {
+    const nextApp = await updateApp(selectedApp.value.id, edit.updatePayload())
+    replaceApp(nextApp)
+    editOpen.value = false
+    ElMessage.success('应用已保存。')
+  } catch (err) {
+    ElMessage.error(readError(err))
+  } finally {
+    editSaving.value = false
   }
 }
 
@@ -183,6 +215,9 @@ onMounted(load)
             <el-tooltip content="详情" placement="top" :show-after="600">
               <el-button circle class="app-icon-button" :icon="View" @click="openDetail(app)" />
             </el-tooltip>
+            <el-tooltip content="编辑" placement="top" :show-after="600">
+              <el-button circle class="app-icon-button" :icon="Edit" @click="openEdit(app)" />
+            </el-tooltip>
             <el-tooltip
               :content="app.status === 'enabled' ? '禁用' : '启用'"
               placement="top"
@@ -215,6 +250,16 @@ onMounted(load)
       @show-detail="showCreatedAppDetail"
     />
 
+    <AppCreateDialog
+      v-model:open="editOpen"
+      :create="edit"
+      mode="edit"
+      :saving="editSaving"
+      @save="saveApp"
+      @copy="copyText"
+      @show-detail="showCreatedAppDetail"
+    />
+
     <AppDetailDrawer
       v-model:open="detailOpen"
       v-model:active-tab="activeDetailTab"
@@ -224,6 +269,7 @@ onMounted(load)
       :type-label="typeLabel"
       :status-label="statusLabel"
       @copy="copyText"
+      @edit="openEdit"
       @test="testSelectedApp"
     />
   </section>

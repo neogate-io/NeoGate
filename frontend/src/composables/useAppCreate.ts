@@ -4,7 +4,8 @@ import {
   createApp,
   getAppModelOptions,
   type AppModelOption,
-  type CreateAppInput
+  type CreateAppInput,
+  type UpdateAppInput
 } from '../api/apps'
 import type { AppRecord, AppType } from '../types/admin'
 import { readError } from '../utils/errors'
@@ -127,6 +128,7 @@ export function useAppCreate() {
     systemPrompt: '',
     contextTurns: 10,
     maxOutputTokens: 2048,
+    endpointEnabled: true,
     corpId: '',
     agentId: '',
     corpSecret: '',
@@ -282,6 +284,7 @@ export function useAppCreate() {
     form.systemPrompt = ''
     form.contextTurns = 10
     form.maxOutputTokens = 2048
+    form.endpointEnabled = true
     lastAutoSystemPrompt.value = ''
     applyUsageScenario(form.usageScenario, { forcePrompt: true })
     form.corpId = ''
@@ -379,6 +382,57 @@ export function useAppCreate() {
     }
   }
 
+  function updatePayload(): UpdateAppInput {
+    return {
+      name: form.name,
+      description: form.description,
+      status: form.status as 'enabled' | 'disabled',
+      model: form.model,
+      system_prompt: form.systemPrompt,
+      context_turns: form.contextTurns,
+      max_output_tokens: form.maxOutputTokens,
+      endpoint: {
+        name: form.name,
+        enabled: form.endpointEnabled,
+        config: endpointConfig(),
+        secrets: endpointSecrets()
+      }
+    }
+  }
+
+  function fillFromApp(app: AppRecord) {
+    resetForm(app.app_type)
+    form.step = 2
+    createdApp.value = null
+    form.name = app.name
+    form.description = app.description
+    form.status = app.status
+    form.model = app.model
+    lastAutoModel.value = app.model
+    form.systemPrompt = app.system_prompt
+    lastAutoSystemPrompt.value = app.system_prompt
+    form.contextTurns = app.context_turns
+    form.maxOutputTokens = app.max_output_tokens
+    form.endpointEnabled = app.endpoint?.enabled ?? app.status === 'enabled'
+
+    const config = app.endpoint?.config ?? {}
+    if (app.app_type === 'wecom') {
+      form.corpId = typeof config.corp_id === 'string' ? config.corp_id : ''
+      form.agentId = typeof config.agent_id === 'string' ? config.agent_id : ''
+    }
+    if (app.app_type === 'feishu') {
+      form.feishuAppId = typeof config.app_id === 'string' ? config.app_id : ''
+    }
+    if (app.app_type === 'widget') {
+      form.allowedDomains = Array.isArray(config.allowed_domains)
+        ? config.allowed_domains.map(String).join('\n')
+        : ''
+      form.welcome = typeof config.welcome === 'string' ? config.welcome : ''
+      form.themeColor = typeof config.theme_color === 'string' ? config.theme_color : '#176baf'
+      form.anonymousAccess = config.anonymous_access !== false
+    }
+  }
+
   async function loadModelOptions() {
     modelOptions.value = await getAppModelOptions()
     if (!form.model) applyRecommendedModel(true)
@@ -414,8 +468,10 @@ export function useAppCreate() {
     applySelectedScenarioPrompt,
     loadModelOptions,
     resetForm,
+    fillFromApp,
     selectType,
     submitCreate,
+    updatePayload,
     typeMeta,
     typeLabel
   }

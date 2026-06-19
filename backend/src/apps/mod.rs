@@ -358,6 +358,17 @@ fn endpoint_from_row(
         .as_object()
         .map(|object| object.keys().cloned().collect())
         .unwrap_or_default();
+    let callback_url = match endpoint_type.as_str() {
+        "wecom" | "feishu" | "dingtalk" => {
+            public_url(state, &format!("/apps/{endpoint_type}/{id}/callback"))
+        }
+        _ => None,
+    };
+    let invoke_url = match endpoint_type.as_str() {
+        "webhook" => public_url(state, &format!("/apps/webhook/{id}")),
+        "widget" => public_url(state, &format!("/apps/widget/{id}/messages")),
+        _ => None,
+    };
     Ok(AppEndpointRecord {
         id,
         app_id: row.try_get("app_id")?,
@@ -366,8 +377,8 @@ fn endpoint_from_row(
         enabled: row.try_get("enabled")?,
         config: row.try_get("config")?,
         secrets_set,
-        callback_url: public_url(state, &format!("/apps/{endpoint_type}/{id}/callback")),
-        invoke_url: public_url(state, &format!("/apps/{endpoint_type}/{id}")),
+        callback_url,
+        invoke_url,
         widget_script_url: if endpoint_type == "widget" {
             public_url(state, &format!("/widget/{id}.js"))
         } else {

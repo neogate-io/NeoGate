@@ -245,6 +245,13 @@ router.beforeEach(async (to) => {
     }
   }
 
+  if (to.name === 'apps') {
+    const servicePolicy = await getAdminServicePolicy().catch(() => null)
+    if (servicePolicy && servicePolicy.service_mode === 'paid') {
+      return '/admin/channels'
+    }
+  }
+
   if (to.name === 'userRecharge') {
     const servicePolicy = await getUserServicePolicy().catch(() => null)
     if (servicePolicy && !servicePolicy.recharge_enabled) {

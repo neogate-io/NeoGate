@@ -3,6 +3,7 @@ pub mod db;
 pub mod email;
 pub mod error;
 pub mod id;
+pub mod input;
 pub mod pagination;
 pub mod secrets;
 pub mod tokens;

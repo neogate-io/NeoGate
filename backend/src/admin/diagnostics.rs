@@ -10,6 +10,7 @@ use crate::{
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
+    input::trimmed_non_empty,
     relay::upstream_url,
     AppState,
 };
@@ -1022,7 +1023,7 @@ fn extract_model_ids(value: &Value) -> Vec<String> {
             .get("id")
             .or_else(|| item.get("name"))
             .and_then(Value::as_str);
-        let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        let Some(id) = trimmed_non_empty(id) else {
             continue;
         };
         if !models.iter().any(|model| model == id) {

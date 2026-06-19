@@ -29,6 +29,7 @@ use crate::{
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
+    input::{bounded_limit, trimmed_non_empty},
     pagination::{created_id_cursor_page, parse_created_id_cursor},
     AppState,
 };
@@ -483,11 +484,7 @@ async fn upstream_models(
     Json(req): Json<FetchUpstreamModelsRequest>,
 ) -> AppResult<Json<FetchUpstreamModelsResponse>> {
     let provider_code = req.provider.trim();
-    let secret = req
-        .secret
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let secret = trimmed_non_empty(req.secret.as_deref());
 
     if provider_code.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
@@ -502,11 +499,7 @@ async fn upstream_models(
     let defaults = provider_default_endpoints(&state, provider_code)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
-    let protocol = req
-        .protocol
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let protocol = trimmed_non_empty(req.protocol.as_deref())
         .map(str::to_string)
         .ok_or_else(|| AppError::BadRequest("protocol is required".to_string()))?;
     if protocol != "openai" && protocol != "anthropic" && protocol != OPENAI_OAUTH_PROTOCOL {
@@ -522,15 +515,8 @@ async fn upstream_models(
             "provider {provider_code} does not support protocol {protocol}"
         )));
     }
-    let base_url = req
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let base_url = trimmed_non_empty(req.base_url.as_deref())
         .ok_or_else(|| AppError::BadRequest("base_url is required".to_string()))?;
-    if base_url.is_empty() {
-        return Err(AppError::BadRequest("base_url is required".to_string()));
-    }
 
     if req.use_credentials && provider_code == "openai" && protocol == OPENAI_OAUTH_PROTOCOL {
         let models = openai_oauth_catalog_models(&state).await?;
@@ -789,7 +775,7 @@ fn extract_model_ids(value: &Value) -> Vec<String> {
             .get("id")
             .or_else(|| item.get("name"))
             .and_then(Value::as_str);
-        let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        let Some(id) = trimmed_non_empty(id) else {
             continue;
         };
         if !models.iter().any(|model| model == id) {
@@ -1262,16 +1248,11 @@ async fn usage(
     Query(params): Query<ListUsageParams>,
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
-    let limit = params.limit.unwrap_or(20).clamp(1, 500);
+    let limit = bounded_limit(params.limit, 20, 500);
     let start = params.start;
     let end = params.end;
-    let query = params
-        .query
-        .as_deref()
-        .or(params.model.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let query =
+        trimmed_non_empty(params.query.as_deref().or(params.model.as_deref())).map(str::to_string);
     let status = match params.status.as_deref() {
         Some("success") => Some("success"),
         Some("failed") => Some("failed"),

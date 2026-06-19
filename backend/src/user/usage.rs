@@ -13,6 +13,7 @@ use crate::{
     auth::UserSessionAuth,
     error::AppResult,
     id::DbId,
+    input::bounded_limit,
     pagination::{created_id_cursor_page, parse_created_id_cursor},
     AppState,
 };
@@ -77,7 +78,7 @@ async fn usage(
     Query(params): Query<ListUsageParams>,
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
-    let limit = params.limit.unwrap_or(20).clamp(1, 1000);
+    let limit = bounded_limit(params.limit, 20, 1000);
     let (cursor_created_at, cursor_id) =
         parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
             .map(|cursor| (Some(cursor.0), Some(cursor.1)))

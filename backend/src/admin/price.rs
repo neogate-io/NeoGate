@@ -124,6 +124,14 @@ struct ModelsDevCost {
     cache_write: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PricingMicros {
+    input_price_usd_micros: i64,
+    output_price_usd_micros: i64,
+    cache_read_price_usd_micros: Option<i64>,
+    cache_write_price_usd_micros: Option<i64>,
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -303,38 +311,16 @@ async fn sync_models_dev_pricing_templates(
         }
 
         for (model, model_data) in provider_data.models {
-            let model = model.trim();
-            if model.is_empty() {
-                skipped += 1;
-                continue;
-            }
-            let Some(cost) = model_data.cost else {
-                skipped += 1;
-                continue;
-            };
-            let Some(input_price_usd_micros) = usd_per_million_to_micros(cost.input) else {
+            let Some(template) = pricing_template_from_models_dev_model(
+                provider,
+                &model,
+                model_data,
+                PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+            ) else {
                 skipped += 1;
                 continue;
             };
-            let Some(output_price_usd_micros) = usd_per_million_to_micros(cost.output) else {
-                skipped += 1;
-                continue;
-            };
-            let cache_read_price_usd_micros = usd_per_million_to_micros(cost.cache_read);
-            let cache_write_price_usd_micros = usd_per_million_to_micros(cost.cache_write);
-            saved += upsert_synced_pricing_template(
-                state,
-                PricingTemplateUpsert {
-                    provider,
-                    model,
-                    input_price_usd_micros,
-                    output_price_usd_micros,
-                    cache_read_price_usd_micros,
-                    cache_write_price_usd_micros,
-                    source: PRICE_TEMPLATE_SOURCE_MODELS_DEV,
-                },
-            )
-            .await?;
+            saved += upsert_synced_pricing_template(state, template).await?;
         }
     }
 
@@ -368,17 +354,42 @@ async fn enabled_provider_codes(state: &AppState) -> AppResult<HashSet<String>> 
 struct PricingTemplateUpsert<'a> {
     provider: &'a str,
     model: &'a str,
-    input_price_usd_micros: i64,
-    output_price_usd_micros: i64,
-    cache_read_price_usd_micros: Option<i64>,
-    cache_write_price_usd_micros: Option<i64>,
+    prices: PricingMicros,
     source: &'a str,
+}
+
+fn pricing_template_from_models_dev_model<'a>(
+    provider: &'a str,
+    model: &'a str,
+    model_data: ModelsDevModel,
+    source: &'a str,
+) -> Option<PricingTemplateUpsert<'a>> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    Some(PricingTemplateUpsert {
+        provider,
+        model,
+        prices: pricing_micros_from_models_dev_cost(model_data.cost?)?,
+        source,
+    })
+}
+
+fn pricing_micros_from_models_dev_cost(cost: ModelsDevCost) -> Option<PricingMicros> {
+    Some(PricingMicros {
+        input_price_usd_micros: usd_per_million_to_micros(cost.input)?,
+        output_price_usd_micros: usd_per_million_to_micros(cost.output)?,
+        cache_read_price_usd_micros: usd_per_million_to_micros(cost.cache_read),
+        cache_write_price_usd_micros: usd_per_million_to_micros(cost.cache_write),
+    })
 }
 
 async fn upsert_synced_pricing_template(
     state: &AppState,
     template: PricingTemplateUpsert<'_>,
 ) -> AppResult<u64> {
+    let model = template.model.trim();
     sqlx::query(
         "INSERT INTO provider_model
          (provider, model, display_name, source, enabled)
@@ -386,7 +397,7 @@ async fn upsert_synced_pricing_template(
          ON CONFLICT (provider, model) DO NOTHING",
     )
     .bind(template.provider)
-    .bind(template.model.trim())
+    .bind(model)
     .execute(&state.db.pool)
     .await?;
 
@@ -408,11 +419,11 @@ async fn upsert_synced_pricing_template(
          ",
     )
     .bind(template.provider)
-    .bind(template.model.trim())
-    .bind(template.input_price_usd_micros)
-    .bind(template.output_price_usd_micros)
-    .bind(template.cache_read_price_usd_micros)
-    .bind(template.cache_write_price_usd_micros)
+    .bind(model)
+    .bind(template.prices.input_price_usd_micros)
+    .bind(template.prices.output_price_usd_micros)
+    .bind(template.prices.cache_read_price_usd_micros)
+    .bind(template.prices.cache_write_price_usd_micros)
     .bind(template.source)
     .execute(&state.db.pool)
     .await?;
@@ -511,20 +522,29 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
             "provider and model are required".to_string(),
         ));
     }
-    if req.input_price_usd_micros < 0
-        || req.output_price_usd_micros < 0
-        || req
-            .cache_read_price_usd_micros
-            .is_some_and(|price| price < 0)
-        || req
-            .cache_write_price_usd_micros
-            .is_some_and(|price| price < 0)
-    {
+    let prices = PricingMicros {
+        input_price_usd_micros: req.input_price_usd_micros,
+        output_price_usd_micros: req.output_price_usd_micros,
+        cache_read_price_usd_micros: req.cache_read_price_usd_micros,
+        cache_write_price_usd_micros: req.cache_write_price_usd_micros,
+    };
+    if !prices_are_non_negative(prices) {
         return Err(AppError::BadRequest(
             "price must be non-negative".to_string(),
         ));
     }
     Ok(())
+}
+
+fn prices_are_non_negative(prices: PricingMicros) -> bool {
+    prices.input_price_usd_micros >= 0
+        && prices.output_price_usd_micros >= 0
+        && prices
+            .cache_read_price_usd_micros
+            .is_none_or(|price| price >= 0)
+        && prices
+            .cache_write_price_usd_micros
+            .is_none_or(|price| price >= 0)
 }
 
 fn validate_pricing_policy(req: &UpsertPricingPolicyRequest) -> AppResult<()> {

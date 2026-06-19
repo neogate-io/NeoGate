@@ -21,6 +21,7 @@ use crate::{
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
+    input::{bounded_limit, trimmed_non_empty},
     project, AppState,
 };
 
@@ -314,12 +315,8 @@ async fn app_run_logs(
     _admin: AdminAuth,
     Query(query): Query<ListAppRunLogsQuery>,
 ) -> AppResult<Json<Vec<AppRunLogRecord>>> {
-    let limit = query.limit.unwrap_or(100).clamp(1, 200);
-    let search = query
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let limit = bounded_limit(query.limit, 100, 200);
+    let search = trimmed_non_empty(query.search.as_deref());
     let rows = sqlx::query(
         r#"
         SELECT id, app_id, endpoint_id, conversation_id, external_user_id,

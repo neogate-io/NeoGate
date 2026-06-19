@@ -4,13 +4,14 @@ use sqlx::{postgres::PgRow, Row};
 use crate::{
     error::{AppError, AppResult},
     id::DbId,
+    input::trimmed_non_empty,
 };
 
 pub fn parse_created_id_cursor(
     cursor: Option<&str>,
     invalid_message: &'static str,
 ) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(cursor) = trimmed_non_empty(cursor) else {
         return Ok(None);
     };
     let Some((created_at, id)) = cursor.rsplit_once('|') else {

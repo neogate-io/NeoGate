@@ -161,36 +161,20 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         if let AppError::UpstreamRequest(err) = self {
-            let status = err.status();
-            let mut response = (
-                status,
-                Json(json!({
-                    "error": {
-                        "message": err.kind.user_message(),
-                        "code": err.kind.type_code(),
-                        "upstream": err.provider,
-                        "retryable": err.retryable,
-                    }
-                })),
-            )
-                .into_response();
-            response.headers_mut().insert(
-                "x-neogate-error-code",
-                HeaderValue::from_static(err.kind.type_code()),
-            );
-            response.headers_mut().insert(
-                "x-neogate-retryable",
-                HeaderValue::from_static(if err.retryable { "true" } else { "false" }),
-            );
-            if let Ok(provider) = HeaderValue::from_str(&err.provider) {
-                response
-                    .headers_mut()
-                    .insert("x-neogate-upstream-provider", provider);
-            }
-            return response;
+            return upstream_request_response(err);
         }
 
-        let status = match &self {
+        let status = self.status();
+        let code = self.code();
+        let message = self.user_message(status);
+        self.log(status, code);
+        error_response(status, code, message)
+    }
+}
+
+impl AppError {
+    fn status(&self) -> StatusCode {
+        match self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::PasswordChangeRequired => StatusCode::FORBIDDEN,
@@ -203,57 +187,16 @@ impl IntoResponse for AppError {
             }
             AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
-            AppError::UpstreamRequest(_) => unreachable!("handled above"),
+            AppError::UpstreamRequest(err) => err.status(),
             AppError::Sqlx(_)
             | AppError::Io(_)
             | AppError::Json(_)
             | AppError::Reqwest(_)
             | AppError::Redis(_)
             | AppError::Anyhow(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        let code = self.code();
-        let message = self.user_message(status);
-        if status.is_server_error() {
-            tracing::error!(
-                code,
-                status = status.as_u16(),
-                error = %self,
-                "request failed"
-            );
-        } else if matches!(
-            self,
-            AppError::Conflict(_)
-                | AppError::ConflictWithCode { .. }
-                | AppError::BadRequest(_)
-                | AppError::BadRequestWithCode { .. }
-                | AppError::PayloadTooLarge(_)
-                | AppError::RateLimited(_)
-        ) {
-            tracing::warn!(
-                code,
-                status = status.as_u16(),
-                error = %self,
-                "request rejected"
-            );
         }
-        let mut response = (
-            status,
-            Json(json!({
-                "error": {
-                    "code": code,
-                    "message": message,
-                }
-            })),
-        )
-            .into_response();
-        response
-            .headers_mut()
-            .insert("x-neogate-error-code", HeaderValue::from_static(code));
-        response
     }
-}
 
-impl AppError {
     fn code(&self) -> &'static str {
         match self {
             AppError::Unauthorized => "unauthorized",
@@ -297,6 +240,83 @@ impl AppError {
             _ => self.to_string(),
         }
     }
+
+    fn log(&self, status: StatusCode, code: &'static str) {
+        if status.is_server_error() {
+            tracing::error!(
+                code,
+                status = status.as_u16(),
+                error = %self,
+                "request failed"
+            );
+        } else if self.should_warn() {
+            tracing::warn!(
+                code,
+                status = status.as_u16(),
+                error = %self,
+                "request rejected"
+            );
+        }
+    }
+
+    fn should_warn(&self) -> bool {
+        matches!(
+            self,
+            AppError::Conflict(_)
+                | AppError::ConflictWithCode { .. }
+                | AppError::BadRequest(_)
+                | AppError::BadRequestWithCode { .. }
+                | AppError::PayloadTooLarge(_)
+                | AppError::RateLimited(_)
+        )
+    }
+}
+
+fn error_response(status: StatusCode, code: &'static str, message: String) -> Response {
+    let mut response = (
+        status,
+        Json(json!({
+            "error": {
+                "code": code,
+                "message": message,
+            }
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("x-neogate-error-code", HeaderValue::from_static(code));
+    response
+}
+
+fn upstream_request_response(err: UpstreamRequestError) -> Response {
+    let status = err.status();
+    let mut response = (
+        status,
+        Json(json!({
+            "error": {
+                "message": err.kind.user_message(),
+                "code": err.kind.type_code(),
+                "upstream": err.provider,
+                "retryable": err.retryable,
+            }
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        "x-neogate-error-code",
+        HeaderValue::from_static(err.kind.type_code()),
+    );
+    response.headers_mut().insert(
+        "x-neogate-retryable",
+        HeaderValue::from_static(if err.retryable { "true" } else { "false" }),
+    );
+    if let Ok(provider) = HeaderValue::from_str(&err.provider) {
+        response
+            .headers_mut()
+            .insert("x-neogate-upstream-provider", provider);
+    }
+    response
 }
 
 pub type AppResult<T> = Result<T, AppError>;

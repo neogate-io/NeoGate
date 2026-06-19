@@ -25,6 +25,7 @@ use sqlx::Row;
 use crate::{
     error::{AppError, AppResult},
     id::DbId,
+    input::trimmed_non_empty,
     AppState,
 };
 
@@ -216,11 +217,7 @@ pub(crate) async fn list_app_records(
     state: &AppState,
     query: ListAppsQuery,
 ) -> AppResult<Vec<AppRecord>> {
-    let search = query
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let search = trimmed_non_empty(query.search.as_deref());
     let rows = sqlx::query(
         r#"
         SELECT a.id, a.name, a.description, a.app_type, a.status, a.model,

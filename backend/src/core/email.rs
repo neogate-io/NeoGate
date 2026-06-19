@@ -7,7 +7,7 @@ use lettre::{
 use serde::Deserialize;
 use sqlx::Row;
 
-use crate::{db::Db, id::DbId, secrets::SecretStore};
+use crate::{db::Db, id::DbId, input::trimmed_non_empty, secrets::SecretStore};
 
 pub const SMTP_SETTING_KEY: &str = "smtp";
 
@@ -19,7 +19,7 @@ pub enum EmailLocale {
 
 impl EmailLocale {
     pub fn from_public_locale(locale: Option<&str>) -> Self {
-        let Some(locale) = locale.map(str::trim).filter(|value| !value.is_empty()) else {
+        let Some(locale) = trimmed_non_empty(locale) else {
             return Self::ZhCn;
         };
         let locale = locale.replace('_', "-").to_ascii_lowercase();

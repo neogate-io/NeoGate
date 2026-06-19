@@ -6,6 +6,7 @@ use sqlx::Row;
 use crate::{
     email::{smtp_test_error, EmailConfig, EmailService, SMTP_SETTING_KEY},
     error::{AppError, AppResult},
+    input::trimmed_non_empty_owned,
     AppState,
 };
 
@@ -220,9 +221,7 @@ fn required_trimmed(value: String, message: &str) -> AppResult<String> {
 }
 
 fn optional_trimmed(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    trimmed_non_empty_owned(value.as_deref())
 }
 
 fn validate_smtp_port(port: u16) -> AppResult<()> {

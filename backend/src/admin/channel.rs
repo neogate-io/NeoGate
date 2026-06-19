@@ -8,6 +8,7 @@ use crate::{
     auth::key_prefix,
     error::{AppError, AppResult},
     id::DbId,
+    input::trimmed_non_empty,
     AppState,
 };
 
@@ -634,11 +635,7 @@ async fn normalize_create_endpoints(
         provider_default_endpoint_base_url(state, provider_code, &protocol)
             .await?
             .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
-    let base_url = req
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let base_url = trimmed_non_empty(req.base_url.as_deref())
         .unwrap_or(default_endpoint_base_url.trim())
         .to_string();
 
@@ -686,11 +683,7 @@ async fn normalize_update_endpoints(
         provider_default_endpoint_base_url(state, provider_code, &protocol)
             .await?
             .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
-    let base_url = req
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let base_url = trimmed_non_empty(req.base_url.as_deref())
         .unwrap_or(default_endpoint_base_url.trim())
         .to_string();
 
@@ -711,9 +704,7 @@ async fn default_protocol_for_request(
     use_credentials: bool,
     requested_protocol: Option<&str>,
 ) -> AppResult<String> {
-    if let Some(protocol) = requested_protocol
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    if let Some(protocol) = trimmed_non_empty(requested_protocol)
         .map(validate_protocol)
         .transpose()?
     {
@@ -750,11 +741,7 @@ fn normalize_endpoint_inputs<'a>(
                 "duplicate endpoint protocol: {protocol}"
             )));
         }
-        let base_url = input
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        let base_url = trimmed_non_empty(input.base_url.as_deref())
             .ok_or_else(|| AppError::BadRequest("base_url is required".to_string()))?
             .to_string();
         endpoints.push(NormalizedEndpoint {
@@ -774,17 +761,23 @@ fn normalize_endpoint_inputs<'a>(
 }
 
 fn models_from_endpoints(endpoints: &[NormalizedEndpoint]) -> Vec<String> {
-    let mut models = Vec::new();
+    dedupe_models(
+        endpoints
+            .iter()
+            .flat_map(|endpoint| endpoint.models.iter().map(String::as_str)),
+    )
+}
+
+fn dedupe_models<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut normalized = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for endpoint in endpoints {
-        for model in &endpoint.models {
-            let model = model.trim();
-            if !model.is_empty() && seen.insert(model.to_string()) {
-                models.push(model.to_string());
-            }
+    for value in values {
+        let model = value.trim();
+        if !model.is_empty() && seen.insert(model.to_string()) {
+            normalized.push(model.to_string());
         }
     }
-    models
+    normalized
 }
 
 fn validate_protocol(protocol: &str) -> AppResult<String> {
@@ -805,16 +798,11 @@ fn credential_endpoint_inputs(
         return inputs;
     }
 
-    let mut models = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for input in &inputs {
-        for model in &input.models {
-            let model = model.trim();
-            if !model.is_empty() && seen.insert(model.to_string()) {
-                models.push(model.to_string());
-            }
-        }
-    }
+    let models = dedupe_models(
+        inputs
+            .iter()
+            .flat_map(|input| input.models.iter().map(String::as_str)),
+    );
 
     let base_url = inputs
         .iter()

@@ -18,7 +18,7 @@ try {
   Add-Type -AssemblyName System.Net.Http
 } catch {
   Write-Host "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)" -ForegroundColor Red
-  exit 1
+  throw "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)"
 }
 
 $AppName = 'NeoGate'
@@ -86,7 +86,7 @@ function Warn([string]$Text) {
 
 function Fail([string]$Text) {
   Write-Host $Text -ForegroundColor Red
-  exit 1
+  throw $Text
 }
 
 function Confirm-DefaultYes([string]$Prompt) {

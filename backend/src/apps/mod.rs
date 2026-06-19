@@ -1,5 +1,8 @@
-mod endpoints;
+mod feishu;
 mod runtime;
+mod webhook;
+mod wecom;
+mod widget;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -10,7 +13,6 @@ use axum::{
 use base64::{
     alphabet,
     engine::general_purpose::{self, GeneralPurpose},
-    Engine as _,
 };
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
@@ -25,11 +27,7 @@ use crate::{
     AppState,
 };
 
-const WECOM_TOKEN_SECRET_KEY: &str = "token";
-const WECOM_AES_SECRET_KEY: &str = "aes_key";
-const WECOM_CORP_SECRET_KEY: &str = "corp_secret";
-const WEBHOOK_SECRET_KEY: &str = "secret";
-pub(crate) const WECOM_ENCODING_AES_KEY_ENGINE: GeneralPurpose = GeneralPurpose::new(
+const WECOM_ENCODING_AES_KEY_ENGINE: GeneralPurpose = GeneralPurpose::new(
     &alphabet::STANDARD,
     general_purpose::PAD.with_decode_allow_trailing_bits(true),
 );
@@ -150,31 +148,6 @@ pub struct UpsertEndpointRequest {
     pub secrets: Option<HashMap<String, String>>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct WecomCallbackQuery {
-    msg_signature: Option<String>,
-    timestamp: Option<String>,
-    nonce: Option<String>,
-    echostr: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct WebhookMessageRequest {
-    external_user_id: Option<String>,
-    external_conversation_id: Option<String>,
-    message_id: Option<String>,
-    content: String,
-    metadata: Option<Value>,
-    trace_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WidgetMessageRequest {
-    session_id: Option<String>,
-    content: String,
-    metadata: Option<Value>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct AppMessageResponse {
     pub ok: bool,
@@ -223,17 +196,15 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route(
             "/apps/wecom/{endpoint_id}/callback",
-            get(endpoints::wecom_verify).post(endpoints::wecom_message),
+            get(wecom::verify).post(wecom::message),
         )
         .route(
-            "/apps/webhook/{endpoint_id}",
-            post(endpoints::webhook_message),
+            "/apps/feishu/{endpoint_id}/callback",
+            post(feishu::callback),
         )
-        .route(
-            "/apps/widget/{endpoint_id}/messages",
-            post(endpoints::widget_message),
-        )
-        .route("/widget/{script_name}", get(endpoints::widget_script))
+        .route("/apps/webhook/{endpoint_id}", post(webhook::message))
+        .route("/apps/widget/{endpoint_id}/messages", post(widget::message))
+        .route("/widget/{script_name}", get(widget::script))
 }
 
 pub(crate) async fn list_app_records(
@@ -448,7 +419,15 @@ pub(crate) async fn upsert_endpoint_tx(
         .transpose()?
         .unwrap_or_else(|| json!({}));
     let mut has_wecom_aes_key = secrets
-        .get(WECOM_AES_SECRET_KEY)
+        .get(wecom::AES_SECRET_KEY)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    let mut has_feishu_app_secret = secrets
+        .get(feishu::APP_SECRET_KEY)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    let mut has_feishu_verification_token = secrets
+        .get(feishu::VERIFICATION_TOKEN_SECRET_KEY)
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty());
     if let Some(next) = req.secrets {
@@ -458,9 +437,15 @@ pub(crate) async fn upsert_endpoint_tx(
         for (key, value) in next {
             let value = value.trim();
             if !value.is_empty() {
-                if endpoint_type == "wecom" && key == WECOM_AES_SECRET_KEY {
-                    validate_wecom_encoding_aes_key(value)?;
+                if endpoint_type == "wecom" && key == wecom::AES_SECRET_KEY {
+                    wecom::validate_encoding_aes_key(value)?;
                     has_wecom_aes_key = true;
+                }
+                if endpoint_type == "feishu" && key == feishu::APP_SECRET_KEY {
+                    has_feishu_app_secret = true;
+                }
+                if endpoint_type == "feishu" && key == feishu::VERIFICATION_TOKEN_SECRET_KEY {
+                    has_feishu_verification_token = true;
                 }
                 object.insert(key, Value::String(state.secrets.encrypt(value)?));
             }
@@ -474,6 +459,13 @@ pub(crate) async fn upsert_endpoint_tx(
     let name = req.name.unwrap_or_else(|| endpoint_type.to_string());
     let enabled = req.enabled.unwrap_or(true);
     let config = req.config.unwrap_or_else(|| json!({}));
+    if endpoint_type == "feishu" {
+        feishu::validate_endpoint_config(
+            &config,
+            has_feishu_app_secret,
+            has_feishu_verification_token,
+        )?;
+    }
 
     sqlx::query(
         r#"
@@ -496,21 +488,6 @@ pub(crate) async fn upsert_endpoint_tx(
     .bind(secrets)
     .execute(&mut **tx)
     .await?;
-    Ok(())
-}
-
-fn validate_wecom_encoding_aes_key(value: &str) -> AppResult<()> {
-    if value.len() != 43 {
-        return Err(AppError::BadRequest(
-            "EncodingAESKey must be 43 characters".to_string(),
-        ));
-    }
-    let key = WECOM_ENCODING_AES_KEY_ENGINE
-        .decode(format!("{value}="))
-        .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
-    if key.len() != 32 {
-        return Err(AppError::BadRequest("invalid EncodingAESKey".to_string()));
-    }
     Ok(())
 }
 
@@ -612,7 +589,7 @@ pub(crate) fn validate_app_type(value: &str) -> AppResult<()> {
 }
 
 pub(crate) fn ensure_supported_app_type(value: &str) -> AppResult<()> {
-    matches!(value, "wecom" | "webhook" | "widget")
+    matches!(value, "wecom" | "webhook" | "widget" | "feishu")
         .then_some(())
         .ok_or_else(|| AppError::BadRequest("this app type is coming soon".to_string()))
 }

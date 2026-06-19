@@ -4,15 +4,14 @@ use aes::Aes256;
 use axum::{
     body::{to_bytes, Body},
     extract::{Path, Query, State},
-    http::{header, HeaderMap},
     response::{IntoResponse, Response},
-    Json,
 };
 use base64::{engine::general_purpose, Engine as _};
 use cbc::{
     cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit},
     Decryptor,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha1::{Digest as Sha1Digest, Sha1};
 use uuid::Uuid;
@@ -23,16 +22,25 @@ use crate::{
     AppState,
 };
 
-use super::WECOM_ENCODING_AES_KEY_ENGINE;
-use super::{constant_time_eq, extract_xml_value, hmac_sha256_hex};
 use super::{
-    runtime::run_app_message, runtime_for_endpoint, secret_plaintext, AppMessageResponse,
-    AppRuntime, IncomingAppMessage, WebhookMessageRequest, WecomCallbackQuery,
-    WidgetMessageRequest, APP_BODY_LIMIT_BYTES, WEBHOOK_SECRET_KEY, WECOM_AES_SECRET_KEY,
-    WECOM_CORP_SECRET_KEY, WECOM_TOKEN_SECRET_KEY,
+    constant_time_eq, extract_xml_value, runtime::run_app_message, runtime_for_endpoint,
+    secret_plaintext, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
+    WECOM_ENCODING_AES_KEY_ENGINE,
 };
 
+pub(super) const TOKEN_SECRET_KEY: &str = "token";
+pub(super) const AES_SECRET_KEY: &str = "aes_key";
+pub(super) const CORP_SECRET_KEY: &str = "corp_secret";
+
 type Aes256CbcDec = Decryptor<Aes256>;
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CallbackQuery {
+    msg_signature: Option<String>,
+    timestamp: Option<String>,
+    nonce: Option<String>,
+    echostr: Option<String>,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct WecomDecrypted {
@@ -40,132 +48,10 @@ struct WecomDecrypted {
     receive_id: String,
 }
 
-pub(super) async fn webhook_message(
+pub(super) async fn verify(
     State(state): State<Arc<AppState>>,
     Path(endpoint_id): Path<DbId>,
-    headers: HeaderMap,
-    Json(req): Json<WebhookMessageRequest>,
-) -> AppResult<Json<AppMessageResponse>> {
-    let runtime = runtime_for_endpoint(&state, endpoint_id, "webhook").await?;
-    let body = serde_json::to_vec(&req)?;
-    verify_webhook_signature(&state, &runtime, &headers, &body)?;
-    let message = IncomingAppMessage {
-        external_user_id: req
-            .external_user_id
-            .unwrap_or_else(|| "webhook".to_string()),
-        external_conversation_id: req
-            .external_conversation_id
-            .unwrap_or_else(|| "default".to_string()),
-        external_message_id: req.message_id,
-        content: req.content,
-        metadata: req.metadata.unwrap_or_else(|| json!({})),
-        trace_id: req.trace_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
-    };
-    let outcome = run_app_message(Arc::clone(&state), runtime, message).await?;
-    Ok(Json(AppMessageResponse {
-        ok: true,
-        conversation_id: outcome.conversation_id,
-        message: outcome.message,
-        trace_id: outcome.trace_id,
-        duplicate: outcome.duplicate,
-    }))
-}
-
-pub(super) async fn widget_message(
-    State(state): State<Arc<AppState>>,
-    Path(endpoint_id): Path<DbId>,
-    headers: HeaderMap,
-    Json(req): Json<WidgetMessageRequest>,
-) -> AppResult<Json<AppMessageResponse>> {
-    let runtime = runtime_for_endpoint(&state, endpoint_id, "widget").await?;
-    verify_widget_origin(&runtime, &headers)?;
-    let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let trace_id = Uuid::new_v4().to_string();
-    let message = IncomingAppMessage {
-        external_user_id: session_id.clone(),
-        external_conversation_id: session_id,
-        external_message_id: Some(trace_id.clone()),
-        content: req.content,
-        metadata: req.metadata.unwrap_or_else(|| json!({})),
-        trace_id,
-    };
-    let outcome = run_app_message(Arc::clone(&state), runtime, message).await?;
-    Ok(Json(AppMessageResponse {
-        ok: true,
-        conversation_id: outcome.conversation_id,
-        message: outcome.message,
-        trace_id: outcome.trace_id,
-        duplicate: outcome.duplicate,
-    }))
-}
-
-pub(super) async fn widget_script(
-    State(state): State<Arc<AppState>>,
-    Path(script_name): Path<String>,
-) -> AppResult<Response> {
-    let endpoint_id = script_name
-        .strip_suffix(".js")
-        .ok_or(AppError::NotFound)?
-        .parse::<DbId>()
-        .map_err(|_| AppError::NotFound)?;
-    let runtime = runtime_for_endpoint(&state, endpoint_id, "widget").await?;
-    let title = runtime
-        .endpoint_config
-        .get("welcome")
-        .and_then(Value::as_str)
-        .unwrap_or(&runtime.name);
-    let script = format!(
-        r#"(function(){{
-  var endpointId = {endpoint_id};
-  var root = document.createElement('div');
-  root.id = 'neogate-widget-' + endpointId;
-  root.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483000;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
-  root.innerHTML = '<button type="button" aria-label="NeoGate chat" style="height:44px;border:0;border-radius:22px;background:#176baf;color:#fff;padding:0 16px;font-weight:650;box-shadow:0 8px 24px rgba(16,24,40,.18);cursor:pointer">{title}</button>';
-  document.body.appendChild(root);
-  var open = false;
-  var panel;
-  root.querySelector('button').onclick = function(){{
-    open = !open;
-    if (!panel) {{
-      panel = document.createElement('div');
-      panel.style.cssText = 'position:absolute;right:0;bottom:56px;width:min(360px,calc(100vw - 32px));height:460px;background:#fff;border:1px solid #d7dee8;border-radius:8px;box-shadow:0 16px 40px rgba(16,24,40,.2);display:grid;grid-template-rows:1fr auto;overflow:hidden';
-      panel.innerHTML = '<div data-log style="padding:14px;overflow:auto;font-size:14px;line-height:1.5;color:#101828"></div><form style="display:flex;gap:8px;padding:10px;border-top:1px solid #edf1f5"><input name="q" autocomplete="off" style="flex:1;border:1px solid #d7dee8;border-radius:6px;padding:9px;font-size:14px"/><button style="border:0;border-radius:6px;background:#176baf;color:#fff;padding:0 12px;font-weight:650">Send</button></form>';
-      root.appendChild(panel);
-      var session = localStorage.getItem('neogate_widget_' + endpointId) || crypto.randomUUID();
-      localStorage.setItem('neogate_widget_' + endpointId, session);
-      panel.querySelector('form').onsubmit = async function(e){{
-        e.preventDefault();
-        var input = panel.querySelector('input');
-        var text = input.value.trim();
-        if (!text) return;
-        input.value = '';
-        var log = panel.querySelector('[data-log]');
-        log.innerHTML += '<div><strong>You</strong><br>' + escapeHtml(text) + '</div>';
-        var res = await fetch('/apps/widget/' + endpointId + '/messages', {{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{session_id:session,content:text}})}});
-        var data = await res.json().catch(function(){{return {{message:'Request failed'}}}});
-        log.innerHTML += '<div style="margin-top:12px"><strong>AI</strong><br>' + escapeHtml(data.message || 'Request failed') + '</div>';
-        log.scrollTop = log.scrollHeight;
-      }};
-    }}
-    panel.style.display = open ? 'grid' : 'none';
-  }};
-  function escapeHtml(s){{return String(s).replace(/[&<>"']/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]}})}}
-}})();"#,
-    );
-    Ok((
-        [(
-            header::CONTENT_TYPE,
-            "application/javascript; charset=utf-8",
-        )],
-        script,
-    )
-        .into_response())
-}
-
-pub(super) async fn wecom_verify(
-    State(state): State<Arc<AppState>>,
-    Path(endpoint_id): Path<DbId>,
-    Query(query): Query<WecomCallbackQuery>,
+    Query(query): Query<CallbackQuery>,
 ) -> AppResult<Response> {
     let runtime = runtime_for_endpoint(&state, endpoint_id, "wecom").await?;
     let msg_signature = query
@@ -175,16 +61,16 @@ pub(super) async fn wecom_verify(
     let timestamp = query.timestamp.as_deref().ok_or(AppError::Unauthorized)?;
     let nonce = query.nonce.as_deref().ok_or(AppError::Unauthorized)?;
     let echostr = query.echostr.as_deref().ok_or(AppError::Unauthorized)?;
-    verify_wecom_signature(&state, &runtime, msg_signature, timestamp, nonce, echostr)?;
-    let decrypted = decrypt_wecom(&state, &runtime, echostr)?;
-    verify_wecom_receive_id(&runtime, &decrypted.receive_id)?;
+    verify_signature(&state, &runtime, msg_signature, timestamp, nonce, echostr)?;
+    let decrypted = decrypt(&state, &runtime, echostr)?;
+    verify_receive_id(&runtime, &decrypted.receive_id)?;
     Ok(decrypted.message.into_response())
 }
 
-pub(super) async fn wecom_message(
+pub(super) async fn message(
     State(state): State<Arc<AppState>>,
     Path(endpoint_id): Path<DbId>,
-    Query(query): Query<WecomCallbackQuery>,
+    Query(query): Query<CallbackQuery>,
     body: Body,
 ) -> AppResult<Response> {
     let runtime = runtime_for_endpoint(&state, endpoint_id, "wecom").await?;
@@ -199,7 +85,7 @@ pub(super) async fn wecom_message(
         .ok_or(AppError::Unauthorized)?;
     let timestamp = query.timestamp.as_deref().ok_or(AppError::Unauthorized)?;
     let nonce = query.nonce.as_deref().ok_or(AppError::Unauthorized)?;
-    verify_wecom_signature(
+    verify_signature(
         &state,
         &runtime,
         msg_signature,
@@ -207,8 +93,8 @@ pub(super) async fn wecom_message(
         nonce,
         &encrypted,
     )?;
-    let decrypted = decrypt_wecom(&state, &runtime, &encrypted)?;
-    verify_wecom_receive_id(&runtime, &decrypted.receive_id)?;
+    let decrypted = decrypt(&state, &runtime, &encrypted)?;
+    verify_receive_id(&runtime, &decrypted.receive_id)?;
     let content = extract_xml_value(decrypted.message.as_bytes(), "Content").unwrap_or_default();
     let msg_type = extract_xml_value(decrypted.message.as_bytes(), "MsgType").unwrap_or_default();
     let from_user = extract_xml_value(decrypted.message.as_bytes(), "FromUserName")
@@ -232,7 +118,7 @@ pub(super) async fn wecom_message(
         match run_app_message(Arc::clone(&state_clone), runtime.clone(), message).await {
             Ok(outcome) if !outcome.duplicate => {
                 if let Err(err) =
-                    send_wecom_text(&state_clone, &runtime, &target_user, &outcome.message).await
+                    send_text(&state_clone, &runtime, &target_user, &outcome.message).await
                 {
                     tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to send wecom app message");
                 }
@@ -246,49 +132,22 @@ pub(super) async fn wecom_message(
     Ok("success".into_response())
 }
 
-fn verify_webhook_signature(
-    state: &AppState,
-    runtime: &AppRuntime,
-    headers: &HeaderMap,
-    body: &[u8],
-) -> AppResult<()> {
-    let secret = secret_plaintext(state, runtime, WEBHOOK_SECRET_KEY)?;
-    if secret.is_empty() {
-        return Ok(());
+pub(super) fn validate_encoding_aes_key(value: &str) -> AppResult<()> {
+    if value.len() != 43 {
+        return Err(AppError::BadRequest(
+            "EncodingAESKey must be 43 characters".to_string(),
+        ));
     }
-    let signature = headers
-        .get("x-neogate-signature")
-        .and_then(|value| value.to_str().ok())
-        .ok_or(AppError::Unauthorized)?;
-    let expected = hmac_sha256_hex(secret.as_bytes(), body);
-    constant_time_eq(signature.as_bytes(), expected.as_bytes())
-        .then_some(())
-        .ok_or(AppError::Unauthorized)
+    let key = WECOM_ENCODING_AES_KEY_ENGINE
+        .decode(format!("{value}="))
+        .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::BadRequest("invalid EncodingAESKey".to_string()));
+    }
+    Ok(())
 }
 
-fn verify_widget_origin(runtime: &AppRuntime, headers: &HeaderMap) -> AppResult<()> {
-    let Some(domains) = runtime
-        .endpoint_config
-        .get("allowed_domains")
-        .and_then(Value::as_array)
-    else {
-        return Ok(());
-    };
-    if domains.is_empty() {
-        return Ok(());
-    }
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    let allowed = domains
-        .iter()
-        .filter_map(Value::as_str)
-        .any(|domain| !domain.trim().is_empty() && origin.contains(domain.trim()));
-    allowed.then_some(()).ok_or(AppError::Forbidden)
-}
-
-fn verify_wecom_signature(
+fn verify_signature(
     state: &AppState,
     runtime: &AppRuntime,
     msg_signature: &str,
@@ -296,14 +155,14 @@ fn verify_wecom_signature(
     nonce: &str,
     encrypted: &str,
 ) -> AppResult<()> {
-    let token = secret_plaintext(state, runtime, WECOM_TOKEN_SECRET_KEY)?;
-    let expected = wecom_signature(&token, timestamp, nonce, encrypted);
+    let token = secret_plaintext(state, runtime, TOKEN_SECRET_KEY)?;
+    let expected = signature(&token, timestamp, nonce, encrypted);
     constant_time_eq(msg_signature.as_bytes(), expected.as_bytes())
         .then_some(())
         .ok_or(AppError::Unauthorized)
 }
 
-fn wecom_signature(token: &str, timestamp: &str, nonce: &str, encrypted: &str) -> String {
+fn signature(token: &str, timestamp: &str, nonce: &str, encrypted: &str) -> String {
     let mut parts = vec![
         token.to_string(),
         timestamp.to_string(),
@@ -318,16 +177,12 @@ fn wecom_signature(token: &str, timestamp: &str, nonce: &str, encrypted: &str) -
     hex::encode(hasher.finalize())
 }
 
-fn decrypt_wecom(
-    state: &AppState,
-    runtime: &AppRuntime,
-    encrypted: &str,
-) -> AppResult<WecomDecrypted> {
-    let aes_key = secret_plaintext(state, runtime, WECOM_AES_SECRET_KEY)?;
-    decrypt_wecom_payload(&aes_key, encrypted)
+fn decrypt(state: &AppState, runtime: &AppRuntime, encrypted: &str) -> AppResult<WecomDecrypted> {
+    let aes_key = secret_plaintext(state, runtime, AES_SECRET_KEY)?;
+    decrypt_payload(&aes_key, encrypted)
 }
 
-fn decrypt_wecom_payload(aes_key: &str, encrypted: &str) -> AppResult<WecomDecrypted> {
+fn decrypt_payload(aes_key: &str, encrypted: &str) -> AppResult<WecomDecrypted> {
     let key = WECOM_ENCODING_AES_KEY_ENGINE
         .decode(format!("{aes_key}="))
         .map_err(|_| AppError::BadRequest("invalid EncodingAESKey".to_string()))?;
@@ -342,7 +197,7 @@ fn decrypt_wecom_payload(aes_key: &str, encrypted: &str) -> AppResult<WecomDecry
         .map_err(|_| AppError::BadRequest("invalid aes key".to_string()))?
         .decrypt_padded_mut::<NoPadding>(&mut ciphertext)
         .map_err(|_| AppError::BadRequest("failed to decrypt payload".to_string()))?;
-    let plaintext = wecom_unpad(decrypted)?;
+    let plaintext = unpad(decrypted)?;
     if plaintext.len() < 20 {
         return Err(AppError::BadRequest(
             "invalid decrypted payload".to_string(),
@@ -367,7 +222,7 @@ fn decrypt_wecom_payload(aes_key: &str, encrypted: &str) -> AppResult<WecomDecry
     })
 }
 
-fn verify_wecom_receive_id(runtime: &AppRuntime, receive_id: &str) -> AppResult<()> {
+fn verify_receive_id(runtime: &AppRuntime, receive_id: &str) -> AppResult<()> {
     let corp_id = runtime
         .endpoint_config
         .get("corp_id")
@@ -382,7 +237,7 @@ fn verify_wecom_receive_id(runtime: &AppRuntime, receive_id: &str) -> AppResult<
         .ok_or(AppError::Unauthorized)
 }
 
-fn wecom_unpad(input: &[u8]) -> AppResult<&[u8]> {
+fn unpad(input: &[u8]) -> AppResult<&[u8]> {
     let Some(&pad) = input.last() else {
         return Err(AppError::BadRequest("empty decrypted payload".to_string()));
     };
@@ -403,7 +258,7 @@ fn wecom_unpad(input: &[u8]) -> AppResult<&[u8]> {
     Ok(&input[..input.len() - pad])
 }
 
-async fn send_wecom_text(
+async fn send_text(
     state: &AppState,
     runtime: &AppRuntime,
     target_user: &str,
@@ -419,7 +274,7 @@ async fn send_wecom_text(
         .get("agent_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::BadRequest("agent_id is required".to_string()))?;
-    let secret = secret_plaintext(state, runtime, WECOM_CORP_SECRET_KEY)?;
+    let secret = secret_plaintext(state, runtime, CORP_SECRET_KEY)?;
     let token_url = format!(
         "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={secret}"
     );
@@ -462,12 +317,12 @@ mod tests {
     type Aes256CbcEnc = Encryptor<Aes256>;
 
     #[test]
-    fn decrypt_wecom_payload_extracts_message_and_receive_id() {
+    fn decrypt_payload_extracts_message_and_receive_id() {
         let aes_key = test_encoding_aes_key();
         let xml = "<xml><ToUserName><![CDATA[corp-123]]></ToUserName><FromUserName><![CDATA[kevin]]></FromUserName><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello]]></Content><MsgId>42</MsgId></xml>";
-        let encrypted = encrypt_wecom_payload(&aes_key, xml, "corp-123");
+        let encrypted = encrypt_payload(&aes_key, xml, "corp-123");
 
-        let decrypted = decrypt_wecom_payload(&aes_key, &encrypted).expect("decrypt payload");
+        let decrypted = decrypt_payload(&aes_key, &encrypted).expect("decrypt payload");
 
         assert_eq!(
             decrypted,
@@ -479,30 +334,30 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_wecom_payload_accepts_real_wecom_key_shape() {
+    fn decrypt_payload_accepts_real_wecom_key_shape() {
         let aes_key = "lFbb7s2MROtNqEWCZ4d8ZVyiQIEQO3HOJs4fDEoGdcD";
         let xml = "<xml><ToUserName><![CDATA[corp-123]]></ToUserName><FromUserName><![CDATA[kevin]]></FromUserName><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello]]></Content><MsgId>42</MsgId></xml>";
-        let encrypted = encrypt_wecom_payload(aes_key, xml, "corp-123");
+        let encrypted = encrypt_payload(aes_key, xml, "corp-123");
 
-        let decrypted = decrypt_wecom_payload(aes_key, &encrypted).expect("decrypt payload");
+        let decrypted = decrypt_payload(aes_key, &encrypted).expect("decrypt payload");
 
         assert_eq!(decrypted.receive_id, "corp-123");
         assert_eq!(decrypted.message, xml);
     }
 
     #[test]
-    fn wecom_signature_uses_token_timestamp_nonce_and_ciphertext_sorted() {
-        let signature = wecom_signature("token", "1700000000", "nonce", "encrypted");
+    fn signature_uses_token_timestamp_nonce_and_ciphertext_sorted() {
+        let signature = signature("token", "1700000000", "nonce", "encrypted");
 
         assert_eq!(signature, "a976d3f9651ff9c34c56c6f9774c36bca10ec1de");
     }
 
     #[test]
-    fn wecom_unpad_rejects_inconsistent_padding() {
+    fn unpad_rejects_inconsistent_padding() {
         let mut input = b"payload".to_vec();
         input.extend_from_slice(&[4, 4, 4, 3]);
 
-        assert!(wecom_unpad(&input).is_err());
+        assert!(unpad(&input).is_err());
     }
 
     fn test_encoding_aes_key() -> String {
@@ -513,7 +368,7 @@ mod tests {
             .to_string()
     }
 
-    fn encrypt_wecom_payload(aes_key: &str, xml: &str, receive_id: &str) -> String {
+    fn encrypt_payload(aes_key: &str, xml: &str, receive_id: &str) -> String {
         let key = WECOM_ENCODING_AES_KEY_ENGINE
             .decode(format!("{aes_key}="))
             .expect("valid aes key");

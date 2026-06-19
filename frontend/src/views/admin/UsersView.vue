@@ -29,12 +29,13 @@ import {
 } from '../../api/users'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
-import { confirmAction } from '../../utils/confirm'
-import { copyTextToClipboard } from '../../utils/clipboard'
+import { createConfirmAction } from '../../utils/confirm'
+import { copyTextWithMessage } from '../../utils/clipboard'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -45,6 +46,7 @@ import {
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 
 defineOptions({
   name: 'UsersView'
@@ -144,6 +146,21 @@ const emptyUsersDescription = computed(() =>
 const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
 const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
 const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
+const {
+  resetAndReload: resetUsersAndReload,
+  nextPage: nextUsersPage,
+  previousPage: previousUsersPage,
+  handlePageSizeChange: handleUsersPageSizeChange
+} = useCursorPageActions(
+  {
+    pageSize: usersPageSize,
+    reset: resetUsersCursorPagination,
+    goToNext: goToNextUsersPage,
+    goToPrevious: goToPreviousUsersPage
+  },
+  () => usersPage.value,
+  reload
+)
 async function loadUsers() {
   return getUsers({
     email: emailSearch.value.trim(),
@@ -216,21 +233,6 @@ function openEditDialog(row: User) {
   userDialogVisible.value = true
 }
 
-async function confirmDialog(
-  message: string,
-  title: string,
-  confirmText: string,
-  type: 'info' | 'warning',
-  danger = false
-) {
-  return confirmAction(message, title, {
-    confirmText,
-    cancelText: t('cancel'),
-    danger,
-    type
-  })
-}
-
 function userStatusConfirmMessage(email: string, status: UserStatus) {
   return t('changeUserStatusConfirm')
     .replace('{email}', email)
@@ -245,8 +247,10 @@ function confirmStatusChange(email: string, status: UserStatus) {
   return confirmDialog(
     userStatusConfirmMessage(email, status),
     t('confirmAction'),
-    t('save'),
-    userStatusConfirmType(status)
+    {
+      confirmText: t('save'),
+      type: userStatusConfirmType(status)
+    }
   )
 }
 
@@ -296,12 +300,7 @@ async function openUserKeysDialog(row: User) {
 }
 
 async function copyApiKey(row: UserKey) {
-  try {
-    await copyTextToClipboard(row.key)
-    ElMessage.success(t('apiKeyCopied'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  }
+  await copyTextWithMessage(row.key, t('apiKeyCopied'))
 }
 
 async function submitEditUser() {
@@ -364,9 +363,11 @@ async function confirmDeleteUser(row: User) {
   const confirmed = await confirmDialog(
     t('deleteUserConfirm').replace('{email}', row.email),
     t('confirmDelete'),
-    t('delete'),
-    'warning',
-    true
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
   )
   if (!confirmed) return
   deletingUserId.value = row.id
@@ -382,25 +383,7 @@ async function confirmDeleteUser(row: User) {
 }
 
 async function searchUsers() {
-  resetUsersCursorPagination()
-  await reload()
-}
-
-async function nextUsersPage() {
-  if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
-  goToNextUsersPage(usersPage.value.next_cursor)
-  await reload()
-}
-
-async function previousUsersPage() {
-  if (!goToPreviousUsersPage()) return
-  await reload()
-}
-
-async function handleUsersPageSizeChange(size: number) {
-  usersPageSize.value = size
-  resetUsersCursorPagination()
-  await reload()
+  await resetUsersAndReload()
 }
 
 function exportUsers() {

@@ -9,6 +9,7 @@ import {
 } from '../api/apps'
 import type { AppRecord, AppType } from '../types/admin'
 import { readError } from '../utils/errors'
+import { withLoading } from './useLoadingTask'
 
 export const appTypes = [
   {
@@ -434,18 +435,17 @@ export function useAppCreate() {
   }
 
   async function submitCreate(afterCreate?: () => Promise<void> | void) {
-    saving.value = true
-    try {
-      const app = await createApp(payload())
-      createdApp.value = app
-      form.step = 3
-      ElMessage.success('应用已创建。')
-      await afterCreate?.()
-    } catch (err) {
-      ElMessage.error(readError(err))
-    } finally {
-      saving.value = false
-    }
+    await withLoading(saving, async () => {
+      try {
+        const app = await createApp(payload())
+        createdApp.value = app
+        form.step = 3
+        ElMessage.success('应用已创建。')
+        await afterCreate?.()
+      } catch (err) {
+        ElMessage.error(readError(err))
+      }
+    })
   }
 
   return {

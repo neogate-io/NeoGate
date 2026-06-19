@@ -31,12 +31,13 @@ import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { adjustCredit } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
-import { copyTextToClipboard } from '../../utils/clipboard'
-import { confirmAction } from '../../utils/confirm'
+import { copyTextWithMessage } from '../../utils/clipboard'
+import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -51,6 +52,7 @@ defineOptions({
 })
 
 const { locale, t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 
 type TranslationKey = Parameters<typeof t>[0]
 type CreditClass = 'is-available' | 'is-unlimited'
@@ -150,6 +152,16 @@ const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? 
 const isEditingProject = computed(() => Boolean(selectedProject.value))
 const projectDialogTitle = computed(() => t(isEditingProject.value ? 'editProject' : 'addProject'))
 const projectSubmitText = computed(() => t(isEditingProject.value ? 'save' : 'create'))
+const {
+  resetAndReload: resetProjectsAndReload,
+  nextPage,
+  previousPage,
+  handlePageSizeChange
+} = useCursorPageActions(
+  { pageSize, reset: resetCursorPagination, goToNext, goToPrevious },
+  () => projectsPage.value,
+  reload
+)
 
 async function loadProjects() {
   return getProjects({
@@ -158,10 +170,6 @@ async function loadProjects() {
     limit: pageSize.value,
     cursor: currentCursor.value
   })
-}
-
-function resetPagination(page = 1) {
-  resetCursorPagination(page)
 }
 
 function projectStatusText(status: ProjectStatus) {
@@ -279,21 +287,6 @@ async function loadSelectedProjectMembers() {
   selectedMembers.value = await getProjectMembers(selectedProject.value.id)
 }
 
-async function confirmDialog(
-  message: string,
-  title: string,
-  confirmText: string,
-  type: 'info' | 'warning',
-  danger = false
-) {
-  return confirmAction(message, title, {
-    confirmText,
-    cancelText: t('cancel'),
-    danger,
-    type
-  })
-}
-
 async function submitProjectForm() {
   const name = projectForm.name.trim()
   if (!name) {
@@ -312,8 +305,10 @@ async function submitProjectForm() {
         .replace('{name}', selectedProject.value.name)
         .replace('{status}', projectStatusText(projectForm.status)),
       t('confirmAction'),
-      t('save'),
-      PROJECT_STATUS_META[projectForm.status].confirmType
+      {
+        confirmText: t('save'),
+        type: PROJECT_STATUS_META[projectForm.status].confirmType
+      }
     )
     if (!confirmed) return
   }
@@ -362,12 +357,7 @@ async function toggleProjectStatus(row: Project) {
 }
 
 async function copyApiKeyValue(value: string) {
-  try {
-    await copyTextToClipboard(value)
-    ElMessage.success(t('apiKeyCopied'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  }
+  await copyTextWithMessage(value, t('apiKeyCopied'))
 }
 
 async function searchUserOptions(query: string, options: Ref<User[]>, loading: Ref<boolean>) {
@@ -427,9 +417,11 @@ async function confirmDeleteProjectMember(row: ProjectMember) {
   const confirmed = await confirmDialog(
     t('deleteProjectMemberConfirm').replace('{email}', row.user_email),
     t('confirmDelete'),
-    t('delete'),
-    'warning',
-    true
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
   )
   if (!confirmed) return
   deletingMemberId.value = row.id
@@ -464,9 +456,11 @@ async function confirmDeleteProject(row: Project) {
   const confirmed = await confirmDialog(
     t('deleteProjectConfirm').replace('{name}', row.name),
     t('confirmDelete'),
-    t('delete'),
-    'warning',
-    true
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
   )
   if (!confirmed) return
   deletingProjectId.value = row.id
@@ -482,25 +476,7 @@ async function confirmDeleteProject(row: Project) {
 }
 
 async function searchProjects() {
-  resetPagination()
-  await reload()
-}
-
-async function nextPage() {
-  if (!projectsPage.value.has_more || !projectsPage.value.next_cursor) return
-  goToNext(projectsPage.value.next_cursor)
-  await reload()
-}
-
-async function previousPage() {
-  if (!goToPrevious()) return
-  await reload()
-}
-
-async function handlePageSizeChange(size: number) {
-  pageSize.value = size
-  resetPagination()
-  await reload()
+  await resetProjectsAndReload()
 }
 
 async function loadServicePolicy() {

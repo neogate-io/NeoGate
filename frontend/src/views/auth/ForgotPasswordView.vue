@@ -6,6 +6,7 @@ import { RouterLink } from 'vue-router'
 import { requestPasswordReset } from '../../api/auth'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { ApiError, isSmtpConfigError } from '../../utils/errors'
 
 const { locale, t } = useLocale()
@@ -20,15 +21,14 @@ async function sendPasswordReset() {
     return
   }
 
-  sending.value = true
-  try {
-    await requestPasswordReset(email.value.trim(), locale.value)
-    ElMessage.success(t('passwordResetSent'))
-  } catch (err) {
-    error.value = readForgotPasswordError(err)
-  } finally {
-    sending.value = false
-  }
+  await withLoading(sending, async () => {
+    try {
+      await requestPasswordReset(email.value.trim(), locale.value)
+      ElMessage.success(t('passwordResetSent'))
+    } catch (err) {
+      error.value = readForgotPasswordError(err)
+    }
+  })
 }
 
 function readForgotPasswordError(err: unknown) {

@@ -7,6 +7,7 @@ import { login as loginAccount, requestLoginVerificationCode } from '../../api/a
 import type { LoginRole } from '../../api/auth'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useAuthStore } from '../../stores/auth'
 import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
@@ -43,22 +44,20 @@ async function login() {
     return
   }
 
-  signingIn.value = true
-
-  try {
-    const data = await loginAccount(username.value, password.value, verificationCode.value)
-    auth.setToken(data.token, data.role, data.requires_password_change === true)
-    await router.replace(readRedirectPath(data.role))
-  } catch (err) {
-    if (isVerificationRequiredError(err)) {
-      showVerificationCode.value = true
-      await nextTick()
-      verificationInput.value?.focus()
+  await withLoading(signingIn, async () => {
+    try {
+      const data = await loginAccount(username.value, password.value, verificationCode.value)
+      auth.setToken(data.token, data.role, data.requires_password_change === true)
+      await router.replace(readRedirectPath(data.role))
+    } catch (err) {
+      if (isVerificationRequiredError(err)) {
+        showVerificationCode.value = true
+        await nextTick()
+        verificationInput.value?.focus()
+      }
+      error.value = readLoginError(err)
     }
-    error.value = readLoginError(err)
-  } finally {
-    signingIn.value = false
-  }
+  })
 }
 
 async function sendVerificationCode() {
@@ -68,16 +67,15 @@ async function sendVerificationCode() {
     return
   }
 
-  sendingVerificationCode.value = true
-  try {
-    await requestLoginVerificationCode(username.value, locale.value)
-    showVerificationCode.value = true
-    ElMessage.success(t('loginVerificationCodeSent'))
-  } catch (err) {
-    ElMessage.error(readLoginVerificationCodeError(err))
-  } finally {
-    sendingVerificationCode.value = false
-  }
+  await withLoading(sendingVerificationCode, async () => {
+    try {
+      await requestLoginVerificationCode(username.value, locale.value)
+      showVerificationCode.value = true
+      ElMessage.success(t('loginVerificationCodeSent'))
+    } catch (err) {
+      ElMessage.error(readLoginVerificationCodeError(err))
+    }
+  })
 }
 
 function isVerificationRequiredError(err: unknown) {

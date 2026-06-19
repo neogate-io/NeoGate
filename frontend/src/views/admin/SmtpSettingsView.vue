@@ -4,6 +4,7 @@ import { Connection, Lock, Message, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getSmtpSetting, saveSmtpSetting, testSmtpSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { readError, readSmtpTestError } from '../../utils/errors'
 
 const { t } = useLocale()
@@ -55,39 +56,36 @@ function applySetting(setting: Awaited<ReturnType<typeof getSmtpSetting>>) {
 }
 
 async function load() {
-  loading.value = true
-  try {
-    applySetting(await getSmtpSetting())
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      applySetting(await getSmtpSetting())
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function save() {
-  saving.value = true
-  try {
-    const setting = await saveSmtpSetting(smtpPayload())
-    applySetting(setting)
-    ElMessage.success(t('smtpSettingsSaved'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    saving.value = false
-  }
+  await withLoading(saving, async () => {
+    try {
+      const setting = await saveSmtpSetting(smtpPayload())
+      applySetting(setting)
+      ElMessage.success(t('smtpSettingsSaved'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function sendTestEmail() {
-  testing.value = true
-  try {
-    await testSmtpSetting(smtpPayload())
-    ElMessage.success(t('smtpTestEmailSent'))
-  } catch (err) {
-    ElMessage.error(readSmtpTestError(err, t))
-  } finally {
-    testing.value = false
-  }
+  await withLoading(testing, async () => {
+    try {
+      await testSmtpSetting(smtpPayload())
+      ElMessage.success(t('smtpTestEmailSent'))
+    } catch (err) {
+      ElMessage.error(readSmtpTestError(err, t))
+    }
+  })
 }
 
 function smtpPayload() {

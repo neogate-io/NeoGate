@@ -6,8 +6,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { updateUserPassword } from '../../api/userPassword'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useAuthStore } from '../../stores/auth'
-import { ApiError } from '../../utils/errors'
+import { readPasswordChangeError, readPasswordChangeValidationError } from '../../utils/password'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -15,7 +16,6 @@ const router = useRouter()
 const { t } = useLocale()
 const submitting = ref(false)
 const error = ref('')
-const minPasswordLength = 8
 
 const form = reactive({
   currentPassword: '',
@@ -24,57 +24,34 @@ const form = reactive({
 })
 
 function validateForm() {
-  if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
-    error.value = t('passwordRequired')
-    return false
-  }
-  if (form.newPassword.length < minPasswordLength) {
-    error.value = t('passwordMinLength')
-    return false
-  }
-  if (form.newPassword !== form.confirmPassword) {
-    error.value = t('passwordMismatch')
-    return false
-  }
-  if (form.currentPassword === form.newPassword) {
-    error.value = t('passwordSameAsCurrent')
-    return false
-  }
-  return true
+  error.value = readPasswordChangeValidationError(form, t)
+  return !error.value
 }
 
 async function submitChange() {
   error.value = ''
   if (!validateForm()) return
 
-  submitting.value = true
-  try {
-    await updateUserPassword({
-      current_password: form.currentPassword,
-      new_password: form.newPassword
-    })
-    auth.markPasswordChanged()
-    await auth.verifySession(true)
-    ElMessage.success(t('passwordChangeSuccess'))
-    await router.replace(readRedirectPath())
-  } catch (err) {
-    error.value = readChangeError(err)
-  } finally {
-    submitting.value = false
-  }
+  await withLoading(submitting, async () => {
+    try {
+      await updateUserPassword({
+        current_password: form.currentPassword,
+        new_password: form.newPassword
+      })
+      auth.markPasswordChanged()
+      await auth.verifySession(true)
+      ElMessage.success(t('passwordChangeSuccess'))
+      await router.replace(readRedirectPath())
+    } catch (err) {
+      error.value = readChangeError(err)
+    }
+  })
 }
 
 function readChangeError(err: unknown) {
-  if (err instanceof ApiError && err.message.includes('current password is incorrect')) {
-    return t('currentPasswordIncorrect')
-  }
-  if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
-    return t('passwordMinLength')
-  }
-  if (err instanceof ApiError && err.message.includes('new password cannot be the same')) {
-    return t('passwordSameAsCurrent')
-  }
-  return err instanceof Error ? err.message : String(err)
+  return readPasswordChangeError(err, t, {
+    sameAsCurrentKey: 'passwordSameAsCurrent'
+  })
 }
 
 function readRedirectPath() {

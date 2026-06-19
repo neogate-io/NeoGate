@@ -4,8 +4,13 @@ import { Key, Lock, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { updateUserPassword } from '../../api/userPassword'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useAuthStore } from '../../stores/auth'
-import { ApiError, readError } from '../../utils/errors'
+import {
+  readPasswordChangeError,
+  readPasswordChangeValidationError,
+  resetPasswordChangeForm
+} from '../../utils/password'
 
 const { t } = useLocale()
 const auth = useAuthStore()
@@ -18,62 +23,42 @@ const form = reactive({
 })
 
 function resetForm() {
-  form.currentPassword = ''
-  form.newPassword = ''
-  form.confirmPassword = ''
+  resetPasswordChangeForm(form)
 }
 
 function validateForm() {
-  if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
-    ElMessage.error(t('passwordRequired'))
-    return false
-  }
-  if (form.newPassword.length < 8) {
-    ElMessage.error(t('passwordMinLength'))
-    return false
-  }
-  if (form.newPassword !== form.confirmPassword) {
-    ElMessage.error(t('passwordMismatch'))
-    return false
-  }
-  if (form.currentPassword === form.newPassword) {
-    ElMessage.error(t('passwordSameAsCurrent'))
+  const error = readPasswordChangeValidationError(form, t)
+  if (error) {
+    ElMessage.error(error)
     return false
   }
   return true
 }
 
 function passwordError(err: unknown) {
-  if (err instanceof ApiError && err.message.includes('current password is incorrect')) {
-    return t('currentPasswordIncorrect')
-  }
-  if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
-    return t('passwordMinLength')
-  }
-  if (err instanceof ApiError && err.message.includes('new password cannot be the same')) {
-    return t('passwordSameAsCurrent')
-  }
-  return readError(err)
+  return readPasswordChangeError(err, t, {
+    sameAsCurrentKey: 'passwordSameAsCurrent',
+    fallback: 'readError'
+  })
 }
 
 async function save() {
   if (!validateForm()) return
 
-  saving.value = true
-  try {
-    await updateUserPassword({
-      current_password: form.currentPassword,
-      new_password: form.newPassword
-    })
-    auth.markPasswordChanged()
-    await auth.verifySession(true)
-    resetForm()
-    ElMessage.success(t('passwordChangeSuccess'))
-  } catch (err) {
-    ElMessage.error(passwordError(err))
-  } finally {
-    saving.value = false
-  }
+  await withLoading(saving, async () => {
+    try {
+      await updateUserPassword({
+        current_password: form.currentPassword,
+        new_password: form.newPassword
+      })
+      auth.markPasswordChanged()
+      await auth.verifySession(true)
+      resetForm()
+      ElMessage.success(t('passwordChangeSuccess'))
+    } catch (err) {
+      ElMessage.error(passwordError(err))
+    }
+  })
 }
 </script>
 

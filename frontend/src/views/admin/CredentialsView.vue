@@ -20,13 +20,15 @@ import {
 } from '../../api/credentials'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Credential, CredentialQuotaWindow } from '../../types/admin'
-import { confirmAction } from '../../utils/confirm'
+import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime } from '../../utils/format'
 
 const { t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 const credentials = ref<Credential[]>([])
 const loading = ref(false)
 const uploading = ref(false)
@@ -48,15 +50,14 @@ const sortedCredentials = computed(() =>
 const selectedCount = selectedIds.size
 
 async function loadCredentials() {
-  loading.value = true
-  try {
-    credentials.value = await getCredentials()
-    pruneSelectedCredentials()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      credentials.value = await getCredentials()
+      pruneSelectedCredentials()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function refreshEnabledCredentials() {
@@ -64,12 +65,7 @@ async function refreshEnabledCredentials() {
     .filter((credential) => credential.enabled && isOpenAICredential(credential))
     .map((credential) => credential.id)
   if (ids.length === 0) return
-  refreshingAll.value = true
-  try {
-    await Promise.all(ids.map((id) => refreshCredential(id, false)))
-  } finally {
-    refreshingAll.value = false
-  }
+  await withLoading(refreshingAll, () => Promise.all(ids.map((id) => refreshCredential(id, false))))
 }
 
 async function refreshCredential(id: number, notify = true) {
@@ -103,9 +99,8 @@ async function toggleCredential(credential: Credential) {
 }
 
 async function removeCredential(credential: Credential) {
-  const confirmed = await confirmAction(t('credentialDeleteConfirm'), t('delete'), {
+  const confirmed = await confirmDialog(t('credentialDeleteConfirm'), t('delete'), {
     confirmText: t('delete'),
-    cancelText: t('cancel'),
     danger: true,
     type: 'warning'
   })
@@ -130,28 +125,27 @@ async function uploadCredential(event: Event) {
   input.value = ''
   if (!file) return
 
-  uploading.value = true
-  try {
-    const result = await uploadCredentialFile(file)
-    const imported = result.imported.length
-    const failed = result.failed.length
-    for (const credential of result.imported) {
-      mergeCredential(credential)
+  await withLoading(uploading, async () => {
+    try {
+      const result = await uploadCredentialFile(file)
+      const imported = result.imported.length
+      const failed = result.failed.length
+      for (const credential of result.imported) {
+        mergeCredential(credential)
+      }
+      const message =
+        failed > 0
+          ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
+          : `${t('credentialUploadDone')} ${imported}`
+      ElMessage.success(message)
+      if (failed > 0) {
+        ElMessage.warning(result.failed.map((item) => `${item.filename}: ${item.error}`).join('\n'))
+      }
+      await loadCredentials()
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    const message =
-      failed > 0
-        ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
-        : `${t('credentialUploadDone')} ${imported}`
-    ElMessage.success(message)
-    if (failed > 0) {
-      ElMessage.warning(result.failed.map((item) => `${item.filename}: ${item.error}`).join('\n'))
-    }
-    await loadCredentials()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    uploading.value = false
-  }
+  })
 }
 
 function openCredentialUpload() {

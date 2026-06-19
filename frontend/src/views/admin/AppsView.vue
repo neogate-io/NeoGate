@@ -15,12 +15,15 @@ import AppCreateDialog from '../../components/admin/apps/AppCreateDialog.vue'
 import AppDetailDrawer from '../../components/admin/apps/AppDetailDrawer.vue'
 import { useAppCreate } from '../../composables/useAppCreate'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import type { AppRecord, AppRunLog } from '../../types/admin'
-import { confirmAction } from '../../utils/confirm'
+import { copyTextWithMessage } from '../../utils/clipboard'
+import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { microUsdToUsd } from '../../utils/format'
 
 const { t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const apps = ref<AppRecord[]>([])
 const logs = ref<AppRunLog[]>([])
@@ -51,16 +54,15 @@ function replaceApp(nextApp: AppRecord) {
 }
 
 async function load() {
-  loading.value = true
-  try {
-    const [nextApps] = await Promise.all([getApps(), create.loadModelOptions()])
-    edit.modelOptions.value = create.modelOptions.value
-    apps.value = nextApps
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      const [nextApps] = await Promise.all([getApps(), create.loadModelOptions()])
+      edit.modelOptions.value = create.modelOptions.value
+      apps.value = nextApps
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function showCreatedAppDetail(app: AppRecord) {
@@ -90,24 +92,23 @@ function openEdit(app: AppRecord) {
 }
 
 async function saveApp() {
-  if (!selectedApp.value) return
-  editSaving.value = true
-  try {
-    const nextApp = await updateApp(selectedApp.value.id, edit.updatePayload())
-    replaceApp(nextApp)
-    editOpen.value = false
-    ElMessage.success('应用已保存。')
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    editSaving.value = false
-  }
+  const app = selectedApp.value
+  if (!app) return
+  await withLoading(editSaving, async () => {
+    try {
+      const nextApp = await updateApp(app.id, edit.updatePayload())
+      replaceApp(nextApp)
+      editOpen.value = false
+      ElMessage.success('应用已保存。')
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function removeApp(app: AppRecord) {
-  const confirmed = await confirmAction(`确认删除应用「${app.name}」？`, '删除应用', {
-    confirmText: '删除',
-    cancelText: t('cancel')
+  const confirmed = await confirmDialog(`确认删除应用「${app.name}」？`, '删除应用', {
+    confirmText: '删除'
   })
   if (!confirmed) return
   try {
@@ -138,20 +139,18 @@ async function openDetail(app: AppRecord) {
 
 async function loadLogs(appId = selectedApp.value?.id) {
   if (!appId) return
-  logsLoading.value = true
-  try {
-    logs.value = await getAppRunLogs({ appId, limit: 100 })
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    logsLoading.value = false
-  }
+  await withLoading(logsLoading, async () => {
+    try {
+      logs.value = await getAppRunLogs({ appId, limit: 100 })
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function copyText(value?: string | null) {
   if (!value) return
-  await navigator.clipboard.writeText(value)
-  ElMessage.success('已复制。')
+  await copyTextWithMessage(value, '已复制。')
 }
 
 onMounted(load)

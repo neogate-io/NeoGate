@@ -4,6 +4,7 @@ import { Download, Refresh } from '@element-plus/icons-vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import {
@@ -24,9 +25,9 @@ const {
   currentPage,
   pageSize,
   currentCursor,
-  reset: resetCursorPagination,
   goToNext,
-  goToPrevious
+  goToPrevious,
+  reset: resetCursorPagination
 } = useCursorPagination(DEFAULT_PAGE_SIZE)
 const usageQueryRange = computed(() => {
   if (!dateRange.value) return { start: undefined, end: undefined }
@@ -57,6 +58,16 @@ const usageInitialLoading = computed(() => !usageLoaded.value)
 const hasUsagePagination = computed(
   () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
 )
+const {
+  resetAndReload,
+  nextPage,
+  previousPage,
+  handlePageSizeChange
+} = useCursorPageActions(
+  { pageSize, reset: resetCursorPagination, goToNext, goToPrevious },
+  () => usagePage.value,
+  reload
+)
 
 function formatFullTime(value: string) {
   return formatDateTime(value, locale.value, {
@@ -73,26 +84,8 @@ function statusLabel(statusCode?: number | null) {
   return statusCode && statusCode >= 400 ? String(statusCode) : t('success')
 }
 
-async function nextPage() {
-  if (!usagePage.value.has_more || !usagePage.value.next_cursor) return
-  goToNext(usagePage.value.next_cursor)
-  await reload()
-}
-
-async function previousPage() {
-  if (!goToPrevious()) return
-  await reload()
-}
-
-async function handlePageSizeChange(size: number) {
-  pageSize.value = size
-  resetCursorPagination()
-  await reload()
-}
-
 async function handleDateRangeChange() {
-  resetCursorPagination()
-  await reload()
+  await resetAndReload()
 }
 
 async function exportUsage() {

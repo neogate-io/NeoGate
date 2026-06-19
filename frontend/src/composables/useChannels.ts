@@ -13,8 +13,8 @@ import {
 } from '../api/channels'
 import { getProviders } from '../api/providers'
 import type { MessageKey } from '../i18n'
-import { copyTextToClipboard } from '../utils/clipboard'
-import { confirmAction } from '../utils/confirm'
+import { copyTextWithMessage } from '../utils/clipboard'
+import { createConfirmAction } from '../utils/confirm'
 import type {
   Channel,
   ChannelEndpoint,
@@ -33,6 +33,7 @@ import {
   type ChannelProviderOption
 } from '../utils/channel'
 import { readError, readModelFetchError } from '../utils/errors'
+import { withLoading } from './useLoadingTask'
 
 type Translate = (key: MessageKey) => string
 type ModelPickerTarget = {
@@ -105,6 +106,7 @@ function endpointModels(endpoints: ChannelEndpoint[]) {
 }
 
 export function useChannels(t: Translate) {
+  const confirmDialog = createConfirmAction(() => t('cancel'))
   const channels = ref<Channel[]>([])
   const channelKeys = ref<ChannelKey[]>([])
   const providers = ref<ChannelProviderOption[]>([])
@@ -247,24 +249,22 @@ export function useChannels(t: Translate) {
   }
 
   async function loadChannels() {
-    loading.value = true
-
-    try {
-      const [fetchedChannels, fetchedChannelKeys, fetchedProviders] = await Promise.all([
-        getChannels(),
-        getAllChannelKeys(),
-        getProviders()
-      ])
-      channels.value = fetchedChannels
-      channelKeys.value = fetchedChannelKeys
-      providers.value = fetchedProviders.map(providerToOption)
-    } catch (err) {
-      channels.value = []
-      channelKeys.value = []
-      ElMessage.error(readError(err))
-    } finally {
-      loading.value = false
-    }
+    await withLoading(loading, async () => {
+      try {
+        const [fetchedChannels, fetchedChannelKeys, fetchedProviders] = await Promise.all([
+          getChannels(),
+          getAllChannelKeys(),
+          getProviders()
+        ])
+        channels.value = fetchedChannels
+        channelKeys.value = fetchedChannelKeys
+        providers.value = fetchedProviders.map(providerToOption)
+      } catch (err) {
+        channels.value = []
+        channelKeys.value = []
+        ElMessage.error(readError(err))
+      }
+    })
   }
 
   async function submitChannel(beforeCreate?: () => Promise<boolean>) {
@@ -272,32 +272,31 @@ export function useChannels(t: Translate) {
     if (!parsed) return null
     const secrets = createForm.use_credentials ? [] : splitSecretLines(createForm.secret)
 
-    creating.value = true
-    try {
-      if (beforeCreate && !(await beforeCreate())) {
+    return withLoading(creating, async () => {
+      try {
+        if (beforeCreate && !(await beforeCreate())) {
+          return null
+        }
+        const channel = await createChannel({
+          provider: createForm.provider,
+          name: parsed.name,
+          endpoints: parsed.endpoints,
+          enabled: createForm.enabled,
+          priority: 0,
+          weight: 1,
+          key_selection_mode: 'polling',
+          use_credentials: createForm.use_credentials
+        })
+        await createKeysFromSecrets(channel.id, parsed.name, secrets)
+        ElMessage.success(t('channelCreated'))
+        await loadChannels()
+        createDialogOpen.value = false
+        return channel
+      } catch (err) {
+        ElMessage.error(readError(err))
         return null
       }
-      const channel = await createChannel({
-        provider: createForm.provider,
-        name: parsed.name,
-        endpoints: parsed.endpoints,
-        enabled: createForm.enabled,
-        priority: 0,
-        weight: 1,
-        key_selection_mode: 'polling',
-        use_credentials: createForm.use_credentials
-      })
-      await createKeysFromSecrets(channel.id, parsed.name, secrets)
-      ElMessage.success(t('channelCreated'))
-      await loadChannels()
-      createDialogOpen.value = false
-      return channel
-    } catch (err) {
-      ElMessage.error(readError(err))
-      return null
-    } finally {
-      creating.value = false
-    }
+    })
   }
 
   async function fetchCreateModels() {
@@ -325,34 +324,33 @@ export function useChannels(t: Translate) {
     const shouldKeepAllSelected = allFetchedModelsSelected.value
     const existingModels = splitCommaList(form.models)
 
-    fetchingModels.value = true
-    try {
-      const { models } = await fetchUpstreamModels({
-        channel_id: channelId,
-        provider: form.provider,
-        protocol: endpoint.protocol,
-        base_url: baseUrl,
-        secret,
-        use_credentials: form.use_credentials
-      })
-      if (models.length === 0) {
-        ElMessage.warning(t('modelsFetchEmpty'))
-        return
-      }
+    await withLoading(fetchingModels, async () => {
+      try {
+        const { models } = await fetchUpstreamModels({
+          channel_id: channelId,
+          provider: form.provider,
+          protocol: endpoint.protocol,
+          base_url: baseUrl,
+          secret,
+          use_credentials: form.use_credentials
+        })
+        if (models.length === 0) {
+          ElMessage.warning(t('modelsFetchEmpty'))
+          return
+        }
 
-      fetchedModels.value = models
-      selectedFetchedModels.value =
-        shouldKeepAllSelected || (formTarget === 'create' && existingModels.length === 0)
-          ? models
-          : models.filter((model) => existingModels.includes(model))
-      syncSelectedModelsToInput()
-      modelPickerDialogOpen.value = true
-      ElMessage.success(t('modelsFetched'))
-    } catch (err) {
-      ElMessage.error(readModelFetchError(err, t))
-    } finally {
-      fetchingModels.value = false
-    }
+        fetchedModels.value = models
+        selectedFetchedModels.value =
+          shouldKeepAllSelected || (formTarget === 'create' && existingModels.length === 0)
+            ? models
+            : models.filter((model) => existingModels.includes(model))
+        syncSelectedModelsToInput()
+        modelPickerDialogOpen.value = true
+        ElMessage.success(t('modelsFetched'))
+      } catch (err) {
+        ElMessage.error(readModelFetchError(err, t))
+      }
+    })
   }
 
   function validateModelFetchInput(form: ChannelForm, baseUrl: string, secret?: string) {
@@ -385,35 +383,34 @@ export function useChannels(t: Translate) {
     const parsed = validateChannelForm(editForm)
     if (!parsed) return null
 
-    updating.value = true
-    try {
-      const channel = await updateChannel(editingChannel.value.id, {
-        name: parsed.name,
-        endpoints: parsed.endpoints,
-        enabled: editForm.enabled,
-        priority: editingChannel.value.priority,
-        weight: editingChannel.value.weight,
-        key_selection_mode: editingChannel.value.key_selection_mode,
-        use_credentials: editForm.use_credentials
-      })
-      const secrets = editForm.use_credentials ? [] : splitSecretLines(editForm.secret)
-      await createKeysFromSecrets(editingChannel.value.id, parsed.name, secrets)
-      ElMessage.success(t('channelUpdated'))
-      await loadChannels()
-      editDialogOpen.value = false
-      return channel
-    } catch (err) {
-      ElMessage.error(readError(err))
-      return null
-    } finally {
-      updating.value = false
-    }
+    const editing = editingChannel.value
+    return withLoading(updating, async () => {
+      try {
+        const channel = await updateChannel(editing.id, {
+          name: parsed.name,
+          endpoints: parsed.endpoints,
+          enabled: editForm.enabled,
+          priority: editing.priority,
+          weight: editing.weight,
+          key_selection_mode: editing.key_selection_mode,
+          use_credentials: editForm.use_credentials
+        })
+        const secrets = editForm.use_credentials ? [] : splitSecretLines(editForm.secret)
+        await createKeysFromSecrets(editing.id, parsed.name, secrets)
+        ElMessage.success(t('channelUpdated'))
+        await loadChannels()
+        editDialogOpen.value = false
+        return channel
+      } catch (err) {
+        ElMessage.error(readError(err))
+        return null
+      }
+    })
   }
 
   async function confirmDeleteChannelKey(key: ChannelKey) {
-    const confirmed = await confirmAction(t('deleteChannelKeyConfirm'), t('delete'), {
+    const confirmed = await confirmDialog(t('deleteChannelKeyConfirm'), t('delete'), {
       confirmText: t('delete'),
-      cancelText: t('cancel'),
       danger: true,
       type: 'warning'
     })
@@ -437,8 +434,7 @@ export function useChannels(t: Translate) {
     copyingKeyId.value = key.id
     try {
       const { secret } = await revealChannelKeySecret(key.channel_id, key.id)
-      await copyTextToClipboard(secret)
-      ElMessage.success(t('channelKeyCopied'))
+      await copyTextWithMessage(secret, t('channelKeyCopied'))
     } catch (err) {
       ElMessage.error(readError(err))
     } finally {
@@ -690,9 +686,8 @@ export function useChannels(t: Translate) {
   }
 
   async function confirmDeleteChannel(row: Channel) {
-    const confirmed = await confirmAction(t('deleteChannelConfirm'), t('delete'), {
+    const confirmed = await confirmDialog(t('deleteChannelConfirm'), t('delete'), {
       confirmText: t('delete'),
-      cancelText: t('cancel'),
       danger: true,
       type: 'warning'
     })

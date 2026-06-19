@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { resetPassword } from '../../api/auth'
 import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { ApiError } from '../../utils/errors'
 
 const route = useRoute()
@@ -32,16 +33,15 @@ async function submitReset() {
     return
   }
 
-  submitting.value = true
-  try {
-    await resetPassword(token, password.value)
-    ElMessage.success(t('passwordResetSuccess'))
-    await router.replace({ name: 'login' })
-  } catch (err) {
-    error.value = readResetError(err)
-  } finally {
-    submitting.value = false
-  }
+  await withLoading(submitting, async () => {
+    try {
+      await resetPassword(token, password.value)
+      ElMessage.success(t('passwordResetSuccess'))
+      await router.replace({ name: 'login' })
+    } catch (err) {
+      error.value = readResetError(err)
+    }
+  })
 }
 
 function readResetError(err: unknown) {

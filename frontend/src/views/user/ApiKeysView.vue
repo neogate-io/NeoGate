@@ -10,17 +10,18 @@ import {
 } from '../../api/userKeys'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
+import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { UserKey } from '../../types/admin'
 import type { ServicePolicy } from '../../api/policy'
-import { copyTextToClipboard } from '../../utils/clipboard'
+import { copyTextWithMessage } from '../../utils/clipboard'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, maskApiKey } from '../../utils/format'
 
 const { t } = useLocale()
 const createLoading = ref(false)
-const deletingIds = ref(new Set<number>())
-const updatingIds = ref(new Set<number>())
+const deletingIds = useReactiveSet<number>()
+const updatingIds = useReactiveSet<number>()
 const createDialogVisible = ref(false)
 const apiKeyName = ref('')
 const newKeyDialogVisible = ref(false)
@@ -44,12 +45,7 @@ function formatLastActiveAt(value?: string | null) {
 }
 
 async function copyText(value: string, successMessage = t('apiKeyCopied')) {
-  try {
-    await copyTextToClipboard(value)
-    ElMessage.success(successMessage)
-  } catch (err) {
-    ElMessage.error(readError(err))
-  }
+  await copyTextWithMessage(value, successMessage)
 }
 
 async function copyApiKey(row: UserKey) {
@@ -61,7 +57,7 @@ async function copyBaseUrl() {
 }
 
 async function toggleApiKeyStatus(row: UserKey, enabled: boolean) {
-  updatingIds.value = new Set(updatingIds.value).add(row.id)
+  updatingIds.add(row.id)
   try {
     const nextStatus = enabled ? 'enabled' : 'disabled'
     const updated = await updateOwnUserKeyStatus(row.id, nextStatus)
@@ -74,9 +70,7 @@ async function toggleApiKeyStatus(row: UserKey, enabled: boolean) {
     ElMessage.error(readError(err))
     await reload()
   } finally {
-    const next = new Set(updatingIds.value)
-    next.delete(row.id)
-    updatingIds.value = next
+    updatingIds.remove(row.id)
   }
 }
 
@@ -127,7 +121,7 @@ async function confirmDeleteApiKey(row: UserKey) {
   })
   if (!confirmed) return
 
-  deletingIds.value = new Set(deletingIds.value).add(row.id)
+  deletingIds.add(row.id)
   try {
     await deleteOwnUserKey(row.id)
     ElMessage.success(t('apiKeyDeleted'))
@@ -135,9 +129,7 @@ async function confirmDeleteApiKey(row: UserKey) {
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    const next = new Set(deletingIds.value)
-    next.delete(row.id)
-    deletingIds.value = next
+    deletingIds.remove(row.id)
   }
 }
 </script>

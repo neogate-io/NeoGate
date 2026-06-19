@@ -27,3 +27,15 @@ export async function confirmAction(
     return false
   }
 }
+
+export function createConfirmAction(cancelText: string | (() => string)) {
+  return (
+    message: MessageBoxConfirmArgs[0],
+    title: MessageBoxConfirmArgs[1],
+    options: Omit<AppConfirmOptions, 'cancelText'>
+  ) =>
+    confirmAction(message, title, {
+      ...options,
+      cancelText: typeof cancelText === 'function' ? cancelText() : cancelText
+    })
+}

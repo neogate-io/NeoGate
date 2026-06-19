@@ -10,6 +10,7 @@ import {
 } from '@element-plus/icons-vue'
 import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import type { UsageRecord } from '../../types/admin'
@@ -77,10 +78,16 @@ const usageInitialLoading = computed(() => !usageLoaded.value)
 const hasUsagePagination = computed(
   () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
 )
-
-function resetUsagePagination() {
-  resetCursorPagination()
-}
+const {
+  resetAndReload: resetUsageAndReload,
+  nextPage,
+  previousPage,
+  handlePageSizeChange
+} = useCursorPageActions(
+  { pageSize, reset: resetCursorPagination, goToNext, goToPrevious },
+  () => usagePage.value,
+  reload
+)
 
 function usageStatusTone(statusCode?: number | null) {
   if (statusCode == null) return 'neutral'
@@ -110,25 +117,7 @@ function usageUserDisplay(row: UsageRecord) {
 }
 
 async function handleSearch() {
-  resetUsagePagination()
-  await reload()
-}
-
-async function nextPage() {
-  if (!usagePage.value.has_more || !usagePage.value.next_cursor) return
-  goToNext(usagePage.value.next_cursor)
-  await reload()
-}
-
-async function previousPage() {
-  if (!goToPrevious()) return
-  await reload()
-}
-
-async function handlePageSizeChange(size: number) {
-  pageSize.value = size
-  resetUsagePagination()
-  await reload()
+  await resetUsageAndReload()
 }
 </script>
 

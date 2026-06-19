@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { getPricingTemplates, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate } from '../../types/admin'
 import { confirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
@@ -103,34 +104,36 @@ function readReferenceSyncError(err: unknown) {
 }
 
 async function load() {
-  loading.value = true
-  try {
-    const [policy, templates] = await Promise.all([getAdminServicePolicy(), getPricingTemplates()])
-    servicePolicy.value = policy
-    pricingTemplates.value = templates
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      const [policy, templates] = await Promise.all([
+        getAdminServicePolicy(),
+        getPricingTemplates()
+      ])
+      servicePolicy.value = policy
+      pricingTemplates.value = templates
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function saveServicePolicy() {
-  if (!servicePolicy.value) return
+  const policy = servicePolicy.value
+  if (!policy) return
 
-  servicePolicySaving.value = true
-  try {
-    servicePolicy.value = await saveAdminServicePolicy({
-      credit_required: servicePolicy.value.credit_required,
-      registration_enabled: servicePolicy.value.registration_enabled
-    })
-    ElMessage.success(t('servicePolicySaved'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-    servicePolicy.value = await getAdminServicePolicy().catch(() => servicePolicy.value)
-  } finally {
-    servicePolicySaving.value = false
-  }
+  await withLoading(servicePolicySaving, async () => {
+    try {
+      servicePolicy.value = await saveAdminServicePolicy({
+        credit_required: policy.credit_required,
+        registration_enabled: policy.registration_enabled
+      })
+      ElMessage.success(t('servicePolicySaved'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+      servicePolicy.value = await getAdminServicePolicy().catch(() => servicePolicy.value)
+    }
+  })
 }
 
 async function syncReferencePrices() {
@@ -144,16 +147,15 @@ async function syncReferencePrices() {
   )
   if (!confirmed) return
 
-  syncingTemplates.value = true
-  try {
-    const result = await syncPricingTemplates()
-    pricingTemplates.value = await getPricingTemplates()
-    ElMessage.success(referencePricesSyncedMessage(result))
-  } catch (err) {
-    ElMessage.error(readReferenceSyncError(err))
-  } finally {
-    syncingTemplates.value = false
-  }
+  await withLoading(syncingTemplates, async () => {
+    try {
+      const result = await syncPricingTemplates()
+      pricingTemplates.value = await getPricingTemplates()
+      ElMessage.success(referencePricesSyncedMessage(result))
+    } catch (err) {
+      ElMessage.error(readReferenceSyncError(err))
+    }
+  })
 }
 
 onMounted(load)

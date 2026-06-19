@@ -254,15 +254,15 @@ function showCreatedAppDetail() {
       </template>
 
       <template v-if="create.form.appType === 'dingtalk'">
-        <el-form-item label="机器人加签密钥">
+        <el-form-item label="机器人 AppSecret">
           <el-input
             v-model="create.form.dingtalkAppSecret"
-            placeholder="在钉钉开发者后台的机器人配置中查看"
+            placeholder="填写钉钉机器人基础信息中的 AppSecret"
             show-password
             type="password"
           />
           <p class="app-form-hint">
-            创建后把消息接收地址复制到钉钉机器人配置中，并开启消息接收与加签校验。
+            创建后把消息接收地址复制到钉钉机器人配置中；NeoGate 会用 AppSecret 校验钉钉回调签名。
           </p>
         </el-form-item>
       </template>

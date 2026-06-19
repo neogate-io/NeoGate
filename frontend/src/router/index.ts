@@ -172,9 +172,13 @@ export const router = createRouter({
   ]
 })
 
+let setupCompleted = false
+
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  const setup = await getSetupStatus().catch(() => null)
+  const setup =
+    setupCompleted && to.name !== 'setup' ? null : await getSetupStatus().catch(() => null)
+  if (setup?.setup_completed) setupCompleted = true
 
   if (setup && !setup.setup_completed && to.name !== 'setup') {
     return {

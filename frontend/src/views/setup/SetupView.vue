@@ -385,7 +385,7 @@ async function waitForRuntimeRestart() {
   while (Date.now() < deadline) {
     await sleep(1500)
     try {
-      const nextStatus = await getSetupStatus()
+      const nextStatus = await getSetupStatus(true)
       if (nextStatus.setup_completed) {
         await router.replace('/login')
         return

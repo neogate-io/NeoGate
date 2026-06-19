@@ -15,7 +15,7 @@ import {
   UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
-import { computed, reactive, ref, type Component } from 'vue'
+import { computed, onMounted, reactive, ref, type Component, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   addProjectMember,
@@ -38,7 +38,13 @@ import type { Project, ProjectMember, ProjectStatus, User } from '../../types/ad
 import { copyTextToClipboard } from '../../utils/clipboard'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
-import { formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
+import {
+  formatCompactDateTime,
+  formatDateTime,
+  formatMicroUsd,
+  maskApiKey,
+  usdToMicroUsd
+} from '../../utils/format'
 
 defineOptions({
   name: 'ProjectsView'
@@ -147,17 +153,12 @@ const projectDialogTitle = computed(() => t(isEditingProject.value ? 'editProjec
 const projectSubmitText = computed(() => t(isEditingProject.value ? 'save' : 'create'))
 
 async function loadProjects() {
-  const [page, policy] = await Promise.all([
-    getProjects({
-      search: search.value.trim(),
-      status: statusFilter.value,
-      limit: pageSize.value,
-      cursor: currentCursor.value
-    }),
-    getAdminServicePolicy()
-  ])
-  servicePolicy.value = policy
-  return page
+  return getProjects({
+    search: search.value.trim(),
+    status: statusFilter.value,
+    limit: pageSize.value,
+    cursor: currentCursor.value
+  })
 }
 
 function resetPagination(page = 1) {
@@ -226,30 +227,6 @@ function projectMemberDisplayName(member: ProjectMember) {
   return member.user_username || member.user_email
 }
 
-function formatLastActiveAt(value?: string | null) {
-  return value ? formatDateTimeParts(value) : null
-}
-
-function formatDateTimePart(value: string | null | undefined, part: 'date' | 'time') {
-  return formatDateTimeParts(value)?.[part] || '-'
-}
-
-function formatDateTimeParts(value?: string | null) {
-  if (!value) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-  const second = String(date.getSeconds()).padStart(2, '0')
-  return {
-    date: `${year}/${month}/${day}`,
-    time: `${hour}:${minute}:${second}`
-  }
-}
-
 function openCreateDialog() {
   selectedProject.value = null
   Object.assign(projectForm, {
@@ -270,7 +247,7 @@ function openEditDialog(row: Project) {
   })
   ownerOptions.value = []
   projectDialogVisible.value = true
-  void searchOwnerUsers(row.owner_email)
+  void searchUserOptions(row.owner_email, ownerOptions, ownerSearchLoading)
 }
 
 function openCreditDialog(row: Project) {
@@ -394,38 +371,29 @@ async function copyApiKeyValue(value: string) {
   }
 }
 
-async function searchOwnerUsers(query: string) {
+async function searchUserOptions(query: string, options: Ref<User[]>, loading: Ref<boolean>) {
   const search = query.trim()
   if (!search) {
-    ownerOptions.value = []
+    options.value = []
     return
   }
-  ownerSearchLoading.value = true
+  loading.value = true
   try {
     const page = await getUsers({ search, limit: 20 })
-    ownerOptions.value = page.items
+    options.value = page.items
   } catch (err) {
     ElMessage.error(readError(err))
   } finally {
-    ownerSearchLoading.value = false
+    loading.value = false
   }
 }
 
+function searchOwnerUsers(query: string) {
+  return searchUserOptions(query, ownerOptions, ownerSearchLoading)
+}
+
 async function searchMemberUsers(query: string) {
-  const search = query.trim()
-  if (!search) {
-    memberUserOptions.value = []
-    return
-  }
-  memberUserSearchLoading.value = true
-  try {
-    const page = await getUsers({ search, limit: 20 })
-    memberUserOptions.value = page.items
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    memberUserSearchLoading.value = false
-  }
+  return searchUserOptions(query, memberUserOptions, memberUserSearchLoading)
 }
 
 async function submitAddProjectMember() {
@@ -535,6 +503,16 @@ async function handlePageSizeChange(size: number) {
   resetPagination()
   await reload()
 }
+
+async function loadServicePolicy() {
+  try {
+    servicePolicy.value = await getAdminServicePolicy()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
+}
+
+onMounted(loadServicePolicy)
 </script>
 
 <template>
@@ -1000,30 +978,14 @@ async function handlePageSizeChange(size: number) {
             </el-table-column>
             <el-table-column :label="t('createdAt')" width="116">
               <template #default="{ row }">
-                <span v-if="formatDateTimeParts(row.created_at)" class="project-member-time-cell">
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.created_at, 'date')
-                  }}</span>
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.created_at, 'time')
-                  }}</span>
-                </span>
-                <span v-else class="user-time-cell project-member-empty-time is-empty"> - </span>
+                <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
               </template>
             </el-table-column>
             <el-table-column :label="t('lastActiveAt')" width="116">
               <template #default="{ row }">
-                <span
-                  v-if="formatLastActiveAt(row.last_active_at)"
-                  class="project-member-time-cell"
-                >
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.last_active_at, 'date')
-                  }}</span>
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.last_active_at, 'time')
-                  }}</span>
-                </span>
+                <span v-if="row.last_active_at" class="user-time-cell">{{
+                  formatCompactDateTime(row.last_active_at)
+                }}</span>
                 <span v-else class="user-time-cell project-member-empty-time is-empty">
                   {{ t('neverActive') }}
                 </span>

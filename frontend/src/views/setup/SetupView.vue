@@ -945,7 +945,7 @@ onMounted(load)
     <section v-loading="loading" class="setup-stage">
       <aside class="setup-brief">
         <div class="setup-logo-lockup">
-          <img src="/logo.svg" alt="NeoGate" />
+          <img src="/logos/logo.svg" alt="NeoGate" />
           <span>{{ t('setupBrandKicker') }}</span>
         </div>
         <div class="setup-heading">

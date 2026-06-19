@@ -18,7 +18,6 @@ import {
   refreshCredential as refreshCredentialApi,
   uploadCredentialFile
 } from '../../api/credentials'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { useReactiveSet } from '../../composables/useReactiveSet'
@@ -384,7 +383,11 @@ void bootstrap()
             formatCompactDateTime(credential.updated_at || credential.last_refresh)
           }}</span>
           <div class="credential-actions">
-            <AdminActionTooltip :content="credential.enabled ? t('disable') : t('enable')">
+            <el-tooltip
+              :content="credential.enabled ? t('disable') : t('enable')"
+              placement="top"
+              :show-after="600"
+            >
               <el-button
                 circle
                 class="credential-icon-button"
@@ -392,8 +395,8 @@ void bootstrap()
                 :loading="togglingIds.has(credential.id)"
                 @click="toggleCredential(credential)"
               />
-            </AdminActionTooltip>
-            <AdminActionTooltip :content="t('refreshQuota')">
+            </el-tooltip>
+            <el-tooltip :content="t('refreshQuota')" placement="top" :show-after="600">
               <el-button
                 v-if="isOpenAICredential(credential)"
                 circle
@@ -402,8 +405,8 @@ void bootstrap()
                 :loading="refreshingIds.has(credential.id)"
                 @click="refreshCredential(credential.id)"
               />
-            </AdminActionTooltip>
-            <AdminActionTooltip :content="t('delete')">
+            </el-tooltip>
+            <el-tooltip :content="t('delete')" placement="top" :show-after="600">
               <el-button
                 circle
                 class="credential-icon-button is-danger"
@@ -411,7 +414,7 @@ void bootstrap()
                 :loading="deletingIds.has(credential.id)"
                 @click="removeCredential(credential)"
               />
-            </AdminActionTooltip>
+            </el-tooltip>
           </div>
         </div>
       </article>

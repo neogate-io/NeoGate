@@ -12,7 +12,7 @@ export const adminMessages = {
     apps: '应用管理',
     adminConsoleSubtitle: '统一管理网关、用户、额度和系统配置',
     adminChannelsSubtitle: '维护供应商接入、模型价格、密钥健康和运行状态',
-    adminAppsSubtitle: '创建 AI 应用并发布到企业微信、Webhook 和网页组件',
+    adminAppsSubtitle: '创建 AI 应用并发布到企业微信、飞书、钉钉、Webhook 和网页组件',
     adminCredentialsSubtitle: '集中管理凭证文件与上游授权材料',
     adminUsersSubtitle: '审核用户、调整状态、查看额度与 API Key 使用情况',
     adminProjectsSubtitle: '管理项目归属、成员状态和调用边界',
@@ -325,7 +325,8 @@ export const adminMessages = {
     apps: 'App Management',
     adminConsoleSubtitle: 'Manage gateway operations, users, credit, and system settings',
     adminChannelsSubtitle: 'Maintain providers, model pricing, key health, and runtime status',
-    adminAppsSubtitle: 'Create AI apps and publish them to WeCom, webhooks, and web widgets',
+    adminAppsSubtitle:
+      'Create AI apps and publish them to WeCom, Feishu, DingTalk, webhooks, and web widgets',
     adminCredentialsSubtitle: 'Centralize credential files and upstream authorization material',
     adminUsersSubtitle: 'Review users, change status, and inspect credit and API key usage',
     adminProjectsSubtitle: 'Manage project ownership, member status, and access boundaries',

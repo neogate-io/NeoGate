@@ -1,5 +1,4 @@
 import { computed, reactive, ref } from 'vue'
-import { ChatDotRound, Connection, Link, Promotion } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   createApp,
@@ -11,11 +10,41 @@ import type { AppRecord, AppType } from '../types/admin'
 import { readError } from '../utils/errors'
 
 export const appTypes = [
-  { type: 'wecom', label: '企业微信应用', icon: ChatDotRound, enabled: true },
-  { type: 'feishu', label: '飞书应用', icon: Promotion, enabled: false },
-  { type: 'dingtalk', label: '钉钉应用', icon: Promotion, enabled: false },
-  { type: 'webhook', label: 'Webhook 应用', icon: Link, enabled: true },
-  { type: 'widget', label: '网页组件应用', icon: Connection, enabled: true }
+  {
+    type: 'wecom',
+    label: '企业微信应用',
+    description: '接入企业微信自建应用，员工在企业微信里直接提问。',
+    iconUrl: '/icons/wecom.svg',
+    enabled: true
+  },
+  {
+    type: 'feishu',
+    label: '飞书应用',
+    description: '接入飞书应用事件订阅，在飞书会话中自动回复消息。',
+    iconUrl: '/icons/feishu.svg',
+    enabled: true
+  },
+  {
+    type: 'dingtalk',
+    label: '钉钉应用',
+    description: '接入钉钉机器人，用于群聊或单聊中的智能问答。',
+    iconUrl: '/icons/dingtalk.svg',
+    enabled: true
+  },
+  {
+    type: 'webhook',
+    label: 'Webhook 应用',
+    description: '给外部系统或脚本调用，用 AI 处理事件、告警和工单。',
+    iconUrl: '/icons/webhook.svg',
+    enabled: true
+  },
+  {
+    type: 'widget',
+    label: '网页组件应用',
+    description: '嵌入网站或内部页面，为访问者提供网页聊天入口。',
+    iconUrl: '/icons/widget.svg',
+    enabled: true
+  }
 ] as const
 
 export const usageScenarios = [
@@ -103,6 +132,11 @@ export function useAppCreate() {
     corpSecret: '',
     callbackToken: '',
     encodingAesKey: '',
+    feishuAppId: '',
+    feishuAppSecret: '',
+    feishuVerificationToken: '',
+    feishuEncryptKey: '',
+    dingtalkAppSecret: '',
     webhookSecret: '',
     allowedDomains: '',
     welcome: '',
@@ -133,6 +167,25 @@ export function useAppCreate() {
           label: '接收消息 URL',
           value: endpoint.callback_url,
           helper: '复制到企业微信应用的接收消息 URL。Token 和 EncodingAESKey 使用刚才填写的值。'
+        }
+      ]
+    }
+    if (endpoint.endpoint_type === 'feishu') {
+      return [
+        {
+          label: '事件订阅请求地址',
+          value: endpoint.callback_url,
+          helper:
+            '复制到飞书开发者后台 > 事件订阅 > 请求地址。Verification Token 和 Encrypt Key 使用刚才填写的值。'
+        }
+      ]
+    }
+    if (endpoint.endpoint_type === 'dingtalk') {
+      return [
+        {
+          label: '机器人消息接收地址',
+          value: endpoint.callback_url,
+          helper: '复制到钉钉开发者后台的机器人消息接收地址，加签密钥使用刚才填写的值。'
         }
       ]
     }
@@ -236,6 +289,11 @@ export function useAppCreate() {
     form.corpSecret = ''
     form.callbackToken = ''
     form.encodingAesKey = ''
+    form.feishuAppId = ''
+    form.feishuAppSecret = ''
+    form.feishuVerificationToken = ''
+    form.feishuEncryptKey = ''
+    form.dingtalkAppSecret = ''
     form.webhookSecret = ''
     form.allowedDomains = ''
     form.welcome = ''
@@ -257,6 +315,11 @@ export function useAppCreate() {
       return {
         corp_id: form.corpId,
         agent_id: form.agentId
+      }
+    }
+    if (form.appType === 'feishu') {
+      return {
+        app_id: form.feishuAppId
       }
     }
     if (form.appType === 'widget') {
@@ -283,6 +346,16 @@ export function useAppCreate() {
     }
     if (form.appType === 'webhook') {
       return { secret: form.webhookSecret }
+    }
+    if (form.appType === 'feishu') {
+      return {
+        app_secret: form.feishuAppSecret,
+        verification_token: form.feishuVerificationToken,
+        encrypt_key: form.feishuEncryptKey
+      }
+    }
+    if (form.appType === 'dingtalk') {
+      return { app_secret: form.dingtalkAppSecret }
     }
     return {}
   }

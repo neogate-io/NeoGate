@@ -345,7 +345,7 @@ export type PaymentSetting = {
 
 export type AppType = 'wecom' | 'webhook' | 'widget' | 'feishu' | 'dingtalk'
 export type AppStatus = 'enabled' | 'disabled'
-export type AppEndpointType = 'wecom' | 'webhook' | 'widget'
+export type AppEndpointType = 'wecom' | 'webhook' | 'widget' | 'feishu' | 'dingtalk'
 
 export type AppEndpoint = {
   id: number

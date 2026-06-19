@@ -1,3 +1,4 @@
+mod dingtalk;
 mod feishu;
 mod runtime;
 mod webhook;
@@ -201,6 +202,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/apps/feishu/{endpoint_id}/callback",
             post(feishu::callback),
+        )
+        .route(
+            "/apps/dingtalk/{endpoint_id}/callback",
+            post(dingtalk::callback),
         )
         .route("/apps/webhook/{endpoint_id}", post(webhook::message))
         .route("/apps/widget/{endpoint_id}/messages", post(widget::message))
@@ -430,6 +435,10 @@ pub(crate) async fn upsert_endpoint_tx(
         .get(feishu::VERIFICATION_TOKEN_SECRET_KEY)
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty());
+    let mut has_dingtalk_app_secret = secrets
+        .get(dingtalk::APP_SECRET_KEY)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
     if let Some(next) = req.secrets {
         let object = secrets
             .as_object_mut()
@@ -446,6 +455,9 @@ pub(crate) async fn upsert_endpoint_tx(
                 }
                 if endpoint_type == "feishu" && key == feishu::VERIFICATION_TOKEN_SECRET_KEY {
                     has_feishu_verification_token = true;
+                }
+                if endpoint_type == "dingtalk" && key == dingtalk::APP_SECRET_KEY {
+                    has_dingtalk_app_secret = true;
                 }
                 object.insert(key, Value::String(state.secrets.encrypt(value)?));
             }
@@ -465,6 +477,9 @@ pub(crate) async fn upsert_endpoint_tx(
             has_feishu_app_secret,
             has_feishu_verification_token,
         )?;
+    }
+    if endpoint_type == "dingtalk" {
+        dingtalk::validate_endpoint_config(has_dingtalk_app_secret)?;
     }
 
     sqlx::query(
@@ -589,9 +604,12 @@ pub(crate) fn validate_app_type(value: &str) -> AppResult<()> {
 }
 
 pub(crate) fn ensure_supported_app_type(value: &str) -> AppResult<()> {
-    matches!(value, "wecom" | "webhook" | "widget" | "feishu")
-        .then_some(())
-        .ok_or_else(|| AppError::BadRequest("this app type is coming soon".to_string()))
+    matches!(
+        value,
+        "wecom" | "webhook" | "widget" | "feishu" | "dingtalk"
+    )
+    .then_some(())
+    .ok_or_else(|| AppError::BadRequest("this app type is coming soon".to_string()))
 }
 
 pub(crate) fn normalize_status(value: &str) -> AppResult<String> {

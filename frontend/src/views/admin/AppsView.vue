@@ -5,7 +5,6 @@ import { ElMessage } from 'element-plus'
 import { deleteApp, getAppRunLogs, getApps, testApp, updateApp } from '../../api/apps'
 import AppCreateDialog from '../../components/admin/apps/AppCreateDialog.vue'
 import AppDetailDrawer from '../../components/admin/apps/AppDetailDrawer.vue'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { statusLabel, useAppCreate } from '../../composables/useAppCreate'
 import { useLocale } from '../../composables/useLocale'
 import type { AppRecord, AppRunLog } from '../../types/admin'
@@ -147,7 +146,7 @@ onMounted(load)
       <article v-for="app in filteredApps" :key="app.id" class="app-card">
         <header class="app-card-header">
           <span class="app-type-icon">
-            <el-icon><component :is="typeMeta(app.app_type).icon" /></el-icon>
+            <img :src="typeMeta(app.app_type).iconUrl" alt="" />
           </span>
           <div class="app-card-title">
             <h3>{{ app.name }}</h3>
@@ -174,38 +173,36 @@ onMounted(load)
           <div>
             <dt>最近活跃</dt>
             <dd>
-              {{
-                app.last_active_at
-                  ? formatCompactDateTime(app.last_active_at)
-                  : '尚未活跃'
-              }}
+              {{ app.last_active_at ? formatCompactDateTime(app.last_active_at) : '尚未活跃' }}
             </dd>
           </div>
         </dl>
         <footer class="app-card-actions">
-          <span class="app-updated-at">
-            更新 {{ formatCompactDateTime(app.updated_at) }}
-          </span>
+          <span class="app-updated-at"> 更新 {{ formatCompactDateTime(app.updated_at) }} </span>
           <div class="app-actions">
-            <AdminActionTooltip content="详情">
+            <el-tooltip content="详情" placement="top" :show-after="600">
               <el-button circle class="app-icon-button" :icon="View" @click="openDetail(app)" />
-            </AdminActionTooltip>
-            <AdminActionTooltip :content="app.status === 'enabled' ? '禁用' : '启用'">
+            </el-tooltip>
+            <el-tooltip
+              :content="app.status === 'enabled' ? '禁用' : '启用'"
+              placement="top"
+              :show-after="600"
+            >
               <el-button
                 circle
                 class="app-icon-button"
                 :icon="SwitchButton"
                 @click="toggleApp(app)"
               />
-            </AdminActionTooltip>
-            <AdminActionTooltip content="删除">
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top" :show-after="600">
               <el-button
                 circle
                 class="app-icon-button is-danger"
                 :icon="Delete"
                 @click="removeApp(app)"
               />
-            </AdminActionTooltip>
+            </el-tooltip>
           </div>
         </footer>
       </article>
@@ -312,6 +309,12 @@ onMounted(load)
   height: 34px;
   justify-content: center;
   width: 34px;
+}
+
+.app-type-icon img {
+  display: block;
+  height: 24px;
+  width: 24px;
 }
 
 .app-card-title {

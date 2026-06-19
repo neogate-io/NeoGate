@@ -287,6 +287,7 @@ async function handlePageSizeChange(size: number) {
               :content="usageStatusTooltip(row.status_code)"
               :disabled="row.status_code == null"
               placement="top"
+              :show-after="600"
             >
               <span class="usage-status-switch" :class="`is-${usageStatusTone(row.status_code)}`">
                 <span class="usage-status-switch-icon">
@@ -299,7 +300,12 @@ async function handlePageSizeChange(size: number) {
         </el-table-column>
         <el-table-column prop="error_summary" :label="t('error')" min-width="180">
           <template #default="{ row }">
-            <el-tooltip v-if="row.error_summary" :content="row.error_summary" placement="top">
+            <el-tooltip
+              v-if="row.error_summary"
+              :content="row.error_summary"
+              placement="top"
+              :show-after="600"
+            >
               <span class="usage-error-cell">{{ row.error_summary }}</span>
             </el-tooltip>
             <span v-else class="usage-muted">-</span>

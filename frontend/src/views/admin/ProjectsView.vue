@@ -30,7 +30,6 @@ import {
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { adjustCredit } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
@@ -661,7 +660,7 @@ async function handlePageSizeChange(size: number) {
           header-align="center"
         >
           <template #default="{ row }">
-            <el-tooltip :content="creditTooltip(row)" placement="top">
+            <el-tooltip :content="creditTooltip(row)" placement="top" :show-after="600">
               <span class="project-credit-cell" :class="creditCellClass(row)">
                 {{ formatAvailableUsd(row) }}
               </span>
@@ -705,22 +704,22 @@ async function handlePageSizeChange(size: number) {
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <AdminActionTooltip :content="t('viewProjectMembers')">
+              <el-tooltip :content="t('viewProjectMembers')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewProjectMembers')"
                   :icon="UserIcon"
                   @click="openMembersDialog(row)"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('edit')">
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </AdminActionTooltip>
+              </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
                   class="admin-action-button icon-only-action action-more-button"
@@ -987,7 +986,7 @@ async function handlePageSizeChange(size: number) {
               <template #default="{ row }">
                 <div v-if="row.api_key" class="user-key-cell project-member-key-cell">
                   <code class="user-key-value">{{ maskApiKey(row.api_key) }}</code>
-                  <el-tooltip :content="t('copy')" placement="top">
+                  <el-tooltip :content="t('copy')" placement="top" :show-after="600">
                     <el-button
                       class="user-key-copy-button"
                       :aria-label="t('copy')"
@@ -1032,7 +1031,12 @@ async function handlePageSizeChange(size: number) {
             </el-table-column>
             <el-table-column :label="t('actions')" width="76" align="center" header-align="center">
               <template #default="{ row }">
-                <AdminActionTooltip v-if="row.role !== 'owner'" :content="t('delete')">
+                <el-tooltip
+                  v-if="row.role !== 'owner'"
+                  :content="t('delete')"
+                  placement="top"
+                  :show-after="600"
+                >
                   <el-button
                     class="admin-icon-action danger"
                     :aria-label="t('delete')"
@@ -1042,7 +1046,7 @@ async function handlePageSizeChange(size: number) {
                     text
                     @click="confirmDeleteProjectMember(row)"
                   />
-                </AdminActionTooltip>
+                </el-tooltip>
               </template>
             </el-table-column>
             <template #empty>
@@ -1094,12 +1098,24 @@ async function handlePageSizeChange(size: number) {
   height: 12px;
 }
 
-.project-table-loading-head span:nth-child(1) { width: 28px; }
-.project-table-loading-head span:nth-child(2) { width: 64px; }
-.project-table-loading-head span:nth-child(3) { width: 56px; }
-.project-table-loading-head span:nth-child(4) { width: 48px; }
-.project-table-loading-head span:nth-child(5) { width: 48px; }
-.project-table-loading-head span:nth-child(6) { width: 56px; }
+.project-table-loading-head span:nth-child(1) {
+  width: 28px;
+}
+.project-table-loading-head span:nth-child(2) {
+  width: 64px;
+}
+.project-table-loading-head span:nth-child(3) {
+  width: 56px;
+}
+.project-table-loading-head span:nth-child(4) {
+  width: 48px;
+}
+.project-table-loading-head span:nth-child(5) {
+  width: 48px;
+}
+.project-table-loading-head span:nth-child(6) {
+  width: 56px;
+}
 
 .project-table-loading-row {
   align-items: center;

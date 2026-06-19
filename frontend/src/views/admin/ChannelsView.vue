@@ -28,7 +28,6 @@ import ChannelProbeTrendCell from '../../components/admin/channels/ChannelProbeT
 import ChannelPriceDialog, {
   type ChannelPriceForm
 } from '../../components/admin/channels/ChannelPriceDialog.vue'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
@@ -43,11 +42,7 @@ import type {
   ProviderPrice
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
-import {
-  formatUsdPerMillion,
-  microUsdToUsd,
-  usdToMicroUsd
-} from '../../utils/format'
+import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
 import {
   derivedCacheReadPrice,
@@ -893,22 +888,22 @@ onMounted(loadInitialData)
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <AdminActionTooltip :content="t('configurePrice')">
+              <el-tooltip :content="t('configurePrice')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action price-config-action"
                   :aria-label="t('configurePrice')"
                   :icon="Coin"
                   @click="openPriceDialog(row)"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('edit')">
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </AdminActionTooltip>
+              </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
                   class="admin-action-button icon-only-action action-more-button"
@@ -1507,5 +1502,4 @@ onMounted(loadInitialData)
 .channel-empty-state {
   padding: 30px 0 34px;
 }
-
 </style>

@@ -28,7 +28,6 @@ import {
   updateUserStatus
 } from '../../api/users'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
@@ -572,22 +571,22 @@ onMounted(() => {
                     :loading="approvingUserId === row.id"
                     @click="approveUser(row)"
                   />
-                  <AdminActionTooltip :content="t('viewApiKeys')">
+                  <el-tooltip :content="t('viewApiKeys')" placement="top" :show-after="600">
                     <el-button
                       class="admin-action-button icon-only-action"
                       :aria-label="t('viewApiKeys')"
                       :icon="Key"
                       @click="openUserKeysDialog(row)"
                     />
-                  </AdminActionTooltip>
-                  <AdminActionTooltip :content="t('edit')">
+                  </el-tooltip>
+                  <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                     <el-button
                       class="admin-action-button icon-only-action"
                       :aria-label="t('edit')"
                       :icon="Edit"
                       @click="openEditDialog(row)"
                     />
-                  </AdminActionTooltip>
+                  </el-tooltip>
                   <el-dropdown trigger="click" placement="bottom-end">
                     <el-button
                       class="admin-action-button icon-only-action action-more-button"
@@ -644,7 +643,7 @@ onMounted(() => {
           header-align="center"
         >
           <template #default="{ row }">
-            <el-tooltip :content="accountBalanceTooltip(row)" placement="top">
+            <el-tooltip :content="accountBalanceTooltip(row)" placement="top" :show-after="600">
               <span class="user-credit-cell" :class="creditCellClass(row)">
                 {{ formatMicroUsd(row.available_micro_usd, 2) }}
               </span>
@@ -706,22 +705,22 @@ onMounted(() => {
                 :loading="approvingUserId === row.id"
                 @click="approveUser(row)"
               />
-              <AdminActionTooltip :content="t('viewApiKeys')">
+              <el-tooltip :content="t('viewApiKeys')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewApiKeys')"
                   :icon="Key"
                   @click="openUserKeysDialog(row)"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('edit')">
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </AdminActionTooltip>
+              </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
                   class="admin-action-button icon-only-action action-more-button"
@@ -877,7 +876,7 @@ onMounted(() => {
               <template #default="{ row }">
                 <div class="user-key-cell">
                   <code class="user-key-value">{{ maskApiKey(row.key) }}</code>
-                  <el-tooltip :content="t('copy')" placement="top">
+                  <el-tooltip :content="t('copy')" placement="top" :show-after="600">
                     <el-button
                       class="user-key-copy-button"
                       :aria-label="t('copy')"

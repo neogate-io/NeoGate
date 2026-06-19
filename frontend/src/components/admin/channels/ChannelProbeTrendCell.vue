@@ -159,7 +159,7 @@ function probeSampleTitle(sample: ChannelProbeSample) {
     placement="top"
     effect="light"
     popper-class="probe-trend-tooltip"
-    :show-after="180"
+    :show-after="600"
   >
     <template #content>
       <div class="probe-tooltip-content">

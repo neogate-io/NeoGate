@@ -19,7 +19,7 @@ const dashboardLink = computed(() => (auth.isAdmin ? '/admin' : '/home/overview'
 <template>
   <header :class="['home-header', headerClass]">
     <RouterLink class="home-brand" to="/" :aria-label="t('appName')">
-      <img class="home-brand-logo" src="/logo.svg" :alt="t('appName')" />
+      <img class="home-brand-logo" src="/logos/logo.svg" :alt="t('appName')" />
     </RouterLink>
     <nav class="home-nav" :aria-label="t('appName')">
       <RouterLink to="/">{{ t('home') }}</RouterLink>

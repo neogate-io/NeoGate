@@ -45,9 +45,9 @@ function showCreatedAppDetail() {
         type="button"
         @click="create.selectType(item.type, item.enabled)"
       >
-        <el-icon><component :is="item.icon" /></el-icon>
+        <img class="app-type-card-icon" :src="item.iconUrl" alt="" />
         <strong>{{ item.label }}</strong>
-        <span>{{ item.enabled ? '创建并配置这个应用入口' : '即将支持' }}</span>
+        <span>{{ item.enabled ? item.description : '即将支持' }}</span>
       </button>
     </div>
 
@@ -190,6 +190,58 @@ function showCreatedAppDetail() {
         </el-form-item>
       </template>
 
+      <template v-if="create.form.appType === 'feishu'">
+        <div class="app-form-grid">
+          <el-form-item label="App ID">
+            <el-input
+              v-model="create.form.feishuAppId"
+              placeholder="在飞书开发者后台 > 凭证与基础信息中查看"
+            />
+          </el-form-item>
+          <el-form-item label="App Secret">
+            <el-input
+              v-model="create.form.feishuAppSecret"
+              placeholder="在飞书开发者后台 > 凭证与基础信息中查看"
+              show-password
+              type="password"
+            />
+          </el-form-item>
+          <el-form-item label="Verification Token">
+            <el-input
+              v-model="create.form.feishuVerificationToken"
+              placeholder="与飞书事件订阅配置中的 Verification Token 保持一致"
+              show-password
+              type="password"
+            />
+          </el-form-item>
+          <el-form-item label="Encrypt Key（可选）">
+            <el-input
+              v-model="create.form.feishuEncryptKey"
+              placeholder="开启飞书事件加密时填写"
+              show-password
+              type="password"
+            />
+          </el-form-item>
+        </div>
+        <p class="app-form-hint">
+          创建后把事件订阅请求地址复制到飞书开发者后台，并订阅接收消息事件。
+        </p>
+      </template>
+
+      <template v-if="create.form.appType === 'dingtalk'">
+        <el-form-item label="机器人加签密钥">
+          <el-input
+            v-model="create.form.dingtalkAppSecret"
+            placeholder="在钉钉开发者后台的机器人配置中查看"
+            show-password
+            type="password"
+          />
+          <p class="app-form-hint">
+            创建后把消息接收地址复制到钉钉机器人配置中，并开启消息接收与加签校验。
+          </p>
+        </el-form-item>
+      </template>
+
       <template v-if="create.form.appType === 'widget'">
         <el-form-item label="允许嵌入域名（一行一个）">
           <el-input v-model="create.form.allowedDomains" type="textarea" :rows="3" />
@@ -213,11 +265,10 @@ function showCreatedAppDetail() {
     <div v-else class="app-create-success">
       <div class="app-create-success-heading">
         <span class="app-type-icon">
-          <el-icon>
-            <component
-              :is="create.typeMeta(create.createdApp.value?.app_type || create.form.appType).icon"
-            />
-          </el-icon>
+          <img
+            :src="create.typeMeta(create.createdApp.value?.app_type || create.form.appType).iconUrl"
+            alt=""
+          />
         </span>
         <div>
           <strong>{{ create.createdApp.value?.name }}</strong>
@@ -317,9 +368,16 @@ function showCreatedAppDetail() {
   text-align: left;
 }
 
-.app-type-card .el-icon {
-  color: var(--admin-primary);
-  font-size: 24px;
+.app-type-card-icon {
+  display: block;
+  height: 28px;
+  width: 28px;
+}
+
+.app-type-icon img {
+  display: block;
+  height: 24px;
+  width: 24px;
 }
 
 .app-type-card strong {

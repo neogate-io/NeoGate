@@ -97,7 +97,7 @@ watch(
     <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
-          <img class="shell-logo-image" src="/logo.svg" :alt="t('appName')" />
+          <img class="shell-logo-image" src="/logos/logo.svg" :alt="t('appName')" />
         </RouterLink>
       </h1>
       <el-menu
@@ -154,11 +154,11 @@ watch(
             </nav>
           </div>
           <div class="header-actions">
-            <el-tooltip :content="t('language')" placement="bottom">
+            <el-tooltip :content="t('language')" placement="bottom" :show-after="600">
               <LocaleToggleButton class="header-utility-button header-language-button" />
             </el-tooltip>
             <span class="header-action-divider" aria-hidden="true"></span>
-            <el-tooltip :content="t('logout')" placement="bottom">
+            <el-tooltip :content="t('logout')" placement="bottom" :show-after="600">
               <el-button
                 class="header-utility-button header-logout-button"
                 :aria-label="t('logout')"

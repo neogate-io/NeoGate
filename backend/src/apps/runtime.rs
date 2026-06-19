@@ -16,6 +16,13 @@ use crate::{
 
 use super::{AppRunOutcome, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES};
 
+type RunLogResult = (
+    &'static str,
+    Option<i32>,
+    Option<TokenUsage>,
+    Option<String>,
+);
+
 pub(super) async fn run_app_message(
     state: Arc<AppState>,
     runtime: AppRuntime,
@@ -47,11 +54,8 @@ pub(super) async fn run_app_message(
                 &runtime,
                 Some(conversation_id),
                 &message,
-                "duplicate",
-                None,
                 started.elapsed().as_millis() as i64,
-                None,
-                None,
+                ("duplicate", None, None, None),
             )
             .await?;
             return Ok(AppRunOutcome {
@@ -106,11 +110,8 @@ pub(super) async fn run_app_message(
                 &runtime,
                 Some(conversation_id),
                 &message,
-                "success",
-                Some(status.as_u16() as i32),
                 started.elapsed().as_millis() as i64,
-                usage,
-                None,
+                ("success", Some(status.as_u16() as i32), usage, None),
             )
             .await?;
             Ok(AppRunOutcome {
@@ -127,11 +128,8 @@ pub(super) async fn run_app_message(
                 &runtime,
                 Some(conversation_id),
                 &message,
-                "failed",
-                None,
                 started.elapsed().as_millis() as i64,
-                None,
-                Some(summary),
+                ("failed", None, None, Some(summary)),
             )
             .await?;
             Err(err)
@@ -175,12 +173,10 @@ async fn insert_run_log(
     runtime: &AppRuntime,
     conversation_id: Option<DbId>,
     message: &IncomingAppMessage,
-    status: &str,
-    status_code: Option<i32>,
     latency_ms: i64,
-    usage: Option<TokenUsage>,
-    error_summary: Option<String>,
+    result: RunLogResult,
 ) -> AppResult<()> {
+    let (status, status_code, usage, error_summary) = result;
     sqlx::query(
         r#"
         INSERT INTO app_run_log

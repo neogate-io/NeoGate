@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import {
   CircleCheckFilled,
   Delete,
@@ -34,16 +34,6 @@ const activeDetailTab = ref('overview')
 const selectedApp = ref<AppRecord | null>(null)
 const create = useAppCreate()
 const edit = useAppCreate()
-
-const filteredApps = computed(() => apps.value)
-
-function typeMeta(type: string) {
-  return create.typeMeta(type)
-}
-
-function typeLabel(type: string) {
-  return create.typeLabel(type)
-}
 
 function cost(value: number) {
   return `$${microUsdToUsd(value).toFixed(4)}`
@@ -178,24 +168,24 @@ onMounted(load)
     </div>
 
     <div v-loading="loading" class="apps-grid">
-      <div v-if="!loading && filteredApps.length === 0" class="apps-empty">
+      <div v-if="!loading && apps.length === 0" class="apps-empty">
         <el-icon><Promotion /></el-icon>
         <p>暂无应用</p>
       </div>
 
       <article
-        v-for="app in filteredApps"
+        v-for="app in apps"
         :key="app.id"
         class="app-card"
         :class="{ 'is-disabled': app.status !== 'enabled' }"
       >
         <header class="app-card-header">
           <span class="app-type-icon">
-            <img :src="typeMeta(app.app_type).iconUrl" alt="" />
+            <img :src="create.typeMeta(app.app_type).iconUrl" alt="" />
           </span>
           <div class="app-card-title">
             <h3>{{ app.name }}</h3>
-            <span>{{ typeLabel(app.app_type) }}</span>
+            <span>{{ create.typeLabel(app.app_type) }}</span>
           </div>
           <button
             type="button"
@@ -331,9 +321,6 @@ onMounted(load)
   background: #ffffff;
   border: 1px solid var(--admin-border);
   border-radius: 8px;
-}
-
-.app-card {
   box-shadow: var(--admin-shadow);
   display: grid;
   gap: 12px;

@@ -106,10 +106,6 @@ export function typeLabel(type: string) {
   return typeMeta(type).label
 }
 
-export function statusLabel(status: string) {
-  return status === 'enabled' ? '已启用' : '已禁用'
-}
-
 export function useAppCreate() {
   const modelOptions = ref<AppModelOption[]>([])
   const saving = ref(false)
@@ -158,7 +154,6 @@ export function useAppCreate() {
   const canApplyScenarioPrompt = computed(
     () => form.systemPrompt !== selectedUsageScenario.value.systemPrompt
   )
-  const modelCandidates = computed(() => modelOptions.value.map((item) => item.model))
   const createdEndpoint = computed(() => createdApp.value?.endpoint ?? null)
   const createdAccessUrls = computed(() => {
     const endpoint = createdEndpoint.value
@@ -242,7 +237,7 @@ export function useAppCreate() {
   }
 
   function recommendedModelForScenario() {
-    const candidates = modelCandidates.value
+    const candidates = modelOptions.value.map((item) => item.model)
     if (candidates.length === 0) return ''
     const preferred: Record<UsageScenario, string[]> = {
       brief_qa: ['mini', 'flash', 'turbo', 'lite'],

@@ -423,10 +423,6 @@ function showCreatedAppDetail() {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.app-half-field {
-  width: calc(50% - 6.5px);
-}
-
 .app-model-option {
   align-items: center;
   display: flex;
@@ -748,10 +744,6 @@ function showCreatedAppDetail() {
   .app-type-grid,
   .app-form-grid {
     grid-template-columns: 1fr;
-  }
-
-  .app-half-field {
-    width: 100%;
   }
 
   .app-access-url-copy {

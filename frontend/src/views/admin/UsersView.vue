@@ -125,12 +125,11 @@ const {
   next_cursor: null,
   has_more: false
 } satisfies UserPage)
-const users = computed(() => usersPage.value.items)
 const usersInitialLoading = computed(() => !usersLoaded.value)
 const showUsersPagination = computed(
   () =>
     !usersInitialLoading.value &&
-    (users.value.length > 0 || usersCurrentPage.value > 1 || usersPage.value.has_more)
+    (usersPage.value.items.length > 0 || usersCurrentPage.value > 1 || usersPage.value.has_more)
 )
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
 const showAccountBalance = computed(() =>
@@ -416,7 +415,7 @@ function exportUsers() {
     'created_at',
     'last_active_at'
   ]
-  const rows = users.value.map((user) => [
+  const rows = usersPage.value.items.map((user) => [
     user.id,
     user.email,
     user.user_group_name,
@@ -541,7 +540,7 @@ onMounted(() => {
       <el-table
         v-loading="loading"
         class="admin-table service-table user-table"
-        :data="users"
+        :data="usersPage.items"
         :row-class-name="userRowClassName"
         row-key="id"
         stripe

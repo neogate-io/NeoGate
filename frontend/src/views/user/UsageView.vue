@@ -53,7 +53,6 @@ const {
   { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE }
 )
 
-const filteredItems = computed(() => usagePage.value.items)
 const usageInitialLoading = computed(() => !usageLoaded.value)
 const hasUsagePagination = computed(
   () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
@@ -139,7 +138,7 @@ async function exportUsage() {
 
 <template>
   <section class="usage-view">
-    <div v-loading="loading && filteredItems.length > 0" class="user-panel usage-console-panel">
+    <div v-loading="loading && usagePage.items.length > 0" class="user-panel usage-console-panel">
       <div class="usage-toolbar">
         <div class="usage-toolbar-title">
           <h3>{{ t('usageRecords') }}</h3>
@@ -154,7 +153,7 @@ async function exportUsage() {
             :end-placeholder="t('endTime')"
             @change="handleDateRangeChange"
           />
-          <el-button :icon="Download" :disabled="filteredItems.length === 0" @click="exportUsage">
+          <el-button :icon="Download" :disabled="usagePage.items.length === 0" @click="exportUsage">
             {{ t('exportDetails') }}
           </el-button>
           <el-tooltip :content="t('refresh')" placement="top">
@@ -164,7 +163,7 @@ async function exportUsage() {
       </div>
 
       <div class="usage-list">
-        <div v-if="filteredItems.length > 0" class="usage-table-header" role="row">
+        <div v-if="usagePage.items.length > 0" class="usage-table-header" role="row">
           <span>{{ t('time') }}</span>
           <span>{{ t('model') }}</span>
           <span>{{ t('tokensColumnHint') }}</span>
@@ -172,7 +171,7 @@ async function exportUsage() {
           <span>{{ t('cost') }}</span>
           <span>{{ t('actions') }}</span>
         </div>
-        <details v-for="row in filteredItems" :key="row.id" class="usage-row">
+        <details v-for="row in usagePage.items" :key="row.id" class="usage-row">
           <summary>
             <span class="usage-time">{{ formatFullTime(row.created_at) }}</span>
             <span class="usage-model-cell">
@@ -278,7 +277,7 @@ async function exportUsage() {
           </dl>
         </details>
         <div
-          v-if="loading && filteredItems.length === 0"
+          v-if="loading && usagePage.items.length === 0"
           class="usage-loading-rows"
           aria-hidden="true"
         >
@@ -288,14 +287,14 @@ async function exportUsage() {
             <i></i>
           </span>
         </div>
-        <div v-else-if="filteredItems.length === 0" class="usage-empty-state">
+        <div v-else-if="usagePage.items.length === 0" class="usage-empty-state">
           <el-empty :description="t('noData')" />
         </div>
       </div>
     </div>
 
     <div
-      v-if="!usageInitialLoading && (hasUsagePagination || filteredItems.length > 1)"
+      v-if="!usageInitialLoading && (hasUsagePagination || usagePage.items.length > 1)"
       class="admin-pagination-bar"
     >
       <div class="admin-pagination-controls">

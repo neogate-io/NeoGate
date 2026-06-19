@@ -133,12 +133,11 @@ const {
   next_cursor: null,
   has_more: false
 } satisfies ProjectPage)
-const projects = computed(() => projectsPage.value.items)
 const initialLoading = computed(() => !loaded.value)
 const showProjectsPagination = computed(
   () =>
     !initialLoading.value &&
-    (projects.value.length > 0 || currentPage.value > 1 || projectsPage.value.has_more)
+    (projectsPage.value.items.length > 0 || currentPage.value > 1 || projectsPage.value.has_more)
 )
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
@@ -583,7 +582,7 @@ onMounted(loadServicePolicy)
       <el-table
         v-loading="loading"
         class="admin-table service-table project-table"
-        :data="projects"
+        :data="projectsPage.items"
         :row-class-name="projectRowClassName"
         row-key="id"
         stripe
@@ -1450,54 +1449,6 @@ onMounted(loadServicePolicy)
   gap: 14px;
 }
 
-.project-key-create-form {
-  align-items: end;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 168px minmax(260px, 1fr) auto;
-}
-
-.project-key-create-form .project-create-field {
-  min-width: 0;
-}
-
-.project-key-create-action {
-  margin-bottom: 0;
-}
-
-.project-key-create-action :deep(.el-form-item__content) {
-  align-items: end;
-}
-
-.project-key-create-action .admin-action-button {
-  height: 40px;
-  min-height: 40px;
-}
-
-.project-created-key {
-  align-items: center;
-  background: #f8fafc;
-  border: 1px solid #dbe4ef;
-  border-radius: 8px;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 12px;
-}
-
-.project-created-key div {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.project-created-key span {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.project-created-key code,
 .user-key-value {
   background: #eef3f8;
   border: 1px solid #dbe4ef;
@@ -1507,16 +1458,6 @@ onMounted(loadServicePolicy)
   font-size: 12px;
   font-weight: 650;
   padding: 4px 7px;
-}
-
-.project-created-key code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-key-detail-panel {
-  max-height: min(52dvh, 480px);
 }
 
 .user-key-cell {
@@ -1573,13 +1514,6 @@ onMounted(loadServicePolicy)
   min-width: 0;
 }
 
-.project-member-time-cell {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.project-member-time-cell .user-time-cell,
 .project-member-empty-time {
   font-size: 12px;
   line-height: 1.2;
@@ -1642,30 +1576,8 @@ onMounted(loadServicePolicy)
     grid-template-columns: 1fr;
   }
 
-  .project-key-create-form {
-    grid-template-columns: 1fr;
-  }
-
   .project-member-add-form {
     grid-template-columns: 1fr;
-  }
-
-  .project-credit-header {
-    display: grid;
-    gap: 10px;
-  }
-
-  .project-credit-result {
-    text-align: left;
-  }
-
-  .project-credit-details {
-    grid-template-columns: 1fr;
-  }
-
-  .project-created-key {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 </style>

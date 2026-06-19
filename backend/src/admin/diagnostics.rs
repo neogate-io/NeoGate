@@ -689,7 +689,7 @@ fn upstream_request(
     request
 }
 
-fn probe_request<'a>(endpoint: &EndpointTarget, model: &'a str) -> (&'static str, Value) {
+fn probe_request(endpoint: &EndpointTarget, model: &str) -> (&'static str, Value) {
     if endpoint.protocol == "anthropic" {
         return (
             "/v1/messages",

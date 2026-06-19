@@ -73,7 +73,6 @@ const {
   { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE } satisfies UsagePage
 )
 
-const usageItems = computed(() => usagePage.value.items)
 const usageInitialLoading = computed(() => !usageLoaded.value)
 const hasUsagePagination = computed(
   () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
@@ -205,12 +204,12 @@ async function handlePageSizeChange(size: number) {
     <div
       v-else
       class="service-table-panel"
-      :class="{ 'has-pagination': hasUsagePagination || usageItems.length > 1 }"
+      :class="{ 'has-pagination': hasUsagePagination || usagePage.items.length > 1 }"
     >
       <el-table
         v-loading="loading"
         class="admin-table service-table usage-table"
-        :data="usageItems"
+        :data="usagePage.items"
         row-key="id"
         stripe
       >
@@ -293,7 +292,9 @@ async function handlePageSizeChange(size: number) {
                 <span class="usage-status-switch-icon">
                   <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
                 </span>
-                <span class="usage-status-switch-text">{{ usageStatusLabel(row.status_code) }}</span>
+                <span class="usage-status-switch-text">{{
+                  usageStatusLabel(row.status_code)
+                }}</span>
               </span>
             </el-tooltip>
           </template>
@@ -320,7 +321,7 @@ async function handlePageSizeChange(size: number) {
     </div>
 
     <div
-      v-if="!usageInitialLoading && (hasUsagePagination || usageItems.length > 1)"
+      v-if="!usageInitialLoading && (hasUsagePagination || usagePage.items.length > 1)"
       class="admin-pagination-bar admin-table-pagination is-compact"
     >
       <div class="admin-pagination-controls">

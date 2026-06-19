@@ -124,7 +124,7 @@ export function useAppCreate() {
     description: '',
     status: 'enabled',
     model: '',
-    usageScenario: 'knowledge' as UsageScenario,
+    usageScenario: 'brief_qa' as UsageScenario,
     systemPrompt: '',
     contextTurns: 10,
     maxOutputTokens: 2048,
@@ -280,7 +280,7 @@ export function useAppCreate() {
     form.status = 'enabled'
     form.model = ''
     lastAutoModel.value = ''
-    form.usageScenario = 'knowledge'
+    form.usageScenario = 'brief_qa'
     form.systemPrompt = ''
     form.contextTurns = 10
     form.maxOutputTokens = 2048

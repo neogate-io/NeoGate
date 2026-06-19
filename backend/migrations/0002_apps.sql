@@ -18,7 +18,7 @@ CREATE TABLE app (
 CREATE TABLE app_endpoint (
     id BIGSERIAL PRIMARY KEY,
     app_id BIGINT NOT NULL REFERENCES app(id) ON DELETE CASCADE,
-    endpoint_type TEXT NOT NULL CHECK (endpoint_type IN ('wecom', 'webhook', 'widget')),
+    endpoint_type TEXT NOT NULL CHECK (endpoint_type IN ('wecom', 'webhook', 'widget', 'feishu', 'dingtalk')),
     name TEXT NOT NULL DEFAULT '',
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     config JSONB NOT NULL DEFAULT '{}',

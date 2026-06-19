@@ -72,12 +72,6 @@ function showCreatedAppDetail() {
         <el-form-item class="app-name-field" label="应用名称">
           <el-input v-model="create.form.name" placeholder="例如 研发知识助手" />
         </el-form-item>
-        <el-form-item v-if="mode === 'edit'" label="状态">
-          <el-select v-model="create.form.status">
-            <el-option label="已启用" value="enabled" />
-            <el-option label="已禁用" value="disabled" />
-          </el-select>
-        </el-form-item>
       </div>
 
       <el-form-item label="描述（可选）">
@@ -109,9 +103,6 @@ function showCreatedAppDetail() {
               <span class="app-model-empty">暂无可用模型，请先配置渠道模型</span>
             </template>
           </el-select>
-        </el-form-item>
-        <el-form-item v-if="mode === 'edit'" label="入口状态">
-          <el-switch v-model="create.form.endpointEnabled" />
         </el-form-item>
       </div>
 

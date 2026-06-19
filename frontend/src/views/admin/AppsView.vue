@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Delete, Edit, Plus, Promotion, SwitchButton, View } from '@element-plus/icons-vue'
+import {
+  CircleCheckFilled,
+  Delete,
+  Edit,
+  Plus,
+  Promotion,
+  VideoPause,
+  View
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { deleteApp, getAppRunLogs, getApps, testApp, updateApp } from '../../api/apps'
 import AppCreateDialog from '../../components/admin/apps/AppCreateDialog.vue'
 import AppDetailDrawer from '../../components/admin/apps/AppDetailDrawer.vue'
-import { statusLabel, useAppCreate } from '../../composables/useAppCreate'
+import { useAppCreate } from '../../composables/useAppCreate'
 import { useLocale } from '../../composables/useLocale'
 import type { AppRecord, AppRunLog } from '../../types/admin'
 import { confirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
-import { formatCompactDateTime, microUsdToUsd } from '../../utils/format'
+import { microUsdToUsd } from '../../utils/format'
 
 const { t } = useLocale()
 
@@ -175,7 +183,12 @@ onMounted(load)
         <p>暂无应用</p>
       </div>
 
-      <article v-for="app in filteredApps" :key="app.id" class="app-card">
+      <article
+        v-for="app in filteredApps"
+        :key="app.id"
+        class="app-card"
+        :class="{ 'is-disabled': app.status !== 'enabled' }"
+      >
         <header class="app-card-header">
           <span class="app-type-icon">
             <img :src="typeMeta(app.app_type).iconUrl" alt="" />
@@ -184,62 +197,66 @@ onMounted(load)
             <h3>{{ app.name }}</h3>
             <span>{{ typeLabel(app.app_type) }}</span>
           </div>
-          <el-tag :type="app.status === 'enabled' ? 'success' : 'info'" round>
-            {{ statusLabel(app.status) }}
-          </el-tag>
+          <button
+            type="button"
+            class="channel-runtime-switch app-status-switch"
+            :class="{
+              'is-enabled': app.status === 'enabled',
+              'is-disabled': app.status !== 'enabled'
+            }"
+            :aria-pressed="app.status === 'enabled'"
+            :aria-label="app.status === 'enabled' ? '启用' : '禁用'"
+            @click="toggleApp(app)"
+          >
+            <span class="channel-runtime-switch-icon">
+              <el-icon>
+                <CircleCheckFilled v-if="app.status === 'enabled'" />
+                <VideoPause v-else />
+              </el-icon>
+            </span>
+            <span class="channel-runtime-switch-text">
+              {{ app.status === 'enabled' ? '启用' : '禁用' }}
+            </span>
+          </button>
         </header>
-        <p class="app-description">{{ app.description || '这个应用还没有描述。' }}</p>
         <dl class="app-card-metrics">
-          <div>
-            <dt>默认模型</dt>
+          <div class="app-card-model">
+            <dt>模型</dt>
             <dd>{{ app.model }}</dd>
           </div>
           <div>
-            <dt>今日消息</dt>
+            <dt>消息</dt>
             <dd>{{ app.today_message_count }}</dd>
           </div>
           <div>
-            <dt>今日消耗</dt>
+            <dt>消耗</dt>
             <dd>{{ cost(app.today_cost_micro_usd) }}</dd>
           </div>
-          <div>
-            <dt>最近活跃</dt>
-            <dd>
-              {{ app.last_active_at ? formatCompactDateTime(app.last_active_at) : '尚未活跃' }}
-            </dd>
-          </div>
         </dl>
-        <footer class="app-card-actions">
-          <span class="app-updated-at"> 更新 {{ formatCompactDateTime(app.updated_at) }} </span>
-          <div class="app-actions">
-            <el-tooltip content="详情" placement="top" :show-after="600">
-              <el-button circle class="app-icon-button" :icon="View" @click="openDetail(app)" />
-            </el-tooltip>
-            <el-tooltip content="编辑" placement="top" :show-after="600">
-              <el-button circle class="app-icon-button" :icon="Edit" @click="openEdit(app)" />
-            </el-tooltip>
-            <el-tooltip
-              :content="app.status === 'enabled' ? '禁用' : '启用'"
-              placement="top"
-              :show-after="600"
-            >
-              <el-button
-                circle
-                class="app-icon-button"
-                :icon="SwitchButton"
-                @click="toggleApp(app)"
-              />
-            </el-tooltip>
-            <el-tooltip content="删除" placement="top" :show-after="600">
-              <el-button
-                circle
-                class="app-icon-button is-danger"
-                :icon="Delete"
-                @click="removeApp(app)"
-              />
-            </el-tooltip>
-          </div>
-        </footer>
+        <div class="app-actions table-row-actions">
+          <el-tooltip content="详情" placement="top" :show-after="600">
+            <el-button
+              class="admin-action-button icon-only-action"
+              :icon="View"
+              @click="openDetail(app)"
+            />
+          </el-tooltip>
+          <el-tooltip content="编辑" placement="top" :show-after="600">
+            <el-button
+              class="admin-action-button icon-only-action"
+              :icon="Edit"
+              @click="openEdit(app)"
+            />
+          </el-tooltip>
+          <el-tooltip content="删除" placement="top" :show-after="600">
+            <el-button
+              class="admin-action-button icon-only-action"
+              type="danger"
+              :icon="Delete"
+              @click="removeApp(app)"
+            />
+          </el-tooltip>
+        </div>
       </article>
     </div>
 
@@ -266,10 +283,7 @@ onMounted(load)
       :app="selectedApp"
       :logs="logs"
       :logs-loading="logsLoading"
-      :type-label="typeLabel"
-      :status-label="statusLabel"
       @copy="copyText"
-      @edit="openEdit"
       @test="testSelectedApp"
     />
   </section>
@@ -291,7 +305,7 @@ onMounted(load)
 .apps-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, 320px);
   justify-content: start;
   min-height: 220px;
 }
@@ -323,6 +337,7 @@ onMounted(load)
   box-shadow: var(--admin-shadow);
   display: grid;
   gap: 12px;
+  grid-template-rows: auto 1fr auto;
   min-height: 0;
   overflow: hidden;
   padding: 12px;
@@ -330,13 +345,32 @@ onMounted(load)
     background-color 160ms ease,
     border-color 160ms ease,
     box-shadow 160ms ease;
-  width: 100%;
+  width: 320px;
 }
 
 .app-card:hover {
   background: #fbfdff;
   border-color: #c8d4e2;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
+}
+
+.app-card.is-disabled {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+
+.app-card.is-disabled .app-type-icon,
+.app-card.is-disabled .app-card-title,
+.app-card.is-disabled .app-card-metrics,
+.app-card.is-disabled .app-actions {
+  opacity: 0.58;
+}
+
+.app-card.is-disabled:hover {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  box-shadow: none;
 }
 
 .app-card-header {
@@ -348,19 +382,48 @@ onMounted(load)
 
 .app-type-icon {
   align-items: center;
-  background: var(--admin-primary-soft);
-  border-radius: 8px;
   color: var(--admin-primary);
   display: inline-flex;
-  height: 34px;
+  height: 46px;
   justify-content: center;
-  width: 34px;
+  width: 46px;
 }
 
 .app-type-icon img {
   display: block;
-  height: 24px;
-  width: 24px;
+  height: 36px;
+  width: 36px;
+}
+
+.app-status-switch {
+  min-width: 78px;
+}
+
+.app-status-switch.is-enabled,
+.app-status-switch.is-enabled .channel-runtime-switch-text {
+  background: var(--admin-success-bg);
+  border-color: var(--admin-success-border);
+  color: var(--admin-success);
+}
+
+.app-status-switch.is-disabled,
+.app-status-switch.is-disabled .channel-runtime-switch-text {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.app-status-switch.is-enabled .channel-runtime-switch-icon {
+  background: #22c55e;
+}
+
+.app-status-switch.is-disabled .channel-runtime-switch-icon {
+  background: #94a3b8;
+}
+
+.app-status-switch,
+.app-status-switch * {
+  transition: none;
 }
 
 .app-card-title {
@@ -369,7 +432,7 @@ onMounted(load)
 
 .app-card-title h3 {
   color: var(--admin-heading);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.25;
   margin: 0 0 4px;
@@ -379,27 +442,42 @@ onMounted(load)
 }
 
 .app-card-title span,
-.app-description,
 .app-card-metrics dt {
   color: var(--admin-text-muted);
 }
 
-.app-description {
-  display: -webkit-box;
+.app-card-title span {
+  display: block;
   font-size: 13px;
-  line-height: 1.5;
-  margin: 0;
-  min-height: 40px;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  line-height: 1.25;
 }
 
 .app-card-metrics {
   display: grid;
-  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--admin-border-soft);
+  border-radius: 8px;
+  gap: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
+}
+
+.app-card-metrics > div {
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.app-card-metrics > div + div {
+  border-left: 1px solid var(--admin-border-soft);
+}
+
+.app-card-metrics > div:nth-child(2) {
+  border-left: 0;
+}
+
+.app-card-model {
+  border-bottom: 1px solid var(--admin-border-soft);
+  grid-column: 1 / -1;
 }
 
 .app-card-metrics dt {
@@ -416,45 +494,9 @@ onMounted(load)
   white-space: nowrap;
 }
 
-.app-card-actions {
-  align-items: center;
-  border-top: 1px solid var(--admin-border-soft);
-  display: grid;
-  gap: 9px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding-top: 9px;
-}
-
-.app-updated-at {
-  color: #94a3b8;
-  font-size: 12px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .app-actions {
   display: flex;
-  gap: 7px;
   justify-content: flex-end;
-  min-width: max-content;
-}
-
-.app-icon-button.el-button {
-  --el-button-bg-color: #f8fafc;
-  --el-button-border-color: var(--admin-border);
-  --el-button-hover-bg-color: var(--brand-blue-soft);
-  --el-button-hover-border-color: #cbd5e1;
-  --el-button-hover-text-color: var(--brand-blue-hover);
-  height: 28px;
-  width: 28px;
-}
-
-.app-icon-button.is-danger.el-button {
-  --el-button-hover-bg-color: #fff1f2;
-  --el-button-hover-border-color: #fecdd3;
-  --el-button-hover-text-color: #e11d48;
 }
 
 @media (max-width: 760px) {
@@ -463,12 +505,12 @@ onMounted(load)
     flex-direction: column;
   }
 
-  .app-card-actions {
+  .apps-grid {
     grid-template-columns: 1fr;
   }
 
-  .app-actions {
-    justify-content: flex-start;
+  .app-card {
+    width: 100%;
   }
 }
 </style>

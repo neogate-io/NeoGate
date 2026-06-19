@@ -34,6 +34,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
 import { copyTextWithMessage } from '../../utils/clipboard'
@@ -272,14 +273,13 @@ async function openMembersDialog(row: Project) {
     userId: null,
     role: 'member'
   })
-  membersLoading.value = true
-  try {
-    await loadSelectedProjectMembers()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    membersLoading.value = false
-  }
+  await withLoading(membersLoading, async () => {
+    try {
+      await loadSelectedProjectMembers()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function loadSelectedProjectMembers() {
@@ -313,47 +313,46 @@ async function submitProjectForm() {
     if (!confirmed) return
   }
 
-  projectSaving.value = true
-  try {
-    if (selectedProject.value) {
-      await updateProject(selectedProject.value.id, {
-        name,
-        owner_user_id: projectForm.ownerUserId,
-        status: projectForm.status
-      })
-      ElMessage.success(t('projectUpdated'))
-      await reload()
-    } else {
-      await createProject({
-        name,
-        owner_user_id: projectForm.ownerUserId!,
-        status: projectForm.status
-      })
-      ElMessage.success(t('projectCreated'))
-      await searchProjects()
+  const ownerUserId = projectForm.ownerUserId
+  await withLoading(projectSaving, async () => {
+    try {
+      if (selectedProject.value) {
+        await updateProject(selectedProject.value.id, {
+          name,
+          owner_user_id: ownerUserId,
+          status: projectForm.status
+        })
+        ElMessage.success(t('projectUpdated'))
+        await reload()
+      } else {
+        await createProject({
+          name,
+          owner_user_id: ownerUserId,
+          status: projectForm.status
+        })
+        ElMessage.success(t('projectCreated'))
+        await searchProjects()
+      }
+      projectDialogVisible.value = false
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    projectDialogVisible.value = false
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    projectSaving.value = false
-  }
+  })
 }
 
 async function toggleProjectStatus(row: Project) {
   if (togglingProjectIds.has(row.id)) return
 
   const nextStatus: ProjectStatus = row.status === 'enabled' ? 'disabled' : 'enabled'
-  togglingProjectIds.add(row.id)
-  try {
-    await updateProject(row.id, { status: nextStatus })
-    ElMessage.success(t('projectUpdated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingProjectIds.remove(row.id)
-  }
+  await togglingProjectIds.withItem(row.id, async () => {
+    try {
+      await updateProject(row.id, { status: nextStatus })
+      ElMessage.success(t('projectUpdated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function copyApiKeyValue(value: string) {
@@ -366,15 +365,14 @@ async function searchUserOptions(query: string, options: Ref<User[]>, loading: R
     options.value = []
     return
   }
-  loading.value = true
-  try {
-    const page = await getUsers({ search, limit: 20 })
-    options.value = page.items
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      const page = await getUsers({ search, limit: 20 })
+      options.value = page.items
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 function searchOwnerUsers(query: string) {
@@ -386,30 +384,31 @@ async function searchMemberUsers(query: string) {
 }
 
 async function submitAddProjectMember() {
-  if (!selectedProject.value) return
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
   if (!memberForm.userId) {
     ElMessage.error(t('projectMemberRequired'))
     return
   }
-  memberSaving.value = true
-  try {
-    await addProjectMember(selectedProject.value.id, {
-      user_id: memberForm.userId,
-      role: memberForm.role
-    })
-    ElMessage.success(t('projectMemberAdded'))
-    Object.assign(memberForm, {
-      userId: null,
-      role: 'member'
-    })
-    memberUserOptions.value = []
-    await loadSelectedProjectMembers()
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    memberSaving.value = false
-  }
+  const memberUserId = memberForm.userId
+  await withLoading(memberSaving, async () => {
+    try {
+      await addProjectMember(projectId, {
+        user_id: memberUserId,
+        role: memberForm.role
+      })
+      ElMessage.success(t('projectMemberAdded'))
+      Object.assign(memberForm, {
+        userId: null,
+        role: 'member'
+      })
+      memberUserOptions.value = []
+      await loadSelectedProjectMembers()
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteProjectMember(row: ProjectMember) {
@@ -424,32 +423,32 @@ async function confirmDeleteProjectMember(row: ProjectMember) {
     }
   )
   if (!confirmed) return
-  deletingMemberId.value = row.id
-  try {
-    await deleteProjectMember(selectedProject.value.id, row.id)
-    ElMessage.success(t('projectMemberRemoved'))
-    await loadSelectedProjectMembers()
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingMemberId.value = null
-  }
+  const projectId = selectedProject.value.id
+  await withLoadingValue(deletingMemberId, row.id, null, async () => {
+    try {
+      await deleteProjectMember(projectId, row.id)
+      ElMessage.success(t('projectMemberRemoved'))
+      await loadSelectedProjectMembers()
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function submitCredit() {
-  if (!selectedProject.value) return
-  creditSaving.value = true
-  try {
-    await adjustCredit('project', selectedProject.value.id, usdToMicroUsd(amountUsd.value))
-    ElMessage.success(t('creditUpdated'))
-    creditDialogVisible.value = false
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    creditSaving.value = false
-  }
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  await withLoading(creditSaving, async () => {
+    try {
+      await adjustCredit('project', projectId, usdToMicroUsd(amountUsd.value))
+      ElMessage.success(t('creditUpdated'))
+      creditDialogVisible.value = false
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteProject(row: Project) {
@@ -463,16 +462,15 @@ async function confirmDeleteProject(row: Project) {
     }
   )
   if (!confirmed) return
-  deletingProjectId.value = row.id
-  try {
-    await deleteProject(row.id)
-    ElMessage.success(t('projectDeleted'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingProjectId.value = null
-  }
+  await withLoadingValue(deletingProjectId, row.id, null, async () => {
+    try {
+      await deleteProject(row.id)
+      ElMessage.success(t('projectDeleted'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function searchProjects() {

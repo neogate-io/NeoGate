@@ -69,33 +69,31 @@ async function refreshEnabledCredentials() {
 }
 
 async function refreshCredential(id: number, notify = true) {
-  refreshingIds.add(id)
-  try {
-    const updated = await refreshCredentialApi(id)
-    mergeCredential(updated)
-  } catch (err) {
-    if (notify) ElMessage.error(readError(err))
-  } finally {
-    refreshingIds.remove(id)
-  }
+  await refreshingIds.withItem(id, async () => {
+    try {
+      const updated = await refreshCredentialApi(id)
+      mergeCredential(updated)
+    } catch (err) {
+      if (notify) ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function toggleCredential(credential: Credential) {
-  togglingIds.add(credential.id)
-  try {
-    const updated = credential.enabled
-      ? await disableCredential(credential.id)
-      : await enableCredential(credential.id)
-    mergeCredential(updated)
-    ElMessage.success(credential.enabled ? t('credentialDisabled') : t('credentialEnabled'))
-    if (updated.enabled) {
-      await refreshCredential(updated.id, false)
+  await togglingIds.withItem(credential.id, async () => {
+    try {
+      const updated = credential.enabled
+        ? await disableCredential(credential.id)
+        : await enableCredential(credential.id)
+      mergeCredential(updated)
+      ElMessage.success(credential.enabled ? t('credentialDisabled') : t('credentialEnabled'))
+      if (updated.enabled) {
+        await refreshCredential(updated.id, false)
+      }
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingIds.remove(credential.id)
-  }
+  })
 }
 
 async function removeCredential(credential: Credential) {
@@ -106,17 +104,16 @@ async function removeCredential(credential: Credential) {
   })
   if (!confirmed) return
 
-  deletingIds.add(credential.id)
-  try {
-    await deleteCredential(credential.id)
-    credentials.value = credentials.value.filter((item) => item.id !== credential.id)
-    selectedIds.remove(credential.id)
-    ElMessage.success(t('credentialDeleted'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingIds.remove(credential.id)
-  }
+  await deletingIds.withItem(credential.id, async () => {
+    try {
+      await deleteCredential(credential.id)
+      credentials.value = credentials.value.filter((item) => item.id !== credential.id)
+      selectedIds.remove(credential.id)
+      ElMessage.success(t('credentialDeleted'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function uploadCredential(event: Event) {

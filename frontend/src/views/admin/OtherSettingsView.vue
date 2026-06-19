@@ -7,11 +7,12 @@ import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } fro
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate } from '../../types/admin'
-import { confirmAction } from '../../utils/confirm'
+import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const loading = ref(false)
 const servicePolicy = ref<ServicePolicy | null>(null)
@@ -137,12 +138,11 @@ async function saveServicePolicy() {
 }
 
 async function syncReferencePrices() {
-  const confirmed = await confirmAction(
+  const confirmed = await confirmDialog(
     referenceSyncConfirmContent(),
     t('syncReferencePricesConfirmTitle'),
     {
-      confirmText: t('syncReferencePricesConfirmButton'),
-      cancelText: t('cancel')
+      confirmText: t('syncReferencePricesConfirmButton')
     }
   )
   if (!confirmed) return

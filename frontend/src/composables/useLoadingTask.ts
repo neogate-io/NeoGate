@@ -8,3 +8,17 @@ export async function withLoading<T>(loading: Ref<boolean>, task: () => Promise<
     loading.value = false
   }
 }
+
+export async function withLoadingValue<T, R>(
+  loading: Ref<T>,
+  activeValue: T,
+  idleValue: T,
+  task: () => Promise<R>
+) {
+  loading.value = activeValue
+  try {
+    return await task()
+  } finally {
+    loading.value = idleValue
+  }
+}

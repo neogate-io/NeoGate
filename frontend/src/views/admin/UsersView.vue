@@ -32,6 +32,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
@@ -271,25 +272,24 @@ async function submitCreateUser() {
     ElMessage.error(t('passwordMinLength'))
     return
   }
-  userDialogSaving.value = true
-  try {
-    const created = await createUser({
-      email: userForm.email.trim(),
-      username: userForm.username.trim() || null,
-      password: userForm.password,
-      status: userForm.status
-    })
-    if (userForm.userGroupId && userForm.userGroupId !== created.user_group_id) {
-      await updateUser(created.id, { user_group_id: userForm.userGroupId })
+  await withLoading(userDialogSaving, async () => {
+    try {
+      const created = await createUser({
+        email: userForm.email.trim(),
+        username: userForm.username.trim() || null,
+        password: userForm.password,
+        status: userForm.status
+      })
+      if (userForm.userGroupId && userForm.userGroupId !== created.user_group_id) {
+        await updateUser(created.id, { user_group_id: userForm.userGroupId })
+      }
+      ElMessage.success(t('userCreated'))
+      userDialogVisible.value = false
+      await searchUsers()
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    ElMessage.success(t('userCreated'))
-    userDialogVisible.value = false
-    await searchUsers()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userDialogSaving.value = false
-  }
+  })
 }
 
 async function openUserKeysDialog(row: User) {
@@ -304,23 +304,23 @@ async function copyApiKey(row: UserKey) {
 }
 
 async function submitEditUser() {
-  if (!selectedUser.value) return
-  userDialogSaving.value = true
-  try {
-    await updateUser(selectedUser.value.id, {
-      email: userForm.email.trim(),
-      username: userForm.username.trim() || null,
-      status: userForm.status,
-      user_group_id: userForm.userGroupId
-    })
-    ElMessage.success(t('userUpdated'))
-    userDialogVisible.value = false
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userDialogSaving.value = false
-  }
+  const user = selectedUser.value
+  if (!user) return
+  await withLoading(userDialogSaving, async () => {
+    try {
+      await updateUser(user.id, {
+        email: userForm.email.trim(),
+        username: userForm.username.trim() || null,
+        status: userForm.status,
+        user_group_id: userForm.userGroupId
+      })
+      ElMessage.success(t('userUpdated'))
+      userDialogVisible.value = false
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function approveUser(row: User) {
@@ -331,32 +331,30 @@ async function confirmUserStatusChange(row: User, status: UserStatus) {
   if (row.status === status) return
   const confirmed = await confirmStatusChange(row.email, status)
   if (!confirmed) return
-  approvingUserId.value = row.id
-  try {
-    await updateUserStatus(row.id, status)
-    ElMessage.success(status === 'enabled' ? t('userApproved') : t('userUpdated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    approvingUserId.value = null
-  }
+  await withLoadingValue(approvingUserId, row.id, null, async () => {
+    try {
+      await updateUserStatus(row.id, status)
+      ElMessage.success(status === 'enabled' ? t('userApproved') : t('userUpdated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function toggleUserStatus(row: User) {
   if (togglingUserIds.has(row.id)) return
 
   const nextStatus: UserStatus = row.status === 'enabled' ? 'disabled' : 'enabled'
-  togglingUserIds.add(row.id)
-  try {
-    await updateUserStatus(row.id, nextStatus)
-    ElMessage.success(nextStatus === 'enabled' ? t('userApproved') : t('userUpdated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingUserIds.remove(row.id)
-  }
+  await togglingUserIds.withItem(row.id, async () => {
+    try {
+      await updateUserStatus(row.id, nextStatus)
+      ElMessage.success(nextStatus === 'enabled' ? t('userApproved') : t('userUpdated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteUser(row: User) {
@@ -370,16 +368,15 @@ async function confirmDeleteUser(row: User) {
     }
   )
   if (!confirmed) return
-  deletingUserId.value = row.id
-  try {
-    await deleteUser(row.id)
-    ElMessage.success(t('userDeleted'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingUserId.value = null
-  }
+  await withLoadingValue(deletingUserId, row.id, null, async () => {
+    try {
+      await deleteUser(row.id)
+      ElMessage.success(t('userDeleted'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function searchUsers() {
@@ -422,14 +419,13 @@ async function loadSelectedUserKeys() {
 }
 
 async function withUserKeysLoading(task: () => Promise<void>) {
-  userKeysLoading.value = true
-  try {
-    await task()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userKeysLoading.value = false
-  }
+  await withLoading(userKeysLoading, async () => {
+    try {
+      await task()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function loadUserGroups() {

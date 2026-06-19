@@ -33,6 +33,7 @@ import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type {
   Channel,
@@ -415,19 +416,18 @@ function keyStatusTooltip(
 }
 
 async function loadPricingData() {
-  pricingLoading.value = true
-  try {
-    const [fetchedPrices, fetchedTemplates] = await Promise.all([
-      getProviderPrices(),
-      getPricingTemplates()
-    ])
-    prices.value = fetchedPrices
-    templates.value = fetchedTemplates
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    pricingLoading.value = false
-  }
+  await withLoading(pricingLoading, async () => {
+    try {
+      const [fetchedPrices, fetchedTemplates] = await Promise.all([
+        getProviderPrices(),
+        getPricingTemplates()
+      ])
+      prices.value = fetchedPrices
+      templates.value = fetchedTemplates
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 function openPriceDialog(row: Channel) {
@@ -552,69 +552,66 @@ async function syncCreateReferencePricesIfNeeded() {
 }
 
 async function saveChannelPrices() {
-  savingPrices.value = true
-  try {
-    for (const form of Object.values(priceForms)) {
-      await upsertProviderPrice({
-        provider: form.provider,
-        model: form.model,
-        input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-        output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-        cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-        cache_write_price_usd_micros: cacheWritePricePayload(form),
-        enabled: form.enabled
-      })
+  await withLoading(savingPrices, async () => {
+    try {
+      for (const form of Object.values(priceForms)) {
+        await upsertProviderPrice({
+          provider: form.provider,
+          model: form.model,
+          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
+          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
+          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
+          cache_write_price_usd_micros: cacheWritePricePayload(form),
+          enabled: form.enabled
+        })
+      }
+      ElMessage.success(t('priceSaved'))
+      await loadPricingData()
+      await loadChannels()
+      priceDialogOpen.value = false
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    ElMessage.success(t('priceSaved'))
-    await loadPricingData()
-    await loadChannels()
-    priceDialogOpen.value = false
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    savingPrices.value = false
-  }
+  })
 }
 
 async function toggleChannelModelRuntime(channelId: number, model: string, enabled: boolean) {
   if (isRuntimeToggling(channelId, model)) return
 
-  togglingRuntimeKeys.add(runtimeKey(channelId, model))
-  try {
-    await updateChannelModel(channelId, model, { enabled })
-    await loadChannels()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingRuntimeKeys.remove(runtimeKey(channelId, model))
-  }
+  await togglingRuntimeKeys.withItem(runtimeKey(channelId, model), async () => {
+    try {
+      await updateChannelModel(channelId, model, { enabled })
+      await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function toggleChannelRuntime(row: Channel, enabled: boolean) {
   if (row.enabled === enabled || isChannelToggling(row.id)) return
 
-  togglingChannelIds.add(row.id)
-  try {
-    await updateChannel(row.id, {
-      name: row.name,
-      endpoints: row.endpoints.map((endpoint) => ({
-        protocol: endpoint.protocol,
-        base_url: endpoint.base_url,
-        models: endpoint.models,
-        enabled: endpoint.enabled
-      })),
-      enabled,
-      priority: row.priority,
-      weight: row.weight,
-      key_selection_mode: row.key_selection_mode,
-      use_credentials: row.use_credentials
-    })
-    await loadChannels()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingChannelIds.remove(row.id)
-  }
+  await togglingChannelIds.withItem(row.id, async () => {
+    try {
+      await updateChannel(row.id, {
+        name: row.name,
+        endpoints: row.endpoints.map((endpoint) => ({
+          protocol: endpoint.protocol,
+          base_url: endpoint.base_url,
+          models: endpoint.models,
+          enabled: endpoint.enabled
+        })),
+        enabled,
+        priority: row.priority,
+        weight: row.weight,
+        key_selection_mode: row.key_selection_mode,
+        use_credentials: row.use_credentials
+      })
+      await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function applyReferencePrices() {
@@ -624,29 +621,28 @@ async function applyReferencePrices() {
     return
   }
 
-  savingPrices.value = true
-  try {
-    for (const form of targetForms) {
-      fillReferencePrice(form)
-      await upsertProviderPrice({
-        provider: form.provider,
-        model: form.model,
-        input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-        output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-        cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-        cache_write_price_usd_micros: cacheWritePricePayload(form),
-        enabled: true
-      })
+  await withLoading(savingPrices, async () => {
+    try {
+      for (const form of targetForms) {
+        fillReferencePrice(form)
+        await upsertProviderPrice({
+          provider: form.provider,
+          model: form.model,
+          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
+          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
+          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
+          cache_write_price_usd_micros: cacheWritePricePayload(form),
+          enabled: true
+        })
+      }
+      ElMessage.success(t('referencePricesApplied'))
+      await loadPricingData()
+      await loadChannels()
+      priceDialogOpen.value = false
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    ElMessage.success(t('referencePricesApplied'))
-    await loadPricingData()
-    await loadChannels()
-    priceDialogOpen.value = false
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    savingPrices.value = false
-  }
+  })
 }
 
 async function submitChannel() {

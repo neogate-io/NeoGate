@@ -33,7 +33,7 @@ import {
   type ChannelProviderOption
 } from '../utils/channel'
 import { readError, readModelFetchError } from '../utils/errors'
-import { withLoading } from './useLoadingTask'
+import { withLoading, withLoadingValue } from './useLoadingTask'
 
 type Translate = (key: MessageKey) => string
 type ModelPickerTarget = {
@@ -416,30 +416,28 @@ export function useChannels(t: Translate) {
     })
     if (!confirmed) return
 
-    deletingKeyId.value = key.id
-    try {
-      await deleteChannelKey(key.channel_id, key.id)
-      ElMessage.success(t('channelKeyDeleted'))
-      channelKeys.value = channelKeys.value.filter((item) => item.id !== key.id)
-    } catch (err) {
-      ElMessage.error(readError(err))
-    } finally {
-      deletingKeyId.value = null
-    }
+    await withLoadingValue(deletingKeyId, key.id, null, async () => {
+      try {
+        await deleteChannelKey(key.channel_id, key.id)
+        ElMessage.success(t('channelKeyDeleted'))
+        channelKeys.value = channelKeys.value.filter((item) => item.id !== key.id)
+      } catch (err) {
+        ElMessage.error(readError(err))
+      }
+    })
   }
 
   async function copyChannelKeySecret(key: ChannelKey) {
     if (copyingKeyId.value) return
 
-    copyingKeyId.value = key.id
-    try {
-      const { secret } = await revealChannelKeySecret(key.channel_id, key.id)
-      await copyTextWithMessage(secret, t('channelKeyCopied'))
-    } catch (err) {
-      ElMessage.error(readError(err))
-    } finally {
-      copyingKeyId.value = null
-    }
+    await withLoadingValue(copyingKeyId, key.id, null, async () => {
+      try {
+        const { secret } = await revealChannelKeySecret(key.channel_id, key.id)
+        await copyTextWithMessage(secret, t('channelKeyCopied'))
+      } catch (err) {
+        ElMessage.error(readError(err))
+      }
+    })
   }
 
   function toggleAllFetchedModels(checked: boolean) {
@@ -693,16 +691,15 @@ export function useChannels(t: Translate) {
     })
     if (!confirmed) return
 
-    deletingId.value = row.id
-    try {
-      await deleteChannel(row.id)
-      ElMessage.success(t('channelDeleted'))
-      await loadChannels()
-    } catch (err) {
-      ElMessage.error(readError(err))
-    } finally {
-      deletingId.value = null
-    }
+    await withLoadingValue(deletingId, row.id, null, async () => {
+      try {
+        await deleteChannel(row.id)
+        ElMessage.success(t('channelDeleted'))
+        await loadChannels()
+      } catch (err) {
+        ElMessage.error(readError(err))
+      }
+    })
   }
 
   return {

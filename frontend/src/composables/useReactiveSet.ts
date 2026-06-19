@@ -36,6 +36,15 @@ export function useReactiveSet<T>() {
     set([...items.value].filter(predicate))
   }
 
+  async function withItem<R>(value: T, task: () => Promise<R>) {
+    add(value)
+    try {
+      return await task()
+    } finally {
+      remove(value)
+    }
+  }
+
   return {
     items,
     size,
@@ -44,6 +53,7 @@ export function useReactiveSet<T>() {
     remove,
     set,
     toggle,
-    retain
+    retain,
+    withItem
   }
 }

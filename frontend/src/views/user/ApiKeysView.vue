@@ -10,15 +10,17 @@ import {
 } from '../../api/userKeys'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { UserKey } from '../../types/admin'
 import type { ServicePolicy } from '../../api/policy'
 import { copyTextWithMessage } from '../../utils/clipboard'
-import { confirmAction } from '../../utils/confirm'
+import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, maskApiKey } from '../../utils/format'
 
 const { t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 const createLoading = ref(false)
 const deletingIds = useReactiveSet<number>()
 const updatingIds = useReactiveSet<number>()
@@ -57,21 +59,20 @@ async function copyBaseUrl() {
 }
 
 async function toggleApiKeyStatus(row: UserKey, enabled: boolean) {
-  updatingIds.add(row.id)
-  try {
-    const nextStatus = enabled ? 'enabled' : 'disabled'
-    const updated = await updateOwnUserKeyStatus(row.id, nextStatus)
-    const index = apiKeys.value.findIndex((key) => key.id === row.id)
-    if (index >= 0) {
-      apiKeys.value.splice(index, 1, updated)
+  await updatingIds.withItem(row.id, async () => {
+    try {
+      const nextStatus = enabled ? 'enabled' : 'disabled'
+      const updated = await updateOwnUserKeyStatus(row.id, nextStatus)
+      const index = apiKeys.value.findIndex((key) => key.id === row.id)
+      if (index >= 0) {
+        apiKeys.value.splice(index, 1, updated)
+      }
+      ElMessage.success(nextStatus === 'enabled' ? t('apiKeyEnabled') : t('apiKeyDisabled'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+      await reload()
     }
-    ElMessage.success(nextStatus === 'enabled' ? t('apiKeyEnabled') : t('apiKeyDisabled'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-    await reload()
-  } finally {
-    updatingIds.remove(row.id)
-  }
+  })
 }
 
 function handleKeyMenuCommand(row: UserKey, command: string | number) {
@@ -97,40 +98,37 @@ async function createApiKey() {
     return
   }
 
-  createLoading.value = true
-  try {
-    const result = await createOwnUserKey(name)
-    newKey.value = result.key
-    createDialogVisible.value = false
-    newKeyDialogVisible.value = true
-    ElMessage.success(t('apiKeyCreated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    createLoading.value = false
-  }
+  await withLoading(createLoading, async () => {
+    try {
+      const result = await createOwnUserKey(name)
+      newKey.value = result.key
+      createDialogVisible.value = false
+      newKeyDialogVisible.value = true
+      ElMessage.success(t('apiKeyCreated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteApiKey(row: UserKey) {
-  const confirmed = await confirmAction(t('deleteApiKeyConfirm'), t('delete'), {
+  const confirmed = await confirmDialog(t('deleteApiKeyConfirm'), t('delete'), {
     confirmText: t('delete'),
-    cancelText: t('cancel'),
     danger: true,
     type: 'warning'
   })
   if (!confirmed) return
 
-  deletingIds.add(row.id)
-  try {
-    await deleteOwnUserKey(row.id)
-    ElMessage.success(t('apiKeyDeleted'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingIds.remove(row.id)
-  }
+  await deletingIds.withItem(row.id, async () => {
+    try {
+      await deleteOwnUserKey(row.id)
+      ElMessage.success(t('apiKeyDeleted'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 </script>
 

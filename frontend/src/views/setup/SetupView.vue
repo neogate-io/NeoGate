@@ -35,6 +35,7 @@ import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
 import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { ApiError, readError, readModelFetchError, readSmtpTestError } from '../../utils/errors'
@@ -320,58 +321,56 @@ watch(
 )
 
 async function load() {
-  loading.value = true
-  try {
-    status.value = await getSetupStatus()
-    if (status.value.setup_completed) {
-      await router.replace('/login')
-      return
-    }
-    bootstrapForm.siteName = status.value.site_name || bootstrapForm.siteName
-    bootstrapForm.publicBaseUrl =
-      preferredPublicBaseUrl(status.value.public_base_url) || bootstrapForm.publicBaseUrl
-    paymentForm.siteName = status.value.site_name || paymentForm.siteName
-
-    if (!status.value.bootstrap_required) {
-      providers.value = await getSetupProviders()
-      if (providers.value.length > 0 && !selectedProvider.value) {
-        setupForm.provider = providers.value[0].code
+  await withLoading(loading, async () => {
+    try {
+      status.value = await getSetupStatus()
+      if (status.value.setup_completed) {
+        await router.replace('/login')
+        return
       }
-      applyProviderDefaults()
+      bootstrapForm.siteName = status.value.site_name || bootstrapForm.siteName
+      bootstrapForm.publicBaseUrl =
+        preferredPublicBaseUrl(status.value.public_base_url) || bootstrapForm.publicBaseUrl
+      paymentForm.siteName = status.value.site_name || paymentForm.siteName
+
+      if (!status.value.bootstrap_required) {
+        providers.value = await getSetupProviders()
+        if (providers.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providers.value[0].code
+        }
+        applyProviderDefaults()
+      }
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  })
 }
 
 async function saveBootstrap() {
   if (!validateRuntimeConfig()) return
-  saving.value = true
-  try {
-    const result = await bootstrapSetup({
-      database_url:
-        bootstrapMissingDatabase.value || runtimeDatabaseChangeEnabled.value
-          ? buildDatabaseUrl(false)
-          : null,
-      site_name: bootstrapForm.siteName,
-      public_base_url: bootstrapForm.publicBaseUrl
-    })
-    envFile.value = result.env_file
-    waitingForRestart.value = true
-    restartWaitTimedOut.value = false
-    ElMessage.success(t('runtimeConfigSaved'))
-    if (reviewingRuntimeConfig.value) {
-      waitingForRestart.value = false
-      return
+  await withLoading(saving, async () => {
+    try {
+      const result = await bootstrapSetup({
+        database_url:
+          bootstrapMissingDatabase.value || runtimeDatabaseChangeEnabled.value
+            ? buildDatabaseUrl(false)
+            : null,
+        site_name: bootstrapForm.siteName,
+        public_base_url: bootstrapForm.publicBaseUrl
+      })
+      envFile.value = result.env_file
+      waitingForRestart.value = true
+      restartWaitTimedOut.value = false
+      ElMessage.success(t('runtimeConfigSaved'))
+      if (reviewingRuntimeConfig.value) {
+        waitingForRestart.value = false
+        return
+      }
+      await waitForRuntimeRestart()
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    await waitForRuntimeRestart()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    saving.value = false
-  }
+  })
 }
 
 async function handleRuntimeSubmit() {
@@ -412,26 +411,24 @@ async function waitForRuntimeRestart() {
 
 async function testDatabaseConnection() {
   if (!validateDatabaseConfig()) return
-  testingDatabase.value = true
-  try {
-    await testSetupDatabase({ database_url: buildDatabaseUrl(false) })
-    ElMessage.success(t('databaseConnectionSucceeded'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    testingDatabase.value = false
-  }
+  await withLoading(testingDatabase, async () => {
+    try {
+      await testSetupDatabase({ database_url: buildDatabaseUrl(false) })
+      ElMessage.success(t('databaseConnectionSucceeded'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function generateClusterTemplate() {
-  generatingTemplate.value = true
-  try {
-    clusterEnvTemplate.value = (await getClusterEnvTemplate()).env_text
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    generatingTemplate.value = false
-  }
+  await withLoading(generatingTemplate, async () => {
+    try {
+      clusterEnvTemplate.value = (await getClusterEnvTemplate()).env_text
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function fetchModels() {
@@ -447,32 +444,31 @@ async function fetchModels() {
   const shouldKeepAllSelected = allFetchedModelsSelected.value
   const existingModels = splitCommaList(setupForm.models)
 
-  fetchingModels.value = true
-  try {
-    const result = await fetchSetupUpstreamModels({
-      provider: setupForm.provider,
-      protocol: endpoint.protocol,
-      base_url: endpoint.base_url,
-      secret: setupForm.secret
-    })
-    if (result.models.length === 0) {
-      ElMessage.warning(t('modelsFetchEmpty'))
-      return
-    }
+  await withLoading(fetchingModels, async () => {
+    try {
+      const result = await fetchSetupUpstreamModels({
+        provider: setupForm.provider,
+        protocol: endpoint.protocol,
+        base_url: endpoint.base_url,
+        secret: setupForm.secret
+      })
+      if (result.models.length === 0) {
+        ElMessage.warning(t('modelsFetchEmpty'))
+        return
+      }
 
-    fetchedModels.value = result.models
-    selectedFetchedModels.value =
-      shouldKeepAllSelected || existingModels.length === 0
-        ? result.models
-        : result.models.filter((model) => existingModels.includes(model))
-    syncSelectedModelsToInput()
-    modelPickerDialogOpen.value = true
-    ElMessage.success(t('modelsFetched'))
-  } catch (err) {
-    ElMessage.error(readModelFetchError(err, t))
-  } finally {
-    fetchingModels.value = false
-  }
+      fetchedModels.value = result.models
+      selectedFetchedModels.value =
+        shouldKeepAllSelected || existingModels.length === 0
+          ? result.models
+          : result.models.filter((model) => existingModels.includes(model))
+      syncSelectedModelsToInput()
+      modelPickerDialogOpen.value = true
+      ElMessage.success(t('modelsFetched'))
+    } catch (err) {
+      ElMessage.error(readModelFetchError(err, t))
+    }
+  })
 }
 
 function toggleAllFetchedModels(checked: boolean) {
@@ -516,66 +512,60 @@ async function prepareUpstreamPrices() {
     return false
   }
 
-  configuringPrices.value = true
-  try {
-    return await syncAndApplyReferencePrices()
-  } finally {
-    configuringPrices.value = false
-  }
+  return withLoading(configuringPrices, syncAndApplyReferencePrices)
 }
 
 async function submitSetup() {
   if (!validateSetup()) return
-  saving.value = true
-  try {
-    const models = splitCommaList(setupForm.models)
-    const channel = includeUpstream.value
-      ? {
-          provider: setupForm.provider,
-          name: setupForm.channelName.trim(),
-          endpoints: setupEndpointsForSubmit(models),
-          secret: setupForm.secret
-        }
-      : null
-    await completeSetupWizard({
-      admin_username: setupForm.adminUsername.trim(),
-      admin_password: setupForm.adminPassword,
-      service_mode: setupForm.serviceMode,
-      credit_required: setupForm.serviceMode === 'internal' ? setupForm.creditRequired : true,
-      registration_enabled: setupForm.registrationEnabled,
-      channel,
-      prices: includeUpstream.value
-        ? prices.value.map((price) => ({
+  await withLoading(saving, async () => {
+    try {
+      const models = splitCommaList(setupForm.models)
+      const channel = includeUpstream.value
+        ? {
             provider: setupForm.provider,
-            model: price.model,
-            input_price_usd_micros: usdToMicroUsd(price.inputUsd),
-            output_price_usd_micros: usdToMicroUsd(price.outputUsd),
-            enabled: price.enabled
-          }))
-        : [],
-      smtp: smtpForm.enabled ? smtpPayload() : null,
-      payment:
-        setupForm.serviceMode === 'paid' && paymentForm.enabled
-          ? {
-              payment_enabled: true,
-              return_base_url: status.value?.public_base_url || bootstrapForm.publicBaseUrl,
-              zpay_api_url: paymentForm.apiUrl,
-              zpay_merchant_id: paymentForm.merchantId || null,
-              zpay_secret_key: paymentForm.secretKey || null,
-              clear_zpay_secret_key: false,
-              zpay_default_pay_type: paymentForm.payType,
-              zpay_site_name: paymentForm.siteName
-            }
-          : null
-    })
-    ElMessage.success(t('setupCompleted'))
-    await router.replace('/login')
-  } catch (err) {
-    ElMessage.error(readError(err))
-    await load()
-  } finally {
-    saving.value = false
-  }
+            name: setupForm.channelName.trim(),
+            endpoints: setupEndpointsForSubmit(models),
+            secret: setupForm.secret
+          }
+        : null
+      await completeSetupWizard({
+        admin_username: setupForm.adminUsername.trim(),
+        admin_password: setupForm.adminPassword,
+        service_mode: setupForm.serviceMode,
+        credit_required: setupForm.serviceMode === 'internal' ? setupForm.creditRequired : true,
+        registration_enabled: setupForm.registrationEnabled,
+        channel,
+        prices: includeUpstream.value
+          ? prices.value.map((price) => ({
+              provider: setupForm.provider,
+              model: price.model,
+              input_price_usd_micros: usdToMicroUsd(price.inputUsd),
+              output_price_usd_micros: usdToMicroUsd(price.outputUsd),
+              enabled: price.enabled
+            }))
+          : [],
+        smtp: smtpForm.enabled ? smtpPayload() : null,
+        payment:
+          setupForm.serviceMode === 'paid' && paymentForm.enabled
+            ? {
+                payment_enabled: true,
+                return_base_url: status.value?.public_base_url || bootstrapForm.publicBaseUrl,
+                zpay_api_url: paymentForm.apiUrl,
+                zpay_merchant_id: paymentForm.merchantId || null,
+                zpay_secret_key: paymentForm.secretKey || null,
+                clear_zpay_secret_key: false,
+                zpay_default_pay_type: paymentForm.payType,
+                zpay_site_name: paymentForm.siteName
+              }
+            : null
+      })
+      ElMessage.success(t('setupCompleted'))
+      await router.replace('/login')
+    } catch (err) {
+      ElMessage.error(readError(err))
+      await load()
+    }
+  })
 }
 
 function validateSetup() {
@@ -700,15 +690,14 @@ function smtpPayload() {
 async function sendSmtpTestEmail() {
   smtpForm.enabled = true
   if (!validateSmtpStep()) return
-  testingSmtp.value = true
-  try {
-    await testSetupSmtpSetting(smtpPayload())
-    ElMessage.success(t('smtpTestEmailSent'))
-  } catch (err) {
-    ElMessage.error(readSmtpTestError(err, t))
-  } finally {
-    testingSmtp.value = false
-  }
+  await withLoading(testingSmtp, async () => {
+    try {
+      await testSetupSmtpSetting(smtpPayload())
+      ElMessage.success(t('smtpTestEmailSent'))
+    } catch (err) {
+      ElMessage.error(readSmtpTestError(err, t))
+    }
+  })
 }
 
 function readReferenceSyncError(err: unknown) {

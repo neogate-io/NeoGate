@@ -158,6 +158,17 @@ docker compose -f docker-compose.cn.yml up -d --build
 
 启动后访问 `http://服务器IP:8080`，首次运行向导会引导你完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
 
+#### 绑定域名和宿主机 Nginx
+
+使用 `docker compose up -d --build` 安装时，Compose 默认会把服务暴露到宿主机 `8080` 端口。宿主机 Nginx 可直接反向代理到 `http://127.0.0.1:8080`：
+
+```bash
+sudo cp deploy/nginx/docker-compose.conf.example /etc/nginx/conf.d/neogate.conf
+sudo vim /etc/nginx/conf.d/neogate.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
 #### 检查运行状态
 
 部署完成后，可以先查看容器是否都处于 `running` 或 `healthy` 状态：
@@ -350,14 +361,14 @@ pnpm install
 pnpm build
 ```
 
-构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/standalone.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。
+构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/source-build.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。
 
 源码部署时可以按下面方式使用：
 
 ```bash
 sudo install -d /usr/share/nginx/html
 sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/standalone.conf.example /etc/nginx/conf.d/neogate.conf
+sudo cp deploy/nginx/source-build.conf.example /etc/nginx/conf.d/neogate.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```

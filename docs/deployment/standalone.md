@@ -205,14 +205,14 @@ pnpm build
 cd ..
 ```
 
-After the build, serve `frontend/dist` with Nginx or another static web server. The repository includes `deploy/nginx/standalone.conf.example`; it assumes `/usr/share/nginx/html` for static files and proxies backend API and health-check paths to `http://127.0.0.1:8080`.
+After the build, serve `frontend/dist` with Nginx or another static web server. The repository includes `deploy/nginx/source-build.conf.example`; it assumes `/usr/share/nginx/html` for static files and proxies backend API and health-check paths to `http://127.0.0.1:8080`.
 
 Use it like this:
 
 ```bash
 sudo install -d /usr/share/nginx/html
 sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/standalone.conf.example /etc/nginx/conf.d/neogate.conf
+sudo cp deploy/nginx/source-build.conf.example /etc/nginx/conf.d/neogate.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```

@@ -158,6 +158,17 @@ docker compose -f docker-compose.cn.yml up -d --build
 
 After startup, open `http://SERVER_IP:8080`. The first-run wizard will guide you through the admin account, service mode, initial upstream, prices, SMTP, and payment settings.
 
+#### Domain and Host Nginx
+
+When installed with `docker compose up -d --build`, Compose exposes the service on host port `8080` by default. Host Nginx can reverse proxy directly to `http://127.0.0.1:8080`:
+
+```bash
+sudo cp deploy/nginx/docker-compose.conf.example /etc/nginx/conf.d/neogate.conf
+sudo vim /etc/nginx/conf.d/neogate.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
 #### Check Runtime Status
 
 After deployment starts, check whether all containers are `running` or `healthy`:
@@ -350,14 +361,14 @@ pnpm install
 pnpm build
 ```
 
-After the build, serve `frontend/dist` with Nginx or another static web server. The included `deploy/nginx/standalone.conf.example` uses `/usr/share/nginx/html` as the static file root and proxies backend APIs and health-check paths to the local backend at `http://127.0.0.1:8080`.
+After the build, serve `frontend/dist` with Nginx or another static web server. The included `deploy/nginx/source-build.conf.example` uses `/usr/share/nginx/html` as the static file root and proxies backend APIs and health-check paths to the local backend at `http://127.0.0.1:8080`.
 
 For source deployments, you can use it like this:
 
 ```bash
 sudo install -d /usr/share/nginx/html
 sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/standalone.conf.example /etc/nginx/conf.d/neogate.conf
+sudo cp deploy/nginx/source-build.conf.example /etc/nginx/conf.d/neogate.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```

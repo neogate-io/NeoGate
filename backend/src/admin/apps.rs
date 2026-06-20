@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
-use sqlx::Row;
+use sqlx::{AssertSqlSafe, Row};
 
 use crate::{
     apps::{
@@ -17,7 +17,7 @@ use crate::{
         UpsertAppRequest, DEFAULT_CONTEXT_TURNS, DEFAULT_MAX_OUTPUT_TOKENS,
     },
     auth::{generate_user_key, key_prefix, AdminAuth},
-    billing::{account, CreditAccountType},
+    billing::{account, CreditAccountType, BILLABLE_PROVIDER_PRICE_CONDITION_PP},
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
@@ -68,7 +68,7 @@ async fn app_model_options(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
 ) -> AppResult<Json<Vec<AppModelOption>>> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(AssertSqlSafe(format!(
         r#"
         SELECT cm.model,
                array_agg(DISTINCT c.provider ORDER BY c.provider) AS providers,
@@ -78,9 +78,10 @@ async fn app_model_options(
         JOIN provider p ON p.code = c.provider
         JOIN channel_endpoint ce ON ce.channel_id = c.id
         JOIN provider_price pp
-          ON pp.provider = cm.provider
+         ON pp.provider = cm.provider
          AND pp.model = cm.model
          AND pp.enabled = TRUE
+         AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
         WHERE p.enabled = TRUE
           AND c.enabled = TRUE
           AND ce.enabled = TRUE
@@ -119,8 +120,8 @@ async fn app_model_options(
           )
         GROUP BY cm.model
         ORDER BY COUNT(DISTINCT c.id) DESC, cm.model ASC
-        "#,
-    )
+        "#
+    )))
     .fetch_all(&state.db.pool)
     .await?;
 

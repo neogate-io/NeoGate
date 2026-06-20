@@ -7,8 +7,8 @@ use futures_util::StreamExt;
 use crate::{
     auth::UserAuth,
     billing::{
-        parse_usage_from_bytes, parse_usage_from_sse_data, BillingAccounts, BillingCharge,
-        CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
+        parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
+        BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
     AppState,
 };
@@ -209,7 +209,7 @@ async fn settle_successful_hold(
                     project_credit_account: &ctx.auth.project_credit_account,
                 },
                 hold: ctx.hold.clone(),
-                usage: token_usage,
+                usage: token_usage.map(BillableUsage::token),
                 price: &ctx.price,
             },
         )

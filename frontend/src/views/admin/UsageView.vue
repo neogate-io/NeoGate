@@ -242,7 +242,13 @@ async function handleSearch() {
         </el-table-column>
         <el-table-column :label="t('tokensColumnHint')" min-width="150">
           <template #default="{ row }">
-            <div class="usage-stack">
+            <div v-if="row.billing_meter === 'image'" class="usage-stack">
+              <span class="usage-mono">
+                {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
+              </span>
+              <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+            </div>
+            <div v-else class="usage-stack">
               <span class="usage-mono">
                 {{ formatNumber(row.input_tokens, locale) }} /
                 {{ formatNumber(row.output_tokens, locale) }}

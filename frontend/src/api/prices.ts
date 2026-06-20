@@ -1,4 +1,5 @@
 import type {
+  BillingMeter,
   PricingPolicy,
   PricingTemplate,
   PricingTemplateSyncResult,
@@ -37,6 +38,8 @@ export function upsertProviderPrice(input: {
   output_price_usd_micros: number
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter: BillingMeter
+  unit_price_usd_micros?: number | null
   enabled: boolean
 }) {
   return adminRequest<ProviderPrice>('/api/admin/provider-prices', {

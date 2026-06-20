@@ -13,7 +13,9 @@ use serde_json::Value;
 
 use crate::{
     auth::UserAuth,
-    billing::parse_usage_from_bytes,
+    billing::{
+        parse_usage_from_bytes, BillableUsage, BillingAccounts, BillingMeter, SettleRequest,
+    },
     error::{AppError, AppResult},
     task::{billing as task_billing, jobs, upstream as upstream_task},
     AppState,
@@ -27,7 +29,7 @@ use crate::{
         describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_openai,
         forward_openai_bound, forward_openai_with_content_type, handle_upstream_http_error,
         log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
-        record_upstream_http_failure, release_empty_hold, reserve_credit,
+        record_upstream_http_failure, release_empty_hold, reserve_billable_credit, reserve_credit,
         respond_upstream_http_failure,
         selector::{ModelCooldown, SelectedUpstream, UpstreamProtocol},
         task_status_from_value, BodyKind, ChannelAffinityKey, PreparedRelayBody, RelayBody,
@@ -42,6 +44,7 @@ const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
 struct ImageRequestMeta {
     model: String,
     stream: bool,
+    image_count: i64,
     content_type: HeaderValue,
 }
 
@@ -431,15 +434,33 @@ async fn relay_openai_image(
             .try_acquire(auth.user_key_id)
             .await?,
     );
-    let hold = reserve_credit(
-        &state,
-        &auth,
-        user_key_model_credit_account.as_ref(),
-        &body,
-        state.billing.default_output_tokens(),
-        &price,
-    )
-    .await?;
+    let estimated_image_units = meta.image_count.max(1);
+    let hold = if price.billing_meter == BillingMeter::Image {
+        reserve_billable_credit(
+            &state,
+            &auth,
+            user_key_model_credit_account.as_ref(),
+            estimated_image_units.saturating_mul(
+                price
+                    .unit_price_usd_micros
+                    .ok_or_else(|| {
+                        AppError::BadRequest("unit price is required for image billing".to_string())
+                    })?
+                    .max(0),
+            ),
+        )
+        .await?
+    } else {
+        reserve_credit(
+            &state,
+            &auth,
+            user_key_model_credit_account.as_ref(),
+            &body,
+            state.billing.default_output_tokens(),
+            &price,
+        )
+        .await?
+    };
     let ctx = RelayContext {
         state: Arc::clone(&state),
         auth,
@@ -471,20 +492,214 @@ async fn relay_openai_image(
             body,
             meta.content_type,
             meta.stream,
+            estimated_image_units,
             ctx,
             response,
         )
         .await;
     }
     if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
-        return finish_newapi_image_stream(ctx, response).await;
+        return finish_newapi_image_stream(ctx, response, estimated_image_units).await;
     }
-    finish_relay(ctx, response).await
+    if ctx.price.billing_meter == BillingMeter::Image {
+        finish_image_relay(ctx, response, estimated_image_units).await
+    } else {
+        finish_relay(ctx, response).await
+    }
+}
+
+async fn finish_image_relay(
+    ctx: RelayContext,
+    response: AppResult<reqwest::Response>,
+    requested_image_count: i64,
+) -> AppResult<Response> {
+    if ctx.streamed {
+        return finish_streamed_image_relay(ctx, response, requested_image_count).await;
+    }
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return handle_upstream_http_error(ctx, status, upstream_response).await;
+    }
+    let content_type = upstream_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let body = upstream_response.bytes().await?;
+    let image_count = image_count_from_response_body(&body).ok_or_else(|| {
+        AppError::BadRequest("image response missing non-empty data array".to_string())
+    })?;
+    let billing = settle_image_hold(&ctx, image_count, "image relay").await;
+    let usage = crate::relay::usage_from_context(
+        &ctx,
+        Some(status.as_u16() as i32),
+        None,
+        None,
+        None,
+        billing,
+    );
+    crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
+    response_from_bytes(status, content_type, body)
+}
+
+async fn finish_streamed_image_relay(
+    ctx: RelayContext,
+    response: AppResult<reqwest::Response>,
+    requested_image_count: i64,
+) -> AppResult<Response> {
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return handle_upstream_http_error(ctx, status, upstream_response).await;
+    }
+    let content_type = upstream_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
+    finish_streamed_image_upstream(
+        ctx,
+        status,
+        content_type,
+        upstream_response,
+        requested_image_count,
+    )
+    .await
+}
+
+async fn finish_streamed_image_upstream(
+    ctx: RelayContext,
+    status: StatusCode,
+    content_type: HeaderValue,
+    upstream_response: reqwest::Response,
+    requested_image_count: i64,
+) -> AppResult<Response> {
+    let relay = ImageStreamRelay {
+        ctx: Some(ctx),
+        status,
+        stream: upstream_response.bytes_stream().boxed(),
+        image_count: requested_image_count,
+    };
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from_stream(futures_util::stream::unfold(
+            Some(relay),
+            |relay| async move {
+                let mut relay = relay?;
+                match relay.stream.next().await {
+                    Some(Ok(chunk)) => Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay))),
+                    Some(Err(err)) => {
+                        relay.finish_error(err.to_string()).await;
+                        Some((Err(std::io::Error::other(err)), None))
+                    }
+                    None => {
+                        relay.finish_success().await;
+                        None
+                    }
+                }
+            },
+        )))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+struct ImageStreamRelay {
+    ctx: Option<RelayContext>,
+    status: StatusCode,
+    stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    image_count: i64,
+}
+
+impl ImageStreamRelay {
+    async fn finish_success(mut self) {
+        let Some(ctx) = self.ctx.take() else {
+            return;
+        };
+        let billing = settle_image_hold(&ctx, self.image_count, "streamed image relay").await;
+        let usage = crate::relay::usage_from_context(
+            &ctx,
+            Some(self.status.as_u16() as i32),
+            None,
+            None,
+            None,
+            billing,
+        );
+        crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
+    }
+
+    async fn finish_error(mut self, error: String) {
+        let Some(ctx) = self.ctx.take() else {
+            return;
+        };
+        release_empty_hold(&ctx.state, ctx.hold.clone(), "streamed image relay error").await;
+        let failure = crate::relay::key_failure_from_context(&ctx, error.clone()).await;
+        let usage = crate::relay::usage_from_context(
+            &ctx,
+            Some(self.status.as_u16() as i32),
+            Some(error),
+            None,
+            None,
+            None,
+        );
+        crate::relay::enqueue_relay_usage(&ctx.state, usage, failure).await;
+    }
+}
+
+impl Drop for ImageStreamRelay {
+    fn drop(&mut self) {
+        if self.ctx.is_some() {
+            tracing::warn!("image stream ended before completion; skipping image billing settle");
+        }
+    }
+}
+
+async fn settle_image_hold(
+    ctx: &RelayContext,
+    image_count: i64,
+    context: &str,
+) -> Option<crate::billing::BillingCharge> {
+    match ctx
+        .state
+        .billing
+        .settle(
+            &ctx.state.db.pool,
+            SettleRequest {
+                accounts: BillingAccounts {
+                    user_id: ctx.auth.user_id,
+                    project_id: ctx.auth.project_id,
+                    user_key_id: ctx.auth.user_key_id,
+                    user_key_model_credit_account: ctx.user_key_model_credit_account.as_ref(),
+                    user_key_credit_account: &ctx.auth.user_key_credit_account,
+                    project_credit_account: &ctx.auth.project_credit_account,
+                },
+                hold: ctx.hold.clone(),
+                usage: Some(BillableUsage::image(image_count)),
+                price: &ctx.price,
+            },
+        )
+        .await
+    {
+        Ok(billing) => Some(billing),
+        Err(err) => {
+            tracing::warn!("failed to settle {context} hold: {err}");
+            None
+        }
+    }
 }
 
 async fn finish_newapi_image_stream(
     ctx: RelayContext,
     response: AppResult<reqwest::Response>,
+    requested_image_count: i64,
 ) -> AppResult<Response> {
     let upstream_response = match response {
         Ok(response) => response,
@@ -501,6 +716,16 @@ async fn finish_newapi_image_stream(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     if newapi::is_event_stream(&content_type) {
+        if ctx.price.billing_meter == BillingMeter::Image {
+            return finish_streamed_image_upstream(
+                ctx,
+                status,
+                content_type,
+                upstream_response,
+                requested_image_count,
+            )
+            .await;
+        }
         return finish_relay(ctx, Ok(upstream_response)).await;
     }
 
@@ -515,7 +740,11 @@ async fn finish_newapi_image_stream(
         path = ctx.path,
         "NewAPI image stream request returned non-SSE response; relaying upstream body without JSON-to-SSE buffering"
     );
-    finish_relay(ctx, Ok(upstream_response)).await
+    if ctx.price.billing_meter == BillingMeter::Image {
+        finish_image_relay(ctx, Ok(upstream_response), requested_image_count).await
+    } else {
+        finish_relay(ctx, Ok(upstream_response)).await
+    }
 }
 
 async fn finish_newapi_image_variation(
@@ -524,6 +753,7 @@ async fn finish_newapi_image_variation(
     body: Bytes,
     content_type: HeaderValue,
     stream: bool,
+    requested_image_count: i64,
     ctx: RelayContext,
     response: AppResult<reqwest::Response>,
 ) -> AppResult<Response> {
@@ -567,9 +797,13 @@ async fn finish_newapi_image_variation(
     )
     .await;
     if stream {
-        return finish_newapi_image_stream(ctx, response).await;
+        return finish_newapi_image_stream(ctx, response, requested_image_count).await;
     }
-    finish_relay(ctx, response).await
+    if ctx.price.billing_meter == BillingMeter::Image {
+        finish_image_relay(ctx, response, requested_image_count).await
+    } else {
+        finish_relay(ctx, response).await
+    }
 }
 
 async fn create_background_response(
@@ -938,6 +1172,7 @@ fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
     Ok(ImageRequestMeta {
         model,
         stream,
+        image_count: image_count_from_value(&value).unwrap_or(1),
         content_type,
     })
 }
@@ -950,10 +1185,12 @@ fn multipart_image_request_meta(
     let boundary = multipart_boundary(content_type_text)?;
     let mut model = None;
     let mut stream = false;
+    let mut image_count = 1_i64;
     for (name, value) in multipart_text_fields(body, &boundary)? {
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
             "stream" => stream = value == "true",
+            "n" => image_count = parse_positive_image_count(&value).unwrap_or(1),
             _ => {}
         }
     }
@@ -961,8 +1198,29 @@ fn multipart_image_request_meta(
     Ok(ImageRequestMeta {
         model,
         stream,
+        image_count,
         content_type,
     })
+}
+
+fn image_count_from_value(value: &Value) -> Option<i64> {
+    value
+        .get("n")
+        .and_then(Value::as_i64)
+        .filter(|count| *count > 0)
+}
+
+fn parse_positive_image_count(value: &str) -> Option<i64> {
+    value.trim().parse::<i64>().ok().filter(|count| *count > 0)
+}
+
+fn image_count_from_response_body(body: &[u8]) -> Option<i64> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let count = value
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| items.len() as i64)?;
+    (count > 0).then_some(count)
 }
 
 fn multipart_boundary(content_type: &str) -> AppResult<String> {
@@ -1228,10 +1486,25 @@ mod tests {
 
         assert_eq!(meta.model, "gpt-image-1");
         assert!(meta.stream);
+        assert_eq!(meta.image_count, 1);
         assert_eq!(
             meta.content_type,
             HeaderValue::from_static("application/json")
         );
+    }
+
+    #[test]
+    fn parses_json_image_count() {
+        let body = br#"{"model":"gpt-image-1","prompt":"draw","n":3}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+
+        let meta = image_request_meta("/v1/images/generations", &headers, body).unwrap();
+
+        assert_eq!(meta.image_count, 3);
     }
 
     #[test]
@@ -1247,6 +1520,7 @@ mod tests {
 
         assert_eq!(meta.model, "gpt-image-2");
         assert!(meta.stream);
+        assert_eq!(meta.image_count, 1);
         assert_eq!(
             meta.content_type,
             HeaderValue::from_static("application/json")
@@ -1266,6 +1540,7 @@ mod tests {
 
         assert_eq!(meta.model, "gpt-image-1");
         assert!(!meta.stream);
+        assert_eq!(meta.image_count, 1);
         assert_eq!(
             meta.content_type,
             HeaderValue::from_static("multipart/form-data; boundary=----neogate-boundary")
@@ -1279,12 +1554,22 @@ mod tests {
             header::CONTENT_TYPE,
             HeaderValue::from_static("multipart/form-data; boundary=\"quoted-boundary\""),
         );
-        let body = b"--quoted-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n--quoted-boundary--\r\n";
+        let body = b"--quoted-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"n\"\r\n\r\n2\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n--quoted-boundary--\r\n";
 
         let meta = image_request_meta("/v1/images/edits", &headers, body).unwrap();
 
         assert_eq!(meta.model, "gpt-image-1");
         assert!(meta.stream);
+        assert_eq!(meta.image_count, 2);
+    }
+
+    #[test]
+    fn counts_images_from_json_response_data() {
+        assert_eq!(
+            image_count_from_response_body(br#"{"data":[{"url":"a"},{"url":"b"}]}"#),
+            Some(2)
+        );
+        assert_eq!(image_count_from_response_body(br#"{"data":[]}"#), None);
     }
 
     #[test]

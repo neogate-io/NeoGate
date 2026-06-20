@@ -25,14 +25,33 @@ mod types;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
 pub use metering::{
-    cost_for_usage, estimate_input_tokens, estimated_cost_micro_usd, parse_usage_from_bytes,
-    parse_usage_from_sse_data,
+    cost_for_billable_usage, estimate_input_tokens, estimated_cost_micro_usd,
+    parse_usage_from_bytes, parse_usage_from_sse_data,
 };
 pub use types::{
-    BillingCharge, CreditAccountId, CreditAccountType, DebitHold, DebitPart, Price, TokenUsage,
+    BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
+    DebitPart, Price, TokenUsage,
 };
 
 pub const MICRO_USD_PER_USD: i64 = 1_000_000;
+pub const BILLABLE_PROVIDER_PRICE_CONDITION: &str = r#"
+(
+    (billing_meter = 'token'
+        AND input_price_usd_micros >= 0
+        AND output_price_usd_micros >= 0)
+    OR (billing_meter = 'image'
+        AND unit_price_usd_micros > 0)
+)
+"#;
+pub const BILLABLE_PROVIDER_PRICE_CONDITION_PP: &str = r#"
+(
+    (pp.billing_meter = 'token'
+        AND pp.input_price_usd_micros >= 0
+        AND pp.output_price_usd_micros >= 0)
+    OR (pp.billing_meter = 'image'
+        AND pp.unit_price_usd_micros > 0)
+)
+"#;
 const ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT: usize = 20;
 
 #[derive(Clone)]
@@ -57,7 +76,7 @@ pub struct BillingAccounts<'a> {
 pub struct SettleRequest<'a> {
     pub accounts: BillingAccounts<'a>,
     pub hold: DebitHold,
-    pub usage: Option<TokenUsage>,
+    pub usage: Option<BillableUsage>,
     pub price: &'a Price,
 }
 
@@ -320,17 +339,24 @@ impl Billing {
             price,
         } = request;
         let (cost_micro_usd, status) = match usage {
-            Some(usage) => (cost_for_usage(usage, price), "billed".to_string()),
+            Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
             None => (hold.estimated_micro_usd, "usage_missing".to_string()),
         };
         let cost_micro_usd = cost_micro_usd.max(0);
+        let token_usage = usage.and_then(|usage| usage.token_usage);
+        let billing_meter = usage
+            .map(|usage| usage.meter)
+            .unwrap_or(price.billing_meter);
+        let billable_units = usage.map(|usage| usage.billable_units.max(0)).unwrap_or(0);
 
         if !hold.charge_credit {
             return Ok(BillingCharge {
                 transaction_id: hold.transaction_id,
-                input_tokens: usage.map(|usage| usage.input_tokens),
-                output_tokens: usage.map(|usage| usage.output_tokens),
-                total_tokens: usage.map(TokenUsage::total_tokens),
+                input_tokens: token_usage.map(|usage| usage.input_tokens),
+                output_tokens: token_usage.map(|usage| usage.output_tokens),
+                total_tokens: token_usage.map(TokenUsage::total_tokens),
+                billing_meter,
+                billable_units,
                 cost_micro_usd,
                 status,
                 parts: Vec::new(),
@@ -347,9 +373,11 @@ impl Billing {
                         parts.extend(extra_hold.parts);
                         return Ok(BillingCharge {
                             transaction_id: hold.transaction_id,
-                            input_tokens: usage.map(|usage| usage.input_tokens),
-                            output_tokens: usage.map(|usage| usage.output_tokens),
-                            total_tokens: usage.map(TokenUsage::total_tokens),
+                            input_tokens: token_usage.map(|usage| usage.input_tokens),
+                            output_tokens: token_usage.map(|usage| usage.output_tokens),
+                            total_tokens: token_usage.map(TokenUsage::total_tokens),
+                            billing_meter,
+                            billable_units,
                             cost_micro_usd,
                             status,
                             parts,
@@ -365,9 +393,11 @@ impl Billing {
             }
             return Ok(BillingCharge {
                 transaction_id: hold.transaction_id,
-                input_tokens: usage.map(|usage| usage.input_tokens),
-                output_tokens: usage.map(|usage| usage.output_tokens),
-                total_tokens: usage.map(TokenUsage::total_tokens),
+                input_tokens: token_usage.map(|usage| usage.input_tokens),
+                output_tokens: token_usage.map(|usage| usage.output_tokens),
+                total_tokens: token_usage.map(TokenUsage::total_tokens),
+                billing_meter,
+                billable_units,
                 cost_micro_usd: hold.estimated_micro_usd,
                 status: if cost_micro_usd > hold.estimated_micro_usd {
                     "undercharged".to_string()
@@ -412,9 +442,11 @@ impl Billing {
 
         Ok(BillingCharge {
             transaction_id: hold.transaction_id,
-            input_tokens: usage.map(|usage| usage.input_tokens),
-            output_tokens: usage.map(|usage| usage.output_tokens),
-            total_tokens: usage.map(TokenUsage::total_tokens),
+            input_tokens: token_usage.map(|usage| usage.input_tokens),
+            output_tokens: token_usage.map(|usage| usage.output_tokens),
+            total_tokens: token_usage.map(TokenUsage::total_tokens),
+            billing_meter,
+            billable_units,
             cost_micro_usd,
             status,
             parts: consumed,
@@ -603,7 +635,9 @@ impl PriceCache {
             WITH base_price AS (
                 SELECT input_price_usd_micros, output_price_usd_micros,
                        cache_read_price_usd_micros,
-                       cache_write_price_usd_micros
+                       cache_write_price_usd_micros,
+                       billing_meter,
+                       unit_price_usd_micros
                 FROM provider_price
                 WHERE provider = $1 AND model = $2 AND enabled = TRUE
             ),
@@ -633,7 +667,13 @@ impl PriceCache {
                     WHEN base_price.cache_write_price_usd_micros IS NULL THEN NULL
                     ELSE (base_price.cache_write_price_usd_micros *
                         COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                END AS cache_write_price_usd_micros
+                END AS cache_write_price_usd_micros,
+                base_price.billing_meter,
+                CASE
+                    WHEN base_price.unit_price_usd_micros IS NULL THEN NULL
+                    ELSE (base_price.unit_price_usd_micros *
+                        COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
+                END AS unit_price_usd_micros
             FROM base_price
             LEFT JOIN policy ON TRUE
             "#,
@@ -652,6 +692,11 @@ impl PriceCache {
             output_price_usd_micros: row.try_get("output_price_usd_micros")?,
             cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
             cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+            billing_meter: BillingMeter::from_strict_str(
+                &row.try_get::<String, _>("billing_meter")?,
+            )
+            .map_err(AppError::BadRequest)?,
+            unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
         };
         if !self.ttl.is_zero() {
             let now = Instant::now();

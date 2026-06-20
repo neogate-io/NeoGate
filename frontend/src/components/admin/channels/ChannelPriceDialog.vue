@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import ProviderIcon from '../../ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
+import type { BillingMeter } from '../../../types/admin'
 
 export type ChannelPriceForm = {
   provider: string
   model: string
+  billingMeter: BillingMeter | null
   inputUsdPerMillion: number
   outputUsdPerMillion: number
   cacheReadUsdPerMillion: number
   cacheWriteUsdPerMillion: number | null
+  unitUsd: number
   enabled: boolean
   hasPrice: boolean
   templateSource?: string
@@ -43,6 +46,7 @@ const { t } = useLocale()
     <div class="price-editor">
       <div class="price-editor-head">
         <span>{{ t('model') }}</span>
+        <span>{{ t('billingMeter') }}</span>
         <div class="price-editor-head-label">
           <strong>{{ t('tokenPricePair') }}</strong>
           <small>{{ t('inputOutputPair') }}/{{ t('pricePerMillionTokens') }}</small>
@@ -64,8 +68,18 @@ const { t } = useLocale()
             <ProviderIcon :provider="priceIconProvider(row)" class="price-model-icon" />
             <span>{{ row.model }}</span>
           </div>
+          <div class="price-meter-cell">
+            <el-select
+              v-model="row.billingMeter"
+              class="price-meter-select"
+              :placeholder="t('billingMeterRequired')"
+            >
+              <el-option :label="t('billingMeterToken')" value="token" />
+              <el-option :label="t('billingMeterImageGeneration')" value="image" />
+            </el-select>
+          </div>
           <div class="price-pair-field">
-            <div class="price-pair-input">
+            <div v-if="row.billingMeter === 'token'" class="price-pair-input">
               <el-input-number
                 v-model="row.inputUsdPerMillion"
                 class="price-number-input"
@@ -82,9 +96,20 @@ const { t } = useLocale()
                 :step="0.01"
               />
             </div>
+            <div v-else-if="row.billingMeter === 'image'" class="price-single-input">
+              <el-input-number
+                v-model="row.unitUsd"
+                class="price-number-input"
+                :controls="false"
+                :min="0"
+                :step="0.01"
+              />
+              <span class="price-unit-label">{{ t('perImage') }}</span>
+            </div>
+            <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>
           </div>
           <div class="price-pair-field">
-            <div class="price-pair-input">
+            <div v-if="row.billingMeter === 'token'" class="price-pair-input">
               <el-input-number
                 v-model="row.cacheReadUsdPerMillion"
                 class="price-number-input"
@@ -101,6 +126,7 @@ const { t } = useLocale()
                 :step="0.01"
               />
             </div>
+            <span v-else class="price-muted-cell">-</span>
           </div>
           <div class="reference-price-cell">
             <template v-if="hasReferencePrice(row)">
@@ -146,6 +172,7 @@ const { t } = useLocale()
   display: grid;
   grid-template-columns:
     minmax(140px, 0.7fr)
+    minmax(140px, 0.56fr)
     minmax(170px, 0.8fr)
     minmax(170px, 0.8fr)
     minmax(170px, 0.84fr);
@@ -236,7 +263,12 @@ const { t } = useLocale()
   min-width: 0;
 }
 
-.price-pair-input {
+.price-meter-select {
+  width: 100%;
+}
+
+.price-pair-input,
+.price-single-input {
   align-items: center;
   background: #ffffff;
   border: 1px solid #d8e0ec;
@@ -246,6 +278,18 @@ const { t } = useLocale()
   min-height: 34px;
   padding: 0 6px;
   width: 140px;
+}
+
+.price-single-input {
+  width: 160px;
+}
+
+.price-muted-cell,
+.price-unit-label {
+  color: #7a8797;
+  font-size: 12px;
+  font-weight: 620;
+  white-space: nowrap;
 }
 
 .price-number-input {

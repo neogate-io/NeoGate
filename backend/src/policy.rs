@@ -30,6 +30,7 @@ use crate::{
         },
     },
     auth::{AdminAuth, UserSessionAuth},
+    billing::BillingMeter,
     cache::InvalidationEvent,
     config::RuntimeProbe,
     error::{AppError, AppResult},
@@ -339,6 +340,8 @@ async fn complete_setup(
                 output_price_usd_micros: price.output_price_usd_micros,
                 cache_read_price_usd_micros: None,
                 cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: None,
                 enabled: price.enabled,
             },
         )

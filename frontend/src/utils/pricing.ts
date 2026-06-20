@@ -12,7 +12,11 @@ export function derivedCacheReadPrice(inputPrice: number) {
 }
 
 export function isProviderPriceConfigured(price?: ProviderPrice) {
-  return Boolean(price && price.input_price_usd_micros > 0 && price.output_price_usd_micros > 0)
+  if (!price) return false
+  if (price.billing_meter === 'image') {
+    return price.unit_price_usd_micros !== undefined && price.unit_price_usd_micros !== null
+  }
+  return price.input_price_usd_micros >= 0 && price.output_price_usd_micros >= 0
 }
 
 export function isProviderPriceReady(price?: ProviderPrice) {

@@ -3,6 +3,7 @@ export type EndpointProtocol = 'openai' | 'openai_oauth' | 'anthropic'
 export type UserStatus = 'enabled' | 'disabled' | 'pending'
 export type UserKeyStatus = 'enabled' | 'disabled'
 export type ProjectStatus = 'enabled' | 'disabled'
+export type BillingMeter = 'token' | 'image'
 
 export type CursorPage<T> = {
   items: T[]
@@ -142,6 +143,8 @@ export type ChannelModel = {
   output_price_usd_micros?: number | null
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter?: BillingMeter | null
+  unit_price_usd_micros?: number | null
   created_at: string
   updated_at: string
 }
@@ -256,6 +259,8 @@ export type UsageRecord = {
   reason_out_tokens?: number | null
   audio_in_tokens?: number | null
   audio_out_tokens?: number | null
+  billing_meter: BillingMeter
+  billable_units: number
   cost_micro_usd?: number | null
   billing_status: string
   created_at: string
@@ -269,6 +274,8 @@ export type ProviderPrice = {
   output_price_usd_micros: number
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter: BillingMeter
+  unit_price_usd_micros?: number | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -280,6 +287,8 @@ export type ProviderModel = {
   model: string
   display_name: string
   source: 'seed' | 'upstream' | 'channel'
+  billing_meter: BillingMeter
+  capabilities: Record<string, unknown>
   enabled: boolean
   discovered_at: string
   created_at: string
@@ -294,6 +303,8 @@ export type PricingTemplate = {
   output_price_usd_micros: number
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter: BillingMeter
+  unit_price_usd_micros?: number | null
   source: string
   enabled: boolean
   created_at: string

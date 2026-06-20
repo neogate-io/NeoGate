@@ -5,9 +5,12 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{AssertSqlSafe, Row};
 
-use crate::{auth::UserAuth, error::AppError, error::AppResult, AppState};
+use crate::{
+    auth::UserAuth, billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP, error::AppError,
+    error::AppResult, AppState,
+};
 
 use super::selector::UpstreamProtocol;
 
@@ -117,13 +120,15 @@ async fn available_models(
     auth: &UserAuth,
     protocol: UpstreamProtocol,
 ) -> AppResult<Vec<AvailableModel>> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(AssertSqlSafe(format!(
         r#"
         SELECT model, MIN(provider) AS owned_by
         FROM (
             SELECT
                 c.provider,
                 cm.model,
+                pp.billing_meter,
+                pp.unit_price_usd_micros,
                 pp.input_price_usd_micros,
                 pp.output_price_usd_micros
             FROM channel c
@@ -131,9 +136,10 @@ async fn available_models(
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
             JOIN provider_price pp
-              ON pp.provider = c.provider
+             ON pp.provider = c.provider
              AND pp.model = cm.model
              AND pp.enabled = TRUE
+             AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
               AND ce.protocol = $1
@@ -171,11 +177,12 @@ async fn available_models(
               )
         ) available
         GROUP BY model
-        ORDER BY MAX(output_price_usd_micros) DESC,
+        ORDER BY MAX(COALESCE(unit_price_usd_micros, output_price_usd_micros)) DESC,
+                 MAX(output_price_usd_micros) DESC,
                  MAX(input_price_usd_micros) DESC,
                  model ASC
-        "#,
-    )
+        "#
+    )))
     .bind(protocol.as_str())
     .bind(auth.model_limits.as_ref().map(|limits| limits.as_slice()))
     .fetch_all(&state.db.pool)

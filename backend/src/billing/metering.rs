@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{Price, TokenUsage};
+use super::{BillableUsage, BillingMeter, Price, TokenUsage};
 
 const TOKENS_PER_MILLION: i128 = 1_000_000;
 const DEFAULT_CACHE_READ_PRICE_DIVISOR: i64 = 10;
@@ -39,6 +39,21 @@ pub fn cost_for_usage(usage: TokenUsage, price: &Price) -> i64 {
             usage.output_tokens,
             price.output_price_usd_micros,
         ))
+}
+
+pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
+    match usage.meter {
+        BillingMeter::Token => usage
+            .token_usage
+            .map(|token_usage| cost_for_usage(token_usage, price))
+            .unwrap_or(0),
+        BillingMeter::Image => usage.billable_units.max(0).saturating_mul(
+            price
+                .unit_price_usd_micros
+                .expect("image billing requires unit_price_usd_micros")
+                .max(0),
+        ),
+    }
 }
 
 fn micro_usd_for_tokens(tokens: i64, price_usd_micros: i64) -> i64 {
@@ -196,6 +211,8 @@ mod tests {
             output_price_usd_micros: 1_100_000,
             cache_read_price_usd_micros: None,
             cache_write_price_usd_micros: None,
+            billing_meter: BillingMeter::Token,
+            unit_price_usd_micros: None,
         };
 
         assert_eq!(
@@ -212,6 +229,8 @@ mod tests {
             output_price_usd_micros: 30_000_000,
             cache_read_price_usd_micros: Some(500_000),
             cache_write_price_usd_micros: None,
+            billing_meter: BillingMeter::Token,
+            unit_price_usd_micros: None,
         };
         let usage = TokenUsage {
             input_tokens: 77_931,

@@ -1,7 +1,41 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::id::DbId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingMeter {
+    Token,
+    Image,
+}
+
+impl BillingMeter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Token => "token",
+            Self::Image => "image",
+        }
+    }
+
+    pub fn from_strict_str(value: &str) -> Result<Self, String> {
+        match value {
+            "token" => Ok(Self::Token),
+            "image" => Ok(Self::Image),
+            _ => Err(format!("invalid billing meter: {value}")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BillingMeter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_strict_str(&value).map_err(serde::de::Error::custom)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +72,8 @@ pub struct Price {
     pub output_price_usd_micros: i64,
     pub cache_read_price_usd_micros: Option<i64>,
     pub cache_write_price_usd_micros: Option<i64>,
+    pub billing_meter: BillingMeter,
+    pub unit_price_usd_micros: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -56,6 +92,31 @@ pub struct TokenUsage {
 impl TokenUsage {
     pub fn total_tokens(self) -> i64 {
         self.input_tokens + self.output_tokens
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct BillableUsage {
+    pub meter: BillingMeter,
+    pub token_usage: Option<TokenUsage>,
+    pub billable_units: i64,
+}
+
+impl BillableUsage {
+    pub fn token(usage: TokenUsage) -> Self {
+        Self {
+            meter: BillingMeter::Token,
+            token_usage: Some(usage),
+            billable_units: usage.total_tokens().max(0),
+        }
+    }
+
+    pub fn image(image_count: i64) -> Self {
+        Self {
+            meter: BillingMeter::Image,
+            token_usage: None,
+            billable_units: image_count.max(0),
+        }
     }
 }
 
@@ -86,6 +147,8 @@ pub struct BillingCharge {
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
+    pub billing_meter: BillingMeter,
+    pub billable_units: i64,
     pub cost_micro_usd: i64,
     pub status: String,
     pub parts: Vec<DebitPart>,

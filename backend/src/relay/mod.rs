@@ -461,6 +461,18 @@ pub(crate) fn usage_from_context(
         output_tokens_per_second,
         error_summary,
         token_usage,
+        billing_meter: billing
+            .as_ref()
+            .map(|billing| billing.billing_meter)
+            .unwrap_or(ctx.price.billing_meter),
+        billable_units: billing
+            .as_ref()
+            .map(|billing| billing.billable_units)
+            .unwrap_or_else(|| {
+                token_usage
+                    .map(|usage| usage.total_tokens().max(0))
+                    .unwrap_or(0)
+            }),
         billing,
     }
 }
@@ -566,13 +578,49 @@ pub(crate) async fn reserve_credit(
         .await
 }
 
+pub(crate) async fn reserve_billable_credit(
+    state: &AppState,
+    auth: &UserAuth,
+    user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,
+    estimated_micro_usd: i64,
+) -> AppResult<DebitHold> {
+    let estimated = estimated_micro_usd.max(0);
+    if !policy::credit_required(state).await? {
+        return Ok(DebitHold {
+            transaction_id: Uuid::new_v4(),
+            estimated_micro_usd: estimated,
+            parts: Vec::new(),
+            charge_credit: false,
+        });
+    }
+    state
+        .billing
+        .reserve(
+            &state.db.pool,
+            BillingAccounts {
+                user_id: auth.user_id,
+                project_id: auth.project_id,
+                user_key_id: auth.user_key_id,
+                user_key_model_credit_account,
+                user_key_credit_account: &auth.user_key_credit_account,
+                project_credit_account: &auth.project_credit_account,
+            },
+            estimated,
+        )
+        .await
+}
+
 fn key_cooldown_until(state: &AppState) -> chrono::DateTime<Utc> {
     let cooldown = ChronoDuration::from_std(state.config.relay.key_cooldown)
         .unwrap_or_else(|_| ChronoDuration::seconds(60));
     Utc::now() + cooldown
 }
 
-async fn enqueue_relay_usage(state: &AppState, item: UsageInsert, failure: Option<KeyFailure>) {
+pub(crate) async fn enqueue_relay_usage(
+    state: &AppState,
+    item: UsageInsert,
+    failure: Option<KeyFailure>,
+) {
     if let Some(failure) = &failure {
         state
             .cache_invalidator

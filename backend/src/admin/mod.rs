@@ -1236,6 +1236,8 @@ struct UsageRecord {
     reason_out_tokens: Option<i64>,
     audio_in_tokens: Option<i64>,
     audio_out_tokens: Option<i64>,
+    billing_meter: String,
+    billable_units: i64,
     cost_micro_usd: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
@@ -1274,7 +1276,8 @@ async fn usage(
                 usage_record.cache_in_tokens, usage_record.cache_create_in_tokens,
                 usage_record.cache_create_5m_in_tokens, usage_record.cache_create_1h_in_tokens,
                 usage_record.reason_out_tokens, usage_record.audio_in_tokens,
-                usage_record.audio_out_tokens, usage_record.cost_micro_usd,
+                usage_record.audio_out_tokens, usage_record.billing_meter,
+                usage_record.billable_units, usage_record.cost_micro_usd,
                 usage_record.billing_status, usage_record.error_summary, usage_record.created_at
          FROM usage AS usage_record
          LEFT JOIN "user" u ON u.id = usage_record.user_id
@@ -1370,6 +1373,8 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         reason_out_tokens: row.try_get("reason_out_tokens")?,
         audio_in_tokens: row.try_get("audio_in_tokens")?,
         audio_out_tokens: row.try_get("audio_out_tokens")?,
+        billing_meter: row.try_get("billing_meter")?,
+        billable_units: row.try_get("billable_units")?,
         cost_micro_usd: row.try_get("cost_micro_usd")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,

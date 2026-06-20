@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    billing::{BillingCharge, TokenUsage},
+    billing::{BillingCharge, BillingMeter, TokenUsage},
     id::DbId,
 };
 
@@ -23,6 +23,8 @@ pub struct UsageInsert {
     pub output_tokens_per_second: Option<f64>,
     pub error_summary: Option<String>,
     pub token_usage: Option<TokenUsage>,
+    pub billing_meter: BillingMeter,
+    pub billable_units: i64,
     pub billing: Option<BillingCharge>,
 }
 

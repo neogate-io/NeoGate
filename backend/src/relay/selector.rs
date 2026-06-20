@@ -9,11 +9,12 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use rand::RngExt;
-use sqlx::{PgPool, Row};
+use sqlx::{AssertSqlSafe, PgPool, Row};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     admin::{channel::KeySelectionMode, credentials::openai_runtime_credential},
+    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
     error::{AppError, AppResult},
     id::DbId,
     secrets::SecretStore,
@@ -638,7 +639,7 @@ fn build_route_indexes(channels: &[ChannelCandidate]) -> (RouteIndex, WildcardRo
 }
 
 async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandidate>> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(AssertSqlSafe(format!(
         "SELECT c.id, ce.id AS endpoint_id, ce.protocol, c.provider, c.name,
                 ce.base_url,
                 COALESCE(
@@ -669,6 +670,7 @@ async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandida
               WHERE pp.provider = c.provider
                 AND pp.model = cm.model
                 AND pp.enabled = TRUE
+                AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
           )
          WHERE p.enabled = TRUE
            AND c.enabled = TRUE
@@ -702,8 +704,8 @@ async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandida
                )
            )
          GROUP BY c.id, ce.id
-         ORDER BY c.priority DESC, c.created_at ASC",
-    )
+         ORDER BY c.priority DESC, c.created_at ASC"
+    )))
     .fetch_all(pool)
     .await?;
 

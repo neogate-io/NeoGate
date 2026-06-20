@@ -101,3 +101,69 @@ CREATE INDEX idx_billing_pending_created ON billing(created_at ASC)
     WHERE status IN ('pending', 'failed');
 CREATE INDEX idx_billing_pending_attempts_created ON billing(attempts ASC, created_at ASC)
     WHERE status IN ('pending', 'failed');
+
+ALTER TABLE usage
+    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN billable_units BIGINT CHECK (billable_units >= 0);
+UPDATE usage
+SET billing_meter = 'token',
+    billable_units = 0
+WHERE billing_meter IS NULL OR billable_units IS NULL;
+ALTER TABLE usage
+    ALTER COLUMN billing_meter SET NOT NULL,
+    ALTER COLUMN billable_units SET NOT NULL,
+    ADD CONSTRAINT usage_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+
+ALTER TABLE usage_daily
+    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN billable_units BIGINT CHECK (billable_units >= 0);
+UPDATE usage_daily
+SET billing_meter = 'token',
+    billable_units = 0
+WHERE billing_meter IS NULL OR billable_units IS NULL;
+ALTER TABLE usage_daily
+    ALTER COLUMN billing_meter SET NOT NULL,
+    ALTER COLUMN billable_units SET NOT NULL,
+    ADD CONSTRAINT usage_daily_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+
+DROP INDEX IF EXISTS idx_usage_daily_identity;
+CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
+    day,
+    COALESCE(user_id, -1),
+    COALESCE(project_id, -1),
+    COALESCE(user_key_id, -1),
+    COALESCE(channel_id, -1),
+    COALESCE(channel_key_id, -1),
+    COALESCE(credential_id, -1),
+    provider,
+    model,
+    billing_meter
+);
+
+ALTER TABLE provider_model
+    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN capabilities JSONB;
+UPDATE provider_model
+SET billing_meter = 'token',
+    capabilities = '{}'::JSONB
+WHERE billing_meter IS NULL OR capabilities IS NULL;
+ALTER TABLE provider_model
+    ALTER COLUMN billing_meter SET NOT NULL,
+    ALTER COLUMN capabilities SET NOT NULL,
+    ADD CONSTRAINT provider_model_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+
+ALTER TABLE provider_price
+    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN unit_price_usd_micros BIGINT CHECK (unit_price_usd_micros >= 0);
+UPDATE provider_price SET billing_meter = 'token' WHERE billing_meter IS NULL;
+ALTER TABLE provider_price
+    ALTER COLUMN billing_meter SET NOT NULL,
+    ADD CONSTRAINT provider_price_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+
+ALTER TABLE pricing_template
+    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN unit_price_usd_micros BIGINT CHECK (unit_price_usd_micros >= 0);
+UPDATE pricing_template SET billing_meter = 'token' WHERE billing_meter IS NULL;
+ALTER TABLE pricing_template
+    ALTER COLUMN billing_meter SET NOT NULL,
+    ADD CONSTRAINT pricing_template_billing_meter_check CHECK (billing_meter IN ('token', 'image'));

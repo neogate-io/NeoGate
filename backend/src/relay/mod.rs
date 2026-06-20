@@ -1,3 +1,4 @@
+mod affinity;
 mod body;
 mod credential;
 mod error;
@@ -38,6 +39,7 @@ use crate::{
 use self::selector::SelectedUpstream;
 use crate::task::{billing as task_billing, upstream as upstream_task};
 use crate::usage::{KeyFailure, UsageInsert};
+pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};

@@ -1,13 +1,13 @@
 use std::{
     collections::hash_map::DefaultHasher,
-    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -99,13 +99,12 @@ impl fmt::Debug for AllocationRecoverySample {
 }
 
 type PriceCacheKey = (String, String, String);
-type PriceCacheEntries = HashMap<PriceCacheKey, CachedPrice>;
 
 #[derive(Clone)]
 struct PriceCache {
     ttl: Duration,
     max_entries: usize,
-    entries: Arc<RwLock<PriceCacheEntries>>,
+    entries: Arc<DashMap<PriceCacheKey, CachedPrice>>,
 }
 
 #[derive(Clone)]
@@ -564,20 +563,19 @@ impl PriceCache {
         Self {
             ttl,
             max_entries,
-            entries: Arc::new(RwLock::new(HashMap::new())),
+            entries: Arc::new(DashMap::new()),
         }
     }
 
     fn invalidate(&self, provider: &str, model: &str) {
-        self.entries.write().expect("price cache poisoned").retain(
-            |(cached_provider, cached_model, _), _| {
+        self.entries
+            .retain(|(cached_provider, cached_model, _), _| {
                 cached_provider != provider || cached_model != model
-            },
-        );
+            });
     }
 
     fn invalidate_all(&self) {
-        self.entries.write().expect("price cache poisoned").clear();
+        self.entries.clear();
     }
 
     async fn price_for(
@@ -592,13 +590,12 @@ impl PriceCache {
             model.to_string(),
             user_group.to_string(),
         );
-        {
-            let entries = self.entries.read().expect("price cache poisoned");
-            if let Some(cached) = entries.get(&key) {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.price.clone());
-                }
+        if let Some(cached) = self.entries.get(&key) {
+            if cached.expires_at > Instant::now() {
+                return Ok(cached.price.clone());
             }
+            drop(cached);
+            self.entries.remove(&key);
         }
 
         let row = sqlx::query(
@@ -658,10 +655,11 @@ impl PriceCache {
         };
         if !self.ttl.is_zero() {
             let now = Instant::now();
-            let mut entries = self.entries.write().expect("price cache poisoned");
-            entries.retain(|_, cached| cached.expires_at > now);
-            trim_price_cache_for_insert(&mut entries, &key, self.max_entries);
-            entries.insert(
+            if self.entries.len() >= self.max_entries {
+                self.entries.retain(|_, cached| cached.expires_at > now);
+                trim_price_cache_for_insert(&self.entries, &key, self.max_entries);
+            }
+            self.entries.insert(
                 key,
                 CachedPrice {
                     price: price.clone(),
@@ -674,12 +672,13 @@ impl PriceCache {
 }
 
 fn trim_price_cache_for_insert(
-    entries: &mut PriceCacheEntries,
+    entries: &DashMap<PriceCacheKey, CachedPrice>,
     keep: &PriceCacheKey,
     max_entries: usize,
 ) {
     while max_entries > 0 && entries.len() >= max_entries && !entries.contains_key(keep) {
-        let Some(evict) = entries.keys().next().cloned() else {
+        let evict = entries.iter().next().map(|entry| entry.key().clone());
+        let Some(evict) = evict else {
             break;
         };
         entries.remove(&evict);

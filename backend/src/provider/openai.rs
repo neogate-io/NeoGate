@@ -30,7 +30,8 @@ use crate::{
         record_upstream_http_failure, release_empty_hold, reserve_credit,
         respond_upstream_http_failure,
         selector::{ModelCooldown, SelectedUpstream, UpstreamProtocol},
-        task_status_from_value, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
+        task_status_from_value, BodyKind, ChannelAffinityKey, PreparedRelayBody, RelayBody,
+        RelayContext,
     },
 };
 
@@ -252,14 +253,24 @@ async fn relay_openai(
                 "create-time streaming for background responses is not supported; retrieve with stream=true to resume".to_string(),
             ));
         }
-        return create_background_response(state, auth, body, meta.model, output_tokens).await;
+        return create_background_response(
+            state,
+            auth,
+            body,
+            meta.model,
+            output_tokens,
+            meta.channel_affinity_key,
+        )
+        .await;
     }
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let channel_affinity_key = meta.channel_affinity_key.clone();
 
     let mut model_unavailable_reroutes = 0;
     loop {
         let started = Instant::now();
-        let (protocol, upstream) = select_upstream(&state, path, &meta.model).await?;
+        let (protocol, upstream) =
+            select_upstream(&state, path, &meta.model, channel_affinity_key.as_ref()).await?;
         let price = state
             .billing
             .price_for(
@@ -290,6 +301,7 @@ async fn relay_openai(
             hold,
             user_key_model_credit_account: user_key_model_credit_account.clone(),
             started,
+            channel_affinity_key: channel_affinity_key.clone(),
             _image_sync_permit: None,
         };
         let response = forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await;
@@ -440,6 +452,7 @@ async fn relay_openai_image(
         hold,
         user_key_model_credit_account,
         started,
+        channel_affinity_key: None,
         _image_sync_permit: image_sync_permit,
     };
     let response = forward_openai_with_content_type(
@@ -565,16 +578,19 @@ async fn create_background_response(
     body: Bytes,
     model: String,
     output_tokens: i64,
+    channel_affinity_key: Option<ChannelAffinityKey>,
 ) -> AppResult<Response> {
     let started = Instant::now();
     let prepared = jobs::prepare_request_body(body)?;
     let upstream = state
         .selector
-        .select(
+        .select_with_affinity(
             &state.db.pool,
             &state.secrets,
+            &state.channel_affinity,
             UpstreamProtocol::Openai,
             &model,
+            channel_affinity_key.as_ref(),
         )
         .await?;
     ensure_key_backed_async_upstream(&upstream)?;
@@ -610,6 +626,9 @@ async fn create_background_response(
                 return Err(err);
             }
         };
+        if let Some(key) = channel_affinity_key.clone() {
+            state.channel_affinity.insert(key, (&upstream).into());
+        }
         return jobs::response(response).await;
     }
     if prepared.image_format.requires_neogate_asset_url() {
@@ -638,6 +657,7 @@ async fn create_background_response(
         hold: hold.clone(),
         user_key_model_credit_account,
         started,
+        channel_affinity_key,
         _image_sync_permit: None,
     };
 
@@ -1057,15 +1077,18 @@ async fn select_upstream(
     state: &AppState,
     path: &'static str,
     model: &str,
+    affinity_key: Option<&ChannelAffinityKey>,
 ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
     if path == "/v1/responses" {
         match state
             .selector
-            .select(
+            .select_with_affinity(
                 &state.db.pool,
                 &state.secrets,
+                &state.channel_affinity,
                 UpstreamProtocol::OpenAiOauth,
                 model,
+                affinity_key,
             )
             .await
         {
@@ -1077,11 +1100,13 @@ async fn select_upstream(
 
     let upstream = state
         .selector
-        .select(
+        .select_with_affinity(
             &state.db.pool,
             &state.secrets,
+            &state.channel_affinity,
             UpstreamProtocol::Openai,
             model,
+            affinity_key,
         )
         .await?;
     Ok((UpstreamProtocol::Openai, upstream))

@@ -16,6 +16,7 @@ base64 = "0.22.1"
 bytes = "1.11.1"
 cbc = "0.1.2"
 chrono = { version = "0.4.44", features = ["serde"] }
+dashmap = "6.1.0"
 dotenvy = "0.15.7"
 futures-util = "0.3.32"
 http = "1.4.1"

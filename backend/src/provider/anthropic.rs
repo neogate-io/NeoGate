@@ -53,14 +53,17 @@ pub(crate) async fn anthropic_messages(
     )?;
     auth.ensure_model_allowed(&meta.model)?;
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let channel_affinity_key = meta.channel_affinity_key.clone();
     let started = Instant::now();
     let upstream = state
         .selector
-        .select(
+        .select_with_affinity(
             &state.db.pool,
             &state.secrets,
+            &state.channel_affinity,
             UpstreamProtocol::Anthropic,
             &meta.model,
+            channel_affinity_key.as_ref(),
         )
         .await?;
     let price = state
@@ -95,6 +98,7 @@ pub(crate) async fn anthropic_messages(
             hold,
             user_key_model_credit_account,
             started,
+            channel_affinity_key,
             _image_sync_permit: None,
         },
         response,

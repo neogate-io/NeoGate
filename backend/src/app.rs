@@ -38,7 +38,7 @@ use crate::{
     health::{self, RuntimeHealth},
     id::DbId,
     payment, policy,
-    relay::{self, selector::Selector},
+    relay::{self, selector::Selector, ChannelAffinityCache},
     secrets::SecretStore,
     setup::{bootstrap, install},
     task,
@@ -60,6 +60,7 @@ pub struct AppState {
     pub http: Client,
     pub secrets: SecretStore,
     pub selector: Selector,
+    pub(crate) channel_affinity: ChannelAffinityCache,
     pub user_auth_cache: auth::UserAuthCache,
     pub auth_rate_limiter: auth::AuthRateLimiter,
     pub(crate) image_sync_limiter: relay::ImageSyncLimiter,
@@ -457,6 +458,11 @@ async fn build_state(
         None
     };
     let selector = Selector::with_cache_ttl(config.cache.routing_ttl);
+    let channel_affinity = ChannelAffinityCache::new(
+        config.relay.channel_affinity_enabled,
+        config.relay.channel_affinity_ttl,
+        config.relay.channel_affinity_max_entries,
+    );
     let billing = if config.runtime_mode.is_distributed() {
         Billing::new_redis(
             config.redis_url.as_deref().expect("validated redis url"),
@@ -552,6 +558,7 @@ async fn build_state(
         http,
         secrets,
         selector,
+        channel_affinity,
         user_auth_cache: auth::UserAuthCache::new(
             config.cache.user_auth_ttl,
             config.cache.user_auth_max_entries,
@@ -731,6 +738,9 @@ pub(crate) mod tests {
                     credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                     image_sync_global_limit: 8,
                     image_sync_key_limit: 2,
+                    channel_affinity_enabled: true,
+                    channel_affinity_ttl: Duration::from_secs(3600),
+                    channel_affinity_max_entries: 100_000,
                 },
                 cache: config::CacheConfig {
                     user_auth_ttl: Duration::from_secs(30),
@@ -783,6 +793,11 @@ pub(crate) mod tests {
             http: Client::new(),
             secrets: SecretStore::new("test-upstream-secret-key", 1024),
             selector: Selector::new(),
+            channel_affinity: relay::ChannelAffinityCache::new(
+                true,
+                Duration::from_secs(3600),
+                100_000,
+            ),
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
             image_sync_limiter: relay::ImageSyncLimiter::new(8, 2),

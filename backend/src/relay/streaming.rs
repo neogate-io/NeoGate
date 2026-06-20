@@ -18,7 +18,7 @@ use super::{
     limit::ImageSyncPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
-    usage_from_context,
+    usage_from_context, ChannelAffinityKey,
 };
 
 pub(crate) struct RelayContext {
@@ -33,6 +33,7 @@ pub(crate) struct RelayContext {
     pub(crate) hold: DebitHold,
     pub(crate) user_key_model_credit_account: Option<CreditAccountId>,
     pub(crate) started: Instant,
+    pub(crate) channel_affinity_key: Option<ChannelAffinityKey>,
     pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
 }
 
@@ -119,6 +120,7 @@ impl StreamingRelay {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let billing = if self.status.is_success() {
+            record_channel_affinity(&ctx);
             settle_successful_hold(&ctx, token_usage, "streamed relay").await
         } else {
             release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream error").await;
@@ -273,6 +275,15 @@ impl Drop for StreamingRelay {
             enqueue_relay_usage(&ctx.state, usage, failure).await;
         });
     }
+}
+
+fn record_channel_affinity(ctx: &RelayContext) {
+    let Some(key) = ctx.channel_affinity_key.clone() else {
+        return;
+    };
+    ctx.state
+        .channel_affinity
+        .insert(key, (&ctx.upstream).into());
 }
 
 enum ResponseUsageParser {

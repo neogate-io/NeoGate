@@ -131,6 +131,9 @@ pub struct RelayConfig {
     pub credential_upload_limit_bytes: usize,
     pub image_sync_global_limit: usize,
     pub image_sync_key_limit: usize,
+    pub channel_affinity_enabled: bool,
+    pub channel_affinity_ttl: Duration,
+    pub channel_affinity_max_entries: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -238,6 +241,12 @@ impl Config {
                 )?,
                 image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8)?,
                 image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2)?,
+                channel_affinity_enabled: parse_bool("CHANNEL_AFFINITY_ENABLED", true)?,
+                channel_affinity_ttl: Duration::from_secs(parse_u64(
+                    "CHANNEL_AFFINITY_TTL_SECONDS",
+                    3600,
+                )?),
+                channel_affinity_max_entries: parse_usize("CHANNEL_AFFINITY_MAX_ENTRIES", 100_000)?,
             },
             cache: CacheConfig {
                 user_auth_ttl: Duration::from_secs(parse_u64("USER_AUTH_CACHE_TTL_SECONDS", 60)?),
@@ -356,6 +365,12 @@ impl Config {
         }
         if self.relay.image_sync_key_limit == 0 {
             anyhow::bail!("NEOGATE_IMAGE_SYNC_KEY_LIMIT must be positive");
+        }
+        if self.relay.channel_affinity_ttl.is_zero() {
+            anyhow::bail!("CHANNEL_AFFINITY_TTL_SECONDS must be positive");
+        }
+        if self.relay.channel_affinity_max_entries == 0 {
+            anyhow::bail!("CHANNEL_AFFINITY_MAX_ENTRIES must be positive");
         }
         if self.cache.user_auth_max_entries == 0 {
             anyhow::bail!("USER_AUTH_CACHE_MAX_ENTRIES must be positive");
@@ -545,6 +560,21 @@ fn parse_i64(name: &str, default: i64) -> Result<i64> {
 
 fn parse_usize(name: &str, default: usize) -> Result<usize> {
     parse_env(name, default)
+}
+
+fn parse_bool(name: &str, default: bool) -> Result<bool> {
+    let Some(value) = env::var(name)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(default);
+    };
+    match value.as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Ok(true),
+        "0" | "false" | "no" | "n" | "off" => Ok(false),
+        _ => anyhow::bail!("{name} must be a boolean"),
+    }
 }
 
 fn parse_env<T>(name: &str, default: T) -> Result<T>

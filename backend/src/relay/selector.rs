@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    hash::{Hash, Hasher},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, RwLock as StdRwLock,
@@ -19,6 +18,8 @@ use crate::{
     id::DbId,
     secrets::SecretStore,
 };
+
+use super::affinity::{ChannelAffinityKey, UpstreamAffinityTarget};
 
 const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 
@@ -68,33 +69,13 @@ struct ModelBlockCache {
     entries: Arc<StdRwLock<HashMap<ModelBlockKey, DateTime<Utc>>>>,
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct ModelBlockKey {
     protocol: UpstreamProtocol,
     endpoint_id: DbId,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
     model: String,
-}
-
-impl PartialEq for ModelBlockKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.protocol == other.protocol
-            && self.endpoint_id == other.endpoint_id
-            && self.channel_key_id == other.channel_key_id
-            && self.credential_id == other.credential_id
-            && self.model == other.model
-    }
-}
-
-impl Hash for ModelBlockKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.protocol.hash(state);
-        self.endpoint_id.hash(state);
-        self.channel_key_id.hash(state);
-        self.credential_id.hash(state);
-        self.model.hash(state);
-    }
 }
 
 #[derive(Clone, Default)]
@@ -228,14 +209,102 @@ impl Selector {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
         let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        let channel = choose_channel_for_request(&snapshot, protocol, model, now, &model_blocks)
-            .ok_or_else(|| {
-                AppError::UpstreamUnavailable(unavailable_channel_message(
+        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks)
+    }
+
+    pub(crate) async fn select_with_affinity(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        affinity_cache: &super::affinity::ChannelAffinityCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        affinity_key: Option<&ChannelAffinityKey>,
+    ) -> AppResult<SelectedUpstream> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        if let Some(affinity_key) = affinity_key {
+            if let Some(target) = affinity_cache.get(affinity_key) {
+                if let Some(upstream) = self.selected_affinity_upstream(
+                    secrets,
                     &snapshot,
                     protocol,
                     model,
                     now,
                     &model_blocks,
+                    &target,
+                )? {
+                    tracing::debug!(
+                        rule = affinity_key.rule,
+                        protocol = protocol.as_str(),
+                        model,
+                        channel_id = upstream.channel_id,
+                        channel_endpoint_id = upstream.channel_endpoint_id,
+                        channel_key_id = ?upstream.channel_key_id,
+                        credential_id = ?upstream.credential_id,
+                        "selected upstream from channel affinity cache"
+                    );
+                    return Ok(upstream);
+                }
+            }
+        }
+
+        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks)
+    }
+
+    fn selected_affinity_upstream(
+        &self,
+        secrets: &SecretStore,
+        snapshot: &RoutingCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        now: DateTime<Utc>,
+        model_blocks: &ModelBlockLookup<'_>,
+        target: &UpstreamAffinityTarget,
+    ) -> AppResult<Option<SelectedUpstream>> {
+        let Some(channel) = snapshot.channels.iter().find(|channel| {
+            channel.id == target.channel_id && channel.endpoint_id == target.channel_endpoint_id
+        }) else {
+            return Ok(None);
+        };
+        if !channel_is_available(snapshot, channel, protocol, model, now, model_blocks) {
+            return Ok(None);
+        }
+        let keys = snapshot
+            .keys
+            .get(&channel.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let Some(key) = keys.iter().find(|key| {
+            key.credential_id == target.credential_id
+                && (!channel.use_credentials).then_some(key.id) == target.channel_key_id
+                && key_is_available(channel, key, model, now, model_blocks)
+        }) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            self.selected_upstream_from_candidate(secrets, channel, key)?,
+        ))
+    }
+
+    fn select_from_snapshot(
+        &self,
+        secrets: &SecretStore,
+        snapshot: &RoutingCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        now: DateTime<Utc>,
+        model_blocks: &ModelBlockLookup<'_>,
+    ) -> AppResult<SelectedUpstream> {
+        let channel = choose_channel_for_request(snapshot, protocol, model, now, model_blocks)
+            .ok_or_else(|| {
+                AppError::UpstreamUnavailable(unavailable_channel_message(
+                    snapshot,
+                    protocol,
+                    model,
+                    now,
+                    model_blocks,
                 ))
             })?;
         let keys = snapshot
@@ -243,10 +312,18 @@ impl Selector {
             .get(&channel.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let key = choose_key(channel, keys, model, now, &model_blocks).ok_or_else(|| {
+        let key = choose_key(channel, keys, model, now, model_blocks).ok_or_else(|| {
             AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
         })?;
+        self.selected_upstream_from_candidate(secrets, channel, key)
+    }
 
+    fn selected_upstream_from_candidate(
+        &self,
+        secrets: &SecretStore,
+        channel: &ChannelCandidate,
+        key: &KeyCandidate,
+    ) -> AppResult<SelectedUpstream> {
         let runtime = if let Some(credential_id) = key.credential_id {
             credential_runtime_secret(
                 &self.credential_runtime_secrets,
@@ -519,9 +596,11 @@ impl RoutingCache {
 }
 
 async fn load_routing_cache(pool: &PgPool) -> AppResult<RoutingCache> {
-    let channels = fetch_channel_candidates(pool).await?;
-    let keys = fetch_key_candidates(pool).await?;
-    let model_blocks = fetch_model_blocks(pool).await?;
+    let (channels, keys, model_blocks) = tokio::try_join!(
+        fetch_channel_candidates(pool),
+        fetch_key_candidates(pool),
+        fetch_model_blocks(pool)
+    )?;
     let (route_index, wildcard_index) = build_route_indexes(&channels);
     Ok(RoutingCache {
         loaded_at: Some(Instant::now()),
@@ -1493,5 +1572,27 @@ mod tests {
             .secret_ciphertext,
             "right-plan"
         );
+    }
+
+    #[test]
+    fn affinity_target_preserves_selected_upstream_identity() {
+        let upstream = SelectedUpstream {
+            channel_id: 10,
+            channel_endpoint_id: 20,
+            channel_key_id: Some(30),
+            credential_id: None,
+            provider: "openai".to_string(),
+            channel_name: "primary".to_string(),
+            base_url: "https://example.com".to_string(),
+            secret: "secret".to_string(),
+            account_id: None,
+        };
+
+        let target = UpstreamAffinityTarget::from(&upstream);
+
+        assert_eq!(target.channel_id, 10);
+        assert_eq!(target.channel_endpoint_id, 20);
+        assert_eq!(target.channel_key_id, Some(30));
+        assert_eq!(target.credential_id, None);
     }
 }

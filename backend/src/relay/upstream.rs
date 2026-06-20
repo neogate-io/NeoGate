@@ -1,7 +1,6 @@
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use bytes::Bytes;
 use serde_json::{json, Value};
-use tokio::time::Duration;
 
 use crate::{
     admin::credentials::refresh_openai_runtime_credential,
@@ -12,9 +11,6 @@ use crate::{
 
 use super::selector::{SelectedUpstream, UpstreamProtocol};
 use super::streaming::RelayContext;
-
-const UPSTREAM_MAX_TRANSPORT_ATTEMPTS: usize = 2;
-const UPSTREAM_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
 pub(crate) async fn forward_openai(
     state: &AppState,
@@ -308,42 +304,14 @@ pub(crate) async fn forward_anthropic_bound(
 async fn send_upstream_request<F>(
     state: &AppState,
     upstream: &SelectedUpstream,
-    protocol: UpstreamProtocol,
-    path: &str,
-    mut build: F,
+    _protocol: UpstreamProtocol,
+    _path: &str,
+    build: F,
 ) -> AppResult<reqwest::Response>
 where
-    F: FnMut() -> reqwest::RequestBuilder,
+    F: FnOnce() -> reqwest::RequestBuilder,
 {
-    let send = async {
-        for attempt in 1..=UPSTREAM_MAX_TRANSPORT_ATTEMPTS {
-            match build().send().await {
-                Ok(response) => return Ok(response),
-                Err(err)
-                    if attempt < UPSTREAM_MAX_TRANSPORT_ATTEMPTS
-                        && should_retry_transport_error(&err) =>
-                {
-                    let kind = UpstreamErrorKind::from_reqwest(&err);
-                    tracing::warn!(
-                        "{}",
-                        format_upstream_transport_retry_log(
-                            upstream,
-                            protocol,
-                            path,
-                            kind,
-                            attempt,
-                            format!("{err:?}")
-                        )
-                    );
-                    tokio::time::sleep(UPSTREAM_RETRY_BACKOFF).await;
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        unreachable!("upstream attempt loop always returns")
-    };
-
-    match tokio::time::timeout(state.config.http.upstream_timeout, send).await {
+    match tokio::time::timeout(state.config.http.upstream_timeout, build().send()).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(err)) => Err(AppError::Reqwest(err)),
         Err(_) => Err(AppError::UpstreamRequest(UpstreamRequestError::new(
@@ -415,32 +383,6 @@ pub(crate) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
     }
 }
 
-fn format_upstream_transport_retry_log(
-    upstream: &SelectedUpstream,
-    protocol: UpstreamProtocol,
-    path: &str,
-    kind: UpstreamErrorKind,
-    attempt: usize,
-    error: String,
-) -> String {
-    format!(
-        "retry upstream transport error | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} path={} upstream={} error_kind={} retryable=true attempt={}/{} error={}",
-        upstream.channel_name,
-        upstream.channel_id,
-        upstream.channel_endpoint_id,
-        optional_id(upstream.channel_key_id),
-        optional_id(upstream.credential_id),
-        upstream.provider,
-        protocol.as_str(),
-        path,
-        upstream.base_url,
-        kind.type_code(),
-        attempt,
-        UPSTREAM_MAX_TRANSPORT_ATTEMPTS,
-        error
-    )
-}
-
 fn format_relay_upstream_failure_log(
     ctx: &RelayContext,
     error_kind: &str,
@@ -475,19 +417,6 @@ fn format_relay_upstream_failure_log(
 fn optional_id(id: Option<i64>) -> String {
     id.map(|id| id.to_string())
         .unwrap_or_else(|| "none".to_string())
-}
-
-fn should_retry_transport_error(err: &reqwest::Error) -> bool {
-    if err.is_connect() {
-        return true;
-    }
-
-    let details = format!("{err:?}").to_ascii_lowercase();
-    details.contains("tls")
-        || details.contains("dns")
-        || details.contains("unexpectedeof")
-        || details.contains("connection reset")
-        || details.contains("connection closed")
 }
 
 pub(crate) fn upstream_url(base_url: &str, path: &str) -> String {

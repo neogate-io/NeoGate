@@ -550,7 +550,9 @@ async fn flush_unbilled_usage(
 
     let mut query_builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO usage
-         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
+         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
+          relay_trace_id, relay_attempt, relay_final,
+          provider, model, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -566,6 +568,9 @@ async fn flush_unbilled_usage(
             .push_bind(item.channel_id)
             .push_bind(item.channel_key_id)
             .push_bind(item.credential_id)
+            .push_bind(item.relay_trace_id)
+            .push_bind(item.relay_attempt)
+            .push_bind(item.relay_final)
             .push_bind(&item.provider)
             .push_bind(item.model.as_deref())
             .push_bind(item.status_code)
@@ -617,7 +622,9 @@ async fn insert_usage(
 ) -> AppResult<sqlx::postgres::PgRow> {
     let row = sqlx::query(
         "INSERT INTO usage
-         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
+         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
+          relay_trace_id, relay_attempt, relay_final,
+          provider, model, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -626,7 +633,8 @@ async fn insert_usage(
           cost_micro_usd, billing_status, billing_transaction_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                 $21, $22, $23, $24, $25, $26, $27, $28, $29)
+                 $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                 $31, $32)
          RETURNING id",
     )
     .bind(item.user_id)
@@ -635,6 +643,9 @@ async fn insert_usage(
     .bind(item.channel_id)
     .bind(item.channel_key_id)
     .bind(item.credential_id)
+    .bind(item.relay_trace_id)
+    .bind(item.relay_attempt)
+    .bind(item.relay_final)
     .bind(&item.provider)
     .bind(item.model.as_deref())
     .bind(item.status_code)
@@ -1077,6 +1088,9 @@ mod tests {
             channel_id: id,
             channel_key_id: Some(id),
             credential_id: None,
+            relay_trace_id: None,
+            relay_attempt: 1,
+            relay_final: true,
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             status_code: Some(200),
@@ -1110,6 +1124,9 @@ mod tests {
             channel_id: 3,
             channel_key_id: Some(4),
             credential_id: None,
+            relay_trace_id: None,
+            relay_attempt: 1,
+            relay_final: true,
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             status_code: Some(200),

@@ -10,6 +10,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
@@ -21,11 +22,14 @@ use crate::{
 };
 
 use crate::relay::{
-    ensure_key_backed_async_upstream, finish_relay, finish_task_json_response, forward_anthropic,
-    forward_anthropic_bound, prepare_relay_body, raw_upstream_response, release_empty_hold,
-    reserve_credit, response_from_bytes,
-    selector::{SelectedUpstream, UpstreamProtocol},
-    BodyKind, PreparedRelayBody, RelayBody, RelayContext,
+    describe_upstream_http_failure, ensure_key_backed_async_upstream, finish_relay,
+    finish_task_json_response, forward_anthropic, forward_anthropic_bound,
+    log_upstream_http_failure, prepare_relay_body, raw_upstream_response, read_upstream_error_body,
+    record_upstream_http_failure, record_upstream_transport_failure_for_failover,
+    release_empty_hold, reserve_credit, respond_upstream_http_failure, response_from_bytes,
+    selector::{AttemptedUpstream, SelectedUpstream, UpstreamProtocol},
+    should_failover_retryable_upstream_failure, BodyKind, PreparedRelayBody, RelayBody,
+    RelayContext,
 };
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
@@ -54,56 +58,145 @@ pub(crate) async fn anthropic_messages(
     auth.ensure_model_allowed(&meta.model)?;
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
-    let started = Instant::now();
-    let upstream = state
-        .selector
-        .select_with_affinity(
-            &state.db.pool,
-            &state.secrets,
-            &state.channel_affinity,
-            UpstreamProtocol::Anthropic,
-            &meta.model,
-            channel_affinity_key.as_ref(),
+    let relay_trace_id = Uuid::new_v4();
+
+    let mut retryable_failovers = 0;
+    let mut attempted_upstreams = Vec::new();
+    loop {
+        let started = Instant::now();
+        let upstream = state
+            .selector
+            .select_with_affinity_excluding(
+                &state.db.pool,
+                &state.secrets,
+                &state.channel_affinity,
+                UpstreamProtocol::Anthropic,
+                &meta.model,
+                channel_affinity_key.as_ref(),
+                &attempted_upstreams,
+            )
+            .await?;
+        attempted_upstreams.push(AttemptedUpstream::from(&upstream));
+        let price = state
+            .billing
+            .price_for(
+                &state.db.pool,
+                &upstream.provider,
+                &meta.model,
+                &auth.user_group,
+            )
+            .await?;
+        let hold = reserve_credit(
+            &state,
+            &auth,
+            user_key_model_credit_account.as_ref(),
+            &body,
+            output_tokens,
+            &price,
         )
         .await?;
-    let price = state
-        .billing
-        .price_for(
-            &state.db.pool,
-            &upstream.provider,
-            &meta.model,
-            &auth.user_group,
-        )
-        .await?;
-    let hold = reserve_credit(
-        &state,
-        &auth,
-        user_key_model_credit_account.as_ref(),
-        &body,
-        output_tokens,
-        &price,
-    )
-    .await?;
-    let response = forward_anthropic(&state, &headers, &upstream, body).await;
-    finish_relay(
-        RelayContext {
-            state,
-            auth,
+        let mut ctx = RelayContext {
+            state: Arc::clone(&state),
+            auth: auth.clone(),
             upstream,
             protocol: UpstreamProtocol::Anthropic,
             path: "/v1/messages",
-            model: meta.model,
+            model: meta.model.clone(),
             streamed: meta.stream,
             price,
             hold,
-            user_key_model_credit_account,
+            user_key_model_credit_account: user_key_model_credit_account.clone(),
             started,
-            channel_affinity_key,
+            channel_affinity_key: channel_affinity_key.clone(),
+            relay_trace_id,
+            relay_attempt: attempted_upstreams.len() as i32,
+            relay_final: false,
             _image_sync_permit: None,
-        },
-        response,
-    )
-    .await
+        };
+        let response = forward_anthropic(&state, &headers, &ctx.upstream, body.clone()).await;
+
+        match response {
+            Ok(upstream_response) => {
+                let status = StatusCode::from_u16(upstream_response.status().as_u16())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                if status.is_success() {
+                    ctx.relay_final = true;
+                    return finish_relay(ctx, Ok(upstream_response)).await;
+                }
+
+                let body = read_upstream_error_body(upstream_response).await;
+                let failure = describe_upstream_http_failure(status, &body);
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    failure.retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    log_upstream_http_failure(&ctx, status, &failure, None);
+                    record_upstream_http_failure(&ctx, status, &failure, "upstream failover").await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream_status = status.as_u16(),
+                        failover_attempt = retryable_failovers,
+                        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                        "retryable upstream http failure; retrying another upstream"
+                    );
+                    continue;
+                }
+
+                ctx.relay_final = true;
+                return respond_upstream_http_failure(ctx, status, failure).await;
+            }
+            Err(err) => {
+                let retryable = err.retryable();
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    let summary = err.to_string();
+                    log_anthropic_transport_failover(&ctx, &summary, retryable_failovers);
+                    record_upstream_transport_failure_for_failover(&ctx, summary).await;
+                    continue;
+                }
+                ctx.relay_final = true;
+                return finish_relay(ctx, Err(err)).await;
+            }
+        }
+    }
+}
+
+fn log_anthropic_transport_failover(ctx: &RelayContext, summary: &str, failover_attempt: usize) {
+    tracing::warn!(
+        provider = %ctx.upstream.provider,
+        channel_id = ctx.upstream.channel_id,
+        channel_name = %ctx.upstream.channel_name,
+        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+        channel_key_id = ?ctx.upstream.channel_key_id,
+        credential_id = ?ctx.upstream.credential_id,
+        protocol = ctx.protocol.as_str(),
+        model = %ctx.model,
+        path = ctx.path,
+        failover_attempt,
+        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+        error = %summary,
+        "retryable upstream transport failure; retrying another upstream"
+    );
 }
 
 pub(crate) async fn create_anthropic_message_batch(

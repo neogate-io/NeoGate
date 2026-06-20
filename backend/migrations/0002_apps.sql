@@ -102,6 +102,16 @@ CREATE INDEX idx_billing_pending_created ON billing(created_at ASC)
 CREATE INDEX idx_billing_pending_attempts_created ON billing(attempts ASC, created_at ASC)
     WHERE status IN ('pending', 'failed');
 
+-- Relay trace columns belong logically after usage.credential_id and before provider/model/status_code.
+-- PostgreSQL does not support ADD COLUMN ... AFTER, so keep this before later usage column additions.
+ALTER TABLE usage
+    ADD COLUMN relay_trace_id UUID,
+    ADD COLUMN relay_attempt INTEGER NOT NULL DEFAULT 1 CHECK (relay_attempt > 0),
+    ADD COLUMN relay_final BOOLEAN NOT NULL DEFAULT TRUE;
+
+CREATE INDEX idx_usage_relay_trace ON usage(relay_trace_id, relay_attempt, id)
+    WHERE relay_trace_id IS NOT NULL;
+
 ALTER TABLE usage
     ADD COLUMN billing_meter TEXT,
     ADD COLUMN billable_units BIGINT CHECK (billable_units >= 0);

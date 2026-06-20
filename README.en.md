@@ -420,6 +420,10 @@ Check by scenario:
       <td>For 504s on long image edits, increase <code>UPSTREAM_TIMEOUT_SECONDS</code>; it defaults to 600 seconds, and the old <code>REQUEST_TIMEOUT_SECONDS</code> name remains a compatibility alias.</td>
     </tr>
     <tr>
+      <td>🔀 Upstream failover</td>
+      <td>When an upstream returns 429, 5xx, 529, or a timeout/connection error occurs, NeoGate retries another selectable upstream up to 5 times by default; tune <code>MAX_UPSTREAM_FAILOVERS</code>, or set it to 0 to disable failover.</td>
+    </tr>
+    <tr>
       <td>🩺 Upstream monitoring</td>
       <td>Channel availability is probed by the scheduled jobs process every 10 minutes by default; adjust <code>CHANNEL_PROBE_INTERVAL_SECONDS</code> if needed. Upstream model lists are synced once per day by default; adjust <code>UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS</code> if needed.</td>
     </tr>

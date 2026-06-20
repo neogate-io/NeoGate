@@ -36,7 +36,7 @@ use crate::{
     policy, AppState,
 };
 
-use self::selector::SelectedUpstream;
+use self::selector::{AttemptedUpstream, SelectedUpstream};
 use crate::task::{billing as task_billing, upstream as upstream_task};
 use crate::usage::{KeyFailure, UsageInsert};
 pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
@@ -393,6 +393,66 @@ pub(crate) async fn record_upstream_http_failure(
     enqueue_relay_usage(&ctx.state, usage, key_failure).await;
 }
 
+pub(crate) async fn should_failover_retryable_upstream_failure(
+    ctx: &RelayContext,
+    attempted: &[AttemptedUpstream],
+    retryable: bool,
+    failovers: usize,
+) -> bool {
+    if !retryable || failovers >= ctx.state.config.relay.max_upstream_failovers {
+        return false;
+    }
+    match ctx
+        .state
+        .selector
+        .has_selectable_upstream_excluding(&ctx.state.db.pool, ctx.protocol, &ctx.model, attempted)
+        .await
+    {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::info!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                failovers,
+                max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                "skipping upstream failover because no alternate upstream is selectable"
+            );
+            false
+        }
+        Err(err) => {
+            tracing::warn!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                error = %err,
+                "failed to check alternate upstream before failover"
+            );
+            false
+        }
+    }
+}
+
+pub(crate) async fn record_upstream_transport_failure_for_failover(
+    ctx: &RelayContext,
+    summary: String,
+) {
+    let usage = usage_from_context(ctx, None, Some(summary.clone()), None, None, None);
+    let failure = key_failure_from_context(ctx, summary).await;
+    release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream transport failover").await;
+    enqueue_relay_usage(&ctx.state, usage, failure).await;
+}
+
 pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {
     let mut stream = upstream_response.bytes_stream();
     let mut body = Vec::new();
@@ -452,6 +512,9 @@ pub(crate) fn usage_from_context(
         channel_id: ctx.upstream.channel_id,
         channel_key_id: ctx.upstream.channel_key_id,
         credential_id: ctx.upstream.credential_id,
+        relay_trace_id: Some(ctx.relay_trace_id),
+        relay_attempt: ctx.relay_attempt,
+        relay_final: ctx.relay_final,
         provider: ctx.upstream.provider.clone(),
         model: Some(ctx.model.clone()),
         status_code,
@@ -482,10 +545,11 @@ pub(crate) async fn key_failure_from_context(
     error: String,
 ) -> Option<KeyFailure> {
     let channel_key_id = ctx.upstream.channel_key_id?;
+    let attempted = [AttemptedUpstream::from(&ctx.upstream)];
     match ctx
         .state
         .selector
-        .has_alternate_channel_for_model(&ctx.state.db.pool, ctx.protocol, &ctx.model)
+        .has_selectable_upstream_excluding(&ctx.state.db.pool, ctx.protocol, &ctx.model, &attempted)
         .await
     {
         Ok(true) => Some(KeyFailure {

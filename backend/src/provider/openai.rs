@@ -10,6 +10,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
@@ -29,11 +30,11 @@ use crate::{
         describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_openai,
         forward_openai_bound, forward_openai_with_content_type, handle_upstream_http_error,
         log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
-        record_upstream_http_failure, release_empty_hold, reserve_billable_credit, reserve_credit,
-        respond_upstream_http_failure,
-        selector::{ModelCooldown, SelectedUpstream, UpstreamProtocol},
-        task_status_from_value, BodyKind, ChannelAffinityKey, PreparedRelayBody, RelayBody,
-        RelayContext,
+        record_upstream_http_failure, record_upstream_transport_failure_for_failover,
+        release_empty_hold, reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
+        selector::{AttemptedUpstream, ModelCooldown, SelectedUpstream, UpstreamProtocol},
+        should_failover_retryable_upstream_failure, task_status_from_value, BodyKind,
+        ChannelAffinityKey, PreparedRelayBody, RelayBody, RelayContext,
     },
 };
 
@@ -268,12 +269,22 @@ async fn relay_openai(
     }
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
+    let relay_trace_id = Uuid::new_v4();
 
     let mut model_unavailable_reroutes = 0;
+    let mut retryable_failovers = 0;
+    let mut attempted_upstreams = Vec::new();
     loop {
         let started = Instant::now();
-        let (protocol, upstream) =
-            select_upstream(&state, path, &meta.model, channel_affinity_key.as_ref()).await?;
+        let (protocol, upstream) = select_upstream_excluding(
+            &state,
+            path,
+            &meta.model,
+            channel_affinity_key.as_ref(),
+            &attempted_upstreams,
+        )
+        .await?;
+        attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         let price = state
             .billing
             .price_for(
@@ -292,7 +303,7 @@ async fn relay_openai(
             &price,
         )
         .await?;
-        let ctx = RelayContext {
+        let mut ctx = RelayContext {
             state: Arc::clone(&state),
             auth: auth.clone(),
             upstream,
@@ -305,6 +316,9 @@ async fn relay_openai(
             user_key_model_credit_account: user_key_model_credit_account.clone(),
             started,
             channel_affinity_key: channel_affinity_key.clone(),
+            relay_trace_id,
+            relay_attempt: attempted_upstreams.len() as i32,
+            relay_final: false,
             _image_sync_permit: None,
         };
         let response = forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await;
@@ -315,6 +329,7 @@ async fn relay_openai(
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
+                    ctx.relay_final = true;
                     return finish_relay(ctx, Ok(upstream_response)).await;
                 }
 
@@ -335,6 +350,7 @@ async fn relay_openai(
                             path = ctx.path,
                             "skipping upstream model cooldown because this model has no alternate channel"
                         );
+                        ctx.relay_final = true;
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     if model_unavailable_reroutes >= MODEL_UNAVAILABLE_MAX_REROUTES {
@@ -351,6 +367,7 @@ async fn relay_openai(
                             max_reroutes = MODEL_UNAVAILABLE_MAX_REROUTES,
                             "upstream model unavailable reroute limit reached"
                         );
+                        ctx.relay_final = true;
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     model_unavailable_reroutes += 1;
@@ -380,9 +397,57 @@ async fn relay_openai(
                     continue;
                 }
 
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    failure.retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    log_upstream_http_failure(&ctx, status, &failure, None);
+                    record_upstream_http_failure(&ctx, status, &failure, "upstream failover").await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream_status = status.as_u16(),
+                        failover_attempt = retryable_failovers,
+                        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                        "retryable upstream http failure; retrying another upstream"
+                    );
+                    continue;
+                }
+
+                ctx.relay_final = true;
                 return respond_upstream_http_failure(ctx, status, failure).await;
             }
-            Err(err) => return finish_relay(ctx, Err(err)).await,
+            Err(err) => {
+                let retryable = err.retryable();
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    let summary = err.to_string();
+                    log_relay_transport_failover(&ctx, &summary, retryable_failovers);
+                    record_upstream_transport_failure_for_failover(&ctx, summary).await;
+                    continue;
+                }
+                ctx.relay_final = true;
+                return finish_relay(ctx, Err(err)).await;
+            }
         }
     }
 }
@@ -408,103 +473,177 @@ async fn relay_openai_image(
 ) -> AppResult<Response> {
     let meta = image_request_meta(path, &headers, &body)?;
     auth.ensure_model_allowed(&meta.model)?;
-    let started = Instant::now();
-    let upstream = state
-        .selector
-        .select(
-            &state.db.pool,
-            &state.secrets,
-            UpstreamProtocol::Openai,
-            &meta.model,
-        )
-        .await?;
-    let price = state
-        .billing
-        .price_for(
-            &state.db.pool,
-            &upstream.provider,
-            &meta.model,
-            &auth.user_group,
-        )
-        .await?;
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
-    let image_sync_permit = Some(
+    let mut image_sync_permit = Some(
         state
             .image_sync_limiter
             .try_acquire(auth.user_key_id)
             .await?,
     );
     let estimated_image_units = meta.image_count.max(1);
-    let hold = if price.billing_meter == BillingMeter::Image {
-        reserve_billable_credit(
-            &state,
-            &auth,
-            user_key_model_credit_account.as_ref(),
-            estimated_image_units.saturating_mul(
-                price
-                    .unit_price_usd_micros
-                    .ok_or_else(|| {
-                        AppError::BadRequest("unit price is required for image billing".to_string())
-                    })?
-                    .max(0),
-            ),
-        )
-        .await?
-    } else {
-        reserve_credit(
-            &state,
-            &auth,
-            user_key_model_credit_account.as_ref(),
-            &body,
-            state.billing.default_output_tokens(),
-            &price,
-        )
-        .await?
-    };
-    let ctx = RelayContext {
-        state: Arc::clone(&state),
-        auth,
-        upstream: upstream.clone(),
-        protocol: UpstreamProtocol::Openai,
-        path,
-        model: meta.model,
-        streamed: meta.stream,
-        price,
-        hold,
-        user_key_model_credit_account,
-        started,
-        channel_affinity_key: None,
-        _image_sync_permit: image_sync_permit,
-    };
-    let response = forward_openai_with_content_type(
-        &state,
-        &upstream,
-        body.clone(),
-        path,
-        meta.content_type.clone(),
-        meta.stream,
-    )
-    .await;
-    if newapi::should_retry_image_variation(&upstream.provider, path) {
-        return finish_newapi_image_variation(
+    let relay_trace_id = Uuid::new_v4();
+    let mut retryable_failovers = 0;
+    let mut attempted_upstreams = Vec::new();
+
+    loop {
+        let started = Instant::now();
+        let (protocol, upstream) =
+            select_upstream_excluding(&state, path, &meta.model, None, &attempted_upstreams)
+                .await?;
+        attempted_upstreams.push(AttemptedUpstream::from(&upstream));
+        let price = state
+            .billing
+            .price_for(
+                &state.db.pool,
+                &upstream.provider,
+                &meta.model,
+                &auth.user_group,
+            )
+            .await?;
+        let hold = if price.billing_meter == BillingMeter::Image {
+            reserve_billable_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                estimated_image_units.saturating_mul(
+                    price
+                        .unit_price_usd_micros
+                        .ok_or_else(|| {
+                            AppError::BadRequest(
+                                "unit price is required for image billing".to_string(),
+                            )
+                        })?
+                        .max(0),
+                ),
+            )
+            .await?
+        } else {
+            reserve_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                &body,
+                state.billing.default_output_tokens(),
+                &price,
+            )
+            .await?
+        };
+        let mut ctx = RelayContext {
+            state: Arc::clone(&state),
+            auth: auth.clone(),
+            upstream: upstream.clone(),
+            protocol,
+            path,
+            model: meta.model.clone(),
+            streamed: meta.stream,
+            price,
+            hold,
+            user_key_model_credit_account: user_key_model_credit_account.clone(),
+            started,
+            channel_affinity_key: None,
+            relay_trace_id,
+            relay_attempt: attempted_upstreams.len() as i32,
+            relay_final: false,
+            _image_sync_permit: None,
+        };
+        let response = forward_openai_with_content_type(
             &state,
             &upstream,
-            body,
-            meta.content_type,
+            body.clone(),
+            path,
+            meta.content_type.clone(),
             meta.stream,
-            estimated_image_units,
-            ctx,
-            response,
         )
         .await;
-    }
-    if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
-        return finish_newapi_image_stream(ctx, response, estimated_image_units).await;
-    }
-    if ctx.price.billing_meter == BillingMeter::Image {
-        finish_image_relay(ctx, response, estimated_image_units).await
-    } else {
-        finish_relay(ctx, response).await
+
+        match response {
+            Ok(upstream_response) => {
+                let status = StatusCode::from_u16(upstream_response.status().as_u16())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                if status.is_success() {
+                    ctx.relay_final = true;
+                    ctx._image_sync_permit = image_sync_permit.take();
+                    if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
+                        return finish_newapi_image_stream(
+                            ctx,
+                            Ok(upstream_response),
+                            estimated_image_units,
+                        )
+                        .await;
+                    }
+                    if ctx.price.billing_meter == BillingMeter::Image {
+                        return finish_image_relay(
+                            ctx,
+                            Ok(upstream_response),
+                            estimated_image_units,
+                        )
+                        .await;
+                    }
+                    return finish_relay(ctx, Ok(upstream_response)).await;
+                }
+
+                let error_body = read_upstream_error_body(upstream_response).await;
+                let mut failure = describe_upstream_http_failure(status, &error_body);
+                if newapi::should_retry_image_variation(&upstream.provider, path)
+                    && newapi::should_retry_variation_as_edit(ctx.path, status, &error_body)
+                {
+                    failure.retryable = true;
+                }
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    failure.retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    log_upstream_http_failure(&ctx, status, &failure, None);
+                    record_upstream_http_failure(&ctx, status, &failure, "upstream image failover")
+                        .await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream_status = status.as_u16(),
+                        failover_attempt = retryable_failovers,
+                        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                        "retryable upstream image http failure; retrying another upstream"
+                    );
+                    continue;
+                }
+
+                ctx.relay_final = true;
+                ctx._image_sync_permit = image_sync_permit.take();
+                return respond_upstream_http_failure(ctx, status, failure).await;
+            }
+            Err(err) => {
+                let retryable = err.retryable();
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    let summary = err.to_string();
+                    log_relay_transport_failover(&ctx, &summary, retryable_failovers);
+                    record_upstream_transport_failure_for_failover(&ctx, summary).await;
+                    continue;
+                }
+                ctx.relay_final = true;
+                ctx._image_sync_permit = image_sync_permit.take();
+                return finish_relay(ctx, Err(err)).await;
+            }
+        }
     }
 }
 
@@ -747,65 +886,6 @@ async fn finish_newapi_image_stream(
     }
 }
 
-async fn finish_newapi_image_variation(
-    state: &AppState,
-    upstream: &SelectedUpstream,
-    body: Bytes,
-    content_type: HeaderValue,
-    stream: bool,
-    requested_image_count: i64,
-    ctx: RelayContext,
-    response: AppResult<reqwest::Response>,
-) -> AppResult<Response> {
-    let upstream_response = match response {
-        Ok(response) => response,
-        Err(err) => return finish_relay(ctx, Err(err)).await,
-    };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    if status != StatusCode::BAD_REQUEST {
-        return finish_relay(ctx, Ok(upstream_response)).await;
-    }
-
-    let error_body = read_upstream_error_body(upstream_response).await;
-    if !newapi::should_retry_variation_as_edit(ctx.path, status, &error_body) {
-        let failure = describe_upstream_http_failure(status, &error_body);
-        return respond_upstream_http_failure(ctx, status, failure).await;
-    }
-
-    tracing::warn!(
-        provider = %upstream.provider,
-        channel_id = upstream.channel_id,
-        channel_name = %upstream.channel_name,
-        channel_endpoint_id = upstream.channel_endpoint_id,
-        channel_key_id = ?upstream.channel_key_id,
-        credential_id = ?upstream.credential_id,
-        model = %ctx.model,
-        path = ctx.path,
-        retry_path = "/v1/images/edits",
-        "retrying NewAPI image variation as image edit because upstream dropped multipart model field"
-    );
-
-    let retry = newapi::variation_as_edit_request(&body, &content_type)?;
-    let response = forward_openai_with_content_type(
-        state,
-        upstream,
-        retry.body,
-        retry.path,
-        retry.content_type,
-        stream,
-    )
-    .await;
-    if stream {
-        return finish_newapi_image_stream(ctx, response, requested_image_count).await;
-    }
-    if ctx.price.billing_meter == BillingMeter::Image {
-        finish_image_relay(ctx, response, requested_image_count).await
-    } else {
-        finish_relay(ctx, response).await
-    }
-}
-
 async fn create_background_response(
     state: Arc<AppState>,
     auth: UserAuth,
@@ -892,6 +972,9 @@ async fn create_background_response(
         user_key_model_credit_account,
         started,
         channel_affinity_key,
+        relay_trace_id: Uuid::new_v4(),
+        relay_attempt: 1,
+        relay_final: true,
         _image_sync_permit: None,
     };
 
@@ -1331,22 +1414,24 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-async fn select_upstream(
+async fn select_upstream_excluding(
     state: &AppState,
     path: &'static str,
     model: &str,
     affinity_key: Option<&ChannelAffinityKey>,
+    attempted: &[AttemptedUpstream],
 ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
     if path == "/v1/responses" {
         match state
             .selector
-            .select_with_affinity(
+            .select_with_affinity_excluding(
                 &state.db.pool,
                 &state.secrets,
                 &state.channel_affinity,
                 UpstreamProtocol::OpenAiOauth,
                 model,
                 affinity_key,
+                attempted,
             )
             .await
         {
@@ -1358,16 +1443,35 @@ async fn select_upstream(
 
     let upstream = state
         .selector
-        .select_with_affinity(
+        .select_with_affinity_excluding(
             &state.db.pool,
             &state.secrets,
             &state.channel_affinity,
             UpstreamProtocol::Openai,
             model,
             affinity_key,
+            attempted,
         )
         .await?;
     Ok((UpstreamProtocol::Openai, upstream))
+}
+
+fn log_relay_transport_failover(ctx: &RelayContext, summary: &str, failover_attempt: usize) {
+    tracing::warn!(
+        provider = %ctx.upstream.provider,
+        channel_id = ctx.upstream.channel_id,
+        channel_name = %ctx.upstream.channel_name,
+        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+        channel_key_id = ?ctx.upstream.channel_key_id,
+        credential_id = ?ctx.upstream.credential_id,
+        protocol = ctx.protocol.as_str(),
+        model = %ctx.model,
+        path = ctx.path,
+        failover_attempt,
+        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+        error = %summary,
+        "retryable upstream transport failure; retrying another upstream"
+    );
 }
 
 async fn mark_credential_model_unavailable(

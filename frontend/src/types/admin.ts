@@ -241,6 +241,10 @@ export type UsageRecord = {
   user_key_id?: number | null
   channel_id?: number | null
   channel_key_id?: number | null
+  credential_id?: number | null
+  relay_trace_id?: string | null
+  relay_attempt: number
+  relay_final: boolean
   provider: string
   model?: string | null
   status_code?: number | null

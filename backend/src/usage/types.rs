@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     billing::{BillingCharge, BillingMeter, TokenUsage},
@@ -14,6 +15,9 @@ pub struct UsageInsert {
     pub channel_id: DbId,
     pub channel_key_id: Option<DbId>,
     pub credential_id: Option<DbId>,
+    pub relay_trace_id: Option<Uuid>,
+    pub relay_attempt: i32,
+    pub relay_final: bool,
     pub provider: String,
     pub model: Option<String>,
     pub status_code: Option<i32>,

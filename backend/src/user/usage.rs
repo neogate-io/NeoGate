@@ -8,6 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::{
     auth::UserSessionAuth,
@@ -49,6 +50,9 @@ struct UsageRecord {
     channel_id: Option<DbId>,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
+    relay_trace_id: Option<Uuid>,
+    relay_attempt: i32,
+    relay_final: bool,
     provider: String,
     model: Option<String>,
     status_code: Option<i32>,
@@ -86,7 +90,8 @@ async fn usage(
             .map(|cursor| (Some(cursor.0), Some(cursor.1)))
             .unwrap_or((None, None));
     let rows = sqlx::query(
-        "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
+        "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id,
+                relay_trace_id, relay_attempt, relay_final, provider, model,
                 status_code, streamed, latency_ms, first_response_ms, output_tokens_per_second,
                 input_tokens, output_tokens, total_tokens, cache_in_tokens,
                 cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -132,6 +137,9 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         channel_id: row.try_get("channel_id")?,
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
+        relay_trace_id: row.try_get("relay_trace_id")?,
+        relay_attempt: row.try_get("relay_attempt")?,
+        relay_final: row.try_get("relay_final")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         status_code: row.try_get("status_code")?,

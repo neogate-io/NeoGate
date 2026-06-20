@@ -21,6 +21,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::{
     auth::{self, AdminAuth},
@@ -1219,6 +1220,9 @@ struct UsageRecord {
     channel_id: Option<DbId>,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
+    relay_trace_id: Option<Uuid>,
+    relay_attempt: i32,
+    relay_final: bool,
     provider: String,
     model: Option<String>,
     status_code: Option<i32>,
@@ -1269,7 +1273,9 @@ async fn usage(
     let rows = sqlx::query(
         r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
                 usage_record.user_key_id, usage_record.channel_id, usage_record.channel_key_id,
-                usage_record.credential_id, usage_record.provider, usage_record.model,
+                usage_record.credential_id, usage_record.relay_trace_id,
+                usage_record.relay_attempt, usage_record.relay_final,
+                usage_record.provider, usage_record.model,
                 usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
                 usage_record.first_response_ms, usage_record.output_tokens_per_second,
                 usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
@@ -1287,6 +1293,7 @@ async fn usage(
              $3::text IS NULL
              OR usage_record.provider ILIKE $3
              OR usage_record.model ILIKE $3
+             OR usage_record.relay_trace_id::text ILIKE $3
              OR usage_record.user_id::text ILIKE $3
              OR u.email::text ILIKE $3
            )
@@ -1356,6 +1363,9 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         channel_id: row.try_get("channel_id")?,
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
+        relay_trace_id: row.try_get("relay_trace_id")?,
+        relay_attempt: row.try_get("relay_attempt")?,
+        relay_final: row.try_get("relay_final")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         status_code: row.try_get("status_code")?,

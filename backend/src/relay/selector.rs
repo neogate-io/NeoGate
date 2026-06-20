@@ -102,6 +102,25 @@ pub struct SelectedUpstream {
     pub account_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttemptedUpstream {
+    pub channel_id: DbId,
+    pub channel_endpoint_id: DbId,
+    pub channel_key_id: Option<DbId>,
+    pub credential_id: Option<DbId>,
+}
+
+impl From<&SelectedUpstream> for AttemptedUpstream {
+    fn from(upstream: &SelectedUpstream) -> Self {
+        Self {
+            channel_id: upstream.channel_id,
+            channel_endpoint_id: upstream.channel_endpoint_id,
+            channel_key_id: upstream.channel_key_id,
+            credential_id: upstream.credential_id,
+        }
+    }
+}
+
 pub struct ModelCooldown<'a> {
     pub unavailable_until: DateTime<Utc>,
     pub last_error: &'a str,
@@ -210,7 +229,7 @@ impl Selector {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
         let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks)
+        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks, &[])
     }
 
     pub(crate) async fn select_with_affinity(
@@ -221,6 +240,28 @@ impl Selector {
         protocol: UpstreamProtocol,
         model: &str,
         affinity_key: Option<&ChannelAffinityKey>,
+    ) -> AppResult<SelectedUpstream> {
+        self.select_with_affinity_excluding(
+            pool,
+            secrets,
+            affinity_cache,
+            protocol,
+            model,
+            affinity_key,
+            &[],
+        )
+        .await
+    }
+
+    pub(crate) async fn select_with_affinity_excluding(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        affinity_cache: &super::affinity::ChannelAffinityCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        affinity_key: Option<&ChannelAffinityKey>,
+        attempted: &[AttemptedUpstream],
     ) -> AppResult<SelectedUpstream> {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
@@ -235,6 +276,7 @@ impl Selector {
                     now,
                     &model_blocks,
                     &target,
+                    attempted,
                 )? {
                     tracing::debug!(
                         rule = affinity_key.rule,
@@ -251,7 +293,15 @@ impl Selector {
             }
         }
 
-        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks)
+        self.select_from_snapshot(
+            secrets,
+            &snapshot,
+            protocol,
+            model,
+            now,
+            &model_blocks,
+            attempted,
+        )
     }
 
     fn selected_affinity_upstream(
@@ -263,13 +313,22 @@ impl Selector {
         now: DateTime<Utc>,
         model_blocks: &ModelBlockLookup<'_>,
         target: &UpstreamAffinityTarget,
+        attempted: &[AttemptedUpstream],
     ) -> AppResult<Option<SelectedUpstream>> {
         let Some(channel) = snapshot.channels.iter().find(|channel| {
             channel.id == target.channel_id && channel.endpoint_id == target.channel_endpoint_id
         }) else {
             return Ok(None);
         };
-        if !channel_is_available(snapshot, channel, protocol, model, now, model_blocks) {
+        if !channel_is_available(
+            snapshot,
+            channel,
+            protocol,
+            model,
+            now,
+            model_blocks,
+            attempted,
+        ) {
             return Ok(None);
         }
         let keys = snapshot
@@ -281,6 +340,7 @@ impl Selector {
             key.credential_id == target.credential_id
                 && (!channel.use_credentials).then_some(key.id) == target.channel_key_id
                 && key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
         }) else {
             return Ok(None);
         };
@@ -297,25 +357,31 @@ impl Selector {
         model: &str,
         now: DateTime<Utc>,
         model_blocks: &ModelBlockLookup<'_>,
+        attempted: &[AttemptedUpstream],
     ) -> AppResult<SelectedUpstream> {
-        let channel = choose_channel_for_request(snapshot, protocol, model, now, model_blocks)
-            .ok_or_else(|| {
-                AppError::UpstreamUnavailable(unavailable_channel_message(
-                    snapshot,
-                    protocol,
-                    model,
-                    now,
-                    model_blocks,
-                ))
-            })?;
+        let channel =
+            choose_channel_for_request(snapshot, protocol, model, now, model_blocks, attempted)
+                .ok_or_else(|| {
+                    AppError::UpstreamUnavailable(unavailable_channel_message(
+                        snapshot,
+                        protocol,
+                        model,
+                        now,
+                        model_blocks,
+                    ))
+                })?;
         let keys = snapshot
             .keys
             .get(&channel.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let key = choose_key(channel, keys, model, now, model_blocks).ok_or_else(|| {
-            AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
-        })?;
+        let key =
+            choose_key(channel, keys, model, now, model_blocks, attempted).ok_or_else(|| {
+                AppError::UpstreamUnavailable(format!(
+                    "channel {} has no available key",
+                    channel.name
+                ))
+            })?;
         self.selected_upstream_from_candidate(secrets, channel, key)
     }
 
@@ -485,7 +551,7 @@ impl Selector {
         cooldown_until: DateTime<Utc>,
     ) -> AppResult<bool> {
         if !self
-            .has_alternate_channel_for_model(pool, protocol, model)
+            .has_selectable_upstream_excluding_channel_key(pool, protocol, model, channel_key_id)
             .await?
         {
             return Ok(false);
@@ -513,6 +579,56 @@ impl Selector {
     ) -> AppResult<bool> {
         let snapshot = self.routing_snapshot(pool).await?;
         Ok(matching_channel_count(&snapshot, protocol, model) > 1)
+    }
+
+    pub(crate) async fn has_selectable_upstream_excluding(
+        &self,
+        pool: &PgPool,
+        protocol: UpstreamProtocol,
+        model: &str,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<bool> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let Some(channel) =
+            choose_channel_for_request(&snapshot, protocol, model, now, &model_blocks, attempted)
+        else {
+            return Ok(false);
+        };
+        let keys = snapshot
+            .keys
+            .get(&channel.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Ok(choose_key(channel, keys, model, now, &model_blocks, attempted).is_some())
+    }
+
+    async fn has_selectable_upstream_excluding_channel_key(
+        &self,
+        pool: &PgPool,
+        protocol: UpstreamProtocol,
+        model: &str,
+        channel_key_id: DbId,
+    ) -> AppResult<bool> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        Ok(snapshot.channels.iter().any(|channel| {
+            channel.protocol == protocol
+                && channel_matches_model(channel, model)
+                && ready_at(channel.cooldown_until, now)
+                && snapshot
+                    .keys
+                    .get(&channel.id)
+                    .map(|keys| {
+                        keys.iter().any(|key| {
+                            (!channel.use_credentials).then_some(key.id) != Some(channel_key_id)
+                                && key_is_available(channel, key, model, now, &model_blocks)
+                        })
+                    })
+                    .unwrap_or(false)
+        }))
     }
 }
 
@@ -943,6 +1059,7 @@ fn choose_channel_for_request<'a>(
     model: &str,
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
 ) -> Option<&'a ChannelCandidate> {
     let indexed = cache
         .route_index
@@ -958,7 +1075,15 @@ fn choose_channel_for_request<'a>(
     let mut selected = None;
 
     for channel in indexed {
-        if !channel_is_available(cache, channel, protocol, model, now, model_blocks) {
+        if !channel_is_available(
+            cache,
+            channel,
+            protocol,
+            model,
+            now,
+            model_blocks,
+            attempted,
+        ) {
             continue;
         }
         let weight = channel.weight.max(1);
@@ -993,6 +1118,7 @@ fn channel_is_available(
     model: &str,
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
 ) -> bool {
     channel.protocol == protocol
         && channel_matches_model(channel, model)
@@ -1001,8 +1127,10 @@ fn channel_is_available(
             .keys
             .get(&channel.id)
             .map(|keys| {
-                keys.iter()
-                    .any(|key| key_is_available(channel, key, model, now, model_blocks))
+                keys.iter().any(|key| {
+                    key_is_available(channel, key, model, now, model_blocks)
+                        && !was_attempted(channel, key, attempted)
+                })
             })
             .unwrap_or(false)
 }
@@ -1088,10 +1216,14 @@ fn choose_key<'a>(
     model: &str,
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
 ) -> Option<&'a KeyCandidate> {
     let ready_count = keys
         .iter()
-        .filter(|key| key_is_available(channel, key, model, now, model_blocks))
+        .filter(|key| {
+            key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
+        })
         .count();
     if ready_count == 0 {
         return None;
@@ -1101,8 +1233,25 @@ fn choose_key<'a>(
         KeySelectionMode::Polling => channel.polling.fetch_add(1, Ordering::Relaxed) % ready_count,
     };
     keys.iter()
-        .filter(|key| key_is_available(channel, key, model, now, model_blocks))
+        .filter(|key| {
+            key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
+        })
         .nth(slot)
+}
+
+fn was_attempted(
+    channel: &ChannelCandidate,
+    key: &KeyCandidate,
+    attempted: &[AttemptedUpstream],
+) -> bool {
+    let channel_key_id = (!channel.use_credentials).then_some(key.id);
+    attempted.iter().any(|item| {
+        item.channel_id == channel.id
+            && item.channel_endpoint_id == channel.endpoint_id
+            && item.channel_key_id == channel_key_id
+            && item.credential_id == key.credential_id
+    })
 }
 
 fn key_is_ready(key: &KeyCandidate, now: DateTime<Utc>) -> bool {
@@ -1416,7 +1565,8 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
@@ -1428,7 +1578,8 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
@@ -1440,7 +1591,8 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
@@ -1468,11 +1620,57 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
             "only-enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn key_selection_skips_attempted_upstream_identity() {
+        let channel = candidate("retry", 0, 1, vec![]);
+        let keys = vec![
+            KeyCandidate {
+                id: 1,
+                channel_id: channel.id,
+                credential_id: None,
+                secret_ciphertext: "attempted".to_string(),
+                cooldown_until: None,
+                plan_type: None,
+                plan_models: Vec::new(),
+            },
+            KeyCandidate {
+                id: 2,
+                channel_id: channel.id,
+                credential_id: None,
+                secret_ciphertext: "next".to_string(),
+                cooldown_until: None,
+                plan_type: None,
+                plan_models: Vec::new(),
+            },
+        ];
+        let attempted = vec![AttemptedUpstream {
+            channel_id: channel.id,
+            channel_endpoint_id: channel.endpoint_id,
+            channel_key_id: Some(1),
+            credential_id: None,
+        }];
+
+        assert_eq!(
+            choose_key(
+                &channel,
+                &keys,
+                "gpt-4.1",
+                Utc::now(),
+                &empty_block_lookup(),
+                &attempted,
+            )
+            .unwrap()
+            .secret_ciphertext,
+            "next"
         );
     }
 
@@ -1523,7 +1721,7 @@ mod tests {
         let model_blocks = ModelBlockLookup::new(&model_blocks, &local_blocks);
 
         assert_eq!(
-            choose_key(&channel, &keys, "gpt-5.4", now, &model_blocks)
+            choose_key(&channel, &keys, "gpt-5.4", now, &model_blocks, &[])
                 .unwrap()
                 .secret_ciphertext,
             "available"
@@ -1568,7 +1766,8 @@ mod tests {
                 &keys,
                 "gpt-5.4",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,

@@ -39,6 +39,10 @@ impl UpstreamErrorKind {
         }
     }
 
+    pub(crate) fn retryable(self) -> bool {
+        true
+    }
+
     pub fn type_code(self) -> &'static str {
         match self {
             Self::Timeout => "upstream_timeout",
@@ -173,6 +177,14 @@ impl IntoResponse for AppError {
 }
 
 impl AppError {
+    pub(crate) fn retryable(&self) -> bool {
+        match self {
+            AppError::UpstreamRequest(err) => err.retryable,
+            AppError::Reqwest(err) => UpstreamErrorKind::from_reqwest(err).retryable(),
+            _ => false,
+        }
+    }
+
     fn status(&self) -> StatusCode {
         match self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,

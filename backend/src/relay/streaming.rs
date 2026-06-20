@@ -12,6 +12,7 @@ use crate::{
     },
     AppState,
 };
+use uuid::Uuid;
 
 use super::{
     enqueue_relay_usage, key_failure_from_context,
@@ -34,6 +35,9 @@ pub(crate) struct RelayContext {
     pub(crate) user_key_model_credit_account: Option<CreditAccountId>,
     pub(crate) started: Instant,
     pub(crate) channel_affinity_key: Option<ChannelAffinityKey>,
+    pub(crate) relay_trace_id: Uuid,
+    pub(crate) relay_attempt: i32,
+    pub(crate) relay_final: bool,
     pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
 }
 

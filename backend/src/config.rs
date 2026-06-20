@@ -126,6 +126,7 @@ pub struct HttpClientConfig {
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub key_cooldown: Duration,
+    pub max_upstream_failovers: usize,
     pub body_limit_bytes: usize,
     pub usage_buffer_limit_bytes: usize,
     pub credential_upload_limit_bytes: usize,
@@ -227,6 +228,7 @@ impl Config {
             },
             relay: RelayConfig {
                 key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)?),
+                max_upstream_failovers: parse_usize("MAX_UPSTREAM_FAILOVERS", 5)?,
                 body_limit_bytes: parse_usize(
                     "RELAY_BODY_LIMIT_BYTES",
                     DEFAULT_RELAY_BODY_LIMIT_BYTES,
@@ -338,6 +340,9 @@ impl Config {
         }
         if self.relay.body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");
+        }
+        if self.relay.max_upstream_failovers > 10 {
+            anyhow::bail!("MAX_UPSTREAM_FAILOVERS must be <= 10");
         }
         if self.relay.usage_buffer_limit_bytes == 0 {
             anyhow::bail!("RELAY_USAGE_BUFFER_LIMIT_BYTES must be positive");

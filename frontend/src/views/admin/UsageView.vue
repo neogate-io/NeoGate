@@ -110,6 +110,26 @@ function usageStatusTooltip(statusCode?: number | null) {
   return statusCode == null ? '' : `HTTP ${statusCode}`
 }
 
+function relayTraceLabel(row: UsageRecord) {
+  if (!row.relay_trace_id) return '-'
+  return `#${row.relay_attempt}`
+}
+
+function relayTraceTone(row: UsageRecord) {
+  if (!row.relay_trace_id) return 'neutral'
+  return row.relay_final ? 'success' : 'warning'
+}
+
+function relayTraceText(row: UsageRecord) {
+  if (!row.relay_trace_id) return ''
+  return row.relay_final ? t('relayAttemptFinal') : t('relayAttemptRetry')
+}
+
+function relayTraceTooltip(row: UsageRecord) {
+  if (!row.relay_trace_id) return ''
+  return `${t('relayTrace')} ${row.relay_trace_id} · #${row.relay_attempt}`
+}
+
 function usageUserDisplay(row: UsageRecord) {
   if (row.user_email) return row.user_email
   if (row.user_id != null) return `#${row.user_id}`
@@ -289,6 +309,23 @@ async function handleSearch() {
                 </span>
                 <span class="usage-status-switch-text">{{
                   usageStatusLabel(row.status_code)
+                }}</span>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('relayTrace')" min-width="120" align="center" header-align="center">
+          <template #default="{ row }">
+            <el-tooltip
+              :content="relayTraceTooltip(row)"
+              :disabled="!row.relay_trace_id"
+              placement="top"
+              :show-after="600"
+            >
+              <span class="usage-trace-pill" :class="`is-${relayTraceTone(row)}`">
+                <span class="usage-mono">{{ relayTraceLabel(row) }}</span>
+                <span v-if="row.relay_trace_id" class="usage-trace-text">{{
+                  relayTraceText(row)
                 }}</span>
               </span>
             </el-tooltip>
@@ -519,6 +556,39 @@ async function handleSearch() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.usage-trace-pill {
+  align-items: center;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  color: #667085;
+  display: inline-flex;
+  gap: 6px;
+  height: 26px;
+  justify-content: center;
+  max-width: 112px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.usage-trace-pill.is-success {
+  background: #ecfdf3;
+  border-color: #abefc6;
+  color: #067647;
+}
+
+.usage-trace-pill.is-warning {
+  background: #fffaeb;
+  border-color: #fedf89;
+  color: #b54708;
+}
+
+.usage-trace-text {
+  font-size: 12px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .usage-empty-state {

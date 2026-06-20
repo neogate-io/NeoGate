@@ -98,6 +98,12 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/admin/channels' },
         {
+          path: 'apps',
+          name: 'apps',
+          component: () => import('../views/admin/AppsView.vue'),
+          meta: { messageKey: 'apps', subtitleKey: 'adminAppsSubtitle' }
+        },
+        {
           path: 'credentials',
           name: 'credentials',
           component: () => import('../views/admin/CredentialsView.vue'),
@@ -166,9 +172,13 @@ export const router = createRouter({
   ]
 })
 
+let setupCompleted = false
+
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  const setup = await getSetupStatus().catch(() => null)
+  const setup =
+    setupCompleted && to.name !== 'setup' ? null : await getSetupStatus().catch(() => null)
+  if (setup?.setup_completed) setupCompleted = true
 
   if (setup && !setup.setup_completed && to.name !== 'setup') {
     return {
@@ -236,6 +246,20 @@ router.beforeEach(async (to) => {
     const servicePolicy = await getAdminServicePolicy().catch(() => null)
     if (servicePolicy && servicePolicy.service_mode !== 'paid') {
       return '/admin/settings/pricing-policies'
+    }
+  }
+
+  if (to.name === 'apps') {
+    const servicePolicy = await getAdminServicePolicy().catch(() => null)
+    if (servicePolicy && servicePolicy.service_mode === 'paid') {
+      return '/admin/channels'
+    }
+  }
+
+  if (to.name === 'credentials') {
+    const servicePolicy = await getAdminServicePolicy().catch(() => null)
+    if (servicePolicy && servicePolicy.service_mode === 'internal') {
+      return '/admin/channels'
     }
   }
 

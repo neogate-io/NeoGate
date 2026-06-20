@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { getPricingPolicies, upsertPricingPolicy } from '../../api/prices'
 import { getUserGroups } from '../../api/userKeys'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingPolicy, UserGroup } from '../../types/admin'
 import { readError } from '../../utils/errors'
 
@@ -61,19 +62,18 @@ function userGroupUserCount(code?: string | null) {
 }
 
 async function load() {
-  loading.value = true
-  try {
-    const [fetchedPolicies, fetchedGroups] = await Promise.all([
-      getPricingPolicies(),
-      getUserGroups()
-    ])
-    policies.value = fetchedPolicies
-    userGroups.value = fetchedGroups
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      const [fetchedPolicies, fetchedGroups] = await Promise.all([
+        getPricingPolicies(),
+        getUserGroups()
+      ])
+      policies.value = fetchedPolicies
+      userGroups.value = fetchedGroups
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 function openEditDialog(policy: PricingPolicy) {
@@ -87,27 +87,27 @@ function openEditDialog(policy: PricingPolicy) {
 }
 
 async function savePolicy() {
-  if (!editingPolicy.value || !form.userGroup) return
+  const policy = editingPolicy.value
+  if (!policy || !form.userGroup) return
 
-  saving.value = true
-  try {
-    const group = userGroupByCode.value.get(form.userGroup)
-    await upsertPricingPolicy({
-      id: editingPolicy.value.id,
-      name: group?.name ?? editingPolicy.value.name,
-      user_group: form.userGroup,
-      multiplier_micros: Math.round(form.multiplierPercent * 10_000),
-      enabled: form.enabled,
-      priority: 0
-    })
-    ElMessage.success(t('pricingPolicySaved'))
-    dialogOpen.value = false
-    await load()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    saving.value = false
-  }
+  await withLoading(saving, async () => {
+    try {
+      const group = userGroupByCode.value.get(form.userGroup)
+      await upsertPricingPolicy({
+        id: policy.id,
+        name: group?.name ?? policy.name,
+        user_group: form.userGroup,
+        multiplier_micros: Math.round(form.multiplierPercent * 10_000),
+        enabled: form.enabled,
+        priority: 0
+      })
+      ElMessage.success(t('pricingPolicySaved'))
+      dialogOpen.value = false
+      await load()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 onMounted(load)

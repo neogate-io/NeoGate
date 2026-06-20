@@ -1,72 +1,57 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
-  CircleCheck,
   CircleCheckFilled,
-  CircleCloseFilled,
   Coin,
   Delete,
   Edit,
-  Loading,
   MoreFilled,
   Plus,
-  PriceTag,
   Search,
   VideoPause,
-  Warning,
   WarningFilled
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
+  getProviderModels,
   getPricingTemplates,
   getProviderPrices,
   syncPricingTemplates,
   upsertProviderPrice
 } from '../../api/prices'
-import {
-  streamChannelDiagnostic,
-  updateChannelModel,
-  updateChannel,
-  type ChannelDiagnosticStreamEvent
-} from '../../api/channels'
+import { updateChannelModel, updateChannel } from '../../api/channels'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
+import ChannelDiagnosticDialog from '../../components/admin/channels/ChannelDiagnosticDialog.vue'
+import ChannelExpandPanel from '../../components/admin/channels/ChannelExpandPanel.vue'
+import ChannelProbeTrendCell from '../../components/admin/channels/ChannelProbeTrendCell.vue'
 import ChannelPriceDialog, {
   type ChannelPriceForm
 } from '../../components/admin/channels/ChannelPriceDialog.vue'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
+import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type {
+  BillingMeter,
   Channel,
-  ChannelDiagnosticReport,
   ChannelKey,
   ChannelModel,
-  ChannelProbeSample,
-  DiagnosticStep,
-  DiagnosticStatus,
-  EndpointDiagnosticReport,
   PricingTemplate,
+  ProviderModel,
   ProviderPrice
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
-import {
-  formatCompactDateTime,
-  formatDurationMs,
-  formatUsdPerMillion,
-  microUsdToUsd,
-  usdToMicroUsd
-} from '../../utils/format'
+import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
 import {
   derivedCacheReadPrice,
   findPricingTemplate,
   isProviderPriceConfigured,
-  isProviderPriceReady,
   priceKey
 } from '../../utils/pricing'
 
@@ -122,20 +107,11 @@ const {
 
 const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
+const providerModels = ref<ProviderModel[]>([])
 const pricingLoading = ref(true)
 const channelsLoaded = ref(false)
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
-const diagnosticDialogOpen = ref(false)
-const diagnosticReport = ref<ChannelDiagnosticReport | null>(null)
-const diagnosticError = ref('')
-const diagnosticChannel = ref<Channel | null>(null)
-const diagnosingChannelId = ref<number | null>(null)
-const diagnosticLiveSteps = ref<
-  Array<Extract<ChannelDiagnosticStreamEvent, { type: 'model_result' }>>
->([])
-const diagnosticCurrentModel = ref('')
-const diagnosticLiveListRef = ref<HTMLElement | null>(null)
 const channelTableRef = ref()
 const togglingRuntimeKeys = useReactiveSet<string>()
 const togglingChannelIds = useReactiveSet<number>()
@@ -150,8 +126,16 @@ const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 const priceByModel = computed(
   () => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price]))
 )
+const providerModelByModel = computed(
+  () => new Map(providerModels.value.map((model) => [priceKey(model.provider, model.model), model]))
+)
 
-const diagnosticInProgress = computed(() => diagnosingChannelId.value !== null)
+const diagnostic = useChannelDiagnostics(loadChannels)
+const {
+  inProgress: diagnosticInProgress,
+  isChannelDiagnosing,
+  run: runChannelDiagnostic
+} = diagnostic
 
 const filteredChannels = computed(() => {
   const keyword = appliedChannelSearch.value.trim().toLowerCase()
@@ -182,6 +166,13 @@ const channelTotalPages = computed(() =>
 )
 
 const channelHasPagination = computed(() => filteredChannels.value.length > channelPageSize.value)
+
+const probeTrendLatencyScale = computed(() => {
+  const latencies = channels.value.flatMap((channel) =>
+    channel.probe_samples.map((sample) => sample.latency_ms ?? 0).filter((latency) => latency > 0)
+  )
+  return Math.max(...latencies, 1)
+})
 
 function handleChannelPageSizeChange(size: number) {
   channelPageSize.value = size
@@ -283,16 +274,25 @@ function channelPriceRows(row: Channel) {
         model,
         disabled: false,
         missing: false,
+        billingEnabled: false,
+        runtimeStatus: channelModel.runtime_status,
+        runtimeStatusLabel: runtimeStatusLabel(channelModel.runtime_status),
+        runtimeToggleDisabled: true,
+        runtimeEnabled: Boolean(channelModel.enabled),
+        upstreamMissing: channelModel.status === 'missing',
         inputPrice: '-',
         outputPrice: '-',
         cacheReadPrice: '-',
         cacheWritePrice: '-',
+        cachePrice: '-',
         price: '-'
       }
     }
 
     const inputMicros = channelModel.input_price_usd_micros ?? price?.input_price_usd_micros
     const outputMicros = channelModel.output_price_usd_micros ?? price?.output_price_usd_micros
+    const billingMeter = channelModel.billing_meter ?? price?.billing_meter
+    const unitMicros = channelModel.unit_price_usd_micros ?? price?.unit_price_usd_micros
     const cacheReadMicros =
       channelModel.cache_read_price_usd_micros ??
       price?.cache_read_price_usd_micros ??
@@ -301,6 +301,10 @@ function channelPriceRows(row: Channel) {
       channelModel.cache_write_price_usd_micros ?? price?.cache_write_price_usd_micros
     const billingEnabled = Boolean(channelModel.billing_enabled)
     const modelEnabled = Boolean(channelModel.enabled)
+    const unitPrice =
+      unitMicros !== undefined && unitMicros !== null
+        ? formatUsdPerMillion(microUsdToUsd(unitMicros))
+        : t('priceMissing')
     const inputPrice =
       inputMicros !== undefined && inputMicros !== null
         ? formatUsdPerMillion(microUsdToUsd(inputMicros))
@@ -319,6 +323,7 @@ function channelPriceRows(row: Channel) {
         : formatUsdPerMillion(microUsdToUsd(cacheWriteMicros as number))
       : t('priceMissing')
     const modelStatus = channelModel.status
+    const upstreamMissing = modelStatus === 'missing'
     return {
       model,
       disabled: !modelEnabled,
@@ -326,16 +331,27 @@ function channelPriceRows(row: Channel) {
       billingEnabled,
       runtimeStatus: channelModel.runtime_status,
       runtimeStatusLabel: runtimeStatusLabel(channelModel.runtime_status),
-      runtimeToggleDisabled: !billingEnabled || isRuntimeToggling(row.id, model),
+      runtimeToggleDisabled: !billingEnabled || upstreamMissing || isRuntimeToggling(row.id, model),
       runtimeEnabled: modelEnabled,
+      upstreamMissing,
       modelStatus,
       modelStatusLabel: modelStatusLabel(modelStatus),
       inputPrice,
       outputPrice,
       cacheReadPrice,
       cacheWritePrice,
-      cachePrice: price ? `${cacheReadPrice} / ${cacheWritePrice}` : t('priceMissing'),
-      price: price ? `${inputPrice} / ${outputPrice}` : t('priceMissing')
+      cachePrice:
+        billingMeter === 'image'
+          ? '-'
+          : price && billingMeter === 'token'
+            ? `${cacheReadPrice} / ${cacheWritePrice}`
+            : t('priceMissing'),
+      price:
+        billingMeter === 'image'
+          ? `${unitPrice} / ${t('perImage')}`
+          : price && billingMeter === 'token'
+            ? `${inputPrice} / ${outputPrice}`
+            : t('priceMissing')
     }
   })
 }
@@ -358,240 +374,6 @@ function isRuntimeToggling(channelId: number, model: string) {
 
 function isChannelToggling(channelId: number) {
   return togglingChannelIds.has(channelId)
-}
-
-function isChannelDiagnosing(channelId: number) {
-  return diagnosingChannelId.value === channelId
-}
-
-function diagnosticStatusLabel(status: DiagnosticStatus) {
-  const labels: Record<DiagnosticStatus, string> = {
-    ok: t('diagnosticStatusOk'),
-    warning: t('diagnosticStatusWarning'),
-    failed: t('diagnosticStatusFailed'),
-    skipped: t('diagnosticStatusSkipped')
-  }
-  return labels[status]
-}
-
-function diagnosticStatusType(status: DiagnosticStatus) {
-  const types: Record<DiagnosticStatus, 'success' | 'warning' | 'danger' | 'info'> = {
-    ok: 'success',
-    warning: 'warning',
-    failed: 'danger',
-    skipped: 'info'
-  }
-  return types[status]
-}
-
-function diagnosticStepIcon(status: DiagnosticStatus) {
-  const icons = {
-    ok: CircleCheckFilled,
-    warning: WarningFilled,
-    failed: CircleCloseFilled,
-    skipped: VideoPause
-  }
-  return icons[status]
-}
-
-function diagnosticStepLabel(name: string) {
-  if (name === 'models') return t('diagnosticStepModels')
-  if (name === 'probe') return t('diagnosticStepProbe')
-  if (name.startsWith('probe:')) return `${t('diagnosticStepProbe')} · ${name.slice(6)}`
-  return name
-}
-
-async function scrollDiagnosticLiveListToBottom() {
-  await nextTick()
-  const list = diagnosticLiveListRef.value
-  if (list) list.scrollTop = list.scrollHeight
-}
-
-function diagnosticModelsPreview(models: string[]) {
-  if (models.length === 0) return t('diagnosticNoModels')
-  return models.slice(0, 6).join(', ') + (models.length > 6 ? ` +${models.length - 6}` : '')
-}
-
-function diagnosticEndpointCount(report: ChannelDiagnosticReport) {
-  return report.endpoints.length
-}
-
-function diagnosticKeyCount(report: ChannelDiagnosticReport) {
-  return report.endpoints.reduce((count, endpoint) => count + endpoint.keys.length, 0)
-}
-
-function diagnosticAvailableKeyCount(report: ChannelDiagnosticReport) {
-  return report.endpoints.reduce(
-    (count, endpoint) => count + endpoint.keys.filter((key) => key.status === 'ok').length,
-    0
-  )
-}
-
-function diagnosticConfiguredModelCount(endpoint: EndpointDiagnosticReport) {
-  return endpoint.configured_models.length
-}
-
-function diagnosticDiscoveredModelSummary(endpoint: EndpointDiagnosticReport) {
-  const count = endpoint.discovered_models.length
-  return count > 0 ? `${count}` : t('diagnosticNoModels')
-}
-
-function diagnosticStepMeta(step: DiagnosticStep) {
-  return `${formatDurationMs(step.duration_ms)}${step.status_code ? ` · HTTP ${step.status_code}` : ''}`
-}
-
-function diagnosticEndpointTitle(endpoint: EndpointDiagnosticReport) {
-  return `${endpoint.protocol.toUpperCase()} · ${endpoint.base_url}`
-}
-
-function latestProbeSample(row: Channel) {
-  return row.probe_samples.length > 0 ? row.probe_samples[row.probe_samples.length - 1] : null
-}
-
-function probeTrendStats(row: Channel) {
-  const samples = row.probe_samples
-  const latencySamples = samples.filter((sample) => sample.latency_ms != null)
-  const latencyValues = latencySamples.map((sample) => sample.latency_ms ?? 0)
-  const latest = latestProbeSample(row)
-  const okCount = samples.filter((sample) => sample.status === 'ok').length
-  const failedCount = samples.filter((sample) => sample.status === 'failed').length
-  const avgLatency =
-    latencyValues.length > 0
-      ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length
-      : null
-  const minLatency = latencyValues.length > 0 ? Math.min(...latencyValues) : null
-  const maxLatency = latencyValues.length > 0 ? Math.max(...latencyValues) : null
-
-  return {
-    total: samples.length,
-    okCount,
-    failedCount,
-    latest,
-    avgLatency,
-    minLatency,
-    maxLatency
-  }
-}
-
-function probeSampleTone(sample: ChannelProbeSample) {
-  if (sample.status === 'skipped') return 'is-skipped'
-  if (sample.status !== 'ok') return 'is-failed'
-  if (sample.latency_ms == null) return 'is-empty'
-  if (sample.latency_ms > 5000) return 'is-very-slow'
-  if (sample.latency_ms > 2000) return 'is-slow'
-  return 'is-ok'
-}
-
-function probeSampleStatusText(sample: ChannelProbeSample) {
-  if (sample.status === 'ok') return t('diagnosticStatusOk')
-  if (sample.status === 'skipped') return t('diagnosticStatusSkipped')
-  return t('diagnosticStatusFailed')
-}
-
-function probeSampleTitle(sample: ChannelProbeSample) {
-  return [
-    `${t('time')}: ${formatCompactDateTime(sample.created_at)}`,
-    `${t('model')}: ${sample.model || '-'}`,
-    `${t('channelStatus')}: ${probeSampleStatusText(sample)}`,
-    `${t('latency')}: ${probeLatencyLabel(sample)}`,
-    sample.status_code ? `${t('probeStatusCode')}: ${sample.status_code}` : '',
-    sample.error_summary ? `${t('error')}: ${sample.error_summary}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function probeTrendBars(row: Channel) {
-  const samples = row.probe_samples
-  if (samples.length === 0) return []
-
-  const width = 132
-  const baseline = 39
-  const maxHeight = 34
-  const gap = samples.length > 18 ? 2 : 3
-  const barWidth = Math.max(3, Math.min(10, (width - gap * (samples.length - 1)) / samples.length))
-  const totalWidth = barWidth * samples.length + gap * (samples.length - 1)
-  const offsetX = Math.max(0, (width - totalWidth) / 2)
-  const maxLatency = Math.max(
-    ...samples.map((sample) => sample.latency_ms ?? 0).filter((value) => value > 0),
-    1
-  )
-
-  return samples.map((sample, index) => {
-    const latency = sample.latency_ms ?? 0
-    const valueHeight =
-      sample.status === 'ok' && latency > 0
-        ? Math.max(4, (latency / maxLatency) * maxHeight)
-        : sample.status === 'failed'
-          ? 16
-          : 8
-    const height = Math.min(maxHeight, valueHeight)
-
-    return {
-      key: `${sample.created_at}-${index}`,
-      x: Number((offsetX + index * (barWidth + gap)).toFixed(2)),
-      y: Number((baseline - height).toFixed(2)),
-      width: Number(barWidth.toFixed(2)),
-      height: Number(height.toFixed(2)),
-      tone: probeSampleTone(sample),
-      title: probeSampleTitle(sample)
-    }
-  })
-}
-
-function probeTrendClass(row: Channel) {
-  const latest = latestProbeSample(row)
-  if (!latest) return 'is-empty'
-  return latest.status === 'ok' ? 'is-ok' : 'is-failed'
-}
-
-function probeLatencyLabel(sample: ChannelProbeSample | null) {
-  if (!sample) return t('probeNoData')
-  if (sample.status !== 'ok') return t('probeFailed')
-  return sample.latency_ms == null ? '-' : `${sample.latency_ms}ms`
-}
-
-function probeSampleStatusLabel(sample: ChannelProbeSample | null) {
-  if (!sample) return t('probeNoData')
-  if (sample.status === 'ok') return t('diagnosticStatusOk')
-  if (sample.status === 'skipped') return t('diagnosticStatusSkipped')
-  return t('diagnosticStatusFailed')
-}
-
-function probeTrendSuccessLabel(row: Channel) {
-  const stats = probeTrendStats(row)
-  return stats.total === 0 ? '-' : `${stats.okCount}/${stats.total}`
-}
-
-function probeTrendAverageLabel(row: Channel) {
-  const stats = probeTrendStats(row)
-  return stats.avgLatency == null ? '-' : formatDurationMs(stats.avgLatency)
-}
-
-function probeTooltip(row: Channel) {
-  const stats = probeTrendStats(row)
-  const sample = stats.latest
-  if (!sample) return t('probeNoDataHint')
-  const time = formatCompactDateTime(sample.created_at)
-  const model = sample.model || '-'
-  const status = sample.status === 'ok' ? t('diagnosticStatusOk') : t('diagnosticStatusFailed')
-  return [
-    `${t('time')}: ${time}`,
-    `${t('model')}: ${model}`,
-    `${t('channelStatus')}: ${status}`,
-    `${t('latency')}: ${probeLatencyLabel(sample)}`,
-    `${t('probeSuccessRatio')}: ${stats.okCount}/${stats.total}`,
-    stats.avgLatency != null
-      ? `${t('probeAverageLatency')}: ${formatDurationMs(stats.avgLatency)}`
-      : '',
-    stats.minLatency != null && stats.maxLatency != null
-      ? `${t('probeLatencyRange')}: ${formatDurationMs(stats.minLatency)} - ${formatDurationMs(stats.maxLatency)}`
-      : '',
-    sample.status_code ? `${t('probeStatusCode')}: ${sample.status_code}` : '',
-    sample.error_summary ? `${t('error')}: ${sample.error_summary}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n')
 }
 
 function channelRuntimeStatus(row: Channel) {
@@ -657,19 +439,91 @@ function keyStatusTooltip(
 }
 
 async function loadPricingData() {
-  pricingLoading.value = true
-  try {
-    const [fetchedPrices, fetchedTemplates] = await Promise.all([
-      getProviderPrices(),
-      getPricingTemplates()
-    ])
-    prices.value = fetchedPrices
-    templates.value = fetchedTemplates
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    pricingLoading.value = false
+  await withLoading(pricingLoading, async () => {
+    try {
+      const [fetchedPrices, fetchedTemplates, fetchedProviderModels] = await Promise.all([
+        getProviderPrices(),
+        getPricingTemplates(),
+        getProviderModels()
+      ])
+      prices.value = fetchedPrices
+      templates.value = fetchedTemplates
+      providerModels.value = fetchedProviderModels
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+function capabilityValues(capabilities: Record<string, unknown>, path: string[]) {
+  let current: unknown = capabilities
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return []
+    current = (current as Record<string, unknown>)[key]
   }
+  return Array.isArray(current)
+    ? current.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+    : []
+}
+
+function modelOutputModalities(provider: string, model: string) {
+  const record = providerModelByModel.value.get(priceKey(provider, model))
+  const output = record ? capabilityValues(record.capabilities, ['modalities', 'output']) : []
+  if (output.length > 0) return output
+
+  const template = findPricingTemplate(templates.value, provider, model)
+  if (!template || template.provider === provider) return output
+
+  const referenceRecord = providerModelByModel.value.get(priceKey(template.provider, model))
+  return referenceRecord
+    ? capabilityValues(referenceRecord.capabilities, ['modalities', 'output'])
+    : output
+}
+
+function canUseImageBilling(provider: string, model: string) {
+  const output = modelOutputModalities(provider, model)
+  return output.length === 1 && output[0] === 'image'
+}
+
+function defaultBillingMeterForModel(provider: string, model: string) {
+  return canUseImageBilling(provider, model) ? 'image' : 'token'
+}
+
+function isBillingMeterLocked(provider: string, model: string) {
+  return !canUseImageBilling(provider, model)
+}
+
+function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm) {
+  return (
+    template.billing_meter ===
+    (form.billingMeter ?? defaultBillingMeterForModel(form.provider, form.model))
+  )
+}
+
+function findApplicablePricingTemplate(form: ChannelPriceForm) {
+  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  return template && templateAppliesToForm(template, form) ? template : undefined
+}
+
+function hasManualPriceInput(form: ChannelPriceForm) {
+  if (form.billingMeter === 'image') return form.unitUsd > 0
+  return (
+    form.inputUsdPerMillion > 0 ||
+    form.outputUsdPerMillion > 0 ||
+    form.cacheReadUsdPerMillion > 0 ||
+    (form.cacheWriteUsdPerMillion ?? 0) > 0
+  )
+}
+
+function hasEnabledBillablePrice(price?: ProviderPrice, billingMeter?: BillingMeter | null) {
+  if (!price?.enabled) return false
+  if (billingMeter && price.billing_meter !== billingMeter) return false
+  if (price.billing_meter === 'image') return (price.unit_price_usd_micros ?? 0) > 0
+  return price.input_price_usd_micros > 0 || price.output_price_usd_micros > 0
+}
+
+function shouldSavePriceForm(form: ChannelPriceForm) {
+  return form.hasPriceRecord || hasReferencePrice(form) || hasManualPriceInput(form)
 }
 
 function openPriceDialog(row: Channel) {
@@ -681,6 +535,14 @@ function openPriceDialog(row: Channel) {
     const key = priceKey(row.provider, model)
     const price = priceByModel.value.get(key)
     const template = findPricingTemplate(templates.value, row.provider, model)
+    const supportsImageBilling = canUseImageBilling(row.provider, model)
+    const savedBillingMeter =
+      price?.billing_meter === 'image' && supportsImageBilling
+        ? 'image'
+        : price?.billing_meter === 'token'
+          ? 'token'
+          : null
+    const billingMeter = savedBillingMeter ?? defaultBillingMeterForModel(row.provider, model)
     const inputPrice = price?.input_price_usd_micros ?? template?.input_price_usd_micros ?? 0
     const cacheWritePrice = template
       ? template.cache_write_price_usd_micros
@@ -688,6 +550,7 @@ function openPriceDialog(row: Channel) {
     priceForms[key] = {
       provider: row.provider,
       model,
+      billingMeter,
       inputUsdPerMillion: microUsdToUsd(inputPrice),
       outputUsdPerMillion: microUsdToUsd(
         price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0
@@ -701,8 +564,12 @@ function openPriceDialog(row: Channel) {
         cacheWritePrice === undefined || cacheWritePrice === null
           ? 0
           : microUsdToUsd(cacheWritePrice),
-      enabled: price?.enabled ?? true,
-      hasPrice: Boolean(price),
+      unitUsd: microUsdToUsd(price?.unit_price_usd_micros ?? template?.unit_price_usd_micros ?? 0),
+      enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
+      hasPrice: hasEnabledBillablePrice(price, billingMeter),
+      hasPriceRecord: Boolean(price),
+      billingMeterLocked: isBillingMeterLocked(row.provider, model),
+      canUseImageBilling: supportsImageBilling,
       templateSource: template ? pricingTemplateSourceLabel(template, row.provider) : undefined
     }
   }
@@ -710,7 +577,7 @@ function openPriceDialog(row: Channel) {
 }
 
 function hasReferencePrice(form: (typeof priceForms)[string]) {
-  return Boolean(findPricingTemplate(templates.value, form.provider, form.model))
+  return Boolean(findApplicablePricingTemplate(form))
 }
 
 function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
@@ -718,8 +585,14 @@ function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
 }
 
 function referencePriceSummary(form: (typeof priceForms)[string]) {
-  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  const template = findApplicablePricingTemplate(form)
   if (!template) return ''
+  if (template.billing_meter === 'image') {
+    const unit = template.unit_price_usd_micros
+      ? formatUsdPerMillion(microUsdToUsd(template.unit_price_usd_micros))
+      : t('priceMissing')
+    return `${t('billingMeterImageGeneration')} ${unit} / ${t('perImage')}`
+  }
   const input = formatUsdPerMillion(microUsdToUsd(template.input_price_usd_micros))
   const output = formatUsdPerMillion(microUsdToUsd(template.output_price_usd_micros))
   const cacheRead = formatUsdPerMillion(
@@ -736,17 +609,19 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
 }
 
 function pricingTemplateSourceLabel(template: PricingTemplate, provider: string) {
+  if (template.source === 'models_dev') return ''
   const source = template.source.replace(/_/g, '.')
   return template.provider === provider ? source : `${template.provider} / ${source}`
 }
 
 function priceIconProvider(form: (typeof priceForms)[string]) {
-  return findPricingTemplate(templates.value, form.provider, form.model)?.provider ?? form.provider
+  return findApplicablePricingTemplate(form)?.provider ?? form.provider
 }
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
-  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  const template = findApplicablePricingTemplate(form)
   if (!template) return
+  form.billingMeter = template.billing_meter
   form.inputUsdPerMillion = microUsdToUsd(template.input_price_usd_micros)
   form.outputUsdPerMillion = microUsdToUsd(template.output_price_usd_micros)
   form.cacheReadUsdPerMillion = microUsdToUsd(
@@ -757,10 +632,18 @@ function fillReferencePrice(form: (typeof priceForms)[string]) {
     template.cache_write_price_usd_micros === null
       ? 0
       : microUsdToUsd(template.cache_write_price_usd_micros)
+  form.unitUsd = microUsdToUsd(template.unit_price_usd_micros ?? 0)
 }
 
 function cacheWritePricePayload(form: (typeof priceForms)[string]) {
   return form.cacheWriteUsdPerMillion === null ? null : usdToMicroUsd(form.cacheWriteUsdPerMillion)
+}
+
+function requireBillingMeter(form: (typeof priceForms)[string]) {
+  if (!form.billingMeter) {
+    throw new Error(t('billingMeterRequired'))
+  }
+  return form.billingMeter
 }
 
 function readReferenceSyncError(err: unknown) {
@@ -794,101 +677,70 @@ async function syncCreateReferencePricesIfNeeded() {
 }
 
 async function saveChannelPrices() {
-  savingPrices.value = true
-  try {
-    for (const form of Object.values(priceForms)) {
-      await upsertProviderPrice({
-        provider: form.provider,
-        model: form.model,
-        input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-        output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-        cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-        cache_write_price_usd_micros: cacheWritePricePayload(form),
-        enabled: form.enabled
-      })
+  await withLoading(savingPrices, async () => {
+    try {
+      for (const form of Object.values(priceForms)) {
+        if (!shouldSavePriceForm(form)) continue
+        const billingMeter = requireBillingMeter(form)
+        await upsertProviderPrice({
+          provider: form.provider,
+          model: form.model,
+          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
+          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
+          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
+          cache_write_price_usd_micros: cacheWritePricePayload(form),
+          billing_meter: billingMeter,
+          unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
+          enabled: form.enabled
+        })
+      }
+      ElMessage.success(t('priceSaved'))
+      await loadPricingData()
+      await loadChannels()
+      priceDialogOpen.value = false
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    ElMessage.success(t('priceSaved'))
-    await loadPricingData()
-    await loadChannels()
-    priceDialogOpen.value = false
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    savingPrices.value = false
-  }
+  })
 }
 
 async function toggleChannelModelRuntime(channelId: number, model: string, enabled: boolean) {
   if (isRuntimeToggling(channelId, model)) return
 
-  togglingRuntimeKeys.add(runtimeKey(channelId, model))
-  try {
-    await updateChannelModel(channelId, model, { enabled })
-    await loadChannels()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingRuntimeKeys.remove(runtimeKey(channelId, model))
-  }
+  await togglingRuntimeKeys.withItem(runtimeKey(channelId, model), async () => {
+    try {
+      await updateChannelModel(channelId, model, { enabled })
+      await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function toggleChannelRuntime(row: Channel, enabled: boolean) {
   if (row.enabled === enabled || isChannelToggling(row.id)) return
 
-  togglingChannelIds.add(row.id)
-  try {
-    await updateChannel(row.id, {
-      name: row.name,
-      endpoints: row.endpoints.map((endpoint) => ({
-        protocol: endpoint.protocol,
-        base_url: endpoint.base_url,
-        models: endpoint.models,
-        enabled: endpoint.enabled
-      })),
-      enabled,
-      priority: row.priority,
-      weight: row.weight,
-      key_selection_mode: row.key_selection_mode,
-      use_credentials: row.use_credentials
-    })
-    await loadChannels()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingChannelIds.remove(row.id)
-  }
-}
-
-async function runChannelDiagnostic(row: Channel) {
-  if (diagnosticInProgress.value) return
-
-  diagnosticChannel.value = row
-  diagnosticReport.value = null
-  diagnosticError.value = ''
-  diagnosticLiveSteps.value = []
-  diagnosticCurrentModel.value = ''
-  diagnosticDialogOpen.value = true
-  diagnosingChannelId.value = row.id
-  try {
-    diagnosticReport.value = await streamChannelDiagnostic(row.id, (event) => {
-      if (event.type === 'model_started') {
-        diagnosticCurrentModel.value = event.model
-      }
-      if (event.type === 'model_result') {
-        diagnosticLiveSteps.value.push(event)
-        diagnosticCurrentModel.value = ''
-        void scrollDiagnosticLiveListToBottom()
-      }
-      if (event.type === 'finished') {
-        diagnosticReport.value = event.report
-      }
-    })
-    await loadChannels()
-  } catch (err) {
-    diagnosticError.value = readError(err)
-  } finally {
-    diagnosingChannelId.value = null
-  }
+  await togglingChannelIds.withItem(row.id, async () => {
+    try {
+      await updateChannel(row.id, {
+        name: row.name,
+        endpoints: row.endpoints.map((endpoint) => ({
+          protocol: endpoint.protocol,
+          base_url: endpoint.base_url,
+          models: endpoint.models,
+          enabled: endpoint.enabled
+        })),
+        enabled,
+        priority: row.priority,
+        weight: row.weight,
+        key_selection_mode: row.key_selection_mode,
+        use_credentials: row.use_credentials
+      })
+      await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function applyReferencePrices() {
@@ -898,29 +750,31 @@ async function applyReferencePrices() {
     return
   }
 
-  savingPrices.value = true
-  try {
-    for (const form of targetForms) {
-      fillReferencePrice(form)
-      await upsertProviderPrice({
-        provider: form.provider,
-        model: form.model,
-        input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-        output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-        cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-        cache_write_price_usd_micros: cacheWritePricePayload(form),
-        enabled: true
-      })
+  await withLoading(savingPrices, async () => {
+    try {
+      for (const form of targetForms) {
+        fillReferencePrice(form)
+        const billingMeter = requireBillingMeter(form)
+        await upsertProviderPrice({
+          provider: form.provider,
+          model: form.model,
+          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
+          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
+          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
+          cache_write_price_usd_micros: cacheWritePricePayload(form),
+          billing_meter: billingMeter,
+          unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
+          enabled: true
+        })
+      }
+      ElMessage.success(t('referencePricesApplied'))
+      await loadPricingData()
+      await loadChannels()
+      priceDialogOpen.value = false
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    ElMessage.success(t('referencePricesApplied'))
-    await loadPricingData()
-    await loadChannels()
-    priceDialogOpen.value = false
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    savingPrices.value = false
-  }
+  })
 }
 
 async function submitChannel() {
@@ -1020,75 +874,12 @@ onMounted(loadInitialData)
       >
         <el-table-column type="expand" width="44">
           <template #default="{ row }">
-            <div class="channel-expand-panel" :class="{ 'is-channel-disabled': !row.enabled }">
-              <div class="channel-expand-head">
-                <div>
-                  <strong>{{ t('modelPriceDetails') }}</strong>
-                </div>
-                <el-button
-                  class="admin-action-button expand-price-action"
-                  :icon="PriceTag"
-                  @click="openPriceDialog(row)"
-                >
-                  {{ t('configurePrice') }}
-                </el-button>
-              </div>
-              <div class="channel-expand-price-table">
-                <div class="channel-expand-price-row is-head">
-                  <span>{{ t('modelName') }}</span>
-                  <span class="channel-head-label">{{ t('inputOutputPriceShort') }}</span>
-                  <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
-                  <span>{{ t('priceStatus') }}</span>
-                  <span>{{ t('runtimeStatus') }}</span>
-                  <span>{{ t('modelRuntimeStatus') }}</span>
-                  <span>{{ t('modelRuntimeSwitch') }}</span>
-                </div>
-                <div
-                  v-for="item in channelPriceRows(row)"
-                  :key="item.model"
-                  class="channel-expand-price-row"
-                  :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
-                >
-                  <span class="channel-price-model">{{ item.model }}</span>
-                  <span class="channel-detail-price">{{ item.price }}</span>
-                  <span class="channel-detail-price">{{ item.cachePrice }}</span>
-                  <span
-                    class="channel-detail-status"
-                    :class="{ 'is-missing': item.missing, 'is-disabled': !item.billingEnabled }"
-                    :aria-label="
-                      item.missing
-                        ? t('priceMissing')
-                        : item.billingEnabled
-                          ? t('enabled')
-                          : t('disabled')
-                    "
-                  >
-                    <el-icon>
-                      <Warning v-if="item.missing" />
-                      <CircleCheck v-else-if="item.billingEnabled" />
-                      <CircleCloseFilled v-else />
-                    </el-icon>
-                  </span>
-                  <span class="channel-detail-runtime-raw" :class="`is-${item.runtimeStatus}`">
-                    {{ item.runtimeStatusLabel }}
-                  </span>
-                  <span class="channel-detail-runtime-status" :class="`is-${item.modelStatus}`">
-                    {{ item.modelStatusLabel }}
-                  </span>
-                  <span
-                    class="channel-detail-runtime-switch"
-                    :aria-label="item.runtimeEnabled ? t('enabled') : t('disabled')"
-                  >
-                    <el-switch
-                      :model-value="item.runtimeEnabled"
-                      :disabled="item.runtimeToggleDisabled"
-                      size="small"
-                      @change="toggleChannelModelRuntime(row.id, item.model, Boolean($event))"
-                    />
-                  </span>
-                </div>
-              </div>
-            </div>
+            <ChannelExpandPanel
+              :channel="row"
+              :rows="channelPriceRows(row)"
+              @configure-price="openPriceDialog"
+              @toggle-model-runtime="toggleChannelModelRuntime"
+            />
           </template>
         </el-table-column>
         <el-table-column prop="name" :label="t('name')" min-width="120">
@@ -1165,102 +956,7 @@ onMounted(loadInitialData)
           header-align="center"
         >
           <template #default="{ row }">
-            <el-tooltip
-              placement="top"
-              effect="light"
-              popper-class="probe-trend-tooltip"
-              :show-after="180"
-            >
-              <template #content>
-                <div class="probe-tooltip-content">
-                  <div class="probe-tooltip-head">
-                    <div class="probe-tooltip-title">{{ t('probeLatestResult') }}</div>
-                    <div class="probe-tooltip-subtitle">
-                      {{ latestProbeSample(row)?.model || '-' }}
-                    </div>
-                  </div>
-                  <div class="probe-tooltip-grid">
-                    <span>{{ t('time') }}</span>
-                    <strong>{{
-                      latestProbeSample(row)
-                        ? formatCompactDateTime(latestProbeSample(row)?.created_at)
-                        : '-'
-                    }}</strong>
-                    <span>{{ t('channelStatus') }}</span>
-                    <strong>{{ probeSampleStatusLabel(latestProbeSample(row)) }}</strong>
-                    <span>{{ t('latency') }}</span>
-                    <strong>{{ probeLatencyLabel(latestProbeSample(row)) }}</strong>
-                    <span>{{ t('probeSuccessRatio') }}</span>
-                    <strong>{{ probeTrendSuccessLabel(row) }}</strong>
-                    <span>{{ t('probeAverageLatency') }}</span>
-                    <strong>{{ probeTrendAverageLabel(row) }}</strong>
-                    <template
-                      v-if="
-                        probeTrendStats(row).minLatency != null &&
-                        probeTrendStats(row).maxLatency != null
-                      "
-                    >
-                      <span>{{ t('probeLatencyRange') }}</span>
-                      <strong>
-                        {{ formatDurationMs(probeTrendStats(row).minLatency) }} -
-                        {{ formatDurationMs(probeTrendStats(row).maxLatency) }}
-                      </strong>
-                    </template>
-                    <template v-if="latestProbeSample(row)?.status_code">
-                      <span>{{ t('probeStatusCode') }}</span>
-                      <strong>{{ latestProbeSample(row)?.status_code }}</strong>
-                    </template>
-                    <template v-if="latestProbeSample(row)?.error_summary">
-                      <span>{{ t('error') }}</span>
-                      <strong>{{ latestProbeSample(row)?.error_summary }}</strong>
-                    </template>
-                  </div>
-                </div>
-              </template>
-              <div
-                class="probe-trend-cell"
-                :class="probeTrendClass(row)"
-                :aria-label="probeTooltip(row)"
-              >
-                <svg class="probe-trend-chart" viewBox="0 0 132 44" aria-hidden="true">
-                  <line
-                    x1="0"
-                    y1="39"
-                    x2="132"
-                    y2="39"
-                    class="probe-trend-baseline"
-                    stroke-linecap="round"
-                  />
-                  <rect
-                    v-for="bar in probeTrendBars(row)"
-                    :key="bar.key"
-                    :x="bar.x"
-                    :y="bar.y"
-                    :width="bar.width"
-                    :height="bar.height"
-                    rx="1.8"
-                    class="probe-trend-bar"
-                    :class="bar.tone"
-                  >
-                    <title>{{ bar.title }}</title>
-                  </rect>
-                  <line
-                    v-if="probeTrendBars(row).length === 0"
-                    x1="14"
-                    y1="22"
-                    x2="118"
-                    y2="22"
-                    class="probe-trend-empty-line"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                  />
-                </svg>
-                <div class="probe-trend-foot">
-                  <span>{{ t('probeAverageLatency') }}</span>
-                  <strong>{{ probeTrendAverageLabel(row) }}</strong>
-                </div>
-              </div>
-            </el-tooltip>
+            <ChannelProbeTrendCell :channel="row" :latency-scale="probeTrendLatencyScale" />
           </template>
         </el-table-column>
         <el-table-column
@@ -1320,22 +1016,22 @@ onMounted(loadInitialData)
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <AdminActionTooltip :content="t('configurePrice')">
+              <el-tooltip :content="t('configurePrice')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action price-config-action"
                   :aria-label="t('configurePrice')"
                   :icon="Coin"
                   @click="openPriceDialog(row)"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('edit')">
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </AdminActionTooltip>
+              </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
                   class="admin-action-button icon-only-action action-more-button"
@@ -1473,184 +1169,7 @@ onMounted(loadInitialData)
       @save="saveChannelPrices"
     />
 
-    <el-dialog
-      v-model="diagnosticDialogOpen"
-      class="channel-dialog diagnostic-dialog"
-      :title="t('channelDiagnosticReport')"
-      width="760px"
-      :close-on-click-modal="!diagnosticInProgress"
-      :close-on-press-escape="!diagnosticInProgress"
-    >
-      <div v-if="diagnosticInProgress && diagnosticChannel" class="diagnostic-running">
-        <div class="diagnostic-running-icon">
-          <el-icon><Loading /></el-icon>
-        </div>
-        <div class="diagnostic-running-copy">
-          <strong>{{ t('diagnosticRunningTitle') }}</strong>
-          <span>{{ diagnosticChannel.name }} · {{ diagnosticChannel.provider }}</span>
-          <p>{{ t('diagnosticRunningHint') }}</p>
-        </div>
-        <div v-if="diagnosticCurrentModel" class="diagnostic-current-model">
-          <span>{{ t('diagnosticCurrentModel') }}</span>
-          <strong>{{ diagnosticCurrentModel }}</strong>
-        </div>
-        <div class="diagnostic-live-panel">
-          <div ref="diagnosticLiveListRef" class="diagnostic-live-list">
-            <div v-if="diagnosticLiveSteps.length === 0" class="diagnostic-live-empty">
-              {{ t('diagnosticWaitingFirstResult') }}
-            </div>
-            <div
-              v-for="event in diagnosticLiveSteps"
-              :key="`${event.endpoint_id}-${event.key_id ?? event.key_name}-${event.model}`"
-              class="diagnostic-step"
-              :class="`is-${event.step.status}`"
-            >
-              <el-icon class="diagnostic-step-icon">
-                <component :is="diagnosticStepIcon(event.step.status)" />
-              </el-icon>
-              <div class="diagnostic-step-copy">
-                <strong>{{ diagnosticStepLabel(event.step.name) }}</strong>
-                <span>{{ event.step.message }}</span>
-              </div>
-              <span class="diagnostic-step-meta">{{ diagnosticStepMeta(event.step) }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-else-if="diagnosticError" class="diagnostic-error">
-        <el-alert
-          :title="t('diagnosticFailedTitle')"
-          :description="diagnosticError"
-          type="error"
-          show-icon
-        />
-        <el-button
-          v-if="diagnosticChannel"
-          class="admin-action-button"
-          type="primary"
-          @click="runChannelDiagnostic(diagnosticChannel)"
-        >
-          {{ t('retry') }}
-        </el-button>
-      </div>
-
-      <div v-else-if="diagnosticReport" class="diagnostic-report">
-        <div class="diagnostic-result-card" :class="`is-${diagnosticReport.status}`">
-          <div class="diagnostic-result-main">
-            <span>{{ t('diagnosticResultOverview') }}</span>
-            <strong>{{ diagnosticReport.summary }}</strong>
-            <small>{{ diagnosticReport.channel_name }} · {{ diagnosticReport.provider }}</small>
-          </div>
-          <el-tag :type="diagnosticStatusType(diagnosticReport.status)" effect="light" round>
-            {{ diagnosticStatusLabel(diagnosticReport.status) }}
-          </el-tag>
-        </div>
-
-        <div class="diagnostic-stats">
-          <div class="diagnostic-stat">
-            <span>{{ t('latency') }}</span>
-            <strong>{{ formatDurationMs(diagnosticReport.duration_ms) }}</strong>
-          </div>
-          <div class="diagnostic-stat">
-            <span>{{ t('diagnosticTestedEndpoints') }}</span>
-            <strong>{{ diagnosticEndpointCount(diagnosticReport) }}</strong>
-          </div>
-          <div class="diagnostic-stat">
-            <span>{{ t('diagnosticTestedKeys') }}</span>
-            <strong>{{ diagnosticKeyCount(diagnosticReport) }}</strong>
-          </div>
-          <div class="diagnostic-stat">
-            <span>{{ t('diagnosticAvailableKeys') }}</span>
-            <strong>{{ diagnosticAvailableKeyCount(diagnosticReport) }}</strong>
-          </div>
-        </div>
-
-        <div class="diagnostic-section">
-          <div class="diagnostic-section-title">
-            <strong>{{ t('diagnosticEndpointOverview') }}</strong>
-          </div>
-          <div
-            v-for="endpoint in diagnosticReport.endpoints"
-            :key="endpoint.endpoint_id"
-            class="diagnostic-endpoint-card"
-          >
-            <div class="diagnostic-endpoint-head">
-              <div>
-                <strong>{{ diagnosticEndpointTitle(endpoint) }}</strong>
-                <span>{{ endpoint.summary }}</span>
-              </div>
-              <el-tag :type="diagnosticStatusType(endpoint.status)" size="small" effect="light">
-                {{ diagnosticStatusLabel(endpoint.status) }}
-              </el-tag>
-            </div>
-            <div class="diagnostic-endpoint-facts">
-              <span>
-                {{ t('diagnosticConfiguredModels') }}
-                <strong>{{ diagnosticConfiguredModelCount(endpoint) }}</strong>
-              </span>
-              <span>
-                {{ t('diagnosticDiscoveredModels') }}
-                <strong>{{ diagnosticDiscoveredModelSummary(endpoint) }}</strong>
-              </span>
-              <span v-if="endpoint.missing_configured_models.length" class="is-warning">
-                {{ t('diagnosticMissingModels') }}
-                <strong>{{ diagnosticModelsPreview(endpoint.missing_configured_models) }}</strong>
-              </span>
-            </div>
-            <div v-if="endpoint.discovered_models.length" class="diagnostic-model-preview">
-              {{ diagnosticModelsPreview(endpoint.discovered_models) }}
-            </div>
-          </div>
-        </div>
-
-        <div class="diagnostic-section">
-          <div class="diagnostic-section-title">
-            <strong>{{ t('diagnosticKeyChecks') }}</strong>
-          </div>
-          <div
-            v-for="endpoint in diagnosticReport.endpoints"
-            :key="`keys-${endpoint.endpoint_id}`"
-            class="diagnostic-key-group"
-          >
-            <div
-              v-for="key in endpoint.keys"
-              :key="`${endpoint.endpoint_id}-${key.key_id ?? key.key_name}`"
-              class="diagnostic-key-item"
-            >
-              <div class="diagnostic-key-head">
-                <div>
-                  <strong>{{ key.key_name }}</strong>
-                  <span v-if="key.key_prefix">{{ key.key_prefix }}</span>
-                  <span v-else>{{ endpoint.protocol.toUpperCase() }}</span>
-                </div>
-                <el-tag :type="diagnosticStatusType(key.status)" size="small" effect="light">
-                  {{ diagnosticStatusLabel(key.status) }}
-                </el-tag>
-              </div>
-              <p>{{ key.summary }}</p>
-              <div class="diagnostic-step-list">
-                <div
-                  v-for="step in key.steps"
-                  :key="`${key.key_id ?? key.key_name}-${step.name}`"
-                  class="diagnostic-step"
-                  :class="`is-${step.status}`"
-                >
-                  <el-icon class="diagnostic-step-icon">
-                    <component :is="diagnosticStepIcon(step.status)" />
-                  </el-icon>
-                  <div class="diagnostic-step-copy">
-                    <strong>{{ diagnosticStepLabel(step.name) }}</strong>
-                    <span>{{ step.message }}</span>
-                  </div>
-                  <span class="diagnostic-step-meta">{{ diagnosticStepMeta(step) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
+    <ChannelDiagnosticDialog :diagnostic="diagnostic" @retry="runChannelDiagnostic" />
   </section>
 </template>
 
@@ -2108,863 +1627,7 @@ onMounted(loadInitialData)
   background: #94a3b8;
 }
 
-.probe-trend-cell {
-  color: #17a169;
-  display: inline-grid;
-  gap: 3px;
-  justify-items: center;
-  min-width: 156px;
-  padding: 4px 0;
-  text-align: center;
-}
-
-.probe-trend-cell.is-failed {
-  color: #dc2626;
-}
-
-.probe-trend-cell.is-empty {
-  color: #94a3b8;
-}
-
-.probe-trend-foot {
-  align-items: center;
-  display: flex;
-  gap: 4px;
-  justify-content: center;
-  min-width: 0;
-}
-
-.probe-trend-foot strong {
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.probe-trend-chart {
-  color: inherit;
-  display: block;
-  height: 44px;
-  width: 132px;
-}
-
-.probe-trend-baseline {
-  stroke: #e5e7eb;
-  stroke-width: 1;
-}
-
-.probe-trend-empty-line {
-  stroke: currentColor;
-}
-
-.probe-trend-bar {
-  fill: currentColor;
-}
-
-.probe-trend-bar.is-ok {
-  fill: #16a34a;
-}
-
-.probe-trend-bar.is-slow {
-  fill: #f59e0b;
-}
-
-.probe-trend-bar.is-very-slow {
-  fill: #f97316;
-}
-
-.probe-trend-bar.is-failed {
-  fill: #dc2626;
-}
-
-.probe-trend-bar.is-skipped,
-.probe-trend-bar.is-empty {
-  fill: #94a3b8;
-}
-
-.probe-trend-foot {
-  color: #667085;
-  font-size: 11px;
-  font-weight: 620;
-  line-height: 1.1;
-}
-
-.probe-trend-foot strong {
-  color: #344054;
-  font-weight: 760;
-}
-
-.probe-trend-cell.is-empty .probe-trend-foot strong {
-  color: #86909c;
-  font-weight: 620;
-}
-
-.probe-trend-cell.is-failed .probe-trend-foot strong {
-  color: #b42318;
-}
-
-:global(.probe-trend-tooltip.el-popper.is-light) {
-  border: 1px solid #d8e0ea;
-  border-radius: 8px;
-  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
-  color: #1f2937;
-  padding: 10px 12px;
-}
-
-.probe-tooltip-content {
-  display: grid;
-  gap: 8px;
-  min-width: 230px;
-}
-
-.probe-tooltip-head {
-  display: grid;
-  gap: 2px;
-}
-
-.probe-tooltip-title {
-  color: #111827;
-  font-size: 13px;
-  font-weight: 760;
-}
-
-.probe-tooltip-subtitle {
-  color: #667085;
-  font-size: 12px;
-  font-weight: 620;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.probe-tooltip-grid {
-  display: grid;
-  gap: 5px 14px;
-  grid-template-columns: max-content minmax(0, 1fr);
-}
-
-.probe-tooltip-grid span {
-  color: #667085;
-  font-size: 12px;
-  font-weight: 620;
-}
-
-.probe-tooltip-grid strong {
-  color: #1f2937;
-  font-size: 12px;
-  font-weight: 720;
-  max-width: 260px;
-  overflow-wrap: anywhere;
-}
-
-.channel-expand-panel {
-  display: grid;
-  gap: 12px;
-  margin: 0;
-  padding: 14px 16px 16px 60px;
-}
-
-.channel-expand-head {
-  align-items: center;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.channel-expand-head div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.channel-expand-head strong {
-  color: #1d2129;
-  font-size: 14px;
-  font-weight: 760;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.channel-expand-head span {
-  color: #86909c;
-  font-size: 12px;
-  font-weight: 560;
-  line-height: 1.2;
-}
-
-.expand-price-action.el-button {
-  --el-button-bg-color: var(--brand-blue);
-  --el-button-border-color: var(--brand-blue);
-  --el-button-text-color: #ffffff;
-  --el-button-hover-bg-color: var(--brand-blue-hover);
-  --el-button-hover-border-color: var(--brand-blue-hover);
-  --el-button-hover-text-color: #ffffff;
-  box-shadow: none;
-}
-
-.expand-price-action.el-button:not(.is-disabled):hover {
-  box-shadow: none;
-}
-
-.channel-expand-price-table {
-  background: #ffffff;
-  border: 1px solid #e3ebf4;
-  border-radius: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.channel-expand-price-row {
-  align-items: center;
-  background: #ffffff;
-  display: grid;
-  gap: 8px;
-  grid-template-columns:
-    minmax(120px, 1.5fr)
-    minmax(160px, 0.7fr)
-    minmax(160px, 0.7fr)
-    80px
-    92px
-    90px
-    84px;
-  min-height: 46px;
-  padding: 0 12px;
-}
-
-.channel-expand-price-row + .channel-expand-price-row {
-  border-top: 1px solid #eef3f8;
-}
-
-.channel-expand-price-row.is-head {
-  background: #f4f7fb;
-  color: #4e5969;
-  font-size: 12px;
-  font-weight: 760;
-  min-height: 38px;
-}
-
-.channel-expand-price-row.is-head span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.channel-head-label {
-  align-items: center;
-  display: inline-flex;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-.channel-expand-price-row.is-head span:nth-child(2),
-.channel-expand-price-row.is-head span:nth-child(3),
-.channel-detail-price {
-  text-align: right;
-}
-
-.channel-expand-price-row.is-head span:nth-child(4),
-.channel-expand-price-row.is-head span:nth-child(5),
-.channel-expand-price-row.is-head span:nth-child(6),
-.channel-expand-price-row.is-head span:nth-child(7) {
-  text-align: center;
-}
-
-.channel-expand-price-row.is-missing {
-  background: #fffaf3;
-}
-
-.channel-expand-price-row.is-disabled:not(.is-missing) {
-  background: #f8fafc;
-}
-
-.channel-expand-price-row.is-missing .channel-price-model {
-  color: #c2410c;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-expand-head strong,
-.channel-expand-panel.is-channel-disabled .channel-expand-head span {
-  color: #94a3b8;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-expand-price-row {
-  color: #94a3b8;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-expand-price-row.is-head {
-  background: #f1f5f9;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-price-model,
-.channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-detail-price {
-  color: #94a3b8;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-detail-status .el-icon {
-  color: #cbd5e1;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-detail-runtime-status {
-  color: #94a3b8;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-detail-runtime-raw {
-  color: #94a3b8;
-}
-
-.channel-expand-panel.is-channel-disabled .channel-detail-runtime-switch :deep(.el-switch) {
-  --el-switch-on-color: #cbd5e1;
-  --el-switch-off-color: #cbd5e1;
-}
-
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-price-model,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-price,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-raw,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-status,
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-runtime-switch {
-  color: #94a3b8;
-}
-
-.channel-expand-price-row.is-disabled:not(.is-missing) .channel-detail-status .el-icon {
-  color: #cbd5e1;
-}
-
-.channel-expand-price-row .channel-price-model {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  color: #1d2129;
-  display: inline-block;
-  font-size: 13px;
-  font-weight: 400;
-  max-width: 100%;
-  overflow: hidden;
-  padding: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.channel-detail-price {
-  align-items: center;
-  color: #1d2129;
-  display: inline-flex;
-  font-size: 13px;
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  font-weight: 400;
-  justify-content: flex-end;
-  white-space: nowrap;
-}
-
-.channel-detail-status {
-  align-items: center;
-  display: inline-flex;
-  justify-content: center;
-  justify-self: center;
-  padding-left: 20px;
-}
-
-.channel-detail-status .el-icon {
-  align-items: center;
-  color: #22c55e;
-  display: inline-flex;
-  font-size: 18px;
-  justify-content: center;
-}
-
-.channel-detail-status.is-missing .el-icon {
-  color: #f97316;
-}
-
-.channel-detail-runtime-status {
-  align-items: center;
-  border-radius: 999px;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 700;
-  justify-content: center;
-  line-height: 1;
-  padding: 4px 10px;
-  white-space: nowrap;
-}
-
-.channel-detail-runtime-raw {
-  align-items: center;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  color: #475569;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 700;
-  justify-content: center;
-  line-height: 1;
-  padding: 4px 10px;
-  white-space: nowrap;
-}
-
-.channel-detail-runtime-raw.is-normal {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  color: #15803d;
-}
-
-.channel-detail-runtime-raw.is-cooldown {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
-}
-
-.channel-detail-runtime-raw.is-failed {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #64748b;
-}
-
-.channel-detail-runtime-status.is-available,
-.channel-detail-runtime-status.is-normal {
-  background: #f0fdf4;
-  color: #15803d;
-}
-
-.channel-detail-runtime-status.is-missing,
-.channel-detail-runtime-status.is-rate_limited {
-  background: #fff7ed;
-  color: #c2410c;
-}
-
-.channel-detail-runtime-status.is-cooldown {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.channel-detail-runtime-status.is-failed {
-  background: #f1f5f9;
-  color: #64748b;
-}
-
-.channel-detail-runtime-status.is-disabled {
-  background: #f1f5f9;
-  color: #94a3b8;
-}
-
-.channel-detail-runtime-switch {
-  align-items: center;
-  display: inline-flex;
-  justify-content: center;
-}
-
-.channel-detail-runtime-switch :deep(.el-switch) {
-  --el-switch-on-color: #22c55e;
-  --el-switch-off-color: #94a3b8;
-}
-
-.channel-expand-price-row.is-missing .channel-detail-price,
-.channel-expand-price-row.is-missing .channel-detail-status {
-  color: #c2410c;
-}
-
 .channel-empty-state {
   padding: 30px 0 34px;
-}
-
-.diagnostic-report {
-  display: grid;
-  gap: 16px;
-}
-
-.diagnostic-running,
-.diagnostic-error {
-  display: grid;
-  gap: 14px;
-  min-height: 240px;
-  place-items: center;
-  text-align: center;
-}
-
-.diagnostic-running-copy {
-  display: grid;
-  gap: 6px;
-  justify-items: center;
-  max-width: 520px;
-}
-
-.diagnostic-running-copy strong {
-  color: #1d2129;
-  font-size: 16px;
-  font-weight: 680;
-}
-
-.diagnostic-running-copy span {
-  color: #86909c;
-  font-size: 13px;
-}
-
-.diagnostic-running-copy p {
-  color: #4e5969;
-  line-height: 1.55;
-  margin: 0;
-}
-
-.diagnostic-running-copy small {
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  border-radius: 999px;
-  color: #c2410c;
-  font-size: 12px;
-  font-weight: 720;
-  line-height: 1;
-  padding: 6px 10px;
-}
-
-.diagnostic-current-model {
-  align-items: center;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  border-radius: 8px;
-  display: flex;
-  gap: 8px;
-  max-width: min(100%, 620px);
-  padding: 10px 12px;
-}
-
-.diagnostic-current-model span {
-  color: #c2410c;
-  font-size: 12px;
-  font-weight: 720;
-  white-space: nowrap;
-}
-
-.diagnostic-current-model strong {
-  color: #1d2129;
-  font-size: 13px;
-  font-weight: 760;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.diagnostic-live-panel {
-  background: #ffffff;
-  border: 1px solid #d8e0ea;
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-  box-sizing: border-box;
-  height: 302px;
-  padding: 0 0 0 10px;
-  width: min(100%, 620px);
-}
-
-.diagnostic-live-list {
-  align-content: start;
-  box-sizing: border-box;
-  display: grid;
-  gap: 8px;
-  grid-auto-rows: max-content;
-  height: 100%;
-  overflow: auto;
-  padding: 10px 8px 10px 0;
-  scrollbar-gutter: stable;
-  width: 100%;
-}
-
-.diagnostic-live-empty {
-  color: #667085;
-  font-size: 13px;
-  font-weight: 620;
-  line-height: 1.5;
-  padding: 2px 0;
-  text-align: center;
-}
-
-.diagnostic-running-icon {
-  align-items: center;
-  background: #fff7ed;
-  border-radius: 999px;
-  color: #c2410c;
-  display: inline-flex;
-  font-size: 22px;
-  height: 56px;
-  justify-content: center;
-  width: 56px;
-}
-
-.diagnostic-running-icon :deep(.el-icon) {
-  animation: diagnostic-spin 1s linear infinite;
-}
-
-@keyframes diagnostic-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.diagnostic-result-card {
-  align-items: start;
-  background: #f7fbf8;
-  border: 1px solid #d8f0d1;
-  border-radius: 8px;
-  display: flex;
-  gap: 14px;
-  justify-content: space-between;
-  padding: 14px 16px;
-}
-
-.diagnostic-result-card.is-warning {
-  background: #fffaf0;
-  border-color: #fdecc8;
-}
-
-.diagnostic-result-card.is-failed {
-  background: #fff7f7;
-  border-color: #ffd6d6;
-}
-
-.diagnostic-result-main {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.diagnostic-result-main span,
-.diagnostic-section-title span,
-.diagnostic-stat span,
-.diagnostic-key-head span,
-.diagnostic-step-copy span,
-.diagnostic-step-meta,
-.diagnostic-endpoint-head span,
-.diagnostic-model-preview,
-.diagnostic-endpoint-facts {
-  color: #86909c;
-  font-size: 12px;
-}
-
-.diagnostic-result-main strong {
-  color: #1d2129;
-  font-size: 16px;
-  font-weight: 760;
-  line-height: 1.35;
-}
-
-.diagnostic-result-main small {
-  color: #667085;
-  font-size: 12px;
-  font-weight: 620;
-}
-
-.diagnostic-stats {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.diagnostic-stat {
-  background: #f8fafc;
-  border: 1px solid #edf1f6;
-  border-radius: 8px;
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-}
-
-.diagnostic-stat strong {
-  color: #1d2129;
-  font-size: 16px;
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  font-weight: 760;
-}
-
-.diagnostic-section {
-  display: grid;
-  gap: 10px;
-}
-
-.diagnostic-section-title {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-.diagnostic-section-title strong {
-  color: #344054;
-  font-size: 14px;
-  font-weight: 760;
-}
-
-.diagnostic-endpoint-card,
-.diagnostic-key-item {
-  border: 1px solid #e6edf5;
-  border-radius: 8px;
-  display: grid;
-  gap: 12px;
-  padding: 13px 14px;
-}
-
-.diagnostic-endpoint-head,
-.diagnostic-key-head {
-  align-items: start;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.diagnostic-endpoint-head div,
-.diagnostic-key-head div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.diagnostic-endpoint-head strong,
-.diagnostic-key-head strong {
-  color: #1d2129;
-  font-size: 14px;
-  font-weight: 760;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.diagnostic-endpoint-facts {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-}
-
-.diagnostic-endpoint-facts strong {
-  color: #344054;
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  font-weight: 760;
-  margin-left: 4px;
-}
-
-.diagnostic-endpoint-facts .is-warning,
-.diagnostic-endpoint-facts .is-warning strong {
-  color: #c2410c;
-}
-
-.diagnostic-model-preview {
-  background: #f8fafc;
-  border-radius: 8px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  padding: 9px 10px;
-}
-
-.diagnostic-key-group {
-  display: grid;
-  gap: 10px;
-}
-
-.diagnostic-key-item p {
-  color: #4e5969;
-  line-height: 1.45;
-  margin: 0;
-}
-
-.diagnostic-step-list {
-  display: grid;
-  gap: 8px;
-}
-
-.diagnostic-step {
-  align-items: center;
-  background: #fbfcff;
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  min-height: 74px;
-  padding: 9px 10px;
-}
-
-.diagnostic-step-icon {
-  color: #16a34a;
-  font-size: 18px;
-}
-
-.diagnostic-step.is-warning .diagnostic-step-icon {
-  color: #d97706;
-}
-
-.diagnostic-step.is-failed .diagnostic-step-icon {
-  color: #dc2626;
-}
-
-.diagnostic-step.is-skipped .diagnostic-step-icon {
-  color: #64748b;
-}
-
-.diagnostic-step-copy {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.diagnostic-step-copy strong {
-  color: #1d2129;
-  font-size: 13px;
-  font-weight: 720;
-}
-
-.diagnostic-step-copy span {
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.diagnostic-step-meta {
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-@media (max-width: 760px) {
-  .channel-expand-panel {
-    padding: 12px;
-  }
-
-  .channel-expand-head {
-    align-items: stretch;
-    display: grid;
-  }
-
-  .channel-expand-price-row {
-    gap: 8px;
-    grid-template-columns: 1fr;
-    padding: 12px;
-  }
-
-  .channel-expand-price-row.is-head {
-    display: none;
-  }
-
-  .channel-expand-price-row span,
-  .channel-detail-price,
-  .channel-detail-status {
-    text-align: left;
-  }
-
-  .diagnostic-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .diagnostic-step {
-    align-items: start;
-    grid-template-columns: 10px minmax(0, 1fr);
-  }
-
-  .diagnostic-step-meta {
-    grid-column: 2;
-  }
-
-  .diagnostic-result-card,
-  .diagnostic-endpoint-head,
-  .diagnostic-key-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }
 </style>

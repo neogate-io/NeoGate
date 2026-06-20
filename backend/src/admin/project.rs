@@ -3,11 +3,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Row};
 
 use crate::{
-    AppState,
     auth::{generate_user_key, key_prefix},
-    billing::{CreditAccountId, CreditAccountType, DebitPart, account},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart},
     error::{AppError, AppResult},
     id::DbId,
+    input::{bounded_limit, trimmed_non_empty_owned},
+    pagination::{created_id_cursor_page, parse_created_id_cursor},
+    AppState,
 };
 
 #[derive(Debug, Serialize)]
@@ -104,20 +106,10 @@ fn default_enabled_status() -> String {
 }
 
 pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppResult<ProjectPage> {
-    let limit = query.limit.unwrap_or(50).clamp(1, 200);
-    let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
-    let search = query
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let status = query
-        .status
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let limit = bounded_limit(query.limit, 50, 200);
+    let cursor = parse_created_id_cursor(query.cursor.as_deref(), "invalid cursor")?;
+    let search = trimmed_non_empty_owned(query.search.as_deref());
+    let status = trimmed_non_empty_owned(query.status.as_deref());
     if let Some(status) = &status {
         validate_project_status(status)?;
     }
@@ -129,12 +121,12 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
                FROM project p"#,
     );
 
-    let mut has_where = true;
     query_builder.push(" WHERE p.deleted_at IS NULL");
     if let Some(search) = search {
+        let search_pattern = format!("%{search}%");
         query_builder
             .push(" AND (p.name ILIKE ")
-            .push_bind(format!("%{search}%"))
+            .push_bind(search_pattern.clone())
             .push(
                 r#" OR EXISTS (
                     SELECT 1
@@ -144,26 +136,20 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
                       AND admin_member.role = 'admin'
                       AND (admin_user.email::TEXT ILIKE "#,
             )
-            .push_bind(format!("%{search}%"))
+            .push_bind(search_pattern.clone())
             .push(" OR admin_user.username ILIKE ")
-            .push_bind(format!("%{search}%"))
+            .push_bind(search_pattern)
             .push("))")
             .push(")");
-        has_where = true;
     }
 
     if let Some(status) = status {
-        query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
-            .push("p.status = ")
-            .push_bind(status);
-        has_where = true;
+        query_builder.push(" AND p.status = ").push_bind(status);
     }
 
     if let Some((created_at, id)) = cursor {
         query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
-            .push("(p.created_at, p.id) < (")
+            .push(" AND (p.created_at, p.id) < (")
             .push_bind(created_at)
             .push(", ")
             .push_bind(id)
@@ -212,13 +198,7 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
         );
 
     let rows = query_builder.build().fetch_all(&state.db.pool).await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(created_id_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
 
     Ok(ProjectPage {
         items: rows
@@ -714,14 +694,7 @@ async fn invalidate_project_keys(state: &AppState, project_id: DbId) -> AppResul
         .bind(project_id)
         .fetch_all(&state.db.pool)
         .await?;
-    for row in rows {
-        let id: DbId = row.try_get("id")?;
-        state
-            .cache_invalidator
-            .invalidate(state, crate::cache::InvalidationEvent::UserKey { id })
-            .await;
-    }
-    Ok(())
+    invalidate_user_key_rows(state, rows).await
 }
 
 async fn invalidate_project_member_user_keys(
@@ -734,6 +707,13 @@ async fn invalidate_project_member_user_keys(
         .bind(user_id)
         .fetch_all(&state.db.pool)
         .await?;
+    invalidate_user_key_rows(state, rows).await
+}
+
+async fn invalidate_user_key_rows(
+    state: &AppState,
+    rows: Vec<sqlx::postgres::PgRow>,
+) -> AppResult<()> {
     for row in rows {
         let id: DbId = row.try_get("id")?;
         state
@@ -766,10 +746,7 @@ async fn recover_project_hot_credit_accounts(state: &AppState, project_id: DbId)
     .fetch_all(&state.db.pool)
     .await?;
 
-    for row in rows {
-        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
-    }
-    Ok(())
+    recover_hot_credit_account_rows(state, rows).await
 }
 
 async fn recover_project_member_user_key_hot_credit_accounts(
@@ -794,10 +771,7 @@ async fn recover_project_member_user_key_hot_credit_accounts(
     .fetch_all(&state.db.pool)
     .await?;
 
-    for row in rows {
-        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
-    }
-    Ok(())
+    recover_hot_credit_account_rows(state, rows).await
 }
 
 async fn recover_hot_credit_account(
@@ -812,6 +786,16 @@ async fn recover_hot_credit_account(
         .await?;
     recover_hot_credit_in_tx(&mut tx, &recovered).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+async fn recover_hot_credit_account_rows(
+    state: &AppState,
+    rows: Vec<sqlx::postgres::PgRow>,
+) -> AppResult<()> {
+    for row in rows {
+        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
+    }
     Ok(())
 }
 
@@ -834,28 +818,6 @@ async fn recover_hot_credit_in_tx(
     }
 
     Ok(())
-}
-
-fn parse_created_id_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some((created_at, id)) = cursor.rsplit_once('|') else {
-        return Err(AppError::BadRequest("invalid cursor".to_string()));
-    };
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?
-        .with_timezone(&Utc);
-    let id = id
-        .parse::<DbId>()
-        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?;
-    Ok(Some((created_at, id)))
-}
-
-fn created_id_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
-    let created_at: DateTime<Utc> = row.try_get("created_at")?;
-    let id: DbId = row.try_get("id")?;
-    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 fn validate_project_status(status: &str) -> AppResult<()> {

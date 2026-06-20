@@ -7,6 +7,7 @@ import {
   Key,
   Menu,
   Monitor,
+  Promotion,
   Setting,
   SwitchButton,
   User
@@ -27,23 +28,31 @@ type AdminNavItem = { path: string; key: MessageKey; icon: Component }
 type SettingNavItem = { path: string; key: MessageKey }
 type AdminNavGroup = { key: MessageKey; items: AdminNavItem[] }
 
-const navGroups = [
-  {
-    key: 'adminNavOperations',
-    items: [
-      { path: '/admin/channels', key: 'upstreamChannels', icon: Connection },
-      { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
-      { path: '/admin/usage', key: 'usage', icon: Monitor }
-    ]
-  },
-  {
-    key: 'adminNavAccounts',
-    items: [
-      { path: '/admin/keys', key: 'userManagement', icon: User },
-      { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened }
-    ]
+const navGroups = computed(() => {
+  const operationItems: AdminNavItem[] = [
+    { path: '/admin/channels', key: 'upstreamChannels', icon: Connection }
+  ]
+  if (servicePolicy.value?.service_mode === 'internal') {
+    operationItems.push({ path: '/admin/apps', key: 'apps', icon: Promotion })
   }
-] satisfies AdminNavGroup[]
+  if (servicePolicy.value?.service_mode !== 'internal') {
+    operationItems.push({ path: '/admin/credentials', key: 'credentialManagement', icon: Key })
+  }
+  operationItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
+  return [
+    {
+      key: 'adminNavOperations',
+      items: operationItems
+    },
+    {
+      key: 'adminNavAccounts',
+      items: [
+        { path: '/admin/keys', key: 'userManagement', icon: User },
+        { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened }
+      ]
+    }
+  ] satisfies AdminNavGroup[]
+})
 
 const settingItems = computed(() => {
   const items: SettingNavItem[] = [
@@ -71,7 +80,7 @@ const activeRouteSubtitle = computed(() => {
 })
 const activeRouteGroupLabel = computed(() => {
   if (settingsOpen.value) return t('settings')
-  const matchedGroup = navGroups.find((group) =>
+  const matchedGroup = navGroups.value.find((group) =>
     group.items.some((item) => activeRoute.value.startsWith(item.path))
   )
   return t(matchedGroup?.key ?? 'adminNavOperations')
@@ -95,7 +104,7 @@ watch(
     <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
-          <img class="shell-logo-image" src="/logo.svg" :alt="t('appName')" />
+          <img class="shell-logo-image" src="/logos/logo.svg" :alt="t('appName')" />
         </RouterLink>
       </h1>
       <el-menu
@@ -152,11 +161,11 @@ watch(
             </nav>
           </div>
           <div class="header-actions">
-            <el-tooltip :content="t('language')" placement="bottom">
+            <el-tooltip :content="t('language')" placement="bottom" :show-after="600">
               <LocaleToggleButton class="header-utility-button header-language-button" />
             </el-tooltip>
             <span class="header-action-divider" aria-hidden="true"></span>
-            <el-tooltip :content="t('logout')" placement="bottom">
+            <el-tooltip :content="t('logout')" placement="bottom" :show-after="600">
               <el-button
                 class="header-utility-button header-logout-button"
                 :aria-label="t('logout')"

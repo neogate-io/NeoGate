@@ -4,7 +4,12 @@ import { Key, Lock, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { updateAdminPassword } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
-import { ApiError, readError } from '../../utils/errors'
+import { withLoading } from '../../composables/useLoadingTask'
+import {
+  readPasswordChangeError,
+  readPasswordChangeValidationError,
+  resetPasswordChangeForm
+} from '../../utils/password'
 
 const { t } = useLocale()
 
@@ -17,57 +22,43 @@ const form = reactive({
 })
 
 function resetForm() {
-  form.currentPassword = ''
-  form.newPassword = ''
-  form.confirmPassword = ''
+  resetPasswordChangeForm(form)
 }
 
 function validateForm() {
-  if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
-    ElMessage.error(t('passwordRequired'))
-    return false
-  }
-  if (form.newPassword.length < 8) {
-    ElMessage.error(t('passwordMinLength'))
-    return false
-  }
-  if (form.newPassword !== form.confirmPassword) {
-    ElMessage.error(t('adminPasswordMismatch'))
-    return false
-  }
-  if (form.currentPassword === form.newPassword) {
-    ElMessage.error(t('adminPasswordSame'))
+  const error = readPasswordChangeValidationError(form, t, {
+    mismatchKey: 'adminPasswordMismatch',
+    sameAsCurrentKey: 'adminPasswordSame'
+  })
+  if (error) {
+    ElMessage.error(error)
     return false
   }
   return true
 }
 
 function passwordError(err: unknown) {
-  if (err instanceof ApiError && err.message.includes('current password is incorrect')) {
-    return t('adminPasswordCurrentIncorrect')
-  }
-  if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
-    return t('passwordMinLength')
-  }
-  return readError(err)
+  return readPasswordChangeError(err, t, {
+    currentIncorrectKey: 'adminPasswordCurrentIncorrect',
+    fallback: 'readError'
+  })
 }
 
 async function save() {
   if (!validateForm()) return
 
-  saving.value = true
-  try {
-    await updateAdminPassword({
-      current_password: form.currentPassword,
-      new_password: form.newPassword
-    })
-    resetForm()
-    ElMessage.success(t('adminPasswordSaved'))
-  } catch (err) {
-    ElMessage.error(passwordError(err))
-  } finally {
-    saving.value = false
-  }
+  await withLoading(saving, async () => {
+    try {
+      await updateAdminPassword({
+        current_password: form.currentPassword,
+        new_password: form.newPassword
+      })
+      resetForm()
+      ElMessage.success(t('adminPasswordSaved'))
+    } catch (err) {
+      ElMessage.error(passwordError(err))
+    }
+  })
 }
 </script>
 

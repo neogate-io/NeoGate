@@ -91,61 +91,54 @@ function keyHealthLabel(key: ChannelKey) {
     width="680px"
   >
     <el-form class="channel-form" label-position="top" @submit.prevent="emit('submit')">
-      <div class="provider-row">
-        <el-form-item class="provider-field" :label="t('provider')">
-          <el-select
-            v-if="mode === 'create'"
-            v-model="form.provider"
-            class="provider-select"
-            filterable
-            popper-class="provider-select-dropdown"
-            @change="emit('selectProvider', form.provider)"
+      <el-form-item class="provider-field" :label="t('provider')">
+        <el-select
+          v-if="mode === 'create'"
+          v-model="form.provider"
+          class="provider-select"
+          filterable
+          popper-class="provider-select-dropdown"
+          @change="emit('selectProvider', form.provider)"
+        >
+          <template #prefix>
+            <ProviderIcon :provider="form.provider" />
+          </template>
+          <el-option
+            v-for="provider in providerOptions"
+            :key="provider.value"
+            :label="provider.label"
+            :value="provider.value"
           >
-            <template #prefix>
-              <ProviderIcon :provider="form.provider" />
-            </template>
-            <el-option
-              v-for="provider in providerOptions"
-              :key="provider.value"
-              :label="provider.label"
-              :value="provider.value"
-            >
-              <span class="provider-option">
-                <ProviderIcon :provider="provider.value" />
-                <span class="provider-option-label">{{ provider.label }}</span>
-              </span>
-            </el-option>
-          </el-select>
+            <span class="provider-option">
+              <ProviderIcon :provider="provider.value" />
+              <span class="provider-option-label">{{ provider.label }}</span>
+            </span>
+          </el-option>
+        </el-select>
 
-          <el-select
-            v-else
-            :model-value="providerValue"
-            class="provider-select"
-            disabled
-            popper-class="provider-select-dropdown"
+        <el-select
+          v-else
+          :model-value="providerValue"
+          class="provider-select"
+          disabled
+          popper-class="provider-select-dropdown"
+        >
+          <template #prefix>
+            <ProviderIcon :provider="providerValue" />
+          </template>
+          <el-option
+            v-for="provider in providerOptions"
+            :key="provider.value"
+            :label="provider.label"
+            :value="provider.value"
           >
-            <template #prefix>
-              <ProviderIcon :provider="providerValue" />
-            </template>
-            <el-option
-              v-for="provider in providerOptions"
-              :key="provider.value"
-              :label="provider.label"
-              :value="provider.value"
-            >
-              <span class="provider-option">
-                <ProviderIcon :provider="provider.value" />
-                <span class="provider-option-label">{{ provider.label }}</span>
-              </span>
-            </el-option>
-          </el-select>
-        </el-form-item>
-
-        <label class="status-toggle">
-          <span>{{ t('status') }}</span>
-          <el-switch v-model="form.enabled" />
-        </label>
-      </div>
+            <span class="provider-option">
+              <ProviderIcon :provider="provider.value" />
+              <span class="provider-option-label">{{ provider.label }}</span>
+            </span>
+          </el-option>
+        </el-select>
+      </el-form-item>
 
       <el-form-item class="name-field" :label="t('name')">
         <el-input v-model="form.name" :placeholder="t('channelNamePlaceholder')" />
@@ -317,17 +310,9 @@ function keyHealthLabel(key: ChannelKey) {
   gap: 13px;
 }
 
-.provider-row {
-  align-items: end;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 50%) max-content;
-  justify-content: start;
-}
-
 .provider-field {
   margin-bottom: 0;
-  width: 100%;
+  width: 50%;
 }
 
 .name-field {
@@ -371,18 +356,6 @@ function keyHealthLabel(key: ChannelKey) {
 
 :global(.provider-select-dropdown .el-select-dropdown__item.selected .provider-icon) {
   border-color: currentColor;
-}
-
-.status-toggle {
-  align-items: center;
-  align-self: end;
-  color: #475569;
-  display: flex;
-  font-size: 14px;
-  font-weight: 720;
-  gap: 8px;
-  justify-content: flex-end;
-  min-height: 42px;
 }
 
 .base-url-input.is-readonly :deep(.el-input__wrapper) {
@@ -738,20 +711,9 @@ function keyHealthLabel(key: ChannelKey) {
 }
 
 @media (max-width: 760px) {
-  .provider-row {
-    align-items: stretch;
-    grid-template-columns: 1fr;
-  }
-
   .provider-field,
   .name-field {
     width: 100%;
-  }
-
-  .status-toggle {
-    justify-content: space-between;
-    min-height: 32px;
-    padding-bottom: 0;
   }
 
   .model-summary-field {

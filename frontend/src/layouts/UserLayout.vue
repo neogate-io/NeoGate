@@ -45,7 +45,7 @@ const activeRouteSubtitle = computed(() => {
     <el-aside width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
-          <img class="shell-logo-image" src="/logo.svg" :alt="t('appName')" />
+          <img class="shell-logo-image" src="/logos/logo.svg" :alt="t('appName')" />
         </RouterLink>
       </h1>
       <el-menu :default-active="activeRoute" mode="vertical" router>

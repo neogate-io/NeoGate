@@ -4,6 +4,10 @@ use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::affinity::{
+    anthropic_messages_affinity_key_from_value, openai_responses_affinity_key_from_value,
+    ChannelAffinityKey,
+};
 use crate::error::{AppError, AppResult};
 
 #[derive(Clone, Copy)]
@@ -20,6 +24,7 @@ pub(crate) struct RelayRequestMeta {
     pub(crate) stream: bool,
     pub(crate) background: bool,
     pub(crate) store: Option<bool>,
+    pub(crate) channel_affinity_key: Option<ChannelAffinityKey>,
 }
 
 pub(crate) struct PreparedRelayBody {
@@ -51,6 +56,10 @@ pub(crate) fn prepare_relay_body(
     kind: BodyKind,
     default_output_tokens: i64,
 ) -> AppResult<PreparedRelayBody> {
+    if matches!(kind, BodyKind::OpenaiResponses | BodyKind::Anthropic) {
+        return prepare_relay_body_from_value(body, kind, default_output_tokens);
+    }
+
     let probe: RequestProbe<'_> = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let meta = request_meta_from_probe(&probe)?;
@@ -88,6 +97,44 @@ pub(crate) fn prepare_relay_body(
     })
 }
 
+fn prepare_relay_body_from_value(
+    body: Bytes,
+    kind: BodyKind,
+    default_output_tokens: i64,
+) -> AppResult<PreparedRelayBody> {
+    let mut value: Value = serde_json::from_slice(&body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    let meta = request_meta_from_value(&value, kind)?;
+    let needs_output_limit = needs_output_limit(kind);
+    let (output_tokens, has_output_limit) = output_limit_from_value(&value, kind)
+        .map(|tokens| (tokens, true))
+        .unwrap_or_else(|| (default_output_tokens, false));
+    let needs_stream_usage = meta.stream
+        && matches!(kind, BodyKind::OpenaiChat | BodyKind::OpenaiResponses)
+        && !openai_stream_usage_included_value(&value);
+    let changed = (needs_output_limit && !has_output_limit) || needs_stream_usage;
+    if !changed {
+        return Ok(PreparedRelayBody {
+            body,
+            meta,
+            output_tokens,
+        });
+    }
+
+    if needs_output_limit && !has_output_limit {
+        ensure_output_limit(&mut value, kind, default_output_tokens)?;
+    }
+    if needs_stream_usage {
+        ensure_openai_stream_usage(&mut value)?;
+    }
+    let body = Bytes::from(serde_json::to_vec(&value)?);
+    Ok(PreparedRelayBody {
+        body,
+        meta,
+        output_tokens,
+    })
+}
+
 fn request_meta_from_probe(probe: &RequestProbe<'_>) -> AppResult<RelayRequestMeta> {
     let model = probe
         .model
@@ -101,6 +148,35 @@ fn request_meta_from_probe(probe: &RequestProbe<'_>) -> AppResult<RelayRequestMe
         stream: probe.stream.unwrap_or(false),
         background: probe.background.unwrap_or(false),
         store: probe.store,
+        channel_affinity_key: None,
+    })
+}
+
+fn request_meta_from_value(value: &Value, kind: BodyKind) -> AppResult<RelayRequestMeta> {
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))?;
+    if model.is_empty() {
+        return Err(AppError::BadRequest("model is required".to_string()));
+    }
+    let channel_affinity_key = match kind {
+        BodyKind::OpenaiResponses => openai_responses_affinity_key_from_value(model, value),
+        BodyKind::Anthropic => anthropic_messages_affinity_key_from_value(model, value),
+        BodyKind::OpenaiChat | BodyKind::OpenaiJson => None,
+    };
+    Ok(RelayRequestMeta {
+        model: model.to_string(),
+        stream: value
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        background: value
+            .get("background")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        store: value.get("store").and_then(Value::as_bool),
+        channel_affinity_key,
     })
 }
 
@@ -112,6 +188,13 @@ fn output_limit_from_probe(probe: &RequestProbe<'_>, kind: BodyKind) -> Option<i
         BodyKind::Anthropic => probe.max_tokens,
     }?;
     (tokens > 0).then_some(tokens)
+}
+
+fn output_limit_from_value(value: &Value, kind: BodyKind) -> Option<i64> {
+    output_limit_keys(kind)
+        .iter()
+        .filter_map(|key| value.get(*key).and_then(Value::as_i64))
+        .find(|tokens| *tokens > 0)
 }
 
 fn needs_output_limit(kind: BodyKind) -> bool {
@@ -126,6 +209,14 @@ fn openai_stream_usage_included(probe: &RequestProbe<'_>) -> bool {
         .unwrap_or(false)
 }
 
+fn openai_stream_usage_included_value(value: &Value) -> bool {
+    value
+        .get("stream_options")
+        .and_then(|options| options.get("include_usage"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 fn ensure_output_limit(
     value: &mut Value,
     kind: BodyKind,
@@ -134,12 +225,7 @@ fn ensure_output_limit(
     let object = value
         .as_object_mut()
         .ok_or_else(|| AppError::BadRequest("request body must be a json object".to_string()))?;
-    let keys: &[&str] = match kind {
-        BodyKind::OpenaiChat => &["max_completion_tokens", "max_tokens"],
-        BodyKind::OpenaiJson => &[],
-        BodyKind::OpenaiResponses => &["max_output_tokens"],
-        BodyKind::Anthropic => &["max_tokens"],
-    };
+    let keys = output_limit_keys(kind);
     for key in keys {
         if let Some(tokens) = object.get(*key).and_then(Value::as_i64) {
             if tokens > 0 {
@@ -153,6 +239,15 @@ fn ensure_output_limit(
         Value::Number(serde_json::Number::from(default_output_tokens)),
     );
     Ok((default_output_tokens, true))
+}
+
+fn output_limit_keys(kind: BodyKind) -> &'static [&'static str] {
+    match kind {
+        BodyKind::OpenaiChat => &["max_completion_tokens", "max_tokens"],
+        BodyKind::OpenaiJson => &[],
+        BodyKind::OpenaiResponses => &["max_output_tokens"],
+        BodyKind::Anthropic => &["max_tokens"],
+    }
 }
 
 fn ensure_openai_stream_usage(value: &mut Value) -> AppResult<bool> {
@@ -226,5 +321,31 @@ mod tests {
         assert_eq!(prepared.body, body);
         assert_eq!(prepared.meta.model, "text-embedding-3-small");
         assert_eq!(prepared.output_tokens, 0);
+    }
+
+    #[test]
+    fn extracts_openai_responses_affinity_key_from_prepared_meta() {
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-5","prompt_cache_key":"trace-1","max_output_tokens":128}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::OpenaiResponses, 4096).unwrap();
+        let key = prepared.meta.channel_affinity_key.expect("affinity key");
+
+        assert_eq!(key.rule, "openai_responses_prompt_cache_key");
+        assert_eq!(key.value, "trace-1");
+    }
+
+    #[test]
+    fn extracts_anthropic_affinity_key_from_prepared_meta() {
+        let body = Bytes::from_static(
+            br#"{"model":"claude-sonnet-4","metadata":{"user_id":"user-1"},"max_tokens":128}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::Anthropic, 4096).unwrap();
+        let key = prepared.meta.channel_affinity_key.expect("affinity key");
+
+        assert_eq!(key.rule, "anthropic_messages_metadata_user_id");
+        assert_eq!(key.value, "user-1");
     }
 }

@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{AssertSqlSafe, Postgres, Row, Transaction};
 
 use crate::{
     auth::key_prefix,
+    billing::{BILLABLE_PROVIDER_PRICE_CONDITION, BILLABLE_PROVIDER_PRICE_CONDITION_PP},
     error::{AppError, AppResult},
     id::DbId,
+    input::trimmed_non_empty,
     AppState,
 };
 
@@ -89,6 +91,8 @@ pub struct ChannelModelRecord {
     pub output_price_usd_micros: Option<i64>,
     pub cache_read_price_usd_micros: Option<i64>,
     pub cache_write_price_usd_micros: Option<i64>,
+    pub billing_meter: Option<String>,
+    pub unit_price_usd_micros: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -634,11 +638,7 @@ async fn normalize_create_endpoints(
         provider_default_endpoint_base_url(state, provider_code, &protocol)
             .await?
             .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
-    let base_url = req
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let base_url = trimmed_non_empty(req.base_url.as_deref())
         .unwrap_or(default_endpoint_base_url.trim())
         .to_string();
 
@@ -686,11 +686,7 @@ async fn normalize_update_endpoints(
         provider_default_endpoint_base_url(state, provider_code, &protocol)
             .await?
             .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
-    let base_url = req
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let base_url = trimmed_non_empty(req.base_url.as_deref())
         .unwrap_or(default_endpoint_base_url.trim())
         .to_string();
 
@@ -711,9 +707,7 @@ async fn default_protocol_for_request(
     use_credentials: bool,
     requested_protocol: Option<&str>,
 ) -> AppResult<String> {
-    if let Some(protocol) = requested_protocol
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    if let Some(protocol) = trimmed_non_empty(requested_protocol)
         .map(validate_protocol)
         .transpose()?
     {
@@ -750,11 +744,7 @@ fn normalize_endpoint_inputs<'a>(
                 "duplicate endpoint protocol: {protocol}"
             )));
         }
-        let base_url = input
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        let base_url = trimmed_non_empty(input.base_url.as_deref())
             .ok_or_else(|| AppError::BadRequest("base_url is required".to_string()))?
             .to_string();
         endpoints.push(NormalizedEndpoint {
@@ -774,17 +764,23 @@ fn normalize_endpoint_inputs<'a>(
 }
 
 fn models_from_endpoints(endpoints: &[NormalizedEndpoint]) -> Vec<String> {
-    let mut models = Vec::new();
+    dedupe_models(
+        endpoints
+            .iter()
+            .flat_map(|endpoint| endpoint.models.iter().map(String::as_str)),
+    )
+}
+
+fn dedupe_models<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut normalized = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for endpoint in endpoints {
-        for model in &endpoint.models {
-            let model = model.trim();
-            if !model.is_empty() && seen.insert(model.to_string()) {
-                models.push(model.to_string());
-            }
+    for value in values {
+        let model = value.trim();
+        if !model.is_empty() && seen.insert(model.to_string()) {
+            normalized.push(model.to_string());
         }
     }
-    models
+    normalized
 }
 
 fn validate_protocol(protocol: &str) -> AppResult<String> {
@@ -805,16 +801,11 @@ fn credential_endpoint_inputs(
         return inputs;
     }
 
-    let mut models = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for input in &inputs {
-        for model in &input.models {
-            let model = model.trim();
-            if !model.is_empty() && seen.insert(model.to_string()) {
-                models.push(model.to_string());
-            }
-        }
-    }
+    let models = dedupe_models(
+        inputs
+            .iter()
+            .flat_map(|input| input.models.iter().map(String::as_str)),
+    );
 
     let base_url = inputs
         .iter()
@@ -932,10 +923,7 @@ async fn sync_channel_models_for_channel(
 
     if !active_models.is_empty() {
         sqlx::query(
-            "UPDATE channel_model
-             SET enabled = FALSE,
-                 status = 'disabled',
-                 updated_at = now()
+            "DELETE FROM channel_model
              WHERE channel_id = $1
                AND NOT (model = ANY($2))",
         )
@@ -944,16 +932,10 @@ async fn sync_channel_models_for_channel(
         .execute(&mut **tx)
         .await?;
     } else {
-        sqlx::query(
-            "UPDATE channel_model
-             SET enabled = FALSE,
-                 status = 'disabled',
-                 updated_at = now()
-             WHERE channel_id = $1",
-        )
-        .bind(channel_id)
-        .execute(&mut **tx)
-        .await?;
+        sqlx::query("DELETE FROM channel_model WHERE channel_id = $1")
+            .bind(channel_id)
+            .execute(&mut **tx)
+            .await?;
     }
 
     Ok(())
@@ -964,14 +946,15 @@ async fn model_has_enabled_price(
     provider: &str,
     model: &str,
 ) -> AppResult<bool> {
-    let exists: Option<i32> = sqlx::query_scalar(
+    let exists: Option<i32> = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT 1
          FROM provider_price
          WHERE provider = $1
            AND model = $2
            AND enabled = TRUE
-         LIMIT 1",
-    )
+           AND {BILLABLE_PROVIDER_PRICE_CONDITION}
+         LIMIT 1"
+    )))
     .bind(provider)
     .bind(model)
     .fetch_optional(&mut **tx)
@@ -1058,22 +1041,28 @@ async fn models_by_channel(
         return Ok(HashMap::new());
     }
 
-    let rows = sqlx::query(
+    let rows = sqlx::query(AssertSqlSafe(format!(
         "SELECT cm.id, cm.channel_id, cm.provider, cm.model, cm.enabled,
                 cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
                 cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
                 cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
-                COALESCE(pp.enabled, FALSE) AS billing_enabled,
+                COALESCE(
+                    pp.enabled
+                    AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP},
+                    FALSE
+                ) AS billing_enabled,
                 (pp.id IS NOT NULL) AS price_configured,
                 pp.input_price_usd_micros, pp.output_price_usd_micros,
-                pp.cache_read_price_usd_micros, pp.cache_write_price_usd_micros
+                pp.cache_read_price_usd_micros, pp.cache_write_price_usd_micros,
+                pp.billing_meter,
+                pp.unit_price_usd_micros
          FROM channel_model cm
          LEFT JOIN provider_price pp
            ON pp.provider = cm.provider
           AND pp.model = cm.model
          WHERE cm.channel_id = ANY($1)
-         ORDER BY cm.model ASC",
-    )
+         ORDER BY cm.model ASC"
+    )))
     .bind(channel_ids)
     .fetch_all(&state.db.pool)
     .await?;
@@ -1091,17 +1080,18 @@ async fn ensure_channel_model_has_enabled_price(
     channel_id: DbId,
     model: &str,
 ) -> AppResult<()> {
-    let row = sqlx::query(
+    let row = sqlx::query(AssertSqlSafe(format!(
         "SELECT 1
          FROM channel_model cm
          JOIN provider_price pp
-           ON pp.provider = cm.provider
-          AND pp.model = cm.model
-          AND pp.enabled = TRUE
+          ON pp.provider = cm.provider
+         AND pp.model = cm.model
+         AND pp.enabled = TRUE
+         AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
          WHERE cm.channel_id = $1
            AND cm.model = $2
-         LIMIT 1",
-    )
+         LIMIT 1"
+    )))
     .bind(channel_id)
     .bind(model)
     .fetch_optional(&state.db.pool)
@@ -1183,6 +1173,8 @@ fn channel_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelModel
         output_price_usd_micros: row.try_get("output_price_usd_micros")?,
         cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
         cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+        billing_meter: row.try_get("billing_meter")?,
+        unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

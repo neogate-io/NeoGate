@@ -10,10 +10,13 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
-    billing::parse_usage_from_bytes,
+    billing::{
+        parse_usage_from_bytes, BillableUsage, BillingAccounts, BillingMeter, SettleRequest,
+    },
     error::{AppError, AppResult},
     task::{billing as task_billing, jobs, upstream as upstream_task},
     AppState,
@@ -27,10 +30,11 @@ use crate::{
         describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_openai,
         forward_openai_bound, forward_openai_with_content_type, handle_upstream_http_error,
         log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
-        record_upstream_http_failure, release_empty_hold, reserve_credit,
-        respond_upstream_http_failure,
-        selector::{SelectedUpstream, UpstreamProtocol},
-        task_status_from_value, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
+        record_upstream_http_failure, record_upstream_transport_failure_for_failover,
+        release_empty_hold, reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
+        selector::{AttemptedUpstream, ModelCooldown, SelectedUpstream, UpstreamProtocol},
+        should_failover_retryable_upstream_failure, task_status_from_value, BodyKind,
+        ChannelAffinityKey, PreparedRelayBody, RelayBody, RelayContext,
     },
 };
 
@@ -41,6 +45,7 @@ const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
 struct ImageRequestMeta {
     model: String,
     stream: bool,
+    image_count: i64,
     content_type: HeaderValue,
 }
 
@@ -54,6 +59,14 @@ pub(crate) async fn openai_chat_completions(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
     RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    openai_chat_completion_response(state, auth, body).await
+}
+
+pub(crate) async fn openai_chat_completion_response(
+    state: Arc<AppState>,
+    auth: UserAuth,
+    body: Bytes,
 ) -> AppResult<Response> {
     relay_openai(
         state,
@@ -244,14 +257,34 @@ async fn relay_openai(
                 "create-time streaming for background responses is not supported; retrieve with stream=true to resume".to_string(),
             ));
         }
-        return create_background_response(state, auth, body, meta.model, output_tokens).await;
+        return create_background_response(
+            state,
+            auth,
+            body,
+            meta.model,
+            output_tokens,
+            meta.channel_affinity_key,
+        )
+        .await;
     }
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let channel_affinity_key = meta.channel_affinity_key.clone();
+    let relay_trace_id = Uuid::new_v4();
 
     let mut model_unavailable_reroutes = 0;
+    let mut retryable_failovers = 0;
+    let mut attempted_upstreams = Vec::new();
     loop {
         let started = Instant::now();
-        let (protocol, upstream) = select_upstream(&state, path, &meta.model).await?;
+        let (protocol, upstream) = select_upstream_excluding(
+            &state,
+            path,
+            &meta.model,
+            channel_affinity_key.as_ref(),
+            &attempted_upstreams,
+        )
+        .await?;
+        attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         let price = state
             .billing
             .price_for(
@@ -270,7 +303,7 @@ async fn relay_openai(
             &price,
         )
         .await?;
-        let ctx = RelayContext {
+        let mut ctx = RelayContext {
             state: Arc::clone(&state),
             auth: auth.clone(),
             upstream,
@@ -282,6 +315,10 @@ async fn relay_openai(
             hold,
             user_key_model_credit_account: user_key_model_credit_account.clone(),
             started,
+            channel_affinity_key: channel_affinity_key.clone(),
+            relay_trace_id,
+            relay_attempt: attempted_upstreams.len() as i32,
+            relay_final: false,
             _image_sync_permit: None,
         };
         let response = forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await;
@@ -292,6 +329,7 @@ async fn relay_openai(
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
+                    ctx.relay_final = true;
                     return finish_relay(ctx, Ok(upstream_response)).await;
                 }
 
@@ -312,6 +350,7 @@ async fn relay_openai(
                             path = ctx.path,
                             "skipping upstream model cooldown because this model has no alternate channel"
                         );
+                        ctx.relay_final = true;
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     if model_unavailable_reroutes >= MODEL_UNAVAILABLE_MAX_REROUTES {
@@ -328,6 +367,7 @@ async fn relay_openai(
                             max_reroutes = MODEL_UNAVAILABLE_MAX_REROUTES,
                             "upstream model unavailable reroute limit reached"
                         );
+                        ctx.relay_final = true;
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     model_unavailable_reroutes += 1;
@@ -357,9 +397,57 @@ async fn relay_openai(
                     continue;
                 }
 
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    failure.retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    log_upstream_http_failure(&ctx, status, &failure, None);
+                    record_upstream_http_failure(&ctx, status, &failure, "upstream failover").await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream_status = status.as_u16(),
+                        failover_attempt = retryable_failovers,
+                        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                        "retryable upstream http failure; retrying another upstream"
+                    );
+                    continue;
+                }
+
+                ctx.relay_final = true;
                 return respond_upstream_http_failure(ctx, status, failure).await;
             }
-            Err(err) => return finish_relay(ctx, Err(err)).await,
+            Err(err) => {
+                let retryable = err.retryable();
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    let summary = err.to_string();
+                    log_relay_transport_failover(&ctx, &summary, retryable_failovers);
+                    record_upstream_transport_failure_for_failover(&ctx, summary).await;
+                    continue;
+                }
+                ctx.relay_final = true;
+                return finish_relay(ctx, Err(err)).await;
+            }
         }
     }
 }
@@ -385,85 +473,372 @@ async fn relay_openai_image(
 ) -> AppResult<Response> {
     let meta = image_request_meta(path, &headers, &body)?;
     auth.ensure_model_allowed(&meta.model)?;
-    let started = Instant::now();
-    let upstream = state
-        .selector
-        .select(
-            &state.db.pool,
-            &state.secrets,
-            UpstreamProtocol::Openai,
-            &meta.model,
-        )
-        .await?;
-    let price = state
-        .billing
-        .price_for(
-            &state.db.pool,
-            &upstream.provider,
-            &meta.model,
-            &auth.user_group,
-        )
-        .await?;
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
-    let image_sync_permit = Some(
+    let mut image_sync_permit = Some(
         state
             .image_sync_limiter
             .try_acquire(auth.user_key_id)
             .await?,
     );
-    let hold = reserve_credit(
-        &state,
-        &auth,
-        user_key_model_credit_account.as_ref(),
-        &body,
-        state.billing.default_output_tokens(),
-        &price,
-    )
-    .await?;
-    let ctx = RelayContext {
-        state: Arc::clone(&state),
-        auth,
-        upstream: upstream.clone(),
-        protocol: UpstreamProtocol::Openai,
-        path,
-        model: meta.model,
-        streamed: meta.stream,
-        price,
-        hold,
-        user_key_model_credit_account,
-        started,
-        _image_sync_permit: image_sync_permit,
-    };
-    let response = forward_openai_with_content_type(
-        &state,
-        &upstream,
-        body.clone(),
-        path,
-        meta.content_type.clone(),
-        meta.stream,
-    )
-    .await;
-    if newapi::should_retry_image_variation(&upstream.provider, path) {
-        return finish_newapi_image_variation(
+    let estimated_image_units = meta.image_count.max(1);
+    let relay_trace_id = Uuid::new_v4();
+    let mut retryable_failovers = 0;
+    let mut attempted_upstreams = Vec::new();
+
+    loop {
+        let started = Instant::now();
+        let (protocol, upstream) =
+            select_upstream_excluding(&state, path, &meta.model, None, &attempted_upstreams)
+                .await?;
+        attempted_upstreams.push(AttemptedUpstream::from(&upstream));
+        let price = state
+            .billing
+            .price_for(
+                &state.db.pool,
+                &upstream.provider,
+                &meta.model,
+                &auth.user_group,
+            )
+            .await?;
+        let hold = if price.billing_meter == BillingMeter::Image {
+            reserve_billable_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                estimated_image_units.saturating_mul(
+                    price
+                        .unit_price_usd_micros
+                        .ok_or_else(|| {
+                            AppError::BadRequest(
+                                "unit price is required for image billing".to_string(),
+                            )
+                        })?
+                        .max(0),
+                ),
+            )
+            .await?
+        } else {
+            reserve_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                &body,
+                state.billing.default_output_tokens(),
+                &price,
+            )
+            .await?
+        };
+        let mut ctx = RelayContext {
+            state: Arc::clone(&state),
+            auth: auth.clone(),
+            upstream: upstream.clone(),
+            protocol,
+            path,
+            model: meta.model.clone(),
+            streamed: meta.stream,
+            price,
+            hold,
+            user_key_model_credit_account: user_key_model_credit_account.clone(),
+            started,
+            channel_affinity_key: None,
+            relay_trace_id,
+            relay_attempt: attempted_upstreams.len() as i32,
+            relay_final: false,
+            _image_sync_permit: None,
+        };
+        let response = forward_openai_with_content_type(
             &state,
             &upstream,
-            body,
-            meta.content_type,
+            body.clone(),
+            path,
+            meta.content_type.clone(),
             meta.stream,
-            ctx,
-            response,
         )
         .await;
+
+        match response {
+            Ok(upstream_response) => {
+                let status = StatusCode::from_u16(upstream_response.status().as_u16())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                if status.is_success() {
+                    ctx.relay_final = true;
+                    ctx._image_sync_permit = image_sync_permit.take();
+                    if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
+                        return finish_newapi_image_stream(
+                            ctx,
+                            Ok(upstream_response),
+                            estimated_image_units,
+                        )
+                        .await;
+                    }
+                    if ctx.price.billing_meter == BillingMeter::Image {
+                        return finish_image_relay(
+                            ctx,
+                            Ok(upstream_response),
+                            estimated_image_units,
+                        )
+                        .await;
+                    }
+                    return finish_relay(ctx, Ok(upstream_response)).await;
+                }
+
+                let error_body = read_upstream_error_body(upstream_response).await;
+                let mut failure = describe_upstream_http_failure(status, &error_body);
+                if newapi::should_retry_image_variation(&upstream.provider, path)
+                    && newapi::should_retry_variation_as_edit(ctx.path, status, &error_body)
+                {
+                    failure.retryable = true;
+                }
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    failure.retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    log_upstream_http_failure(&ctx, status, &failure, None);
+                    record_upstream_http_failure(&ctx, status, &failure, "upstream image failover")
+                        .await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream_status = status.as_u16(),
+                        failover_attempt = retryable_failovers,
+                        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                        "retryable upstream image http failure; retrying another upstream"
+                    );
+                    continue;
+                }
+
+                ctx.relay_final = true;
+                ctx._image_sync_permit = image_sync_permit.take();
+                return respond_upstream_http_failure(ctx, status, failure).await;
+            }
+            Err(err) => {
+                let retryable = err.retryable();
+                if should_failover_retryable_upstream_failure(
+                    &ctx,
+                    &attempted_upstreams,
+                    retryable,
+                    retryable_failovers,
+                )
+                .await
+                {
+                    retryable_failovers += 1;
+                    let summary = err.to_string();
+                    log_relay_transport_failover(&ctx, &summary, retryable_failovers);
+                    record_upstream_transport_failure_for_failover(&ctx, summary).await;
+                    continue;
+                }
+                ctx.relay_final = true;
+                ctx._image_sync_permit = image_sync_permit.take();
+                return finish_relay(ctx, Err(err)).await;
+            }
+        }
     }
-    if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
-        return finish_newapi_image_stream(ctx, response).await;
+}
+
+async fn finish_image_relay(
+    ctx: RelayContext,
+    response: AppResult<reqwest::Response>,
+    requested_image_count: i64,
+) -> AppResult<Response> {
+    if ctx.streamed {
+        return finish_streamed_image_relay(ctx, response, requested_image_count).await;
     }
-    finish_relay(ctx, response).await
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return handle_upstream_http_error(ctx, status, upstream_response).await;
+    }
+    let content_type = upstream_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let body = upstream_response.bytes().await?;
+    let image_count = image_count_from_response_body(&body).ok_or_else(|| {
+        AppError::BadRequest("image response missing non-empty data array".to_string())
+    })?;
+    let billing = settle_image_hold(&ctx, image_count, "image relay").await;
+    let usage = crate::relay::usage_from_context(
+        &ctx,
+        Some(status.as_u16() as i32),
+        None,
+        None,
+        None,
+        billing,
+    );
+    crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
+    response_from_bytes(status, content_type, body)
+}
+
+async fn finish_streamed_image_relay(
+    ctx: RelayContext,
+    response: AppResult<reqwest::Response>,
+    requested_image_count: i64,
+) -> AppResult<Response> {
+    let upstream_response = match response {
+        Ok(response) => response,
+        Err(err) => return finish_relay(ctx, Err(err)).await,
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if !status.is_success() {
+        return handle_upstream_http_error(ctx, status, upstream_response).await;
+    }
+    let content_type = upstream_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
+    finish_streamed_image_upstream(
+        ctx,
+        status,
+        content_type,
+        upstream_response,
+        requested_image_count,
+    )
+    .await
+}
+
+async fn finish_streamed_image_upstream(
+    ctx: RelayContext,
+    status: StatusCode,
+    content_type: HeaderValue,
+    upstream_response: reqwest::Response,
+    requested_image_count: i64,
+) -> AppResult<Response> {
+    let relay = ImageStreamRelay {
+        ctx: Some(ctx),
+        status,
+        stream: upstream_response.bytes_stream().boxed(),
+        image_count: requested_image_count,
+    };
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from_stream(futures_util::stream::unfold(
+            Some(relay),
+            |relay| async move {
+                let mut relay = relay?;
+                match relay.stream.next().await {
+                    Some(Ok(chunk)) => Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay))),
+                    Some(Err(err)) => {
+                        relay.finish_error(err.to_string()).await;
+                        Some((Err(std::io::Error::other(err)), None))
+                    }
+                    None => {
+                        relay.finish_success().await;
+                        None
+                    }
+                }
+            },
+        )))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+struct ImageStreamRelay {
+    ctx: Option<RelayContext>,
+    status: StatusCode,
+    stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    image_count: i64,
+}
+
+impl ImageStreamRelay {
+    async fn finish_success(mut self) {
+        let Some(ctx) = self.ctx.take() else {
+            return;
+        };
+        let billing = settle_image_hold(&ctx, self.image_count, "streamed image relay").await;
+        let usage = crate::relay::usage_from_context(
+            &ctx,
+            Some(self.status.as_u16() as i32),
+            None,
+            None,
+            None,
+            billing,
+        );
+        crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
+    }
+
+    async fn finish_error(mut self, error: String) {
+        let Some(ctx) = self.ctx.take() else {
+            return;
+        };
+        release_empty_hold(&ctx.state, ctx.hold.clone(), "streamed image relay error").await;
+        let failure = crate::relay::key_failure_from_context(&ctx, error.clone()).await;
+        let usage = crate::relay::usage_from_context(
+            &ctx,
+            Some(self.status.as_u16() as i32),
+            Some(error),
+            None,
+            None,
+            None,
+        );
+        crate::relay::enqueue_relay_usage(&ctx.state, usage, failure).await;
+    }
+}
+
+impl Drop for ImageStreamRelay {
+    fn drop(&mut self) {
+        if self.ctx.is_some() {
+            tracing::warn!("image stream ended before completion; skipping image billing settle");
+        }
+    }
+}
+
+async fn settle_image_hold(
+    ctx: &RelayContext,
+    image_count: i64,
+    context: &str,
+) -> Option<crate::billing::BillingCharge> {
+    match ctx
+        .state
+        .billing
+        .settle(
+            &ctx.state.db.pool,
+            SettleRequest {
+                accounts: BillingAccounts {
+                    user_id: ctx.auth.user_id,
+                    project_id: ctx.auth.project_id,
+                    user_key_id: ctx.auth.user_key_id,
+                    user_key_model_credit_account: ctx.user_key_model_credit_account.as_ref(),
+                    user_key_credit_account: &ctx.auth.user_key_credit_account,
+                    project_credit_account: &ctx.auth.project_credit_account,
+                },
+                hold: ctx.hold.clone(),
+                usage: Some(BillableUsage::image(image_count)),
+                price: &ctx.price,
+            },
+        )
+        .await
+    {
+        Ok(billing) => Some(billing),
+        Err(err) => {
+            tracing::warn!("failed to settle {context} hold: {err}");
+            None
+        }
+    }
 }
 
 async fn finish_newapi_image_stream(
     ctx: RelayContext,
     response: AppResult<reqwest::Response>,
+    requested_image_count: i64,
 ) -> AppResult<Response> {
     let upstream_response = match response {
         Ok(response) => response,
@@ -480,6 +855,16 @@ async fn finish_newapi_image_stream(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     if newapi::is_event_stream(&content_type) {
+        if ctx.price.billing_meter == BillingMeter::Image {
+            return finish_streamed_image_upstream(
+                ctx,
+                status,
+                content_type,
+                upstream_response,
+                requested_image_count,
+            )
+            .await;
+        }
         return finish_relay(ctx, Ok(upstream_response)).await;
     }
 
@@ -494,61 +879,11 @@ async fn finish_newapi_image_stream(
         path = ctx.path,
         "NewAPI image stream request returned non-SSE response; relaying upstream body without JSON-to-SSE buffering"
     );
-    finish_relay(ctx, Ok(upstream_response)).await
-}
-
-async fn finish_newapi_image_variation(
-    state: &AppState,
-    upstream: &SelectedUpstream,
-    body: Bytes,
-    content_type: HeaderValue,
-    stream: bool,
-    ctx: RelayContext,
-    response: AppResult<reqwest::Response>,
-) -> AppResult<Response> {
-    let upstream_response = match response {
-        Ok(response) => response,
-        Err(err) => return finish_relay(ctx, Err(err)).await,
-    };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    if status != StatusCode::BAD_REQUEST {
-        return finish_relay(ctx, Ok(upstream_response)).await;
+    if ctx.price.billing_meter == BillingMeter::Image {
+        finish_image_relay(ctx, Ok(upstream_response), requested_image_count).await
+    } else {
+        finish_relay(ctx, Ok(upstream_response)).await
     }
-
-    let error_body = read_upstream_error_body(upstream_response).await;
-    if !newapi::should_retry_variation_as_edit(ctx.path, status, &error_body) {
-        let failure = describe_upstream_http_failure(status, &error_body);
-        return respond_upstream_http_failure(ctx, status, failure).await;
-    }
-
-    tracing::warn!(
-        provider = %upstream.provider,
-        channel_id = upstream.channel_id,
-        channel_name = %upstream.channel_name,
-        channel_endpoint_id = upstream.channel_endpoint_id,
-        channel_key_id = ?upstream.channel_key_id,
-        credential_id = ?upstream.credential_id,
-        model = %ctx.model,
-        path = ctx.path,
-        retry_path = "/v1/images/edits",
-        "retrying NewAPI image variation as image edit because upstream dropped multipart model field"
-    );
-
-    let retry = newapi::variation_as_edit_request(&body, &content_type)?;
-    let response = forward_openai_with_content_type(
-        state,
-        upstream,
-        retry.body,
-        retry.path,
-        retry.content_type,
-        stream,
-    )
-    .await;
-    if stream {
-        return finish_newapi_image_stream(ctx, response).await;
-    }
-    finish_relay(ctx, response).await
 }
 
 async fn create_background_response(
@@ -557,16 +892,19 @@ async fn create_background_response(
     body: Bytes,
     model: String,
     output_tokens: i64,
+    channel_affinity_key: Option<ChannelAffinityKey>,
 ) -> AppResult<Response> {
     let started = Instant::now();
     let prepared = jobs::prepare_request_body(body)?;
     let upstream = state
         .selector
-        .select(
+        .select_with_affinity(
             &state.db.pool,
             &state.secrets,
+            &state.channel_affinity,
             UpstreamProtocol::Openai,
             &model,
+            channel_affinity_key.as_ref(),
         )
         .await?;
     ensure_key_backed_async_upstream(&upstream)?;
@@ -602,6 +940,9 @@ async fn create_background_response(
                 return Err(err);
             }
         };
+        if let Some(key) = channel_affinity_key.clone() {
+            state.channel_affinity.insert(key, (&upstream).into());
+        }
         return jobs::response(response).await;
     }
     if prepared.image_format.requires_neogate_asset_url() {
@@ -630,6 +971,10 @@ async fn create_background_response(
         hold: hold.clone(),
         user_key_model_credit_account,
         started,
+        channel_affinity_key,
+        relay_trace_id: Uuid::new_v4(),
+        relay_attempt: 1,
+        relay_final: true,
         _image_sync_permit: None,
     };
 
@@ -910,6 +1255,7 @@ fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
     Ok(ImageRequestMeta {
         model,
         stream,
+        image_count: image_count_from_value(&value).unwrap_or(1),
         content_type,
     })
 }
@@ -922,10 +1268,12 @@ fn multipart_image_request_meta(
     let boundary = multipart_boundary(content_type_text)?;
     let mut model = None;
     let mut stream = false;
+    let mut image_count = 1_i64;
     for (name, value) in multipart_text_fields(body, &boundary)? {
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
             "stream" => stream = value == "true",
+            "n" => image_count = parse_positive_image_count(&value).unwrap_or(1),
             _ => {}
         }
     }
@@ -933,8 +1281,29 @@ fn multipart_image_request_meta(
     Ok(ImageRequestMeta {
         model,
         stream,
+        image_count,
         content_type,
     })
+}
+
+fn image_count_from_value(value: &Value) -> Option<i64> {
+    value
+        .get("n")
+        .and_then(Value::as_i64)
+        .filter(|count| *count > 0)
+}
+
+fn parse_positive_image_count(value: &str) -> Option<i64> {
+    value.trim().parse::<i64>().ok().filter(|count| *count > 0)
+}
+
+fn image_count_from_response_body(body: &[u8]) -> Option<i64> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let count = value
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| items.len() as i64)?;
+    (count > 0).then_some(count)
 }
 
 fn multipart_boundary(content_type: &str) -> AppResult<String> {
@@ -1045,19 +1414,24 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-async fn select_upstream(
+async fn select_upstream_excluding(
     state: &AppState,
     path: &'static str,
     model: &str,
+    affinity_key: Option<&ChannelAffinityKey>,
+    attempted: &[AttemptedUpstream],
 ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
     if path == "/v1/responses" {
         match state
             .selector
-            .select(
+            .select_with_affinity_excluding(
                 &state.db.pool,
                 &state.secrets,
+                &state.channel_affinity,
                 UpstreamProtocol::OpenAiOauth,
                 model,
+                affinity_key,
+                attempted,
             )
             .await
         {
@@ -1069,14 +1443,35 @@ async fn select_upstream(
 
     let upstream = state
         .selector
-        .select(
+        .select_with_affinity_excluding(
             &state.db.pool,
             &state.secrets,
+            &state.channel_affinity,
             UpstreamProtocol::Openai,
             model,
+            affinity_key,
+            attempted,
         )
         .await?;
     Ok((UpstreamProtocol::Openai, upstream))
+}
+
+fn log_relay_transport_failover(ctx: &RelayContext, summary: &str, failover_attempt: usize) {
+    tracing::warn!(
+        provider = %ctx.upstream.provider,
+        channel_id = ctx.upstream.channel_id,
+        channel_name = %ctx.upstream.channel_name,
+        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+        channel_key_id = ?ctx.upstream.channel_key_id,
+        credential_id = ?ctx.upstream.credential_id,
+        protocol = ctx.protocol.as_str(),
+        model = %ctx.model,
+        path = ctx.path,
+        failover_attempt,
+        max_failovers = ctx.state.config.relay.max_upstream_failovers,
+        error = %summary,
+        "retryable upstream transport failure; retrying another upstream"
+    );
 }
 
 async fn mark_credential_model_unavailable(
@@ -1094,9 +1489,11 @@ async fn mark_credential_model_unavailable(
             &ctx.upstream,
             ctx.protocol,
             &ctx.model,
-            unavailable_until,
-            &failure.summary,
-            status.as_u16() as i32,
+            ModelCooldown {
+                unavailable_until,
+                last_error: &failure.summary,
+                last_status_code: status.as_u16() as i32,
+            },
         )
         .await?;
     if !blocked {
@@ -1193,10 +1590,25 @@ mod tests {
 
         assert_eq!(meta.model, "gpt-image-1");
         assert!(meta.stream);
+        assert_eq!(meta.image_count, 1);
         assert_eq!(
             meta.content_type,
             HeaderValue::from_static("application/json")
         );
+    }
+
+    #[test]
+    fn parses_json_image_count() {
+        let body = br#"{"model":"gpt-image-1","prompt":"draw","n":3}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+
+        let meta = image_request_meta("/v1/images/generations", &headers, body).unwrap();
+
+        assert_eq!(meta.image_count, 3);
     }
 
     #[test]
@@ -1212,6 +1624,7 @@ mod tests {
 
         assert_eq!(meta.model, "gpt-image-2");
         assert!(meta.stream);
+        assert_eq!(meta.image_count, 1);
         assert_eq!(
             meta.content_type,
             HeaderValue::from_static("application/json")
@@ -1231,6 +1644,7 @@ mod tests {
 
         assert_eq!(meta.model, "gpt-image-1");
         assert!(!meta.stream);
+        assert_eq!(meta.image_count, 1);
         assert_eq!(
             meta.content_type,
             HeaderValue::from_static("multipart/form-data; boundary=----neogate-boundary")
@@ -1244,12 +1658,22 @@ mod tests {
             header::CONTENT_TYPE,
             HeaderValue::from_static("multipart/form-data; boundary=\"quoted-boundary\""),
         );
-        let body = b"--quoted-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n--quoted-boundary--\r\n";
+        let body = b"--quoted-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"n\"\r\n\r\n2\r\n--quoted-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n--quoted-boundary--\r\n";
 
         let meta = image_request_meta("/v1/images/edits", &headers, body).unwrap();
 
         assert_eq!(meta.model, "gpt-image-1");
         assert!(meta.stream);
+        assert_eq!(meta.image_count, 2);
+    }
+
+    #[test]
+    fn counts_images_from_json_response_data() {
+        assert_eq!(
+            image_count_from_response_body(br#"{"data":[{"url":"a"},{"url":"b"}]}"#),
+            Some(2)
+        );
+        assert_eq!(image_count_from_response_body(br#"{"data":[]}"#), None);
     }
 
     #[test]

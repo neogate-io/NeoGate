@@ -1,3 +1,4 @@
+pub(crate) mod apps;
 pub(crate) mod channel;
 pub(crate) mod credentials;
 pub(crate) mod diagnostics;
@@ -7,6 +8,7 @@ pub(crate) mod project;
 pub(crate) mod provider;
 pub(crate) mod setting;
 mod user;
+pub(crate) mod version;
 
 use std::{convert::Infallible, sync::Arc};
 
@@ -20,6 +22,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::{
     auth::{self, AdminAuth},
@@ -28,6 +31,8 @@ use crate::{
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
+    input::{bounded_limit, trimmed_non_empty},
+    pagination::{created_id_cursor_page, parse_created_id_cursor},
     AppState,
 };
 
@@ -50,8 +55,9 @@ use self::{
         ChannelDiagnosticReport,
     },
     price::{
-        list_pricing_policies, list_pricing_templates, list_provider_models, list_provider_prices,
-        sync_pricing_templates, upsert_pricing_policy, upsert_provider_price, PricingPolicyRecord,
+        list_model_reference_catalog, list_pricing_policies, list_pricing_templates,
+        list_provider_models, list_provider_prices, sync_pricing_templates, upsert_pricing_policy,
+        upsert_provider_price, ModelReferenceCatalogRecord, PricingPolicyRecord,
         PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
@@ -79,6 +85,7 @@ use self::{
         UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
         UserRecord,
     },
+    version::{check_latest_version, VersionCheckResponse},
 };
 use crate::payment::settings::{
     get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
@@ -88,6 +95,7 @@ pub use user::public_router;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(apps::router())
         .route("/api/admin/users", get(users).post(create_user_handler))
         .route("/api/admin/user-groups", get(user_groups))
         .route(
@@ -130,6 +138,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/admin/providers", get(providers))
         .route("/api/admin/provider-models", get(provider_models))
         .route("/api/admin/upstream-models", post(upstream_models))
+        .route(
+            "/api/admin/model-reference-catalog",
+            get(model_reference_catalog),
+        )
         .route("/api/admin/pricing-templates", get(pricing_templates))
         .route(
             "/api/admin/pricing-templates/sync",
@@ -155,6 +167,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/admin/settings/admin-password",
             post(update_admin_password_handler),
         )
+        .route("/api/admin/settings/version", get(version_check_handler))
         .route(
             "/api/admin/provider-prices",
             get(provider_prices).post(upsert_provider_price_handler),
@@ -480,11 +493,7 @@ async fn upstream_models(
     Json(req): Json<FetchUpstreamModelsRequest>,
 ) -> AppResult<Json<FetchUpstreamModelsResponse>> {
     let provider_code = req.provider.trim();
-    let secret = req
-        .secret
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let secret = trimmed_non_empty(req.secret.as_deref());
 
     if provider_code.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
@@ -499,11 +508,7 @@ async fn upstream_models(
     let defaults = provider_default_endpoints(&state, provider_code)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
-    let protocol = req
-        .protocol
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let protocol = trimmed_non_empty(req.protocol.as_deref())
         .map(str::to_string)
         .ok_or_else(|| AppError::BadRequest("protocol is required".to_string()))?;
     if protocol != "openai" && protocol != "anthropic" && protocol != OPENAI_OAUTH_PROTOCOL {
@@ -519,15 +524,8 @@ async fn upstream_models(
             "provider {provider_code} does not support protocol {protocol}"
         )));
     }
-    let base_url = req
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let base_url = trimmed_non_empty(req.base_url.as_deref())
         .ok_or_else(|| AppError::BadRequest("base_url is required".to_string()))?;
-    if base_url.is_empty() {
-        return Err(AppError::BadRequest("base_url is required".to_string()));
-    }
 
     if req.use_credentials && provider_code == "openai" && protocol == OPENAI_OAUTH_PROTOCOL {
         let models = openai_oauth_catalog_models(&state).await?;
@@ -545,6 +543,7 @@ async fn upstream_models(
                 &models,
             )
             .await?;
+            invalidate_cache(&state, InvalidationEvent::Routing).await;
         }
         return Ok(Json(FetchUpstreamModelsResponse { models }));
     }
@@ -579,6 +578,7 @@ async fn upstream_models(
             &models,
         )
         .await?;
+        invalidate_cache(&state, InvalidationEvent::Routing).await;
     }
     Ok(Json(FetchUpstreamModelsResponse { models }))
 }
@@ -627,6 +627,10 @@ async fn sync_channel_models_from_upstream(
              ON CONFLICT (channel_id, model)
              DO UPDATE SET
                  status = 'available',
+                 runtime_status = 'normal',
+                 cooldown_until = NULL,
+                 last_error = NULL,
+                 last_status_code = NULL,
                  missing_since = NULL,
                  last_seen_at = now(),
                  updated_at = now()",
@@ -640,7 +644,12 @@ async fn sync_channel_models_from_upstream(
 
     sqlx::query(
         "UPDATE channel_model
-         SET status = 'missing',
+         SET enabled = FALSE,
+             status = 'missing',
+             runtime_status = 'failed',
+             cooldown_until = NULL,
+             last_error = 'upstream model is missing',
+             last_status_code = NULL,
              missing_since = COALESCE(missing_since, now()),
              updated_at = now()
          WHERE channel_id = $1
@@ -775,7 +784,7 @@ fn extract_model_ids(value: &Value) -> Vec<String> {
             .get("id")
             .or_else(|| item.get("name"))
             .and_then(Value::as_str);
-        let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        let Some(id) = trimmed_non_empty(id) else {
             continue;
         };
         if !models.iter().any(|model| model == id) {
@@ -815,6 +824,13 @@ async fn pricing_templates(
     _admin: AdminAuth,
 ) -> AppResult<Json<Vec<PricingTemplateRecord>>> {
     Ok(Json(list_pricing_templates(&state).await?))
+}
+
+async fn model_reference_catalog(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<Vec<ModelReferenceCatalogRecord>>> {
+    Ok(Json(list_model_reference_catalog(&state).await?))
 }
 
 async fn smtp_setting(
@@ -863,7 +879,7 @@ struct UpdateAdminPasswordRequest {
 
 async fn update_admin_password_handler(
     State(state): State<Arc<AppState>>,
-    _admin: AdminAuth,
+    admin: AdminAuth,
     Json(req): Json<UpdateAdminPasswordRequest>,
 ) -> AppResult<Json<Value>> {
     if req.current_password.is_empty() {
@@ -873,31 +889,30 @@ async fn update_admin_password_handler(
     }
     auth::validate_user_password_input(&req.new_password)?;
 
-    let rows = sqlx::query(
+    let row = sqlx::query(
         r#"
-        SELECT id, password_hash
+        SELECT password_hash
         FROM admin
-        WHERE status = 'enabled'
-        ORDER BY id ASC
+        WHERE id = $1 AND status = 'enabled'
         "#,
     )
-    .fetch_all(&state.db.pool)
+    .bind(admin.admin_id)
+    .fetch_optional(&state.db.pool)
     .await?;
 
-    let Some(admin_id) = rows.iter().find_map(|row| {
-        let id: DbId = row.try_get("id").ok()?;
-        let password_hash: String = row.try_get("password_hash").ok()?;
-        auth::verify_user_password(
-            &req.current_password,
-            &state.config.admin_token_secret,
-            &password_hash,
-        )
-        .then_some(id)
-    }) else {
+    let Some(row) = row else {
+        return Err(AppError::Unauthorized);
+    };
+    let password_hash: String = row.try_get("password_hash")?;
+    if !auth::verify_user_password(
+        &req.current_password,
+        &state.config.admin_token_secret,
+        &password_hash,
+    ) {
         return Err(AppError::BadRequest(
             "current password is incorrect".to_string(),
         ));
-    };
+    }
 
     let password_hash =
         auth::hash_user_password(&req.new_password, &state.config.admin_token_secret);
@@ -912,12 +927,19 @@ async fn update_admin_password_handler(
         WHERE id = $1
         "#,
     )
-    .bind(admin_id)
+    .bind(admin.admin_id)
     .bind(password_hash)
     .execute(&state.db.pool)
     .await?;
 
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn version_check_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<VersionCheckResponse>> {
+    Ok(Json(check_latest_version(&state).await?))
 }
 
 async fn sync_pricing_templates_handler(
@@ -1219,6 +1241,9 @@ struct UsageRecord {
     channel_id: Option<DbId>,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
+    relay_trace_id: Option<Uuid>,
+    relay_attempt: i32,
+    relay_final: bool,
     provider: String,
     model: Option<String>,
     status_code: Option<i32>,
@@ -1236,6 +1261,8 @@ struct UsageRecord {
     reason_out_tokens: Option<i64>,
     audio_in_tokens: Option<i64>,
     audio_out_tokens: Option<i64>,
+    billing_meter: String,
+    billable_units: i64,
     cost_micro_usd: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
@@ -1248,37 +1275,36 @@ async fn usage(
     Query(params): Query<ListUsageParams>,
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
-    let limit = params.limit.unwrap_or(20).clamp(1, 500);
+    let limit = bounded_limit(params.limit, 20, 500);
     let start = params.start;
     let end = params.end;
-    let query = params
-        .query
-        .as_deref()
-        .or(params.model.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let query =
+        trimmed_non_empty(params.query.as_deref().or(params.model.as_deref())).map(str::to_string);
     let status = match params.status.as_deref() {
         Some("success") => Some("success"),
         Some("failed") => Some("failed"),
         _ => None,
     };
-    let (cursor_created_at, cursor_id) = parse_usage_cursor(params.cursor.as_deref())?
-        .map(|cursor| (Some(cursor.0), Some(cursor.1)))
-        .unwrap_or((None, None));
+    let (cursor_created_at, cursor_id) =
+        parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
+            .map(|cursor| (Some(cursor.0), Some(cursor.1)))
+            .unwrap_or((None, None));
     let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
     let query_pattern = query_pattern.as_deref();
     let rows = sqlx::query(
         r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
                 usage_record.user_key_id, usage_record.channel_id, usage_record.channel_key_id,
-                usage_record.credential_id, usage_record.provider, usage_record.model,
+                usage_record.credential_id, usage_record.relay_trace_id,
+                usage_record.relay_attempt, usage_record.relay_final,
+                usage_record.provider, usage_record.model,
                 usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
                 usage_record.first_response_ms, usage_record.output_tokens_per_second,
                 usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
                 usage_record.cache_in_tokens, usage_record.cache_create_in_tokens,
                 usage_record.cache_create_5m_in_tokens, usage_record.cache_create_1h_in_tokens,
                 usage_record.reason_out_tokens, usage_record.audio_in_tokens,
-                usage_record.audio_out_tokens, usage_record.cost_micro_usd,
+                usage_record.audio_out_tokens, usage_record.billing_meter,
+                usage_record.billable_units, usage_record.cost_micro_usd,
                 usage_record.billing_status, usage_record.error_summary, usage_record.created_at
          FROM usage AS usage_record
          LEFT JOIN "user" u ON u.id = usage_record.user_id
@@ -1288,6 +1314,7 @@ async fn usage(
              $3::text IS NULL
              OR usage_record.provider ILIKE $3
              OR usage_record.model ILIKE $3
+             OR usage_record.relay_trace_id::text ILIKE $3
              OR usage_record.user_id::text ILIKE $3
              OR u.email::text ILIKE $3
            )
@@ -1309,13 +1336,7 @@ async fn usage(
     .bind(limit + 1)
     .fetch_all(&state.db.pool)
     .await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(usage_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
     Ok(Json(UsagePage {
         items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
         total: rows.len() as i64,
@@ -1324,28 +1345,6 @@ async fn usage(
         next_cursor,
         has_more,
     }))
-}
-
-fn parse_usage_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some((created_at, id)) = cursor.rsplit_once('|') else {
-        return Err(AppError::BadRequest("invalid usage cursor".to_string()));
-    };
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .map_err(|_| AppError::BadRequest("invalid usage cursor".to_string()))?
-        .with_timezone(&Utc);
-    let id = id
-        .parse::<DbId>()
-        .map_err(|_| AppError::BadRequest("invalid usage cursor".to_string()))?;
-    Ok(Some((created_at, id)))
-}
-
-fn usage_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
-    let created_at: DateTime<Utc> = row.try_get("created_at")?;
-    let id: DbId = row.try_get("id")?;
-    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
 }
 
 async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppResult<Json<Value>> {
@@ -1385,6 +1384,9 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         channel_id: row.try_get("channel_id")?,
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
+        relay_trace_id: row.try_get("relay_trace_id")?,
+        relay_attempt: row.try_get("relay_attempt")?,
+        relay_final: row.try_get("relay_final")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         status_code: row.try_get("status_code")?,
@@ -1402,6 +1404,8 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         reason_out_tokens: row.try_get("reason_out_tokens")?,
         audio_in_tokens: row.try_get("audio_in_tokens")?,
         audio_out_tokens: row.try_get("audio_out_tokens")?,
+        billing_meter: row.try_get("billing_meter")?,
+        billable_units: row.try_get("billable_units")?,
         cost_micro_usd: row.try_get("cost_micro_usd")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,

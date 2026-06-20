@@ -8,8 +8,16 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use uuid::Uuid;
 
-use crate::{auth::UserSessionAuth, error::AppResult, id::DbId, AppState};
+use crate::{
+    auth::UserSessionAuth,
+    error::AppResult,
+    id::DbId,
+    input::bounded_limit,
+    pagination::{created_id_cursor_page, parse_created_id_cursor},
+    AppState,
+};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/user/usage", get(usage))
@@ -42,6 +50,9 @@ struct UsageRecord {
     channel_id: Option<DbId>,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
+    relay_trace_id: Option<Uuid>,
+    relay_attempt: i32,
+    relay_final: bool,
     provider: String,
     model: Option<String>,
     status_code: Option<i32>,
@@ -59,6 +70,8 @@ struct UsageRecord {
     reason_out_tokens: Option<i64>,
     audio_in_tokens: Option<i64>,
     audio_out_tokens: Option<i64>,
+    billing_meter: String,
+    billable_units: i64,
     cost_micro_usd: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
@@ -71,17 +84,19 @@ async fn usage(
     Query(params): Query<ListUsageParams>,
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
-    let limit = params.limit.unwrap_or(20).clamp(1, 1000);
-    let (cursor_created_at, cursor_id) = parse_usage_cursor(params.cursor.as_deref())?
-        .map(|cursor| (Some(cursor.0), Some(cursor.1)))
-        .unwrap_or((None, None));
+    let limit = bounded_limit(params.limit, 20, 1000);
+    let (cursor_created_at, cursor_id) =
+        parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
+            .map(|cursor| (Some(cursor.0), Some(cursor.1)))
+            .unwrap_or((None, None));
     let rows = sqlx::query(
-        "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
+        "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id,
+                relay_trace_id, relay_attempt, relay_final, provider, model,
                 status_code, streamed, latency_ms, first_response_ms, output_tokens_per_second,
                 input_tokens, output_tokens, total_tokens, cache_in_tokens,
                 cache_create_in_tokens, cache_create_5m_in_tokens,
                 cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
-                audio_out_tokens,
+                audio_out_tokens, billing_meter, billable_units,
                 cost_micro_usd, billing_status, error_summary, created_at
          FROM usage
          WHERE user_id = $1
@@ -102,13 +117,7 @@ async fn usage(
     .fetch_all(&state.db.pool)
     .await?;
 
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(usage_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
 
     Ok(Json(UsagePage {
         total: rows.len() as i64,
@@ -120,30 +129,6 @@ async fn usage(
     }))
 }
 
-fn parse_usage_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some((created_at, id)) = cursor.rsplit_once('|') else {
-        return Err(crate::error::AppError::BadRequest(
-            "invalid usage cursor".to_string(),
-        ));
-    };
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .map_err(|_| crate::error::AppError::BadRequest("invalid usage cursor".to_string()))?
-        .with_timezone(&Utc);
-    let id = id
-        .parse::<DbId>()
-        .map_err(|_| crate::error::AppError::BadRequest("invalid usage cursor".to_string()))?;
-    Ok(Some((created_at, id)))
-}
-
-fn usage_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
-    let created_at: DateTime<Utc> = row.try_get("created_at")?;
-    let id: DbId = row.try_get("id")?;
-    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
-}
-
 fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Error> {
     Ok(UsageRecord {
         id: row.try_get("id")?,
@@ -152,6 +137,9 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         channel_id: row.try_get("channel_id")?,
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
+        relay_trace_id: row.try_get("relay_trace_id")?,
+        relay_attempt: row.try_get("relay_attempt")?,
+        relay_final: row.try_get("relay_final")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         status_code: row.try_get("status_code")?,
@@ -169,6 +157,8 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         reason_out_tokens: row.try_get("reason_out_tokens")?,
         audio_in_tokens: row.try_get("audio_in_tokens")?,
         audio_out_tokens: row.try_get("audio_out_tokens")?,
+        billing_meter: row.try_get("billing_meter")?,
+        billable_units: row.try_get("billable_units")?,
         cost_micro_usd: row.try_get("cost_micro_usd")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,

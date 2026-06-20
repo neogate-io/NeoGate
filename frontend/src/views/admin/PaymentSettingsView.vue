@@ -4,6 +4,7 @@ import { CreditCard, Link, Lock, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getPaymentSetting, savePaymentSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { readError } from '../../utils/errors'
 
 const { t } = useLocale()
@@ -34,27 +35,25 @@ function applySetting(setting: Awaited<ReturnType<typeof getPaymentSetting>>) {
 }
 
 async function load() {
-  loading.value = true
-  try {
-    applySetting(await getPaymentSetting())
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      applySetting(await getPaymentSetting())
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function save() {
-  saving.value = true
-  try {
-    const setting = await savePaymentSetting(paymentPayload())
-    applySetting(setting)
-    ElMessage.success(t('paymentSettingsSaved'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    saving.value = false
-  }
+  await withLoading(saving, async () => {
+    try {
+      const setting = await savePaymentSetting(paymentPayload())
+      applySetting(setting)
+      ElMessage.success(t('paymentSettingsSaved'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 function paymentPayload() {

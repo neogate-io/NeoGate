@@ -9,7 +9,12 @@ use std::{
     time::Duration,
 };
 
-use axum::{extract::State, http::{HeaderMap, StatusCode}, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::get,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Row};
 use tokio::sync::watch;

@@ -3,8 +3,9 @@ use serde::Serialize;
 use sqlx::Row;
 
 use crate::{
-    AppState,
+    billing::BillingMeter,
     error::{AppError, AppResult},
+    AppState,
 };
 
 pub const CUSTOM_PROVIDER_CODE: &str = "custom";
@@ -185,8 +186,8 @@ pub async fn record_provider_models(
         }
         sqlx::query(
             "INSERT INTO provider_model
-             (provider, model, display_name, source, enabled)
-             VALUES ($1, $2, $2, $3, $4)
+             (provider, model, display_name, source, billing_meter, capabilities, enabled)
+             VALUES ($1, $2, $2, $3, $4, '{}'::JSONB, $5)
              ON CONFLICT (provider, model)
              DO UPDATE SET
                  display_name = CASE
@@ -204,6 +205,7 @@ pub async fn record_provider_models(
         .bind(provider)
         .bind(model)
         .bind(source)
+        .bind(BillingMeter::Token.as_str())
         .bind(enabled)
         .execute(&state.db.pool)
         .await?;

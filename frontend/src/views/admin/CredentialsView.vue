@@ -18,16 +18,17 @@ import {
   refreshCredential as refreshCredentialApi,
   uploadCredentialFile
 } from '../../api/credentials'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import ProviderIcon from '../../components/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Credential, CredentialQuotaWindow } from '../../types/admin'
-import { confirmAction } from '../../utils/confirm'
+import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime } from '../../utils/format'
 
 const { t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 const credentials = ref<Credential[]>([])
 const loading = ref(false)
 const uploading = ref(false)
@@ -49,15 +50,14 @@ const sortedCredentials = computed(() =>
 const selectedCount = selectedIds.size
 
 async function loadCredentials() {
-  loading.value = true
-  try {
-    credentials.value = await getCredentials()
-    pruneSelectedCredentials()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      credentials.value = await getCredentials()
+      pruneSelectedCredentials()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function refreshEnabledCredentials() {
@@ -65,64 +65,55 @@ async function refreshEnabledCredentials() {
     .filter((credential) => credential.enabled && isOpenAICredential(credential))
     .map((credential) => credential.id)
   if (ids.length === 0) return
-  refreshingAll.value = true
-  try {
-    await Promise.all(ids.map((id) => refreshCredential(id, false)))
-  } finally {
-    refreshingAll.value = false
-  }
+  await withLoading(refreshingAll, () => Promise.all(ids.map((id) => refreshCredential(id, false))))
 }
 
 async function refreshCredential(id: number, notify = true) {
-  refreshingIds.add(id)
-  try {
-    const updated = await refreshCredentialApi(id)
-    mergeCredential(updated)
-  } catch (err) {
-    if (notify) ElMessage.error(readError(err))
-  } finally {
-    refreshingIds.remove(id)
-  }
+  await refreshingIds.withItem(id, async () => {
+    try {
+      const updated = await refreshCredentialApi(id)
+      mergeCredential(updated)
+    } catch (err) {
+      if (notify) ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function toggleCredential(credential: Credential) {
-  togglingIds.add(credential.id)
-  try {
-    const updated = credential.enabled
-      ? await disableCredential(credential.id)
-      : await enableCredential(credential.id)
-    mergeCredential(updated)
-    ElMessage.success(credential.enabled ? t('credentialDisabled') : t('credentialEnabled'))
-    if (updated.enabled) {
-      await refreshCredential(updated.id, false)
+  await togglingIds.withItem(credential.id, async () => {
+    try {
+      const updated = credential.enabled
+        ? await disableCredential(credential.id)
+        : await enableCredential(credential.id)
+      mergeCredential(updated)
+      ElMessage.success(credential.enabled ? t('credentialDisabled') : t('credentialEnabled'))
+      if (updated.enabled) {
+        await refreshCredential(updated.id, false)
+      }
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingIds.remove(credential.id)
-  }
+  })
 }
 
 async function removeCredential(credential: Credential) {
-  const confirmed = await confirmAction(t('credentialDeleteConfirm'), t('delete'), {
+  const confirmed = await confirmDialog(t('credentialDeleteConfirm'), t('delete'), {
     confirmText: t('delete'),
-    cancelText: t('cancel'),
     danger: true,
     type: 'warning'
   })
   if (!confirmed) return
 
-  deletingIds.add(credential.id)
-  try {
-    await deleteCredential(credential.id)
-    credentials.value = credentials.value.filter((item) => item.id !== credential.id)
-    selectedIds.remove(credential.id)
-    ElMessage.success(t('credentialDeleted'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingIds.remove(credential.id)
-  }
+  await deletingIds.withItem(credential.id, async () => {
+    try {
+      await deleteCredential(credential.id)
+      credentials.value = credentials.value.filter((item) => item.id !== credential.id)
+      selectedIds.remove(credential.id)
+      ElMessage.success(t('credentialDeleted'))
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function uploadCredential(event: Event) {
@@ -131,28 +122,27 @@ async function uploadCredential(event: Event) {
   input.value = ''
   if (!file) return
 
-  uploading.value = true
-  try {
-    const result = await uploadCredentialFile(file)
-    const imported = result.imported.length
-    const failed = result.failed.length
-    for (const credential of result.imported) {
-      mergeCredential(credential)
+  await withLoading(uploading, async () => {
+    try {
+      const result = await uploadCredentialFile(file)
+      const imported = result.imported.length
+      const failed = result.failed.length
+      for (const credential of result.imported) {
+        mergeCredential(credential)
+      }
+      const message =
+        failed > 0
+          ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
+          : `${t('credentialUploadDone')} ${imported}`
+      ElMessage.success(message)
+      if (failed > 0) {
+        ElMessage.warning(result.failed.map((item) => `${item.filename}: ${item.error}`).join('\n'))
+      }
+      await loadCredentials()
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    const message =
-      failed > 0
-        ? `${t('credentialUploadDone')} ${imported}, ${t('credentialUploadFailed')} ${failed}`
-        : `${t('credentialUploadDone')} ${imported}`
-    ElMessage.success(message)
-    if (failed > 0) {
-      ElMessage.warning(result.failed.map((item) => `${item.filename}: ${item.error}`).join('\n'))
-    }
-    await loadCredentials()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    uploading.value = false
-  }
+  })
 }
 
 function openCredentialUpload() {
@@ -273,11 +263,12 @@ void bootstrap()
       <div class="admin-page-toolbar-actions">
         <el-button
           class="admin-action-button"
+          type="primary"
           :icon="Upload"
           :loading="uploading"
           @click="openCredentialUpload"
         >
-          {{ t('upload') }}
+          {{ t('credentialUploadFile') }}
         </el-button>
         <el-button
           class="admin-action-button"
@@ -383,7 +374,11 @@ void bootstrap()
             formatCompactDateTime(credential.updated_at || credential.last_refresh)
           }}</span>
           <div class="credential-actions">
-            <AdminActionTooltip :content="credential.enabled ? t('disable') : t('enable')">
+            <el-tooltip
+              :content="credential.enabled ? t('disable') : t('enable')"
+              placement="top"
+              :show-after="600"
+            >
               <el-button
                 circle
                 class="credential-icon-button"
@@ -391,8 +386,8 @@ void bootstrap()
                 :loading="togglingIds.has(credential.id)"
                 @click="toggleCredential(credential)"
               />
-            </AdminActionTooltip>
-            <AdminActionTooltip :content="t('refreshQuota')">
+            </el-tooltip>
+            <el-tooltip :content="t('refreshQuota')" placement="top" :show-after="600">
               <el-button
                 v-if="isOpenAICredential(credential)"
                 circle
@@ -401,8 +396,8 @@ void bootstrap()
                 :loading="refreshingIds.has(credential.id)"
                 @click="refreshCredential(credential.id)"
               />
-            </AdminActionTooltip>
-            <AdminActionTooltip :content="t('delete')">
+            </el-tooltip>
+            <el-tooltip :content="t('delete')" placement="top" :show-after="600">
               <el-button
                 circle
                 class="credential-icon-button is-danger"
@@ -410,7 +405,7 @@ void bootstrap()
                 :loading="deletingIds.has(credential.id)"
                 @click="removeCredential(credential)"
               />
-            </AdminActionTooltip>
+            </el-tooltip>
           </div>
         </div>
       </article>

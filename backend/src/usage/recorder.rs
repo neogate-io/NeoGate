@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use crate::{
-    billing::{account, BillingCharge, DebitPart, TokenUsage},
+    billing::{account, BillingCharge, BillingMeter, DebitPart, TokenUsage},
     error::AppResult,
     id::DbId,
 };
@@ -550,12 +550,14 @@ async fn flush_unbilled_usage(
 
     let mut query_builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO usage
-         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
+         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
+          relay_trace_id, relay_attempt, relay_final,
+          provider, model, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
           cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
-          audio_out_tokens,
+          audio_out_tokens, billing_meter, billable_units,
           cost_micro_usd, billing_status, billing_transaction_id)
          ",
     );
@@ -566,6 +568,9 @@ async fn flush_unbilled_usage(
             .push_bind(item.channel_id)
             .push_bind(item.channel_key_id)
             .push_bind(item.credential_id)
+            .push_bind(item.relay_trace_id)
+            .push_bind(item.relay_attempt)
+            .push_bind(item.relay_final)
             .push_bind(&item.provider)
             .push_bind(item.model.as_deref())
             .push_bind(item.status_code)
@@ -596,6 +601,8 @@ async fn flush_unbilled_usage(
             )
             .push_bind(item.token_usage.and_then(|usage| usage.audio_input_tokens))
             .push_bind(item.token_usage.and_then(|usage| usage.audio_output_tokens))
+            .push_bind(usage_billing_meter(item).as_str())
+            .push_bind(usage_billable_units(item))
             .push_bind(item.billing.as_ref().map(|billing| billing.cost_micro_usd))
             .push_bind(
                 item.billing
@@ -615,16 +622,19 @@ async fn insert_usage(
 ) -> AppResult<sqlx::postgres::PgRow> {
     let row = sqlx::query(
         "INSERT INTO usage
-         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model, status_code,
+         (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
+          relay_trace_id, relay_attempt, relay_final,
+          provider, model, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
           cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
-          audio_out_tokens,
+          audio_out_tokens, billing_meter, billable_units,
           cost_micro_usd, billing_status, billing_transaction_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                 $21, $22, $23, $24, $25, $26, $27)
+                 $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                 $31, $32)
          RETURNING id",
     )
     .bind(item.user_id)
@@ -633,6 +643,9 @@ async fn insert_usage(
     .bind(item.channel_id)
     .bind(item.channel_key_id)
     .bind(item.credential_id)
+    .bind(item.relay_trace_id)
+    .bind(item.relay_attempt)
+    .bind(item.relay_final)
     .bind(&item.provider)
     .bind(item.model.as_deref())
     .bind(item.status_code)
@@ -663,6 +676,8 @@ async fn insert_usage(
     )
     .bind(item.token_usage.and_then(|usage| usage.audio_input_tokens))
     .bind(item.token_usage.and_then(|usage| usage.audio_output_tokens))
+    .bind(usage_billing_meter(item).as_str())
+    .bind(usage_billable_units(item))
     .bind(item.billing.as_ref().map(|billing| billing.cost_micro_usd))
     .bind(
         item.billing
@@ -692,7 +707,7 @@ async fn flush_usage_daily_aggregates(
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
           cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
-          audio_out_tokens, cost_micro_usd)
+          audio_out_tokens, billing_meter, billable_units, cost_micro_usd)
          ",
     );
     query_builder.push_values(aggregates, |mut row, item| {
@@ -722,6 +737,8 @@ async fn flush_usage_daily_aggregates(
             .push_bind(item.reason_out_tokens)
             .push_bind(item.audio_in_tokens)
             .push_bind(item.audio_out_tokens)
+            .push_bind(item.billing_meter.as_str())
+            .push_bind(item.billable_units)
             .push_bind(item.cost_micro_usd);
     });
     query_builder.push(
@@ -734,7 +751,8 @@ async fn flush_usage_daily_aggregates(
               COALESCE(channel_key_id, '-1'::BIGINT),
               COALESCE(credential_id, '-1'::BIGINT),
               provider,
-              model
+              model,
+              billing_meter
           )
           DO UPDATE SET
               request_count = usage_daily.request_count + EXCLUDED.request_count,
@@ -754,6 +772,7 @@ async fn flush_usage_daily_aggregates(
               reason_out_tokens = usage_daily.reason_out_tokens + EXCLUDED.reason_out_tokens,
               audio_in_tokens = usage_daily.audio_in_tokens + EXCLUDED.audio_in_tokens,
               audio_out_tokens = usage_daily.audio_out_tokens + EXCLUDED.audio_out_tokens,
+              billable_units = usage_daily.billable_units + EXCLUDED.billable_units,
               cost_micro_usd = usage_daily.cost_micro_usd + EXCLUDED.cost_micro_usd,
               updated_at = now()",
     );
@@ -772,6 +791,7 @@ struct DailyUsageKey {
     credential_id: Option<DbId>,
     provider: String,
     model: String,
+    billing_meter: BillingMeter,
 }
 
 #[derive(Clone, Debug)]
@@ -794,6 +814,8 @@ struct DailyUsageAggregate {
     reason_out_tokens: i64,
     audio_in_tokens: i64,
     audio_out_tokens: i64,
+    billing_meter: BillingMeter,
+    billable_units: i64,
     cost_micro_usd: i64,
 }
 
@@ -843,6 +865,7 @@ impl DailyUsageAggregate {
             credential_id: item.credential_id,
             provider: item.provider.clone(),
             model: item.model.clone().unwrap_or_default(),
+            billing_meter: usage_billing_meter(item),
         };
         let success_count = if usage_succeeded(item) { 1_i64 } else { 0_i64 };
         let error_count = 1_i64 - success_count;
@@ -897,6 +920,8 @@ impl DailyUsageAggregate {
                 .and_then(|usage| usage.audio_output_tokens)
                 .unwrap_or(0)
                 .max(0),
+            billing_meter: usage_billing_meter(item),
+            billable_units: usage_billable_units(item),
             cost_micro_usd: item
                 .billing
                 .as_ref()
@@ -924,6 +949,7 @@ impl DailyUsageAggregate {
         self.reason_out_tokens += other.reason_out_tokens;
         self.audio_in_tokens += other.audio_in_tokens;
         self.audio_out_tokens += other.audio_out_tokens;
+        self.billable_units += other.billable_units;
         self.cost_micro_usd += other.cost_micro_usd;
     }
 }
@@ -962,6 +988,21 @@ fn total_tokens(item: &UsageInsert) -> Option<i64> {
     })
 }
 
+fn usage_billing_meter(item: &UsageInsert) -> BillingMeter {
+    item.billing
+        .as_ref()
+        .map(|billing| billing.billing_meter)
+        .unwrap_or(item.billing_meter)
+}
+
+fn usage_billable_units(item: &UsageInsert) -> i64 {
+    item.billing
+        .as_ref()
+        .map(|billing| billing.billable_units)
+        .unwrap_or(item.billable_units)
+        .max(0)
+}
+
 async fn flush_billing_part(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     usage_id: DbId,
@@ -986,6 +1027,8 @@ async fn flush_billing_part(
     .bind(billing.transaction_id)
     .bind(serde_json::json!({
         "billing_status": billing.status,
+        "billing_meter": billing.billing_meter,
+        "billable_units": billing.billable_units,
         "input_tokens": billing.input_tokens,
         "output_tokens": billing.output_tokens,
         "total_tokens": billing.total_tokens
@@ -1028,6 +1071,8 @@ mod tests {
             input_tokens: Some(10),
             output_tokens: Some(20),
             total_tokens: Some(30),
+            billing_meter: BillingMeter::Token,
+            billable_units: 30,
             cost_micro_usd: 300,
             status: "billed".to_string(),
             parts: Vec::new(),
@@ -1043,6 +1088,9 @@ mod tests {
             channel_id: id,
             channel_key_id: Some(id),
             credential_id: None,
+            relay_trace_id: None,
+            relay_attempt: 1,
+            relay_final: true,
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             status_code: Some(200),
@@ -1052,6 +1100,8 @@ mod tests {
             output_tokens_per_second: None,
             error_summary: None,
             token_usage: None,
+            billing_meter: BillingMeter::Token,
+            billable_units: 0,
             billing: None,
         }
     }
@@ -1074,6 +1124,9 @@ mod tests {
             channel_id: 3,
             channel_key_id: Some(4),
             credential_id: None,
+            relay_trace_id: None,
+            relay_attempt: 1,
+            relay_final: true,
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             status_code: Some(200),
@@ -1093,6 +1146,8 @@ mod tests {
                 audio_input_tokens: None,
                 audio_output_tokens: None,
             }),
+            billing_meter: BillingMeter::Token,
+            billable_units: 30,
             billing: Some(charge.clone()),
         };
 

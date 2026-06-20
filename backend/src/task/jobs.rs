@@ -42,18 +42,13 @@ const ASSET_URL_TTL_SECONDS: u64 = 3600;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum NeogateImageResponseFormat {
+    #[default]
     Base64,
     Url,
     Both,
-}
-
-impl Default for NeogateImageResponseFormat {
-    fn default() -> Self {
-        Self::Base64
-    }
 }
 
 impl NeogateImageResponseFormat {
@@ -239,24 +234,52 @@ pub(crate) async fn cancel(state: &AppState, task: UpstreamTask) -> AppResult<Va
         return response_for_task(state, &task).await;
     }
     if task.status == STATUS_QUEUED {
-        set_terminal_status(
+        if update_metadata(
             &state.db.pool,
             task.id,
             STATUS_CANCELLED,
-            None,
+            true,
             metadata(&task)?,
+            None,
+            Some(STATUS_QUEUED),
         )
-        .await?;
-        task_billing::release_task_hold_by_id(state, task.id, "cancelled neogate response").await?;
+        .await?
+        {
+            task_billing::release_task_hold_by_id(state, task.id, "cancelled neogate response")
+                .await?;
+        } else {
+            let current = upstream::fetch_task(
+                &state.db.pool,
+                task.user_key_id,
+                UpstreamTaskType::NeogateResponse,
+                &task.upstream_task_id,
+            )
+            .await?;
+            if !current.terminal {
+                let mut metadata = metadata(&current)?;
+                metadata.cancel_requested = true;
+                let _ = update_metadata(
+                    &state.db.pool,
+                    current.id,
+                    current.status.as_str(),
+                    false,
+                    metadata,
+                    None,
+                    None,
+                )
+                .await?;
+            }
+        }
     } else {
         let mut metadata = metadata(&task)?;
         metadata.cancel_requested = true;
-        update_metadata(
+        let _ = update_metadata(
             &state.db.pool,
             task.id,
             task.status.as_str(),
             false,
             metadata,
+            None,
             None,
         )
         .await?;
@@ -272,22 +295,39 @@ pub(crate) async fn cancel(state: &AppState, task: UpstreamTask) -> AppResult<Va
 }
 
 pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
-    let mut metadata = metadata(&task)?;
-    if metadata.cancel_requested || task.status == STATUS_CANCELLED {
-        set_terminal_status(&state.db.pool, task.id, STATUS_CANCELLED, None, metadata).await?;
-        task_billing::release_task_hold_by_id(state, task.id, "cancelled neogate response").await?;
+    let task = upstream::fetch_task(
+        &state.db.pool,
+        task.user_key_id,
+        UpstreamTaskType::NeogateResponse,
+        &task.upstream_task_id,
+    )
+    .await?;
+    if task.terminal {
         return Ok(());
     }
 
-    update_metadata(
+    let mut metadata = metadata(&task)?;
+    if metadata.cancel_requested || task.status == STATUS_CANCELLED {
+        if set_terminal_status(&state.db.pool, task.id, STATUS_CANCELLED, None, metadata).await? {
+            task_billing::release_task_hold_by_id(state, task.id, "cancelled neogate response")
+                .await?;
+        }
+        return Ok(());
+    }
+
+    if !update_metadata(
         &state.db.pool,
         task.id,
         STATUS_IN_PROGRESS,
         false,
         metadata.clone(),
         None,
+        Some(task.status.as_str()),
     )
-    .await?;
+    .await?
+    {
+        return Ok(());
+    }
 
     let upstream = task
         .selected_upstream(&state.db.pool, &state.secrets)
@@ -299,22 +339,24 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
             metadata.response = result.response;
             metadata.assets = result.assets;
             metadata.error = None;
-            set_terminal_status(
+            if set_terminal_status(
                 &state.db.pool,
                 task.id,
                 STATUS_COMPLETED,
                 result.usage,
                 metadata,
             )
-            .await?;
-            let updated = upstream::fetch_task(
-                &state.db.pool,
-                task.user_key_id,
-                UpstreamTaskType::NeogateResponse,
-                &task.upstream_task_id,
-            )
-            .await?;
-            task_billing::finalize_polled(state, updated, upstream, result.usage).await?;
+            .await?
+            {
+                let updated = upstream::fetch_task(
+                    &state.db.pool,
+                    task.user_key_id,
+                    UpstreamTaskType::NeogateResponse,
+                    &task.upstream_task_id,
+                )
+                .await?;
+                task_billing::finalize_polled(state, updated, upstream, result.usage).await?;
+            }
         }
         Err(err) => {
             tracing::warn!(
@@ -345,9 +387,10 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
                 metadata.error.clone(),
                 None,
             );
-            set_terminal_status(&state.db.pool, task.id, STATUS_FAILED, None, metadata).await?;
-            task_billing::release_task_hold_by_id(state, task.id, "failed neogate response")
-                .await?;
+            if set_terminal_status(&state.db.pool, task.id, STATUS_FAILED, None, metadata).await? {
+                task_billing::release_task_hold_by_id(state, task.id, "failed neogate response")
+                    .await?;
+            }
         }
     }
     Ok(())
@@ -637,8 +680,7 @@ fn signed_asset_url(state: &AppState, response_id: &str, index: usize) -> String
         .response_assets
         .retention
         .as_secs()
-        .min(ASSET_URL_TTL_SECONDS)
-        .max(1);
+        .clamp(1, ASSET_URL_TTL_SECONDS);
     let expires = Utc::now().timestamp() + ttl as i64;
     let sig = asset_signature(state, response_id, index, expires);
     let path = format!("/v1/responses/{response_id}/assets/{index}?expires={expires}&sig={sig}");
@@ -740,7 +782,7 @@ fn metadata(task: &UpstreamTask) -> AppResult<NeogateResponseMetadata> {
 async fn mark_due_now(pool: &PgPool, response_id: &str) -> AppResult<()> {
     sqlx::query(
         "UPDATE task_upstream SET next_poll_at = now(), updated_at = now()
-         WHERE task_type = 'neogate_response' AND upstream_task_id = $1",
+         WHERE task_type = 'neogate_response' AND upstream_task_id = $1 AND terminal = FALSE",
     )
     .bind(response_id)
     .execute(pool)
@@ -755,7 +797,8 @@ async fn update_metadata(
     terminal: bool,
     mut metadata: NeogateResponseMetadata,
     usage: Option<TokenUsage>,
-) -> AppResult<()> {
+    expected_status: Option<&str>,
+) -> AppResult<bool> {
     metadata.response["status"] = Value::String(status.to_string());
     let usage_summary = usage
         .map(UsageSummary::from_usage)
@@ -763,7 +806,7 @@ async fn update_metadata(
         .transpose()?
         .unwrap_or_else(|| json!({}));
     let next_poll_at = (!terminal && status == STATUS_QUEUED).then(Utc::now);
-    sqlx::query(
+    let result = sqlx::query(
         r#"
         UPDATE task_upstream
         SET status = $2,
@@ -773,7 +816,10 @@ async fn update_metadata(
             last_polled_at = now(),
             next_poll_at = $6,
             updated_at = now()
-        WHERE id = $1 AND task_type = 'neogate_response'
+        WHERE id = $1
+          AND task_type = 'neogate_response'
+          AND terminal = FALSE
+          AND ($7::TEXT IS NULL OR status = $7)
         "#,
     )
     .bind(task_id)
@@ -782,9 +828,10 @@ async fn update_metadata(
     .bind(serde_json::to_value(metadata)?)
     .bind(usage_summary)
     .bind(next_poll_at)
+    .bind(expected_status)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 async fn set_terminal_status(
@@ -793,8 +840,8 @@ async fn set_terminal_status(
     status: &str,
     usage: Option<TokenUsage>,
     metadata: NeogateResponseMetadata,
-) -> AppResult<()> {
-    update_metadata(pool, task_id, status, true, metadata, usage).await
+) -> AppResult<bool> {
+    update_metadata(pool, task_id, status, true, metadata, usage, None).await
 }
 
 async fn task_usage_summary(pool: &PgPool, task_id: DbId) -> AppResult<Option<UsageSummary>> {

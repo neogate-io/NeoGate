@@ -6,6 +6,7 @@ use tokio::time::{self, Duration, MissedTickBehavior};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::{
+    cache::CacheInvalidator,
     config::Config,
     jobs::{self, JobCadence},
 };
@@ -16,6 +17,7 @@ pub(crate) struct AppContext {
     pub db: PgPool,
     pub http: reqwest::Client,
     pub secrets: crate::secrets::SecretStore,
+    pub cache_invalidator: CacheInvalidator,
 }
 
 pub(crate) async fn run() -> anyhow::Result<()> {
@@ -38,10 +40,10 @@ async fn wait_for_context() -> anyhow::Result<AppContext> {
             Ok(context) => return Ok(context),
             Err(err) => {
                 tracing::warn!(
-                    "scheduler runtime configuration is not ready; retrying in 5s: {err:#}"
+                    "scheduler runtime configuration is not ready; retrying in 60s: {err:#}"
                 );
                 tokio::select! {
-                    _ = time::sleep(Duration::from_secs(5)) => {}
+                    _ = time::sleep(Duration::from_secs(60)) => {}
                     signal = tokio::signal::ctrl_c() => {
                         signal.context("failed to listen for shutdown signal")?;
                         tracing::info!("scheduler shutdown requested before startup completed");
@@ -65,11 +67,16 @@ async fn build_context() -> anyhow::Result<AppContext> {
         .await
         .context("failed to connect scheduler database")?;
     let secrets = crate::secrets::SecretStore::new(&config.upstream_secret_key);
+    let cache_invalidator =
+        CacheInvalidator::new(config.redis_url.as_deref(), &config.redis_key_prefix)
+            .await
+            .context("failed to initialize scheduler cache invalidator")?;
     Ok(AppContext {
         config,
         db,
         http,
         secrets,
+        cache_invalidator,
     })
 }
 

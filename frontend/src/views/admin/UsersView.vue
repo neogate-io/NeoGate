@@ -28,14 +28,15 @@ import {
   updateUserStatus
 } from '../../api/users'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
-import { confirmAction } from '../../utils/confirm'
-import { copyTextToClipboard } from '../../utils/clipboard'
+import { createConfirmAction } from '../../utils/confirm'
+import { copyTextWithMessage } from '../../utils/clipboard'
 import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
@@ -46,6 +47,7 @@ import {
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 
 defineOptions({
   name: 'UsersView'
@@ -126,12 +128,11 @@ const {
   next_cursor: null,
   has_more: false
 } satisfies UserPage)
-const users = computed(() => usersPage.value.items)
 const usersInitialLoading = computed(() => !usersLoaded.value)
 const showUsersPagination = computed(
   () =>
     !usersInitialLoading.value &&
-    (users.value.length > 0 || usersCurrentPage.value > 1 || usersPage.value.has_more)
+    (usersPage.value.items.length > 0 || usersCurrentPage.value > 1 || usersPage.value.has_more)
 )
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
 const showAccountBalance = computed(() =>
@@ -146,6 +147,21 @@ const emptyUsersDescription = computed(() =>
 const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
 const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
 const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
+const {
+  resetAndReload: resetUsersAndReload,
+  nextPage: nextUsersPage,
+  previousPage: previousUsersPage,
+  handlePageSizeChange: handleUsersPageSizeChange
+} = useCursorPageActions(
+  {
+    pageSize: usersPageSize,
+    reset: resetUsersCursorPagination,
+    goToNext: goToNextUsersPage,
+    goToPrevious: goToPreviousUsersPage
+  },
+  () => usersPage.value,
+  reload
+)
 async function loadUsers() {
   return getUsers({
     email: emailSearch.value.trim(),
@@ -218,21 +234,6 @@ function openEditDialog(row: User) {
   userDialogVisible.value = true
 }
 
-async function confirmDialog(
-  message: string,
-  title: string,
-  confirmText: string,
-  type: 'info' | 'warning',
-  danger = false
-) {
-  return confirmAction(message, title, {
-    confirmText,
-    cancelText: t('cancel'),
-    danger,
-    type
-  })
-}
-
 function userStatusConfirmMessage(email: string, status: UserStatus) {
   return t('changeUserStatusConfirm')
     .replace('{email}', email)
@@ -247,8 +248,10 @@ function confirmStatusChange(email: string, status: UserStatus) {
   return confirmDialog(
     userStatusConfirmMessage(email, status),
     t('confirmAction'),
-    t('save'),
-    userStatusConfirmType(status)
+    {
+      confirmText: t('save'),
+      type: userStatusConfirmType(status)
+    }
   )
 }
 
@@ -269,25 +272,24 @@ async function submitCreateUser() {
     ElMessage.error(t('passwordMinLength'))
     return
   }
-  userDialogSaving.value = true
-  try {
-    const created = await createUser({
-      email: userForm.email.trim(),
-      username: userForm.username.trim() || null,
-      password: userForm.password,
-      status: userForm.status
-    })
-    if (userForm.userGroupId && userForm.userGroupId !== created.user_group_id) {
-      await updateUser(created.id, { user_group_id: userForm.userGroupId })
+  await withLoading(userDialogSaving, async () => {
+    try {
+      const created = await createUser({
+        email: userForm.email.trim(),
+        username: userForm.username.trim() || null,
+        password: userForm.password,
+        status: userForm.status
+      })
+      if (userForm.userGroupId && userForm.userGroupId !== created.user_group_id) {
+        await updateUser(created.id, { user_group_id: userForm.userGroupId })
+      }
+      ElMessage.success(t('userCreated'))
+      userDialogVisible.value = false
+      await searchUsers()
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    ElMessage.success(t('userCreated'))
-    userDialogVisible.value = false
-    await searchUsers()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userDialogSaving.value = false
-  }
+  })
 }
 
 async function openUserKeysDialog(row: User) {
@@ -298,32 +300,27 @@ async function openUserKeysDialog(row: User) {
 }
 
 async function copyApiKey(row: UserKey) {
-  try {
-    await copyTextToClipboard(row.key)
-    ElMessage.success(t('apiKeyCopied'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  }
+  await copyTextWithMessage(row.key, t('apiKeyCopied'))
 }
 
 async function submitEditUser() {
-  if (!selectedUser.value) return
-  userDialogSaving.value = true
-  try {
-    await updateUser(selectedUser.value.id, {
-      email: userForm.email.trim(),
-      username: userForm.username.trim() || null,
-      status: userForm.status,
-      user_group_id: userForm.userGroupId
-    })
-    ElMessage.success(t('userUpdated'))
-    userDialogVisible.value = false
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userDialogSaving.value = false
-  }
+  const user = selectedUser.value
+  if (!user) return
+  await withLoading(userDialogSaving, async () => {
+    try {
+      await updateUser(user.id, {
+        email: userForm.email.trim(),
+        username: userForm.username.trim() || null,
+        status: userForm.status,
+        user_group_id: userForm.userGroupId
+      })
+      ElMessage.success(t('userUpdated'))
+      userDialogVisible.value = false
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function approveUser(row: User) {
@@ -334,75 +331,56 @@ async function confirmUserStatusChange(row: User, status: UserStatus) {
   if (row.status === status) return
   const confirmed = await confirmStatusChange(row.email, status)
   if (!confirmed) return
-  approvingUserId.value = row.id
-  try {
-    await updateUserStatus(row.id, status)
-    ElMessage.success(status === 'enabled' ? t('userApproved') : t('userUpdated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    approvingUserId.value = null
-  }
+  await withLoadingValue(approvingUserId, row.id, null, async () => {
+    try {
+      await updateUserStatus(row.id, status)
+      ElMessage.success(status === 'enabled' ? t('userApproved') : t('userUpdated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function toggleUserStatus(row: User) {
   if (togglingUserIds.has(row.id)) return
 
   const nextStatus: UserStatus = row.status === 'enabled' ? 'disabled' : 'enabled'
-  togglingUserIds.add(row.id)
-  try {
-    await updateUserStatus(row.id, nextStatus)
-    ElMessage.success(nextStatus === 'enabled' ? t('userApproved') : t('userUpdated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingUserIds.remove(row.id)
-  }
+  await togglingUserIds.withItem(row.id, async () => {
+    try {
+      await updateUserStatus(row.id, nextStatus)
+      ElMessage.success(nextStatus === 'enabled' ? t('userApproved') : t('userUpdated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteUser(row: User) {
   const confirmed = await confirmDialog(
     t('deleteUserConfirm').replace('{email}', row.email),
     t('confirmDelete'),
-    t('delete'),
-    'warning',
-    true
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
   )
   if (!confirmed) return
-  deletingUserId.value = row.id
-  try {
-    await deleteUser(row.id)
-    ElMessage.success(t('userDeleted'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingUserId.value = null
-  }
+  await withLoadingValue(deletingUserId, row.id, null, async () => {
+    try {
+      await deleteUser(row.id)
+      ElMessage.success(t('userDeleted'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function searchUsers() {
-  resetUsersCursorPagination()
-  await reload()
-}
-
-async function nextUsersPage() {
-  if (!usersPage.value.has_more || !usersPage.value.next_cursor) return
-  goToNextUsersPage(usersPage.value.next_cursor)
-  await reload()
-}
-
-async function previousUsersPage() {
-  if (!goToPreviousUsersPage()) return
-  await reload()
-}
-
-async function handleUsersPageSizeChange(size: number) {
-  usersPageSize.value = size
-  resetUsersCursorPagination()
-  await reload()
+  await resetUsersAndReload()
 }
 
 function exportUsers() {
@@ -417,7 +395,7 @@ function exportUsers() {
     'created_at',
     'last_active_at'
   ]
-  const rows = users.value.map((user) => [
+  const rows = usersPage.value.items.map((user) => [
     user.id,
     user.email,
     user.user_group_name,
@@ -441,14 +419,13 @@ async function loadSelectedUserKeys() {
 }
 
 async function withUserKeysLoading(task: () => Promise<void>) {
-  userKeysLoading.value = true
-  try {
-    await task()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    userKeysLoading.value = false
-  }
+  await withLoading(userKeysLoading, async () => {
+    try {
+      await task()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function loadUserGroups() {
@@ -542,7 +519,7 @@ onMounted(() => {
       <el-table
         v-loading="loading"
         class="admin-table service-table user-table"
-        :data="users"
+        :data="usersPage.items"
         :row-class-name="userRowClassName"
         row-key="id"
         stripe
@@ -572,22 +549,22 @@ onMounted(() => {
                     :loading="approvingUserId === row.id"
                     @click="approveUser(row)"
                   />
-                  <AdminActionTooltip :content="t('viewApiKeys')">
+                  <el-tooltip :content="t('viewApiKeys')" placement="top" :show-after="600">
                     <el-button
                       class="admin-action-button icon-only-action"
                       :aria-label="t('viewApiKeys')"
                       :icon="Key"
                       @click="openUserKeysDialog(row)"
                     />
-                  </AdminActionTooltip>
-                  <AdminActionTooltip :content="t('edit')">
+                  </el-tooltip>
+                  <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                     <el-button
                       class="admin-action-button icon-only-action"
                       :aria-label="t('edit')"
                       :icon="Edit"
                       @click="openEditDialog(row)"
                     />
-                  </AdminActionTooltip>
+                  </el-tooltip>
                   <el-dropdown trigger="click" placement="bottom-end">
                     <el-button
                       class="admin-action-button icon-only-action action-more-button"
@@ -644,7 +621,7 @@ onMounted(() => {
           header-align="center"
         >
           <template #default="{ row }">
-            <el-tooltip :content="accountBalanceTooltip(row)" placement="top">
+            <el-tooltip :content="accountBalanceTooltip(row)" placement="top" :show-after="600">
               <span class="user-credit-cell" :class="creditCellClass(row)">
                 {{ formatMicroUsd(row.available_micro_usd, 2) }}
               </span>
@@ -706,22 +683,22 @@ onMounted(() => {
                 :loading="approvingUserId === row.id"
                 @click="approveUser(row)"
               />
-              <AdminActionTooltip :content="t('viewApiKeys')">
+              <el-tooltip :content="t('viewApiKeys')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewApiKeys')"
                   :icon="Key"
                   @click="openUserKeysDialog(row)"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('edit')">
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </AdminActionTooltip>
+              </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
                   class="admin-action-button icon-only-action action-more-button"
@@ -877,7 +854,7 @@ onMounted(() => {
               <template #default="{ row }">
                 <div class="user-key-cell">
                   <code class="user-key-value">{{ maskApiKey(row.key) }}</code>
-                  <el-tooltip :content="t('copy')" placement="top">
+                  <el-tooltip :content="t('copy')" placement="top" :show-after="600">
                     <el-button
                       class="user-key-copy-button"
                       :aria-label="t('copy')"

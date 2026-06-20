@@ -3,6 +3,16 @@ export type EndpointProtocol = 'openai' | 'openai_oauth' | 'anthropic'
 export type UserStatus = 'enabled' | 'disabled' | 'pending'
 export type UserKeyStatus = 'enabled' | 'disabled'
 export type ProjectStatus = 'enabled' | 'disabled'
+export type BillingMeter = 'token' | 'image'
+
+export type VersionCheckResult = {
+  current_version: string
+  latest_version: string
+  latest_tag: string
+  update_available: boolean
+  release_url: string
+  published_at?: string | null
+}
 
 export type CursorPage<T> = {
   items: T[]
@@ -142,6 +152,8 @@ export type ChannelModel = {
   output_price_usd_micros?: number | null
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter?: BillingMeter | null
+  unit_price_usd_micros?: number | null
   created_at: string
   updated_at: string
 }
@@ -238,6 +250,10 @@ export type UsageRecord = {
   user_key_id?: number | null
   channel_id?: number | null
   channel_key_id?: number | null
+  credential_id?: number | null
+  relay_trace_id?: string | null
+  relay_attempt: number
+  relay_final: boolean
   provider: string
   model?: string | null
   status_code?: number | null
@@ -256,6 +272,8 @@ export type UsageRecord = {
   reason_out_tokens?: number | null
   audio_in_tokens?: number | null
   audio_out_tokens?: number | null
+  billing_meter: BillingMeter
+  billable_units: number
   cost_micro_usd?: number | null
   billing_status: string
   created_at: string
@@ -269,6 +287,8 @@ export type ProviderPrice = {
   output_price_usd_micros: number
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter: BillingMeter
+  unit_price_usd_micros?: number | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -280,6 +300,8 @@ export type ProviderModel = {
   model: string
   display_name: string
   source: 'seed' | 'upstream' | 'channel'
+  billing_meter: BillingMeter
+  capabilities: Record<string, unknown>
   enabled: boolean
   discovered_at: string
   created_at: string
@@ -294,10 +316,20 @@ export type PricingTemplate = {
   output_price_usd_micros: number
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter: BillingMeter
+  unit_price_usd_micros?: number | null
+  pricing_basis: BillingMeter
   source: string
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+export type ModelReferenceCatalogRecord = PricingTemplate & {
+  display_name: string
+  capabilities: Record<string, unknown>
+  model_source: string
+  model_updated_at: string
 }
 
 export type PricingTemplateSyncResult = {
@@ -341,6 +373,70 @@ export type PaymentSetting = {
   zpay_default_pay_type: string
   zpay_site_name: string
   updated_at?: string | null
+}
+
+export type AppType = 'wecom' | 'webhook' | 'widget' | 'feishu' | 'dingtalk'
+export type AppStatus = 'enabled' | 'disabled'
+export type AppEndpointType = 'wecom' | 'webhook' | 'widget' | 'feishu' | 'dingtalk'
+
+export type AppEndpoint = {
+  id: number
+  app_id: number
+  endpoint_type: AppEndpointType
+  name: string
+  enabled: boolean
+  config: Record<string, unknown>
+  secrets_set: string[]
+  callback_url?: string | null
+  invoke_url?: string | null
+  widget_script_url?: string | null
+  last_active_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AppRecord = {
+  id: number
+  name: string
+  description: string
+  app_type: AppType
+  status: AppStatus
+  model: string
+  system_prompt: string
+  context_turns: number
+  max_output_tokens: number
+  user_key_id: number
+  user_key_name: string
+  project_id: number
+  project_name: string
+  endpoint?: AppEndpoint | null
+  today_message_count: number
+  today_cost_micro_usd: number
+  last_active_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AppRunLog = {
+  id: number
+  app_id?: number | null
+  endpoint_id?: number | null
+  conversation_id?: number | null
+  external_user_id?: string | null
+  external_conversation_id?: string | null
+  external_message_id?: string | null
+  trace_id?: string | null
+  app_type: AppType | string
+  model?: string | null
+  status: 'success' | 'failed' | 'duplicate' | 'ignored'
+  status_code?: number | null
+  latency_ms: number
+  input_tokens?: number | null
+  output_tokens?: number | null
+  total_tokens?: number | null
+  cost_micro_usd?: number | null
+  error_summary?: string | null
+  created_at: string
 }
 
 export type CredentialQuotaWindow = {

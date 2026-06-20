@@ -29,7 +29,15 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct AdminAuth;
+pub struct AdminAuth {
+    pub admin_id: DbId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AdminSessionTokenClaims {
+    pub admin_id: DbId,
+    issued_at_ms: i64,
+}
 
 #[derive(Debug, Clone)]
 pub struct RequestAuthLogContext {
@@ -72,23 +80,27 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let Some(admin_id) = bearer(&parts.headers).and_then(|token| {
-            validate_admin_session_token(token, &state.config.admin_token_secret)
+        let Some(claims) = bearer(&parts.headers).and_then(|token| {
+            validate_admin_session_token_claims(token, &state.config.admin_token_secret)
         }) else {
             return Err(AppError::Unauthorized);
         };
-        set_request_auth_log_context(parts, "admin", Some(admin_id));
-        Ok(Self)
+        validate_admin_session_claims(state, claims).await?;
+        set_request_auth_log_context(parts, "admin", Some(claims.admin_id));
+        Ok(Self {
+            admin_id: claims.admin_id,
+        })
     }
 }
 
 pub fn issue_admin_token(ttl: Duration, secret: &str, admin_id: DbId) -> String {
+    let issued_at = Utc::now().timestamp_millis();
     let expires_at = Utc::now() + chrono_ttl(ttl);
     let expires_at = expires_at.timestamp();
     let nonce = generate_admin_nonce();
-    let payload = admin_session_token_payload(expires_at, admin_id, &nonce);
+    let payload = admin_session_token_payload(issued_at, expires_at, admin_id, &nonce);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    format!("neo_admin_v2_{expires_at}_{admin_id}_{nonce}_{signature}")
+    format!("neo_admin_v3_{issued_at}_{expires_at}_{admin_id}_{nonce}_{signature}")
 }
 
 pub fn issue_user_session_token(ttl: Duration, secret: &str, user_id: DbId) -> String {
@@ -130,13 +142,17 @@ pub fn password_reset_email_from_token(token: &str, secret: &str) -> Option<Stri
     String::from_utf8(email).ok()
 }
 
-pub fn validate_admin_token(token: &str, secret: &str) -> bool {
-    validate_admin_session_token(token, secret).is_some()
+pub fn validate_admin_session_token(token: &str, secret: &str) -> Option<DbId> {
+    validate_admin_session_token_claims(token, secret).map(|claims| claims.admin_id)
 }
 
-pub fn validate_admin_session_token(token: &str, secret: &str) -> Option<DbId> {
-    let rest = token.strip_prefix("neo_admin_v2_")?;
-    let mut parts = rest.splitn(4, '_');
+pub fn validate_admin_session_token_claims(
+    token: &str,
+    secret: &str,
+) -> Option<AdminSessionTokenClaims> {
+    let rest = token.strip_prefix("neo_admin_v3_")?;
+    let mut parts = rest.splitn(5, '_');
+    let issued_at_ms = parts.next().and_then(|value| value.parse::<i64>().ok())?;
     let expires_at = parts.next().and_then(|value| value.parse::<i64>().ok())?;
     let admin_id = parts.next().and_then(|value| value.parse::<DbId>().ok())?;
     let nonce = parts.next().filter(|value| !value.is_empty())?;
@@ -146,9 +162,43 @@ pub fn validate_admin_session_token(token: &str, secret: &str) -> Option<DbId> {
         return None;
     }
 
-    let payload = admin_session_token_payload(expires_at, admin_id, nonce);
+    let payload = admin_session_token_payload(issued_at_ms, expires_at, admin_id, nonce);
     let expected = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
-    constant_time_eq(signature.as_bytes(), expected.as_bytes()).then_some(admin_id)
+    constant_time_eq(signature.as_bytes(), expected.as_bytes()).then_some(AdminSessionTokenClaims {
+        admin_id,
+        issued_at_ms,
+    })
+}
+
+pub async fn validate_admin_session_claims(
+    state: &AppState,
+    claims: AdminSessionTokenClaims,
+) -> AppResult<()> {
+    let row = sqlx::query(
+        r#"
+        SELECT status, password_changed_at
+        FROM admin
+        WHERE id = $1
+        "#,
+    )
+    .bind(claims.admin_id)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    let Some(row) = row else {
+        return Err(AppError::Unauthorized);
+    };
+    let status: String = row.try_get("status")?;
+    if status != "enabled" {
+        return Err(AppError::Unauthorized);
+    }
+    let password_changed_at: Option<DateTime<Utc>> = row.try_get("password_changed_at")?;
+    if password_changed_at
+        .map(|changed_at| changed_at.timestamp_millis() > claims.issued_at_ms)
+        .unwrap_or(false)
+    {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(())
 }
 
 pub fn validate_user_session_token(token: &str, secret: &str) -> Option<DbId> {
@@ -465,6 +515,57 @@ impl UserAuth {
     }
 }
 
+pub(crate) async fn user_auth_for_key_id(
+    state: &AppState,
+    user_key_id: DbId,
+) -> AppResult<UserAuth> {
+    let row = sqlx::query(
+        r#"
+        SELECT uk.id AS user_key_id, uk.user_id, uk.project_id, uk.status AS key_status,
+               p.status AS project_status,
+               uk.expires_at, uk.model_limits, u.status AS user_status,
+               pw.id AS project_credit_account_id, ukw.id AS user_key_credit_account_id,
+               ug.code AS user_group
+        FROM user_key uk
+        JOIN "user" u ON u.id = uk.user_id
+        JOIN project p ON p.id = uk.project_id
+        JOIN user_group ug ON ug.id = u.user_group_id
+        JOIN credit_account pw ON pw.owner_type = 'project' AND pw.owner_id = p.id
+        JOIN credit_account ukw ON ukw.owner_type = 'user_key' AND ukw.owner_id = uk.id
+        WHERE uk.id = $1
+        "#,
+    )
+    .bind(user_key_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let user_status: String = row.try_get("user_status")?;
+    let key_status: String = row.try_get("key_status")?;
+    let project_status: String = row.try_get("project_status")?;
+    if user_status != "enabled" || project_status != "enabled" || key_status != "enabled" {
+        return Err(AppError::Forbidden);
+    }
+    let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
+    if expires_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+
+    Ok(UserAuth {
+        user_id: row.try_get("user_id")?,
+        project_id: row.try_get("project_id")?,
+        user_key_id,
+        project_credit_account: CreditAccountId::new(row.try_get("project_credit_account_id")?),
+        user_key_credit_account: CreditAccountId::new(row.try_get("user_key_credit_account_id")?),
+        user_key_model_credit_accounts: fetch_user_key_model_credit_accounts(state, user_key_id)
+            .await?,
+        user_group: row.try_get("user_group")?,
+        model_limits: row
+            .try_get::<Option<Vec<String>>, _>("model_limits")?
+            .map(Arc::new),
+    })
+}
+
 async fn fetch_user_key_model_credit_accounts(
     state: &AppState,
     user_key_id: DbId,
@@ -560,8 +661,13 @@ fn generate_admin_nonce() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 48)
 }
 
-fn admin_session_token_payload(expires_at: i64, admin_id: DbId, nonce: &str) -> String {
-    format!("admin.v2.{expires_at}.{admin_id}.{nonce}")
+fn admin_session_token_payload(
+    issued_at_ms: i64,
+    expires_at: i64,
+    admin_id: DbId,
+    nonce: &str,
+) -> String {
+    format!("admin.v3.{issued_at_ms}.{expires_at}.{admin_id}.{nonce}")
 }
 
 fn user_key_draft_token_payload(expires_at: i64, head: &str, tail: &str) -> String {
@@ -830,15 +936,20 @@ mod tests {
         let secret = "test-admin-token-secret";
         let token = issue_admin_token(Duration::from_secs(60), secret, 42);
 
-        assert!(token.starts_with("neo_admin_v2_"));
-        assert!(validate_admin_token(&token, secret));
+        assert!(token.starts_with("neo_admin_v3_"));
+        assert!(validate_admin_session_token_claims(&token, secret).is_some());
         assert_eq!(validate_admin_session_token(&token, secret), Some(42));
-        assert!(!validate_admin_token(&token, "different-secret"));
-        assert!(!validate_admin_token("change-me-in-production", secret));
-        assert!(!validate_admin_token("neo_admin_v1_1_abc_def", secret));
+        assert!(validate_admin_session_token_claims(&token, "different-secret").is_none());
+        assert!(validate_admin_session_token_claims("change-me-in-production", secret).is_none());
+        assert!(validate_admin_session_token_claims("neo_admin_v1_1_abc_def", secret).is_none());
+        assert!(validate_admin_session_token_claims(
+            "neo_admin_v2_4102444800_42_nonce_signature",
+            secret
+        )
+        .is_none());
 
         let expired = issue_admin_token(Duration::from_secs(0), secret, 42);
-        assert!(!validate_admin_token(&expired, secret));
+        assert!(validate_admin_session_token_claims(&expired, secret).is_none());
     }
 
     #[test]

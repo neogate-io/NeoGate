@@ -1,3 +1,4 @@
+mod affinity;
 mod body;
 mod credential;
 mod error;
@@ -35,9 +36,10 @@ use crate::{
     policy, AppState,
 };
 
-use self::selector::SelectedUpstream;
+use self::selector::{AttemptedUpstream, SelectedUpstream};
 use crate::task::{billing as task_billing, upstream as upstream_task};
 use crate::usage::{KeyFailure, UsageInsert};
+pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
@@ -391,6 +393,66 @@ pub(crate) async fn record_upstream_http_failure(
     enqueue_relay_usage(&ctx.state, usage, key_failure).await;
 }
 
+pub(crate) async fn should_failover_retryable_upstream_failure(
+    ctx: &RelayContext,
+    attempted: &[AttemptedUpstream],
+    retryable: bool,
+    failovers: usize,
+) -> bool {
+    if !retryable || failovers >= ctx.state.config.relay.max_upstream_failovers {
+        return false;
+    }
+    match ctx
+        .state
+        .selector
+        .has_selectable_upstream_excluding(&ctx.state.db.pool, ctx.protocol, &ctx.model, attempted)
+        .await
+    {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::info!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                failovers,
+                max_failovers = ctx.state.config.relay.max_upstream_failovers,
+                "skipping upstream failover because no alternate upstream is selectable"
+            );
+            false
+        }
+        Err(err) => {
+            tracing::warn!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                error = %err,
+                "failed to check alternate upstream before failover"
+            );
+            false
+        }
+    }
+}
+
+pub(crate) async fn record_upstream_transport_failure_for_failover(
+    ctx: &RelayContext,
+    summary: String,
+) {
+    let usage = usage_from_context(ctx, None, Some(summary.clone()), None, None, None);
+    let failure = key_failure_from_context(ctx, summary).await;
+    release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream transport failover").await;
+    enqueue_relay_usage(&ctx.state, usage, failure).await;
+}
+
 pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {
     let mut stream = upstream_response.bytes_stream();
     let mut body = Vec::new();
@@ -450,6 +512,9 @@ pub(crate) fn usage_from_context(
         channel_id: ctx.upstream.channel_id,
         channel_key_id: ctx.upstream.channel_key_id,
         credential_id: ctx.upstream.credential_id,
+        relay_trace_id: Some(ctx.relay_trace_id),
+        relay_attempt: ctx.relay_attempt,
+        relay_final: ctx.relay_final,
         provider: ctx.upstream.provider.clone(),
         model: Some(ctx.model.clone()),
         status_code,
@@ -459,6 +524,18 @@ pub(crate) fn usage_from_context(
         output_tokens_per_second,
         error_summary,
         token_usage,
+        billing_meter: billing
+            .as_ref()
+            .map(|billing| billing.billing_meter)
+            .unwrap_or(ctx.price.billing_meter),
+        billable_units: billing
+            .as_ref()
+            .map(|billing| billing.billable_units)
+            .unwrap_or_else(|| {
+                token_usage
+                    .map(|usage| usage.total_tokens().max(0))
+                    .unwrap_or(0)
+            }),
         billing,
     }
 }
@@ -468,10 +545,11 @@ pub(crate) async fn key_failure_from_context(
     error: String,
 ) -> Option<KeyFailure> {
     let channel_key_id = ctx.upstream.channel_key_id?;
+    let attempted = [AttemptedUpstream::from(&ctx.upstream)];
     match ctx
         .state
         .selector
-        .has_alternate_channel_for_model(&ctx.state.db.pool, ctx.protocol, &ctx.model)
+        .has_selectable_upstream_excluding(&ctx.state.db.pool, ctx.protocol, &ctx.model, &attempted)
         .await
     {
         Ok(true) => Some(KeyFailure {
@@ -564,13 +642,49 @@ pub(crate) async fn reserve_credit(
         .await
 }
 
+pub(crate) async fn reserve_billable_credit(
+    state: &AppState,
+    auth: &UserAuth,
+    user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,
+    estimated_micro_usd: i64,
+) -> AppResult<DebitHold> {
+    let estimated = estimated_micro_usd.max(0);
+    if !policy::credit_required(state).await? {
+        return Ok(DebitHold {
+            transaction_id: Uuid::new_v4(),
+            estimated_micro_usd: estimated,
+            parts: Vec::new(),
+            charge_credit: false,
+        });
+    }
+    state
+        .billing
+        .reserve(
+            &state.db.pool,
+            BillingAccounts {
+                user_id: auth.user_id,
+                project_id: auth.project_id,
+                user_key_id: auth.user_key_id,
+                user_key_model_credit_account,
+                user_key_credit_account: &auth.user_key_credit_account,
+                project_credit_account: &auth.project_credit_account,
+            },
+            estimated,
+        )
+        .await
+}
+
 fn key_cooldown_until(state: &AppState) -> chrono::DateTime<Utc> {
     let cooldown = ChronoDuration::from_std(state.config.relay.key_cooldown)
         .unwrap_or_else(|_| ChronoDuration::seconds(60));
     Utc::now() + cooldown
 }
 
-async fn enqueue_relay_usage(state: &AppState, item: UsageInsert, failure: Option<KeyFailure>) {
+pub(crate) async fn enqueue_relay_usage(
+    state: &AppState,
+    item: UsageInsert,
+    failure: Option<KeyFailure>,
+) {
     if let Some(failure) = &failure {
         state
             .cache_invalidator

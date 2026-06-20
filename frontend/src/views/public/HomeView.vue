@@ -10,6 +10,7 @@ import PublicHeader from '../../components/PublicHeader.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useInstallScript } from '../../composables/useInstallScript'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading } from '../../composables/useLoadingTask'
 import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
 const { locale, t } = useLocale()
@@ -52,27 +53,26 @@ async function createHomeApiKey() {
     if (!homeDraftId.value) return
   }
 
-  homeKeySubmitting.value = true
-  try {
-    await createUserKey(homeEmail.value.trim(), homeDraftId.value, locale.value)
-    homeDraftId.value = ''
-    homeMaskedDraftKey.value = ''
-    homeKeySent.value = true
-    ElMessage.success(t('apiKeySentToast'))
-  } catch (err) {
-    if (err instanceof ApiError && err.message.includes('account pending approval')) {
-      ElMessage.warning(t('accountPendingApproval'))
-      apiKeyDialogOpen.value = false
-      return
+  await withLoading(homeKeySubmitting, async () => {
+    try {
+      await createUserKey(homeEmail.value.trim(), homeDraftId.value, locale.value)
+      homeDraftId.value = ''
+      homeMaskedDraftKey.value = ''
+      homeKeySent.value = true
+      ElMessage.success(t('apiKeySentToast'))
+    } catch (err) {
+      if (err instanceof ApiError && err.message.includes('account pending approval')) {
+        ElMessage.warning(t('accountPendingApproval'))
+        apiKeyDialogOpen.value = false
+        return
+      }
+      if (isSmtpConfigError(err)) {
+        ElMessage.error(t('smtpEmailUnavailable'))
+        return
+      }
+      ElMessage.error(readError(err))
     }
-    if (isSmtpConfigError(err)) {
-      ElMessage.error(t('smtpEmailUnavailable'))
-      return
-    }
-    ElMessage.error(readError(err))
-  } finally {
-    homeKeySubmitting.value = false
-  }
+  })
 }
 
 async function prepareHomeApiKey() {

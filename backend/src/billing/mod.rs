@@ -1,13 +1,13 @@
 use std::{
     collections::hash_map::DefaultHasher,
-    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -25,14 +25,33 @@ mod types;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
 pub use metering::{
-    cost_for_usage, estimate_input_tokens, estimated_cost_micro_usd, parse_usage_from_bytes,
-    parse_usage_from_sse_data,
+    cost_for_billable_usage, estimate_input_tokens, estimated_cost_micro_usd,
+    parse_usage_from_bytes, parse_usage_from_sse_data,
 };
 pub use types::{
-    BillingCharge, CreditAccountId, CreditAccountType, DebitHold, DebitPart, Price, TokenUsage,
+    BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
+    DebitPart, Price, TokenUsage,
 };
 
 pub const MICRO_USD_PER_USD: i64 = 1_000_000;
+pub const BILLABLE_PROVIDER_PRICE_CONDITION: &str = r#"
+(
+    (billing_meter = 'token'
+        AND input_price_usd_micros >= 0
+        AND output_price_usd_micros >= 0)
+    OR (billing_meter = 'image'
+        AND unit_price_usd_micros > 0)
+)
+"#;
+pub const BILLABLE_PROVIDER_PRICE_CONDITION_PP: &str = r#"
+(
+    (pp.billing_meter = 'token'
+        AND pp.input_price_usd_micros >= 0
+        AND pp.output_price_usd_micros >= 0)
+    OR (pp.billing_meter = 'image'
+        AND pp.unit_price_usd_micros > 0)
+)
+"#;
 const ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT: usize = 20;
 
 #[derive(Clone)]
@@ -57,7 +76,7 @@ pub struct BillingAccounts<'a> {
 pub struct SettleRequest<'a> {
     pub accounts: BillingAccounts<'a>,
     pub hold: DebitHold,
-    pub usage: Option<TokenUsage>,
+    pub usage: Option<BillableUsage>,
     pub price: &'a Price,
 }
 
@@ -99,13 +118,12 @@ impl fmt::Debug for AllocationRecoverySample {
 }
 
 type PriceCacheKey = (String, String, String);
-type PriceCacheEntries = HashMap<PriceCacheKey, CachedPrice>;
 
 #[derive(Clone)]
 struct PriceCache {
     ttl: Duration,
     max_entries: usize,
-    entries: Arc<RwLock<PriceCacheEntries>>,
+    entries: Arc<DashMap<PriceCacheKey, CachedPrice>>,
 }
 
 #[derive(Clone)]
@@ -321,17 +339,24 @@ impl Billing {
             price,
         } = request;
         let (cost_micro_usd, status) = match usage {
-            Some(usage) => (cost_for_usage(usage, price), "billed".to_string()),
+            Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
             None => (hold.estimated_micro_usd, "usage_missing".to_string()),
         };
         let cost_micro_usd = cost_micro_usd.max(0);
+        let token_usage = usage.and_then(|usage| usage.token_usage);
+        let billing_meter = usage
+            .map(|usage| usage.meter)
+            .unwrap_or(price.billing_meter);
+        let billable_units = usage.map(|usage| usage.billable_units.max(0)).unwrap_or(0);
 
         if !hold.charge_credit {
             return Ok(BillingCharge {
                 transaction_id: hold.transaction_id,
-                input_tokens: usage.map(|usage| usage.input_tokens),
-                output_tokens: usage.map(|usage| usage.output_tokens),
-                total_tokens: usage.map(TokenUsage::total_tokens),
+                input_tokens: token_usage.map(|usage| usage.input_tokens),
+                output_tokens: token_usage.map(|usage| usage.output_tokens),
+                total_tokens: token_usage.map(TokenUsage::total_tokens),
+                billing_meter,
+                billable_units,
                 cost_micro_usd,
                 status,
                 parts: Vec::new(),
@@ -348,9 +373,11 @@ impl Billing {
                         parts.extend(extra_hold.parts);
                         return Ok(BillingCharge {
                             transaction_id: hold.transaction_id,
-                            input_tokens: usage.map(|usage| usage.input_tokens),
-                            output_tokens: usage.map(|usage| usage.output_tokens),
-                            total_tokens: usage.map(TokenUsage::total_tokens),
+                            input_tokens: token_usage.map(|usage| usage.input_tokens),
+                            output_tokens: token_usage.map(|usage| usage.output_tokens),
+                            total_tokens: token_usage.map(TokenUsage::total_tokens),
+                            billing_meter,
+                            billable_units,
                             cost_micro_usd,
                             status,
                             parts,
@@ -366,9 +393,11 @@ impl Billing {
             }
             return Ok(BillingCharge {
                 transaction_id: hold.transaction_id,
-                input_tokens: usage.map(|usage| usage.input_tokens),
-                output_tokens: usage.map(|usage| usage.output_tokens),
-                total_tokens: usage.map(TokenUsage::total_tokens),
+                input_tokens: token_usage.map(|usage| usage.input_tokens),
+                output_tokens: token_usage.map(|usage| usage.output_tokens),
+                total_tokens: token_usage.map(TokenUsage::total_tokens),
+                billing_meter,
+                billable_units,
                 cost_micro_usd: hold.estimated_micro_usd,
                 status: if cost_micro_usd > hold.estimated_micro_usd {
                     "undercharged".to_string()
@@ -413,9 +442,11 @@ impl Billing {
 
         Ok(BillingCharge {
             transaction_id: hold.transaction_id,
-            input_tokens: usage.map(|usage| usage.input_tokens),
-            output_tokens: usage.map(|usage| usage.output_tokens),
-            total_tokens: usage.map(TokenUsage::total_tokens),
+            input_tokens: token_usage.map(|usage| usage.input_tokens),
+            output_tokens: token_usage.map(|usage| usage.output_tokens),
+            total_tokens: token_usage.map(TokenUsage::total_tokens),
+            billing_meter,
+            billable_units,
             cost_micro_usd,
             status,
             parts: consumed,
@@ -564,20 +595,19 @@ impl PriceCache {
         Self {
             ttl,
             max_entries,
-            entries: Arc::new(RwLock::new(HashMap::new())),
+            entries: Arc::new(DashMap::new()),
         }
     }
 
     fn invalidate(&self, provider: &str, model: &str) {
-        self.entries.write().expect("price cache poisoned").retain(
-            |(cached_provider, cached_model, _), _| {
+        self.entries
+            .retain(|(cached_provider, cached_model, _), _| {
                 cached_provider != provider || cached_model != model
-            },
-        );
+            });
     }
 
     fn invalidate_all(&self) {
-        self.entries.write().expect("price cache poisoned").clear();
+        self.entries.clear();
     }
 
     async fn price_for(
@@ -592,13 +622,12 @@ impl PriceCache {
             model.to_string(),
             user_group.to_string(),
         );
-        {
-            let entries = self.entries.read().expect("price cache poisoned");
-            if let Some(cached) = entries.get(&key) {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.price.clone());
-                }
+        if let Some(cached) = self.entries.get(&key) {
+            if cached.expires_at > Instant::now() {
+                return Ok(cached.price.clone());
             }
+            drop(cached);
+            self.entries.remove(&key);
         }
 
         let row = sqlx::query(
@@ -606,7 +635,9 @@ impl PriceCache {
             WITH base_price AS (
                 SELECT input_price_usd_micros, output_price_usd_micros,
                        cache_read_price_usd_micros,
-                       cache_write_price_usd_micros
+                       cache_write_price_usd_micros,
+                       billing_meter,
+                       unit_price_usd_micros
                 FROM provider_price
                 WHERE provider = $1 AND model = $2 AND enabled = TRUE
             ),
@@ -636,7 +667,13 @@ impl PriceCache {
                     WHEN base_price.cache_write_price_usd_micros IS NULL THEN NULL
                     ELSE (base_price.cache_write_price_usd_micros *
                         COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                END AS cache_write_price_usd_micros
+                END AS cache_write_price_usd_micros,
+                base_price.billing_meter,
+                CASE
+                    WHEN base_price.unit_price_usd_micros IS NULL THEN NULL
+                    ELSE (base_price.unit_price_usd_micros *
+                        COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
+                END AS unit_price_usd_micros
             FROM base_price
             LEFT JOIN policy ON TRUE
             "#,
@@ -655,13 +692,19 @@ impl PriceCache {
             output_price_usd_micros: row.try_get("output_price_usd_micros")?,
             cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
             cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+            billing_meter: BillingMeter::from_strict_str(
+                &row.try_get::<String, _>("billing_meter")?,
+            )
+            .map_err(AppError::BadRequest)?,
+            unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
         };
         if !self.ttl.is_zero() {
             let now = Instant::now();
-            let mut entries = self.entries.write().expect("price cache poisoned");
-            entries.retain(|_, cached| cached.expires_at > now);
-            trim_price_cache_for_insert(&mut entries, &key, self.max_entries);
-            entries.insert(
+            if self.entries.len() >= self.max_entries {
+                self.entries.retain(|_, cached| cached.expires_at > now);
+                trim_price_cache_for_insert(&self.entries, &key, self.max_entries);
+            }
+            self.entries.insert(
                 key,
                 CachedPrice {
                     price: price.clone(),
@@ -674,12 +717,13 @@ impl PriceCache {
 }
 
 fn trim_price_cache_for_insert(
-    entries: &mut PriceCacheEntries,
+    entries: &DashMap<PriceCacheKey, CachedPrice>,
     keep: &PriceCacheKey,
     max_entries: usize,
 ) {
     while max_entries > 0 && entries.len() >= max_entries && !entries.contains_key(keep) {
-        let Some(evict) = entries.keys().next().cloned() else {
+        let evict = entries.iter().next().map(|entry| entry.key().clone());
+        let Some(evict) = evict else {
             break;
         };
         entries.remove(&evict);
@@ -821,8 +865,19 @@ async fn fetch_stale_allocations(
                    COALESCE(b.payload->'billing'->'parts', '[]'::jsonb) ||
                    COALESCE(b.payload->'billing'->'returned_parts', '[]'::jsonb)
                ) part
-               WHERE b.status = 'pending'
+               WHERE b.status IN ('pending', 'failed')
                  AND part->>'allocation_id' = credit_allocation.id::TEXT
+           )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM task_upstream task
+               WHERE task.billing_status = 'held'
+                 AND task.billing_hold @> jsonb_build_object(
+                     'parts',
+                     jsonb_build_array(
+                         jsonb_build_object('allocation_id', credit_allocation.id)
+                     )
+                 )
            )
          ORDER BY id ASC
          LIMIT 500",

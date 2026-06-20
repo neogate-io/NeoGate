@@ -1,9 +1,4 @@
-use std::{
-    env,
-    net::SocketAddr,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 
@@ -131,11 +126,15 @@ pub struct HttpClientConfig {
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub key_cooldown: Duration,
+    pub max_upstream_failovers: usize,
     pub body_limit_bytes: usize,
     pub usage_buffer_limit_bytes: usize,
     pub credential_upload_limit_bytes: usize,
     pub image_sync_global_limit: usize,
     pub image_sync_key_limit: usize,
+    pub channel_affinity_enabled: bool,
+    pub channel_affinity_ttl: Duration,
+    pub channel_affinity_max_entries: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +228,7 @@ impl Config {
             },
             relay: RelayConfig {
                 key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)?),
+                max_upstream_failovers: parse_usize("MAX_UPSTREAM_FAILOVERS", 5)?,
                 body_limit_bytes: parse_usize(
                     "RELAY_BODY_LIMIT_BYTES",
                     DEFAULT_RELAY_BODY_LIMIT_BYTES,
@@ -243,6 +243,12 @@ impl Config {
                 )?,
                 image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8)?,
                 image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2)?,
+                channel_affinity_enabled: parse_bool("CHANNEL_AFFINITY_ENABLED", true)?,
+                channel_affinity_ttl: Duration::from_secs(parse_u64(
+                    "CHANNEL_AFFINITY_TTL_SECONDS",
+                    3600,
+                )?),
+                channel_affinity_max_entries: parse_usize("CHANNEL_AFFINITY_MAX_ENTRIES", 100_000)?,
             },
             cache: CacheConfig {
                 user_auth_ttl: Duration::from_secs(parse_u64("USER_AUTH_CACHE_TTL_SECONDS", 60)?),
@@ -301,7 +307,7 @@ impl Config {
                 )?),
             },
             db_pool: DbPoolConfig::from_env()?,
-            cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
+            cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", ""),
         };
         config.validate()?;
         Ok(config)
@@ -335,6 +341,9 @@ impl Config {
         if self.relay.body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");
         }
+        if self.relay.max_upstream_failovers > 10 {
+            anyhow::bail!("MAX_UPSTREAM_FAILOVERS must be <= 10");
+        }
         if self.relay.usage_buffer_limit_bytes == 0 {
             anyhow::bail!("RELAY_USAGE_BUFFER_LIMIT_BYTES must be positive");
         }
@@ -362,6 +371,12 @@ impl Config {
         if self.relay.image_sync_key_limit == 0 {
             anyhow::bail!("NEOGATE_IMAGE_SYNC_KEY_LIMIT must be positive");
         }
+        if self.relay.channel_affinity_ttl.is_zero() {
+            anyhow::bail!("CHANNEL_AFFINITY_TTL_SECONDS must be positive");
+        }
+        if self.relay.channel_affinity_max_entries == 0 {
+            anyhow::bail!("CHANNEL_AFFINITY_MAX_ENTRIES must be positive");
+        }
         if self.cache.user_auth_max_entries == 0 {
             anyhow::bail!("USER_AUTH_CACHE_MAX_ENTRIES must be positive");
         }
@@ -373,6 +388,11 @@ impl Config {
         }
         if self.usage_queue.size > 1_000_000 {
             anyhow::bail!("USAGE_QUEUE_SIZE must be <= 1000000");
+        }
+        if self.cors_allowed_origins.iter().any(|origin| origin == "*") {
+            tracing::warn!(
+                "CORS_ALLOWED_ORIGINS=* allows browser requests from any origin; set explicit origins for admin/user deployments"
+            );
         }
 
         Ok(())
@@ -552,6 +572,21 @@ fn parse_usize(name: &str, default: usize) -> Result<usize> {
     parse_env(name, default)
 }
 
+fn parse_bool(name: &str, default: bool) -> Result<bool> {
+    let Some(value) = env::var(name)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(default);
+    };
+    match value.as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Ok(true),
+        "0" | "false" | "no" | "n" | "off" => Ok(false),
+        _ => anyhow::bail!("{name} must be a boolean"),
+    }
+}
+
 fn parse_env<T>(name: &str, default: T) -> Result<T>
 where
     T: std::str::FromStr + Copy,
@@ -613,7 +648,6 @@ fn default_env_file() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn runtime_mode_accepts_known_values_case_insensitively() {
@@ -643,13 +677,5 @@ mod tests {
             ProcessRole::Worker
         );
         assert!(ProcessRole::from_env_value("scheduler").is_err());
-    }
-
-    fn test_dir(name: &str) -> PathBuf {
-        let mut path = env::temp_dir();
-        path.push(format!("neogate-config-test-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        path
     }
 }

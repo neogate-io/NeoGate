@@ -23,7 +23,7 @@ RUN pnpm build
 
 FROM ${NGINX_IMAGE} AS runtime
 
-COPY deploy/nginx/compose.conf.template /etc/nginx/templates/default.conf.template
+COPY frontend/nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 ENV API_UPSTREAM=http://backend:8080

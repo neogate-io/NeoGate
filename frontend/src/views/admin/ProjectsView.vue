@@ -15,7 +15,7 @@ import {
   UserFilled,
   WarningFilled
 } from '@element-plus/icons-vue'
-import { computed, reactive, ref, type Component } from 'vue'
+import { computed, onMounted, reactive, ref, type Component, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   addProjectMember,
@@ -30,22 +30,30 @@ import {
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { adjustCredit } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
-import AdminActionTooltip from '../../components/admin/AdminActionTooltip.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
-import { copyTextToClipboard } from '../../utils/clipboard'
-import { confirmAction } from '../../utils/confirm'
+import { copyTextWithMessage } from '../../utils/clipboard'
+import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
-import { formatDateTime, formatMicroUsd, maskApiKey, usdToMicroUsd } from '../../utils/format'
+import {
+  formatCompactDateTime,
+  formatDateTime,
+  formatMicroUsd,
+  maskApiKey,
+  usdToMicroUsd
+} from '../../utils/format'
 
 defineOptions({
   name: 'ProjectsView'
 })
 
 const { locale, t } = useLocale()
+const confirmDialog = createConfirmAction(() => t('cancel'))
 
 type TranslationKey = Parameters<typeof t>[0]
 type CreditClass = 'is-available' | 'is-unlimited'
@@ -128,12 +136,11 @@ const {
   next_cursor: null,
   has_more: false
 } satisfies ProjectPage)
-const projects = computed(() => projectsPage.value.items)
 const initialLoading = computed(() => !loaded.value)
 const showProjectsPagination = computed(
   () =>
     !initialLoading.value &&
-    (projects.value.length > 0 || currentPage.value > 1 || projectsPage.value.has_more)
+    (projectsPage.value.items.length > 0 || currentPage.value > 1 || projectsPage.value.has_more)
 )
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
@@ -146,23 +153,24 @@ const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? 
 const isEditingProject = computed(() => Boolean(selectedProject.value))
 const projectDialogTitle = computed(() => t(isEditingProject.value ? 'editProject' : 'addProject'))
 const projectSubmitText = computed(() => t(isEditingProject.value ? 'save' : 'create'))
+const {
+  resetAndReload: resetProjectsAndReload,
+  nextPage,
+  previousPage,
+  handlePageSizeChange
+} = useCursorPageActions(
+  { pageSize, reset: resetCursorPagination, goToNext, goToPrevious },
+  () => projectsPage.value,
+  reload
+)
 
 async function loadProjects() {
-  const [page, policy] = await Promise.all([
-    getProjects({
-      search: search.value.trim(),
-      status: statusFilter.value,
-      limit: pageSize.value,
-      cursor: currentCursor.value
-    }),
-    getAdminServicePolicy()
-  ])
-  servicePolicy.value = policy
-  return page
-}
-
-function resetPagination(page = 1) {
-  resetCursorPagination(page)
+  return getProjects({
+    search: search.value.trim(),
+    status: statusFilter.value,
+    limit: pageSize.value,
+    cursor: currentCursor.value
+  })
 }
 
 function projectStatusText(status: ProjectStatus) {
@@ -227,30 +235,6 @@ function projectMemberDisplayName(member: ProjectMember) {
   return member.user_username || member.user_email
 }
 
-function formatLastActiveAt(value?: string | null) {
-  return value ? formatDateTimeParts(value) : null
-}
-
-function formatDateTimePart(value: string | null | undefined, part: 'date' | 'time') {
-  return formatDateTimeParts(value)?.[part] || '-'
-}
-
-function formatDateTimeParts(value?: string | null) {
-  if (!value) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-  const second = String(date.getSeconds()).padStart(2, '0')
-  return {
-    date: `${year}/${month}/${day}`,
-    time: `${hour}:${minute}:${second}`
-  }
-}
-
 function openCreateDialog() {
   selectedProject.value = null
   Object.assign(projectForm, {
@@ -271,7 +255,7 @@ function openEditDialog(row: Project) {
   })
   ownerOptions.value = []
   projectDialogVisible.value = true
-  void searchOwnerUsers(row.owner_email)
+  void searchUserOptions(row.owner_email, ownerOptions, ownerSearchLoading)
 }
 
 function openCreditDialog(row: Project) {
@@ -289,34 +273,18 @@ async function openMembersDialog(row: Project) {
     userId: null,
     role: 'member'
   })
-  membersLoading.value = true
-  try {
-    await loadSelectedProjectMembers()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    membersLoading.value = false
-  }
+  await withLoading(membersLoading, async () => {
+    try {
+      await loadSelectedProjectMembers()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function loadSelectedProjectMembers() {
   if (!selectedProject.value) return
   selectedMembers.value = await getProjectMembers(selectedProject.value.id)
-}
-
-async function confirmDialog(
-  message: string,
-  title: string,
-  confirmText: string,
-  type: 'info' | 'warning',
-  danger = false
-) {
-  return confirmAction(message, title, {
-    confirmText,
-    cancelText: t('cancel'),
-    danger,
-    type
-  })
 }
 
 async function submitProjectForm() {
@@ -337,123 +305,110 @@ async function submitProjectForm() {
         .replace('{name}', selectedProject.value.name)
         .replace('{status}', projectStatusText(projectForm.status)),
       t('confirmAction'),
-      t('save'),
-      PROJECT_STATUS_META[projectForm.status].confirmType
+      {
+        confirmText: t('save'),
+        type: PROJECT_STATUS_META[projectForm.status].confirmType
+      }
     )
     if (!confirmed) return
   }
 
-  projectSaving.value = true
-  try {
-    if (selectedProject.value) {
-      await updateProject(selectedProject.value.id, {
-        name,
-        owner_user_id: projectForm.ownerUserId,
-        status: projectForm.status
-      })
-      ElMessage.success(t('projectUpdated'))
-      await reload()
-    } else {
-      await createProject({
-        name,
-        owner_user_id: projectForm.ownerUserId!,
-        status: projectForm.status
-      })
-      ElMessage.success(t('projectCreated'))
-      await searchProjects()
+  const ownerUserId = projectForm.ownerUserId
+  await withLoading(projectSaving, async () => {
+    try {
+      if (selectedProject.value) {
+        await updateProject(selectedProject.value.id, {
+          name,
+          owner_user_id: ownerUserId,
+          status: projectForm.status
+        })
+        ElMessage.success(t('projectUpdated'))
+        await reload()
+      } else {
+        await createProject({
+          name,
+          owner_user_id: ownerUserId,
+          status: projectForm.status
+        })
+        ElMessage.success(t('projectCreated'))
+        await searchProjects()
+      }
+      projectDialogVisible.value = false
+    } catch (err) {
+      ElMessage.error(readError(err))
     }
-    projectDialogVisible.value = false
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    projectSaving.value = false
-  }
+  })
 }
 
 async function toggleProjectStatus(row: Project) {
   if (togglingProjectIds.has(row.id)) return
 
   const nextStatus: ProjectStatus = row.status === 'enabled' ? 'disabled' : 'enabled'
-  togglingProjectIds.add(row.id)
-  try {
-    await updateProject(row.id, { status: nextStatus })
-    ElMessage.success(t('projectUpdated'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    togglingProjectIds.remove(row.id)
-  }
+  await togglingProjectIds.withItem(row.id, async () => {
+    try {
+      await updateProject(row.id, { status: nextStatus })
+      ElMessage.success(t('projectUpdated'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function copyApiKeyValue(value: string) {
-  try {
-    await copyTextToClipboard(value)
-    ElMessage.success(t('apiKeyCopied'))
-  } catch (err) {
-    ElMessage.error(readError(err))
-  }
+  await copyTextWithMessage(value, t('apiKeyCopied'))
 }
 
-async function searchOwnerUsers(query: string) {
+async function searchUserOptions(query: string, options: Ref<User[]>, loading: Ref<boolean>) {
   const search = query.trim()
   if (!search) {
-    ownerOptions.value = []
+    options.value = []
     return
   }
-  ownerSearchLoading.value = true
-  try {
-    const page = await getUsers({ search, limit: 20 })
-    ownerOptions.value = page.items
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    ownerSearchLoading.value = false
-  }
+  await withLoading(loading, async () => {
+    try {
+      const page = await getUsers({ search, limit: 20 })
+      options.value = page.items
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+function searchOwnerUsers(query: string) {
+  return searchUserOptions(query, ownerOptions, ownerSearchLoading)
 }
 
 async function searchMemberUsers(query: string) {
-  const search = query.trim()
-  if (!search) {
-    memberUserOptions.value = []
-    return
-  }
-  memberUserSearchLoading.value = true
-  try {
-    const page = await getUsers({ search, limit: 20 })
-    memberUserOptions.value = page.items
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    memberUserSearchLoading.value = false
-  }
+  return searchUserOptions(query, memberUserOptions, memberUserSearchLoading)
 }
 
 async function submitAddProjectMember() {
-  if (!selectedProject.value) return
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
   if (!memberForm.userId) {
     ElMessage.error(t('projectMemberRequired'))
     return
   }
-  memberSaving.value = true
-  try {
-    await addProjectMember(selectedProject.value.id, {
-      user_id: memberForm.userId,
-      role: memberForm.role
-    })
-    ElMessage.success(t('projectMemberAdded'))
-    Object.assign(memberForm, {
-      userId: null,
-      role: 'member'
-    })
-    memberUserOptions.value = []
-    await loadSelectedProjectMembers()
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    memberSaving.value = false
-  }
+  const memberUserId = memberForm.userId
+  await withLoading(memberSaving, async () => {
+    try {
+      await addProjectMember(projectId, {
+        user_id: memberUserId,
+        role: memberForm.role
+      })
+      ElMessage.success(t('projectMemberAdded'))
+      Object.assign(memberForm, {
+        userId: null,
+        role: 'member'
+      })
+      memberUserOptions.value = []
+      await loadSelectedProjectMembers()
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteProjectMember(row: ProjectMember) {
@@ -461,81 +416,76 @@ async function confirmDeleteProjectMember(row: ProjectMember) {
   const confirmed = await confirmDialog(
     t('deleteProjectMemberConfirm').replace('{email}', row.user_email),
     t('confirmDelete'),
-    t('delete'),
-    'warning',
-    true
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
   )
   if (!confirmed) return
-  deletingMemberId.value = row.id
-  try {
-    await deleteProjectMember(selectedProject.value.id, row.id)
-    ElMessage.success(t('projectMemberRemoved'))
-    await loadSelectedProjectMembers()
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingMemberId.value = null
-  }
+  const projectId = selectedProject.value.id
+  await withLoadingValue(deletingMemberId, row.id, null, async () => {
+    try {
+      await deleteProjectMember(projectId, row.id)
+      ElMessage.success(t('projectMemberRemoved'))
+      await loadSelectedProjectMembers()
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function submitCredit() {
-  if (!selectedProject.value) return
-  creditSaving.value = true
-  try {
-    await adjustCredit('project', selectedProject.value.id, usdToMicroUsd(amountUsd.value))
-    ElMessage.success(t('creditUpdated'))
-    creditDialogVisible.value = false
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    creditSaving.value = false
-  }
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  await withLoading(creditSaving, async () => {
+    try {
+      await adjustCredit('project', projectId, usdToMicroUsd(amountUsd.value))
+      ElMessage.success(t('creditUpdated'))
+      creditDialogVisible.value = false
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function confirmDeleteProject(row: Project) {
   const confirmed = await confirmDialog(
     t('deleteProjectConfirm').replace('{name}', row.name),
     t('confirmDelete'),
-    t('delete'),
-    'warning',
-    true
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
   )
   if (!confirmed) return
-  deletingProjectId.value = row.id
-  try {
-    await deleteProject(row.id)
-    ElMessage.success(t('projectDeleted'))
-    await reload()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  } finally {
-    deletingProjectId.value = null
-  }
+  await withLoadingValue(deletingProjectId, row.id, null, async () => {
+    try {
+      await deleteProject(row.id)
+      ElMessage.success(t('projectDeleted'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function searchProjects() {
-  resetPagination()
-  await reload()
+  await resetProjectsAndReload()
 }
 
-async function nextPage() {
-  if (!projectsPage.value.has_more || !projectsPage.value.next_cursor) return
-  goToNext(projectsPage.value.next_cursor)
-  await reload()
+async function loadServicePolicy() {
+  try {
+    servicePolicy.value = await getAdminServicePolicy()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
 }
 
-async function previousPage() {
-  if (!goToPrevious()) return
-  await reload()
-}
-
-async function handlePageSizeChange(size: number) {
-  pageSize.value = size
-  resetPagination()
-  await reload()
-}
+onMounted(loadServicePolicy)
 </script>
 
 <template>
@@ -606,7 +556,7 @@ async function handlePageSizeChange(size: number) {
       <el-table
         v-loading="loading"
         class="admin-table service-table project-table"
-        :data="projects"
+        :data="projectsPage.items"
         :row-class-name="projectRowClassName"
         row-key="id"
         stripe
@@ -661,7 +611,7 @@ async function handlePageSizeChange(size: number) {
           header-align="center"
         >
           <template #default="{ row }">
-            <el-tooltip :content="creditTooltip(row)" placement="top">
+            <el-tooltip :content="creditTooltip(row)" placement="top" :show-after="600">
               <span class="project-credit-cell" :class="creditCellClass(row)">
                 {{ formatAvailableUsd(row) }}
               </span>
@@ -705,22 +655,22 @@ async function handlePageSizeChange(size: number) {
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <AdminActionTooltip :content="t('viewProjectMembers')">
+              <el-tooltip :content="t('viewProjectMembers')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewProjectMembers')"
                   :icon="UserIcon"
                   @click="openMembersDialog(row)"
                 />
-              </AdminActionTooltip>
-              <AdminActionTooltip :content="t('edit')">
+              </el-tooltip>
+              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
                   @click="openEditDialog(row)"
                 />
-              </AdminActionTooltip>
+              </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
                 <el-button
                   class="admin-action-button icon-only-action action-more-button"
@@ -987,7 +937,7 @@ async function handlePageSizeChange(size: number) {
               <template #default="{ row }">
                 <div v-if="row.api_key" class="user-key-cell project-member-key-cell">
                   <code class="user-key-value">{{ maskApiKey(row.api_key) }}</code>
-                  <el-tooltip :content="t('copy')" placement="top">
+                  <el-tooltip :content="t('copy')" placement="top" :show-after="600">
                     <el-button
                       class="user-key-copy-button"
                       :aria-label="t('copy')"
@@ -1001,30 +951,14 @@ async function handlePageSizeChange(size: number) {
             </el-table-column>
             <el-table-column :label="t('createdAt')" width="116">
               <template #default="{ row }">
-                <span v-if="formatDateTimeParts(row.created_at)" class="project-member-time-cell">
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.created_at, 'date')
-                  }}</span>
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.created_at, 'time')
-                  }}</span>
-                </span>
-                <span v-else class="user-time-cell project-member-empty-time is-empty"> - </span>
+                <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
               </template>
             </el-table-column>
             <el-table-column :label="t('lastActiveAt')" width="116">
               <template #default="{ row }">
-                <span
-                  v-if="formatLastActiveAt(row.last_active_at)"
-                  class="project-member-time-cell"
-                >
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.last_active_at, 'date')
-                  }}</span>
-                  <span class="user-time-cell">{{
-                    formatDateTimePart(row.last_active_at, 'time')
-                  }}</span>
-                </span>
+                <span v-if="row.last_active_at" class="user-time-cell">{{
+                  formatCompactDateTime(row.last_active_at)
+                }}</span>
                 <span v-else class="user-time-cell project-member-empty-time is-empty">
                   {{ t('neverActive') }}
                 </span>
@@ -1032,7 +966,12 @@ async function handlePageSizeChange(size: number) {
             </el-table-column>
             <el-table-column :label="t('actions')" width="76" align="center" header-align="center">
               <template #default="{ row }">
-                <AdminActionTooltip v-if="row.role !== 'owner'" :content="t('delete')">
+                <el-tooltip
+                  v-if="row.role !== 'owner'"
+                  :content="t('delete')"
+                  placement="top"
+                  :show-after="600"
+                >
                   <el-button
                     class="admin-icon-action danger"
                     :aria-label="t('delete')"
@@ -1042,7 +981,7 @@ async function handlePageSizeChange(size: number) {
                     text
                     @click="confirmDeleteProjectMember(row)"
                   />
-                </AdminActionTooltip>
+                </el-tooltip>
               </template>
             </el-table-column>
             <template #empty>
@@ -1094,12 +1033,24 @@ async function handlePageSizeChange(size: number) {
   height: 12px;
 }
 
-.project-table-loading-head span:nth-child(1) { width: 28px; }
-.project-table-loading-head span:nth-child(2) { width: 64px; }
-.project-table-loading-head span:nth-child(3) { width: 56px; }
-.project-table-loading-head span:nth-child(4) { width: 48px; }
-.project-table-loading-head span:nth-child(5) { width: 48px; }
-.project-table-loading-head span:nth-child(6) { width: 56px; }
+.project-table-loading-head span:nth-child(1) {
+  width: 28px;
+}
+.project-table-loading-head span:nth-child(2) {
+  width: 64px;
+}
+.project-table-loading-head span:nth-child(3) {
+  width: 56px;
+}
+.project-table-loading-head span:nth-child(4) {
+  width: 48px;
+}
+.project-table-loading-head span:nth-child(5) {
+  width: 48px;
+}
+.project-table-loading-head span:nth-child(6) {
+  width: 56px;
+}
 
 .project-table-loading-row {
   align-items: center;
@@ -1472,54 +1423,6 @@ async function handlePageSizeChange(size: number) {
   gap: 14px;
 }
 
-.project-key-create-form {
-  align-items: end;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 168px minmax(260px, 1fr) auto;
-}
-
-.project-key-create-form .project-create-field {
-  min-width: 0;
-}
-
-.project-key-create-action {
-  margin-bottom: 0;
-}
-
-.project-key-create-action :deep(.el-form-item__content) {
-  align-items: end;
-}
-
-.project-key-create-action .admin-action-button {
-  height: 40px;
-  min-height: 40px;
-}
-
-.project-created-key {
-  align-items: center;
-  background: #f8fafc;
-  border: 1px solid #dbe4ef;
-  border-radius: 8px;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 12px;
-}
-
-.project-created-key div {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.project-created-key span {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.project-created-key code,
 .user-key-value {
   background: #eef3f8;
   border: 1px solid #dbe4ef;
@@ -1529,16 +1432,6 @@ async function handlePageSizeChange(size: number) {
   font-size: 12px;
   font-weight: 650;
   padding: 4px 7px;
-}
-
-.project-created-key code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-key-detail-panel {
-  max-height: min(52dvh, 480px);
 }
 
 .user-key-cell {
@@ -1595,13 +1488,6 @@ async function handlePageSizeChange(size: number) {
   min-width: 0;
 }
 
-.project-member-time-cell {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.project-member-time-cell .user-time-cell,
 .project-member-empty-time {
   font-size: 12px;
   line-height: 1.2;
@@ -1664,30 +1550,8 @@ async function handlePageSizeChange(size: number) {
     grid-template-columns: 1fr;
   }
 
-  .project-key-create-form {
-    grid-template-columns: 1fr;
-  }
-
   .project-member-add-form {
     grid-template-columns: 1fr;
-  }
-
-  .project-credit-header {
-    display: grid;
-    gap: 10px;
-  }
-
-  .project-credit-result {
-    text-align: left;
-  }
-
-  .project-credit-details {
-    grid-template-columns: 1fr;
-  }
-
-  .project-created-key {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 </style>

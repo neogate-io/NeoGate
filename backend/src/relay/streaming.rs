@@ -7,18 +7,19 @@ use futures_util::StreamExt;
 use crate::{
     auth::UserAuth,
     billing::{
-        parse_usage_from_bytes, parse_usage_from_sse_data, BillingAccounts, BillingCharge,
-        CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
+        parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
+        BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
     AppState,
 };
+use uuid::Uuid;
 
 use super::{
     enqueue_relay_usage, key_failure_from_context,
     limit::ImageSyncPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
-    usage_from_context,
+    usage_from_context, ChannelAffinityKey,
 };
 
 pub(crate) struct RelayContext {
@@ -33,6 +34,10 @@ pub(crate) struct RelayContext {
     pub(crate) hold: DebitHold,
     pub(crate) user_key_model_credit_account: Option<CreditAccountId>,
     pub(crate) started: Instant,
+    pub(crate) channel_affinity_key: Option<ChannelAffinityKey>,
+    pub(crate) relay_trace_id: Uuid,
+    pub(crate) relay_attempt: i32,
+    pub(crate) relay_final: bool,
     pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
 }
 
@@ -119,6 +124,7 @@ impl StreamingRelay {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let billing = if self.status.is_success() {
+            record_channel_affinity(&ctx);
             settle_successful_hold(&ctx, token_usage, "streamed relay").await
         } else {
             release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream error").await;
@@ -207,7 +213,7 @@ async fn settle_successful_hold(
                     project_credit_account: &ctx.auth.project_credit_account,
                 },
                 hold: ctx.hold.clone(),
-                usage: token_usage,
+                usage: token_usage.map(BillableUsage::token),
                 price: &ctx.price,
             },
         )
@@ -273,6 +279,15 @@ impl Drop for StreamingRelay {
             enqueue_relay_usage(&ctx.state, usage, failure).await;
         });
     }
+}
+
+fn record_channel_affinity(ctx: &RelayContext) {
+    let Some(key) = ctx.channel_affinity_key.clone() else {
+        return;
+    };
+    ctx.state
+        .channel_affinity
+        .insert(key, (&ctx.upstream).into());
 }
 
 enum ResponseUsageParser {

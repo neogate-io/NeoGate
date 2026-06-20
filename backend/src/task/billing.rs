@@ -1,6 +1,8 @@
 use crate::{
     auth::UserAuth,
-    billing::{BillingAccounts, CreditAccountId, DebitHold, SettleRequest, TokenUsage},
+    billing::{
+        BillableUsage, BillingAccounts, CreditAccountId, DebitHold, SettleRequest, TokenUsage,
+    },
     error::AppResult,
     id::DbId,
     relay::selector::SelectedUpstream,
@@ -149,7 +151,7 @@ async fn finalize_loaded(
                         project_credit_account: &billing_context.project_credit_account,
                     },
                     hold: hold.clone(),
-                    usage: Some(usage),
+                    usage: Some(BillableUsage::token(usage)),
                     price: &price,
                 },
             )
@@ -169,6 +171,9 @@ async fn finalize_loaded(
             channel_id: upstream.channel_id,
             channel_key_id: upstream.channel_key_id,
             credential_id: upstream.credential_id,
+            relay_trace_id: None,
+            relay_attempt: 1,
+            relay_final: true,
             provider: upstream.provider.clone(),
             model: Some(model.to_string()),
             status_code: Some(200),
@@ -178,6 +183,8 @@ async fn finalize_loaded(
             output_tokens_per_second: None,
             error_summary: None,
             token_usage: Some(usage),
+            billing_meter: billing.billing_meter,
+            billable_units: billing.billable_units,
             billing: Some(billing),
         });
     } else {

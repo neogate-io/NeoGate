@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    hash::{Hash, Hasher},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, RwLock as StdRwLock,
@@ -10,15 +9,18 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use rand::RngExt;
-use sqlx::{PgPool, Row};
+use sqlx::{AssertSqlSafe, PgPool, Row};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     admin::{channel::KeySelectionMode, credentials::openai_runtime_credential},
+    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
     error::{AppError, AppResult},
     id::DbId,
     secrets::SecretStore,
 };
+
+use super::affinity::{ChannelAffinityKey, UpstreamAffinityTarget};
 
 const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 
@@ -68,33 +70,13 @@ struct ModelBlockCache {
     entries: Arc<StdRwLock<HashMap<ModelBlockKey, DateTime<Utc>>>>,
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct ModelBlockKey {
     protocol: UpstreamProtocol,
     endpoint_id: DbId,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
     model: String,
-}
-
-impl PartialEq for ModelBlockKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.protocol == other.protocol
-            && self.endpoint_id == other.endpoint_id
-            && self.channel_key_id == other.channel_key_id
-            && self.credential_id == other.credential_id
-            && self.model == other.model
-    }
-}
-
-impl Hash for ModelBlockKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.protocol.hash(state);
-        self.endpoint_id.hash(state);
-        self.channel_key_id.hash(state);
-        self.credential_id.hash(state);
-        self.model.hash(state);
-    }
 }
 
 #[derive(Clone, Default)]
@@ -118,6 +100,31 @@ pub struct SelectedUpstream {
     pub base_url: String,
     pub secret: String,
     pub account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttemptedUpstream {
+    pub channel_id: DbId,
+    pub channel_endpoint_id: DbId,
+    pub channel_key_id: Option<DbId>,
+    pub credential_id: Option<DbId>,
+}
+
+impl From<&SelectedUpstream> for AttemptedUpstream {
+    fn from(upstream: &SelectedUpstream) -> Self {
+        Self {
+            channel_id: upstream.channel_id,
+            channel_endpoint_id: upstream.channel_endpoint_id,
+            channel_key_id: upstream.channel_key_id,
+            credential_id: upstream.credential_id,
+        }
+    }
+}
+
+pub struct ModelCooldown<'a> {
+    pub unavailable_until: DateTime<Utc>,
+    pub last_error: &'a str,
+    pub last_status_code: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +211,14 @@ impl Selector {
         self.model_blocks.clear_expired(Utc::now());
     }
 
+    pub async fn invalidate_refreshed_credential(&self, credential_id: DbId) {
+        self.credential_runtime_secrets.remove(credential_id);
+        let mut cache = self.routing_cache.write().await;
+        let mut next = (**cache).clone();
+        next.loaded_at = None;
+        *cache = Arc::new(next);
+    }
+
     pub async fn select(
         &self,
         pool: &PgPool,
@@ -214,25 +229,168 @@ impl Selector {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
         let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        let channel = choose_channel_for_request(&snapshot, protocol, model, now, &model_blocks)
-            .ok_or_else(|| {
-                AppError::UpstreamUnavailable(unavailable_channel_message(
+        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks, &[])
+    }
+
+    pub(crate) async fn select_with_affinity(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        affinity_cache: &super::affinity::ChannelAffinityCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        affinity_key: Option<&ChannelAffinityKey>,
+    ) -> AppResult<SelectedUpstream> {
+        self.select_with_affinity_excluding(
+            pool,
+            secrets,
+            affinity_cache,
+            protocol,
+            model,
+            affinity_key,
+            &[],
+        )
+        .await
+    }
+
+    pub(crate) async fn select_with_affinity_excluding(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        affinity_cache: &super::affinity::ChannelAffinityCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        affinity_key: Option<&ChannelAffinityKey>,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<SelectedUpstream> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        if let Some(affinity_key) = affinity_key {
+            if let Some(target) = affinity_cache.get(affinity_key) {
+                if let Some(upstream) = self.selected_affinity_upstream(
+                    secrets,
                     &snapshot,
                     protocol,
                     model,
                     now,
                     &model_blocks,
-                ))
-            })?;
+                    &target,
+                    attempted,
+                )? {
+                    tracing::debug!(
+                        rule = affinity_key.rule,
+                        protocol = protocol.as_str(),
+                        model,
+                        channel_id = upstream.channel_id,
+                        channel_endpoint_id = upstream.channel_endpoint_id,
+                        channel_key_id = ?upstream.channel_key_id,
+                        credential_id = ?upstream.credential_id,
+                        "selected upstream from channel affinity cache"
+                    );
+                    return Ok(upstream);
+                }
+            }
+        }
+
+        self.select_from_snapshot(
+            secrets,
+            &snapshot,
+            protocol,
+            model,
+            now,
+            &model_blocks,
+            attempted,
+        )
+    }
+
+    fn selected_affinity_upstream(
+        &self,
+        secrets: &SecretStore,
+        snapshot: &RoutingCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        now: DateTime<Utc>,
+        model_blocks: &ModelBlockLookup<'_>,
+        target: &UpstreamAffinityTarget,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<Option<SelectedUpstream>> {
+        let Some(channel) = snapshot.channels.iter().find(|channel| {
+            channel.id == target.channel_id && channel.endpoint_id == target.channel_endpoint_id
+        }) else {
+            return Ok(None);
+        };
+        if !channel_is_available(
+            snapshot,
+            channel,
+            protocol,
+            model,
+            now,
+            model_blocks,
+            attempted,
+        ) {
+            return Ok(None);
+        }
         let keys = snapshot
             .keys
             .get(&channel.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let key = choose_key(channel, keys, model, now, &model_blocks).ok_or_else(|| {
-            AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
-        })?;
+        let Some(key) = keys.iter().find(|key| {
+            key.credential_id == target.credential_id
+                && (!channel.use_credentials).then_some(key.id) == target.channel_key_id
+                && key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
+        }) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            self.selected_upstream_from_candidate(secrets, channel, key)?,
+        ))
+    }
 
+    fn select_from_snapshot(
+        &self,
+        secrets: &SecretStore,
+        snapshot: &RoutingCache,
+        protocol: UpstreamProtocol,
+        model: &str,
+        now: DateTime<Utc>,
+        model_blocks: &ModelBlockLookup<'_>,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<SelectedUpstream> {
+        let channel =
+            choose_channel_for_request(snapshot, protocol, model, now, model_blocks, attempted)
+                .ok_or_else(|| {
+                    AppError::UpstreamUnavailable(unavailable_channel_message(
+                        snapshot,
+                        protocol,
+                        model,
+                        now,
+                        model_blocks,
+                    ))
+                })?;
+        let keys = snapshot
+            .keys
+            .get(&channel.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let key =
+            choose_key(channel, keys, model, now, model_blocks, attempted).ok_or_else(|| {
+                AppError::UpstreamUnavailable(format!(
+                    "channel {} has no available key",
+                    channel.name
+                ))
+            })?;
+        self.selected_upstream_from_candidate(secrets, channel, key)
+    }
+
+    fn selected_upstream_from_candidate(
+        &self,
+        secrets: &SecretStore,
+        channel: &ChannelCandidate,
+        key: &KeyCandidate,
+    ) -> AppResult<SelectedUpstream> {
         let runtime = if let Some(credential_id) = key.credential_id {
             credential_runtime_secret(
                 &self.credential_runtime_secrets,
@@ -286,9 +444,7 @@ impl Selector {
         upstream: &SelectedUpstream,
         protocol: UpstreamProtocol,
         model: &str,
-        unavailable_until: DateTime<Utc>,
-        last_error: &str,
-        last_status_code: i32,
+        cooldown: ModelCooldown<'_>,
     ) -> AppResult<bool> {
         if !self
             .has_alternate_channel_for_model(pool, protocol, model)
@@ -296,7 +452,7 @@ impl Selector {
         {
             return Ok(false);
         }
-        self.mark_model_unavailable_local(upstream, protocol, model, unavailable_until)
+        self.mark_model_unavailable_local(upstream, protocol, model, cooldown.unavailable_until)
             .await;
         sqlx::query(
             "UPDATE channel_model
@@ -311,9 +467,9 @@ impl Selector {
         )
         .bind(upstream.channel_id)
         .bind(model)
-        .bind(unavailable_until)
-        .bind(last_error.chars().take(500).collect::<String>())
-        .bind(last_status_code)
+        .bind(cooldown.unavailable_until)
+        .bind(cooldown.last_error.chars().take(500).collect::<String>())
+        .bind(cooldown.last_status_code)
         .execute(pool)
         .await?;
         Ok(true)
@@ -395,7 +551,7 @@ impl Selector {
         cooldown_until: DateTime<Utc>,
     ) -> AppResult<bool> {
         if !self
-            .has_alternate_channel_for_model(pool, protocol, model)
+            .has_selectable_upstream_excluding_channel_key(pool, protocol, model, channel_key_id)
             .await?
         {
             return Ok(false);
@@ -424,6 +580,56 @@ impl Selector {
         let snapshot = self.routing_snapshot(pool).await?;
         Ok(matching_channel_count(&snapshot, protocol, model) > 1)
     }
+
+    pub(crate) async fn has_selectable_upstream_excluding(
+        &self,
+        pool: &PgPool,
+        protocol: UpstreamProtocol,
+        model: &str,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<bool> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let Some(channel) =
+            choose_channel_for_request(&snapshot, protocol, model, now, &model_blocks, attempted)
+        else {
+            return Ok(false);
+        };
+        let keys = snapshot
+            .keys
+            .get(&channel.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Ok(choose_key(channel, keys, model, now, &model_blocks, attempted).is_some())
+    }
+
+    async fn has_selectable_upstream_excluding_channel_key(
+        &self,
+        pool: &PgPool,
+        protocol: UpstreamProtocol,
+        model: &str,
+        channel_key_id: DbId,
+    ) -> AppResult<bool> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        Ok(snapshot.channels.iter().any(|channel| {
+            channel.protocol == protocol
+                && channel_matches_model(channel, model)
+                && ready_at(channel.cooldown_until, now)
+                && snapshot
+                    .keys
+                    .get(&channel.id)
+                    .map(|keys| {
+                        keys.iter().any(|key| {
+                            (!channel.use_credentials).then_some(key.id) != Some(channel_key_id)
+                                && key_is_available(channel, key, model, now, &model_blocks)
+                        })
+                    })
+                    .unwrap_or(false)
+        }))
+    }
 }
 
 impl RuntimeSecretCache {
@@ -450,6 +656,13 @@ impl RuntimeSecretCache {
             .write()
             .expect("credential runtime secret cache poisoned")
             .clear();
+    }
+
+    fn remove(&self, credential_id: DbId) {
+        self.entries
+            .write()
+            .expect("credential runtime secret cache poisoned")
+            .remove(&credential_id);
     }
 }
 
@@ -500,9 +713,11 @@ impl RoutingCache {
 }
 
 async fn load_routing_cache(pool: &PgPool) -> AppResult<RoutingCache> {
-    let channels = fetch_channel_candidates(pool).await?;
-    let keys = fetch_key_candidates(pool).await?;
-    let model_blocks = fetch_model_blocks(pool).await?;
+    let (channels, keys, model_blocks) = tokio::try_join!(
+        fetch_channel_candidates(pool),
+        fetch_key_candidates(pool),
+        fetch_model_blocks(pool)
+    )?;
     let (route_index, wildcard_index) = build_route_indexes(&channels);
     Ok(RoutingCache {
         loaded_at: Some(Instant::now()),
@@ -540,27 +755,50 @@ fn build_route_indexes(channels: &[ChannelCandidate]) -> (RouteIndex, WildcardRo
 }
 
 async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandidate>> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(AssertSqlSafe(format!(
         "SELECT c.id, ce.id AS endpoint_id, ce.protocol, c.provider, c.name,
-                ce.base_url, array_agg(cm.model ORDER BY cm.model ASC) AS models,
+                ce.base_url,
+                COALESCE(
+                    array_agg(cm.model ORDER BY cm.model ASC)
+                        FILTER (WHERE cm.model IS NOT NULL),
+                    ARRAY[]::TEXT[]
+                ) AS models,
                 c.priority, c.weight, c.key_selection_mode, ce.cooldown_until, c.use_credentials
          FROM channel c
          JOIN provider p ON p.code = c.provider
          JOIN channel_endpoint ce ON ce.channel_id = c.id
-         JOIN channel_model cm ON cm.channel_id = c.id
-         JOIN provider_price pp
-           ON pp.provider = c.provider
-          AND pp.model = cm.model
-          AND pp.enabled = TRUE
+         LEFT JOIN channel_model cm
+           ON cm.channel_id = c.id
+          AND EXISTS (
+              SELECT 1
+              FROM unnest(ce.models) AS endpoint_model(model)
+              WHERE btrim(endpoint_model.model) = cm.model
+          )
+          AND cm.enabled = TRUE
+          AND cm.status = 'available'
+          AND (
+              cm.runtime_status = 'normal'
+              OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM provider_price pp
+              WHERE pp.provider = c.provider
+                AND pp.model = cm.model
+                AND pp.enabled = TRUE
+                AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+          )
          WHERE p.enabled = TRUE
            AND c.enabled = TRUE
            AND ce.enabled = TRUE
            AND ce.healthy = TRUE
-           AND cm.enabled = TRUE
-           AND cm.status = 'available'
            AND (
-               cm.runtime_status = 'normal'
-               OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+               cm.id IS NOT NULL
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM unnest(ce.models) AS endpoint_model(model)
+                   WHERE btrim(endpoint_model.model) <> ''
+               )
            )
            AND (
                (
@@ -582,8 +820,8 @@ async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandida
                )
            )
          GROUP BY c.id, ce.id
-         ORDER BY c.priority DESC, c.created_at ASC",
-    )
+         ORDER BY c.priority DESC, c.created_at ASC"
+    )))
     .fetch_all(pool)
     .await?;
 
@@ -821,6 +1059,7 @@ fn choose_channel_for_request<'a>(
     model: &str,
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
 ) -> Option<&'a ChannelCandidate> {
     let indexed = cache
         .route_index
@@ -836,7 +1075,15 @@ fn choose_channel_for_request<'a>(
     let mut selected = None;
 
     for channel in indexed {
-        if !channel_is_available(cache, channel, protocol, model, now, model_blocks) {
+        if !channel_is_available(
+            cache,
+            channel,
+            protocol,
+            model,
+            now,
+            model_blocks,
+            attempted,
+        ) {
             continue;
         }
         let weight = channel.weight.max(1);
@@ -871,6 +1118,7 @@ fn channel_is_available(
     model: &str,
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
 ) -> bool {
     channel.protocol == protocol
         && channel_matches_model(channel, model)
@@ -879,8 +1127,10 @@ fn channel_is_available(
             .keys
             .get(&channel.id)
             .map(|keys| {
-                keys.iter()
-                    .any(|key| key_is_available(channel, key, model, now, model_blocks))
+                keys.iter().any(|key| {
+                    key_is_available(channel, key, model, now, model_blocks)
+                        && !was_attempted(channel, key, attempted)
+                })
             })
             .unwrap_or(false)
 }
@@ -966,10 +1216,14 @@ fn choose_key<'a>(
     model: &str,
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
 ) -> Option<&'a KeyCandidate> {
     let ready_count = keys
         .iter()
-        .filter(|key| key_is_available(channel, key, model, now, model_blocks))
+        .filter(|key| {
+            key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
+        })
         .count();
     if ready_count == 0 {
         return None;
@@ -979,8 +1233,25 @@ fn choose_key<'a>(
         KeySelectionMode::Polling => channel.polling.fetch_add(1, Ordering::Relaxed) % ready_count,
     };
     keys.iter()
-        .filter(|key| key_is_available(channel, key, model, now, model_blocks))
+        .filter(|key| {
+            key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
+        })
         .nth(slot)
+}
+
+fn was_attempted(
+    channel: &ChannelCandidate,
+    key: &KeyCandidate,
+    attempted: &[AttemptedUpstream],
+) -> bool {
+    let channel_key_id = (!channel.use_credentials).then_some(key.id);
+    attempted.iter().any(|item| {
+        item.channel_id == channel.id
+            && item.channel_endpoint_id == channel.endpoint_id
+            && item.channel_key_id == channel_key_id
+            && item.credential_id == key.credential_id
+    })
 }
 
 fn key_is_ready(key: &KeyCandidate, now: DateTime<Utc>) -> bool {
@@ -1085,6 +1356,72 @@ mod tests {
         let channel = candidate("strict", 0, 1, vec!["gpt-4.1"]);
         assert!(channel_matches_model(&channel, "gpt-4.1"));
         assert!(!channel_matches_model(&channel, "gpt-4o-mini"));
+    }
+
+    #[test]
+    fn route_indexes_keep_wildcard_channels_reachable() {
+        let wildcard = candidate("any", 0, 1, vec![]);
+        let strict = candidate("strict", 0, 1, vec!["gpt-4.1"]);
+        let (route_index, wildcard_index) = build_route_indexes(&[wildcard, strict]);
+
+        assert_eq!(
+            wildcard_index
+                .get(&UpstreamProtocol::Openai)
+                .expect("wildcard protocol entry"),
+            &[0]
+        );
+        assert_eq!(
+            route_index
+                .get(&UpstreamProtocol::Openai)
+                .and_then(|models| models.get("gpt-4.1"))
+                .expect("strict model entry"),
+            &[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshed_credential_invalidation_is_targeted_and_stales_routing_cache() {
+        let selector = Selector::with_cache_ttl(Duration::from_secs(30));
+        {
+            let mut cache = selector.routing_cache.write().await;
+            let routing = RoutingCache {
+                loaded_at: Some(Instant::now()),
+                ..Default::default()
+            };
+            *cache = Arc::new(routing);
+        }
+        selector.credential_runtime_secrets.insert(
+            1,
+            CachedRuntimeSecret {
+                ciphertext: "cipher-1".to_string(),
+                secret: "secret-1".to_string(),
+                account_id: Some("acct-1".to_string()),
+            },
+        );
+        selector.credential_runtime_secrets.insert(
+            2,
+            CachedRuntimeSecret {
+                ciphertext: "cipher-2".to_string(),
+                secret: "secret-2".to_string(),
+                account_id: Some("acct-2".to_string()),
+            },
+        );
+
+        selector.invalidate_refreshed_credential(1).await;
+
+        assert!(selector
+            .credential_runtime_secrets
+            .get(1, "cipher-1")
+            .is_none());
+        assert_eq!(
+            selector
+                .credential_runtime_secrets
+                .get(2, "cipher-2")
+                .expect("untouched credential")
+                .secret,
+            "secret-2"
+        );
+        assert!(selector.routing_cache.read().await.loaded_at.is_none());
     }
 
     #[test]
@@ -1228,7 +1565,8 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
@@ -1240,7 +1578,8 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
@@ -1252,7 +1591,8 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
@@ -1280,11 +1620,57 @@ mod tests {
                 &keys,
                 "gpt-4.1",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
             "only-enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn key_selection_skips_attempted_upstream_identity() {
+        let channel = candidate("retry", 0, 1, vec![]);
+        let keys = vec![
+            KeyCandidate {
+                id: 1,
+                channel_id: channel.id,
+                credential_id: None,
+                secret_ciphertext: "attempted".to_string(),
+                cooldown_until: None,
+                plan_type: None,
+                plan_models: Vec::new(),
+            },
+            KeyCandidate {
+                id: 2,
+                channel_id: channel.id,
+                credential_id: None,
+                secret_ciphertext: "next".to_string(),
+                cooldown_until: None,
+                plan_type: None,
+                plan_models: Vec::new(),
+            },
+        ];
+        let attempted = vec![AttemptedUpstream {
+            channel_id: channel.id,
+            channel_endpoint_id: channel.endpoint_id,
+            channel_key_id: Some(1),
+            credential_id: None,
+        }];
+
+        assert_eq!(
+            choose_key(
+                &channel,
+                &keys,
+                "gpt-4.1",
+                Utc::now(),
+                &empty_block_lookup(),
+                &attempted,
+            )
+            .unwrap()
+            .secret_ciphertext,
+            "next"
         );
     }
 
@@ -1335,7 +1721,7 @@ mod tests {
         let model_blocks = ModelBlockLookup::new(&model_blocks, &local_blocks);
 
         assert_eq!(
-            choose_key(&channel, &keys, "gpt-5.4", now, &model_blocks)
+            choose_key(&channel, &keys, "gpt-5.4", now, &model_blocks, &[])
                 .unwrap()
                 .secret_ciphertext,
             "available"
@@ -1380,11 +1766,34 @@ mod tests {
                 &keys,
                 "gpt-5.4",
                 Utc::now(),
-                &empty_block_lookup()
+                &empty_block_lookup(),
+                &[],
             )
             .unwrap()
             .secret_ciphertext,
             "right-plan"
         );
+    }
+
+    #[test]
+    fn affinity_target_preserves_selected_upstream_identity() {
+        let upstream = SelectedUpstream {
+            channel_id: 10,
+            channel_endpoint_id: 20,
+            channel_key_id: Some(30),
+            credential_id: None,
+            provider: "openai".to_string(),
+            channel_name: "primary".to_string(),
+            base_url: "https://example.com".to_string(),
+            secret: "secret".to_string(),
+            account_id: None,
+        };
+
+        let target = UpstreamAffinityTarget::from(&upstream);
+
+        assert_eq!(target.channel_id, 10);
+        assert_eq!(target.channel_endpoint_id, 20);
+        assert_eq!(target.channel_key_id, Some(30));
+        assert_eq!(target.credential_id, None);
     }
 }

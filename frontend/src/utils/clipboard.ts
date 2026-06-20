@@ -1,3 +1,6 @@
+import { ElMessage } from 'element-plus'
+import { readError } from './errors'
+
 export async function copyTextToClipboard(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -42,5 +45,16 @@ function copyTextWithTextarea(text: string) {
 
   if (!copied) {
     throw new Error('Clipboard is not available')
+  }
+}
+
+export async function copyTextWithMessage(text: string, successMessage: string) {
+  try {
+    await copyTextToClipboard(text)
+    ElMessage.success(successMessage)
+    return true
+  } catch (err) {
+    ElMessage.error(readError(err))
+    return false
   }
 }

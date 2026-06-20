@@ -7,26 +7,26 @@ const props = defineProps<{
 }>()
 
 const iconUrl: Record<string, string> = {
-  newapi: '/provider-icons/newapi.png',
-  openai: '/provider-icons/openai.svg',
-  anthropic: '/provider-icons/anthropic.ico',
-  google: '/provider-icons/gemini.png',
-  gemini: '/provider-icons/gemini.png',
-  deepseek: '/provider-icons/deepseek.ico',
-  qwen: '/provider-icons/qwen.svg',
-  moonshot: '/provider-icons/kimi.ico',
-  kimi: '/provider-icons/kimi.ico',
-  zhipu: '/provider-icons/glm.ico',
-  glm: '/provider-icons/glm.ico',
-  doubao: '/provider-icons/doubao.png',
-  baidu: '/provider-icons/baidu.png',
-  tencent: '/provider-icons/tencent.ico',
-  minimax: '/provider-icons/minimax.ico',
-  stepfun: '/provider-icons/stepfun.ico',
-  baichuan: '/provider-icons/baichuan.png',
-  iflytek: '/provider-icons/iflytek.ico',
-  sensenova: '/provider-icons/sensenova.ico',
-  siliconflow: '/provider-icons/siliconflow.ico'
+  newapi: '/icons/newapi.png',
+  openai: '/icons/openai.svg',
+  anthropic: '/icons/anthropic.ico',
+  google: '/icons/gemini.png',
+  gemini: '/icons/gemini.png',
+  deepseek: '/icons/deepseek.ico',
+  qwen: '/icons/qwen.svg',
+  moonshot: '/icons/kimi.ico',
+  kimi: '/icons/kimi.ico',
+  zhipu: '/icons/glm.ico',
+  glm: '/icons/glm.ico',
+  doubao: '/icons/doubao.png',
+  baidu: '/icons/baidu.png',
+  tencent: '/icons/tencent.ico',
+  minimax: '/icons/minimax.ico',
+  stepfun: '/icons/stepfun.ico',
+  baichuan: '/icons/baichuan.png',
+  iflytek: '/icons/iflytek.ico',
+  sensenova: '/icons/sensenova.ico',
+  siliconflow: '/icons/siliconflow.ico'
 }
 
 const imageFailed = ref(false)

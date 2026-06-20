@@ -1,4 +1,6 @@
 import type {
+  BillingMeter,
+  ModelReferenceCatalogRecord,
   PricingPolicy,
   PricingTemplate,
   PricingTemplateSyncResult,
@@ -19,6 +21,10 @@ export function getPricingTemplates() {
   return adminRequest<PricingTemplate[]>('/api/admin/pricing-templates')
 }
 
+export function getModelReferenceCatalog() {
+  return adminRequest<ModelReferenceCatalogRecord[]>('/api/admin/model-reference-catalog')
+}
+
 export function syncPricingTemplates(source = 'models_dev') {
   return adminRequest<PricingTemplateSyncResult>('/api/admin/pricing-templates/sync', {
     method: 'POST',
@@ -37,6 +43,8 @@ export function upsertProviderPrice(input: {
   output_price_usd_micros: number
   cache_read_price_usd_micros?: number | null
   cache_write_price_usd_micros?: number | null
+  billing_meter: BillingMeter
+  unit_price_usd_micros?: number | null
   enabled: boolean
 }) {
   return adminRequest<ProviderPrice>('/api/admin/provider-prices', {

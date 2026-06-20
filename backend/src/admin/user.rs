@@ -5,23 +5,24 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    AppState,
     auth::{
-        UserAuth, generate_user_key, generate_user_key_from_parts_and_seed, hash_user_password,
+        generate_user_key, generate_user_key_from_parts_and_seed, hash_user_password,
         is_generated_user_key, issue_user_key_draft_token, key_prefix,
-        user_key_draft_parts_from_token, validate_user_password_input,
+        user_key_draft_parts_from_token, validate_user_password_input, UserAuth,
     },
-    billing::{CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD, account},
-    email::{EmailLocale, smtp_config_error},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
+    email::{smtp_config_error, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
-    policy::{ServiceMode, registration_policy, service_mode},
-    project,
+    input::{bounded_limit, trimmed_non_empty},
+    pagination::{created_id_cursor_page, parse_created_id_cursor},
+    policy::{registration_policy, service_mode, ServiceMode},
+    project, AppState,
 };
 use axum::{
-    Json, Router,
     extract::State,
     routing::{get, post},
+    Json, Router,
 };
 
 #[derive(Debug, Serialize)]
@@ -253,26 +254,11 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
 }
 
 pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<UserPage> {
-    let limit = query.limit.unwrap_or(50).clamp(1, 200);
-    let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
-    let user_search = query
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase());
-    let email = query
-        .email
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase());
-    let api_key = query
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let limit = bounded_limit(query.limit, 50, 200);
+    let cursor = parse_created_id_cursor(query.cursor.as_deref(), "invalid cursor")?;
+    let user_search = trimmed_non_empty(query.search.as_deref()).map(str::to_ascii_lowercase);
+    let email = trimmed_non_empty(query.email.as_deref()).map(str::to_ascii_lowercase);
+    let api_key = trimmed_non_empty(query.api_key.as_deref()).map(ToOwned::to_owned);
 
     let matching_user_ids = match api_key.as_deref() {
         Some(api_key) => user_ids_for_api_key(state, api_key).await?,
@@ -297,34 +283,29 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
     let mut has_where = false;
     if let Some(search) = user_search {
         let pattern = format!("%{search}%");
-        query_builder
-            .push(" WHERE (u.email::TEXT ILIKE ")
+        push_where_clause(&mut query_builder, &mut has_where)
+            .push("(u.email::TEXT ILIKE ")
             .push_bind(pattern.clone())
             .push(" OR u.username ILIKE ")
             .push_bind(pattern)
             .push(")");
-        has_where = true;
     }
 
     if let Some(email) = email {
-        query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
+        push_where_clause(&mut query_builder, &mut has_where)
             .push("u.email::TEXT ILIKE ")
             .push_bind(format!("%{email}%"));
-        has_where = true;
     }
 
     if !matching_user_ids.is_empty() {
-        query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
+        push_where_clause(&mut query_builder, &mut has_where)
             .push("u.id = ANY(")
             .push_bind(matching_user_ids)
             .push(")");
     }
 
     if let Some((created_at, id)) = cursor {
-        query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
+        push_where_clause(&mut query_builder, &mut has_where)
             .push("(u.created_at, u.id) < (")
             .push_bind(created_at)
             .push(", ")
@@ -365,13 +346,7 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
         );
 
     let rows = query_builder.build().fetch_all(&state.db.pool).await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(created_id_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
     Ok(UserPage {
         items: rows.iter().map(user_from_row).collect::<Result<_, _>>()?,
         limit,
@@ -714,8 +689,8 @@ async fn consume_public_user_key_draft(state: &AppState, draft_id: &str) -> AppR
 }
 
 pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppResult<UserKeyPage> {
-    let limit = query.limit.unwrap_or(100).clamp(1, 500);
-    let cursor = parse_created_id_cursor(query.cursor.as_deref())?;
+    let limit = bounded_limit(query.limit, 100, 500);
+    let cursor = parse_created_id_cursor(query.cursor.as_deref(), "invalid cursor")?;
     let mut query_builder = sqlx::QueryBuilder::new(
         "SELECT uk.id, uk.user_id, uk.project_id, uk.owner_user_id,
                 p.name AS project_name,
@@ -730,22 +705,17 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
 
     let mut has_where = false;
     if let Some(user_id) = query.user_id {
-        query_builder.push(" WHERE uk.user_id = ");
+        push_where_clause(&mut query_builder, &mut has_where).push("uk.user_id = ");
         query_builder.push_bind(user_id);
-        has_where = true;
     }
 
     if let Some(project_id) = query.project_id {
-        query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
-            .push("uk.project_id = ");
+        push_where_clause(&mut query_builder, &mut has_where).push("uk.project_id = ");
         query_builder.push_bind(project_id);
-        has_where = true;
     }
 
     if let Some((created_at, id)) = cursor {
-        query_builder
-            .push(if has_where { " AND " } else { " WHERE " })
+        push_where_clause(&mut query_builder, &mut has_where)
             .push("(uk.created_at, uk.id) < (")
             .push_bind(created_at)
             .push(", ")
@@ -758,13 +728,7 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
         .push_bind(limit + 1);
 
     let rows = query_builder.build().fetch_all(&state.db.pool).await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = has_more
-        .then(|| rows.last())
-        .flatten()
-        .map(created_id_cursor_from_row)
-        .transpose()?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
     Ok(UserKeyPage {
         items: rows
             .iter()
@@ -776,32 +740,19 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
     })
 }
 
-fn parse_created_id_cursor(cursor: Option<&str>) -> AppResult<Option<(DateTime<Utc>, DbId)>> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some((created_at, id)) = cursor.rsplit_once('|') else {
-        return Err(AppError::BadRequest("invalid cursor".to_string()));
-    };
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?
-        .with_timezone(&Utc);
-    let id = id
-        .parse::<DbId>()
-        .map_err(|_| AppError::BadRequest("invalid cursor".to_string()))?;
-    Ok(Some((created_at, id)))
-}
-
-fn created_id_cursor_from_row(row: &sqlx::postgres::PgRow) -> Result<String, sqlx::Error> {
-    let created_at: DateTime<Utc> = row.try_get("created_at")?;
-    let id: DbId = row.try_get("id")?;
-    Ok(format!("{}|{}", created_at.to_rfc3339(), id))
-}
-
 fn email_error(err: anyhow::Error) -> AppError {
     smtp_config_error(&err)
         .map(|(code, message)| AppError::BadRequestWithCode { code, message })
         .unwrap_or_else(|| AppError::Anyhow(err))
+}
+
+fn push_where_clause<'a>(
+    query_builder: &'a mut sqlx::QueryBuilder<Postgres>,
+    has_where: &mut bool,
+) -> &'a mut sqlx::QueryBuilder<Postgres> {
+    query_builder.push(if *has_where { " AND " } else { " WHERE " });
+    *has_where = true;
+    query_builder
 }
 
 pub async fn update_user_key(
@@ -923,9 +874,7 @@ fn normalize_username(username: &str) -> AppResult<String> {
 }
 
 fn normalize_optional_username(username: Option<&str>) -> AppResult<Option<String>> {
-    username
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    trimmed_non_empty(username)
         .map(normalize_username)
         .transpose()
 }
@@ -1225,10 +1174,7 @@ async fn recover_user_hot_credit_accounts(state: &AppState, user_id: DbId) -> Ap
     .bind(user_id)
     .fetch_all(&state.db.pool)
     .await?;
-    for row in rows {
-        recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
-    }
-    Ok(())
+    recover_hot_credit_account_rows(state, rows).await
 }
 
 async fn recover_user_key_hot_credit_accounts(
@@ -1251,6 +1197,13 @@ async fn recover_user_key_hot_credit_accounts(
     if rows.is_empty() {
         return Err(AppError::NotFound);
     }
+    recover_hot_credit_account_rows(state, rows).await
+}
+
+async fn recover_hot_credit_account_rows(
+    state: &AppState,
+    rows: Vec<sqlx::postgres::PgRow>,
+) -> AppResult<()> {
     for row in rows {
         recover_hot_credit_account(state, CreditAccountId::new(row.try_get("id")?)).await?;
     }

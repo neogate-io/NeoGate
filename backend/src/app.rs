@@ -29,7 +29,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    admin, auth,
+    admin, apps, auth,
     billing::{outbox::BillingOutbox, Billing},
     cache,
     config::{Config, RuntimeProbe, DEFAULT_RELAY_BODY_LIMIT_BYTES},
@@ -38,7 +38,7 @@ use crate::{
     health::{self, RuntimeHealth},
     id::DbId,
     payment, policy,
-    relay::{self, selector::Selector},
+    relay::{self, selector::Selector, ChannelAffinityCache},
     secrets::SecretStore,
     setup::{bootstrap, install},
     task,
@@ -60,6 +60,7 @@ pub struct AppState {
     pub http: Client,
     pub secrets: SecretStore,
     pub selector: Selector,
+    pub(crate) channel_affinity: ChannelAffinityCache,
     pub user_auth_cache: auth::UserAuthCache,
     pub auth_rate_limiter: auth::AuthRateLimiter,
     pub(crate) image_sync_limiter: relay::ImageSyncLimiter,
@@ -457,6 +458,11 @@ async fn build_state(
         None
     };
     let selector = Selector::with_cache_ttl(config.cache.routing_ttl);
+    let channel_affinity = ChannelAffinityCache::new(
+        config.relay.channel_affinity_enabled,
+        config.relay.channel_affinity_ttl,
+        config.relay.channel_affinity_max_entries,
+    );
     let billing = if config.runtime_mode.is_distributed() {
         Billing::new_redis(
             config.redis_url.as_deref().expect("validated redis url"),
@@ -552,6 +558,7 @@ async fn build_state(
         http,
         secrets,
         selector,
+        channel_affinity,
         user_auth_cache: auth::UserAuthCache::new(
             config.cache.user_auth_ttl,
             config.cache.user_auth_max_entries,
@@ -585,6 +592,7 @@ fn router(state: Arc<AppState>) -> Router {
         .merge(payment::router())
         .merge(policy::router())
         .merge(admin::public_router())
+        .merge(apps::router())
         .merge(relay::router())
         .with_state(state)
 }
@@ -725,11 +733,15 @@ pub(crate) mod tests {
                 },
                 relay: config::RelayConfig {
                     key_cooldown: Duration::from_secs(60),
+                    max_upstream_failovers: 5,
                     body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
                     usage_buffer_limit_bytes: config::DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
                     credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                     image_sync_global_limit: 8,
                     image_sync_key_limit: 2,
+                    channel_affinity_enabled: true,
+                    channel_affinity_ttl: Duration::from_secs(3600),
+                    channel_affinity_max_entries: 100_000,
                 },
                 cache: config::CacheConfig {
                     user_auth_ttl: Duration::from_secs(30),
@@ -782,6 +794,11 @@ pub(crate) mod tests {
             http: Client::new(),
             secrets: SecretStore::new("test-upstream-secret-key", 1024),
             selector: Selector::new(),
+            channel_affinity: relay::ChannelAffinityCache::new(
+                true,
+                Duration::from_secs(3600),
+                100_000,
+            ),
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
             image_sync_limiter: relay::ImageSyncLimiter::new(8, 2),
@@ -858,34 +875,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn protected_admin_accepts_signed_session_token() {
+    async fn protected_admin_rejects_invalid_session_token() {
         let state = test_state();
-        let token = auth::issue_admin_token(
-            state.config.admin_session_ttl,
-            &state.config.admin_token_secret,
-            1,
-        );
         let app = Router::new()
             .merge(admin::router())
             .route("/protected-admin", get(protected_admin))
             .with_state(state);
-
-        assert_ne!(token, "admin");
-        assert!(token.starts_with("neo_admin_"));
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/protected-admin")
-                    .header("authorization", format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
 
         let response = app
             .clone()

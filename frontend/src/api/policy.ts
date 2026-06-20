@@ -35,8 +35,32 @@ export type ServicePolicy = {
   updated_at?: string | null
 }
 
-export function getSetupStatus() {
-  return publicRequest<ServicePolicy>('/api/setup/status')
+const setupStatusCacheTtlMs = 5_000
+let setupStatusCache: ServicePolicy | null = null
+let setupStatusLoadedAt = 0
+let setupStatusPromise: Promise<ServicePolicy> | null = null
+const adminServicePolicyCacheTtlMs = 5_000
+let adminServicePolicyCache: ServicePolicy | null = null
+let adminServicePolicyLoadedAt = 0
+let adminServicePolicyPromise: Promise<ServicePolicy> | null = null
+
+export function getSetupStatus(force = false) {
+  if (!force && setupStatusCache && Date.now() - setupStatusLoadedAt < setupStatusCacheTtlMs) {
+    return Promise.resolve(setupStatusCache)
+  }
+  if (!force && setupStatusPromise) return setupStatusPromise
+
+  setupStatusPromise = publicRequest<ServicePolicy>('/api/setup/status')
+    .then((status) => {
+      setupStatusCache = status
+      setupStatusLoadedAt = Date.now()
+      return status
+    })
+    .finally(() => {
+      setupStatusPromise = null
+    })
+
+  return setupStatusPromise
 }
 
 export function bootstrapSetup(input: {
@@ -153,6 +177,10 @@ export function completeSetupWizard(input: {
   return publicRequest<ServicePolicy>('/api/setup/complete', {
     method: 'POST',
     body: JSON.stringify(input)
+  }).then((status) => {
+    setupStatusCache = status
+    setupStatusLoadedAt = Date.now()
+    return status
   })
 }
 
@@ -160,8 +188,29 @@ export function getUserServicePolicy() {
   return userRequest<ServicePolicy>('/api/user/service-policy')
 }
 
-export function getAdminServicePolicy() {
-  return adminRequest<ServicePolicy>('/api/admin/settings/service-policy')
+export function getAdminServicePolicy(force = false) {
+  if (
+    !force &&
+    adminServicePolicyCache &&
+    Date.now() - adminServicePolicyLoadedAt < adminServicePolicyCacheTtlMs
+  ) {
+    return Promise.resolve(copyServicePolicy(adminServicePolicyCache))
+  }
+  if (!force && adminServicePolicyPromise) {
+    return adminServicePolicyPromise.then(copyServicePolicy)
+  }
+
+  adminServicePolicyPromise = adminRequest<ServicePolicy>('/api/admin/settings/service-policy')
+    .then((policy) => {
+      adminServicePolicyCache = copyServicePolicy(policy)
+      adminServicePolicyLoadedAt = Date.now()
+      return policy
+    })
+    .finally(() => {
+      adminServicePolicyPromise = null
+    })
+
+  return adminServicePolicyPromise.then(copyServicePolicy)
 }
 
 export function saveAdminServicePolicy(input: {
@@ -171,5 +220,13 @@ export function saveAdminServicePolicy(input: {
   return adminRequest<ServicePolicy>('/api/admin/settings/service-policy', {
     method: 'POST',
     body: JSON.stringify(input)
+  }).then((policy) => {
+    adminServicePolicyCache = copyServicePolicy(policy)
+    adminServicePolicyLoadedAt = Date.now()
+    return copyServicePolicy(policy)
   })
+}
+
+function copyServicePolicy(policy: ServicePolicy) {
+  return { ...policy }
 }

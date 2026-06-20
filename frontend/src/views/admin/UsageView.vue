@@ -10,6 +10,7 @@ import {
 } from '@element-plus/icons-vue'
 import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import type { UsageRecord } from '../../types/admin'
@@ -73,15 +74,20 @@ const {
   { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE } satisfies UsagePage
 )
 
-const usageItems = computed(() => usagePage.value.items)
 const usageInitialLoading = computed(() => !usageLoaded.value)
 const hasUsagePagination = computed(
   () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
 )
-
-function resetUsagePagination() {
-  resetCursorPagination()
-}
+const {
+  resetAndReload: resetUsageAndReload,
+  nextPage,
+  previousPage,
+  handlePageSizeChange
+} = useCursorPageActions(
+  { pageSize, reset: resetCursorPagination, goToNext, goToPrevious },
+  () => usagePage.value,
+  reload
+)
 
 function usageStatusTone(statusCode?: number | null) {
   if (statusCode == null) return 'neutral'
@@ -104,6 +110,26 @@ function usageStatusTooltip(statusCode?: number | null) {
   return statusCode == null ? '' : `HTTP ${statusCode}`
 }
 
+function relayTraceLabel(row: UsageRecord) {
+  if (!row.relay_trace_id) return '-'
+  return `#${row.relay_attempt}`
+}
+
+function relayTraceTone(row: UsageRecord) {
+  if (!row.relay_trace_id) return 'neutral'
+  return row.relay_final ? 'success' : 'warning'
+}
+
+function relayTraceText(row: UsageRecord) {
+  if (!row.relay_trace_id) return ''
+  return row.relay_final ? t('relayAttemptFinal') : t('relayAttemptRetry')
+}
+
+function relayTraceTooltip(row: UsageRecord) {
+  if (!row.relay_trace_id) return ''
+  return `${t('relayTrace')} ${row.relay_trace_id} · #${row.relay_attempt}`
+}
+
 function usageUserDisplay(row: UsageRecord) {
   if (row.user_email) return row.user_email
   if (row.user_id != null) return `#${row.user_id}`
@@ -111,25 +137,7 @@ function usageUserDisplay(row: UsageRecord) {
 }
 
 async function handleSearch() {
-  resetUsagePagination()
-  await reload()
-}
-
-async function nextPage() {
-  if (!usagePage.value.has_more || !usagePage.value.next_cursor) return
-  goToNext(usagePage.value.next_cursor)
-  await reload()
-}
-
-async function previousPage() {
-  if (!goToPrevious()) return
-  await reload()
-}
-
-async function handlePageSizeChange(size: number) {
-  pageSize.value = size
-  resetUsagePagination()
-  await reload()
+  await resetUsageAndReload()
 }
 </script>
 
@@ -205,12 +213,12 @@ async function handlePageSizeChange(size: number) {
     <div
       v-else
       class="service-table-panel"
-      :class="{ 'has-pagination': hasUsagePagination || usageItems.length > 1 }"
+      :class="{ 'has-pagination': hasUsagePagination || usagePage.items.length > 1 }"
     >
       <el-table
         v-loading="loading"
         class="admin-table service-table usage-table"
-        :data="usageItems"
+        :data="usagePage.items"
         row-key="id"
         stripe
       >
@@ -254,7 +262,13 @@ async function handlePageSizeChange(size: number) {
         </el-table-column>
         <el-table-column :label="t('tokensColumnHint')" min-width="150">
           <template #default="{ row }">
-            <div class="usage-stack">
+            <div v-if="row.billing_meter === 'image'" class="usage-stack">
+              <span class="usage-mono">
+                {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
+              </span>
+              <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+            </div>
+            <div v-else class="usage-stack">
               <span class="usage-mono">
                 {{ formatNumber(row.input_tokens, locale) }} /
                 {{ formatNumber(row.output_tokens, locale) }}
@@ -287,19 +301,44 @@ async function handlePageSizeChange(size: number) {
               :content="usageStatusTooltip(row.status_code)"
               :disabled="row.status_code == null"
               placement="top"
+              :show-after="600"
             >
               <span class="usage-status-switch" :class="`is-${usageStatusTone(row.status_code)}`">
                 <span class="usage-status-switch-icon">
                   <el-icon><component :is="usageStatusIcon(row.status_code)" /></el-icon>
                 </span>
-                <span class="usage-status-switch-text">{{ usageStatusLabel(row.status_code) }}</span>
+                <span class="usage-status-switch-text">{{
+                  usageStatusLabel(row.status_code)
+                }}</span>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('relayTrace')" min-width="120" align="center" header-align="center">
+          <template #default="{ row }">
+            <el-tooltip
+              :content="relayTraceTooltip(row)"
+              :disabled="!row.relay_trace_id"
+              placement="top"
+              :show-after="600"
+            >
+              <span class="usage-trace-pill" :class="`is-${relayTraceTone(row)}`">
+                <span class="usage-mono">{{ relayTraceLabel(row) }}</span>
+                <span v-if="row.relay_trace_id" class="usage-trace-text">{{
+                  relayTraceText(row)
+                }}</span>
               </span>
             </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column prop="error_summary" :label="t('error')" min-width="180">
           <template #default="{ row }">
-            <el-tooltip v-if="row.error_summary" :content="row.error_summary" placement="top">
+            <el-tooltip
+              v-if="row.error_summary"
+              :content="row.error_summary"
+              placement="top"
+              :show-after="600"
+            >
               <span class="usage-error-cell">{{ row.error_summary }}</span>
             </el-tooltip>
             <span v-else class="usage-muted">-</span>
@@ -314,7 +353,7 @@ async function handlePageSizeChange(size: number) {
     </div>
 
     <div
-      v-if="!usageInitialLoading && (hasUsagePagination || usageItems.length > 1)"
+      v-if="!usageInitialLoading && (hasUsagePagination || usagePage.items.length > 1)"
       class="admin-pagination-bar admin-table-pagination is-compact"
     >
       <div class="admin-pagination-controls">
@@ -517,6 +556,39 @@ async function handlePageSizeChange(size: number) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.usage-trace-pill {
+  align-items: center;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  color: #667085;
+  display: inline-flex;
+  gap: 6px;
+  height: 26px;
+  justify-content: center;
+  max-width: 112px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.usage-trace-pill.is-success {
+  background: #ecfdf3;
+  border-color: #abefc6;
+  color: #067647;
+}
+
+.usage-trace-pill.is-warning {
+  background: #fffaeb;
+  border-color: #fedf89;
+  color: #b54708;
+}
+
+.usage-trace-text {
+  font-size: 12px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .usage-empty-state {

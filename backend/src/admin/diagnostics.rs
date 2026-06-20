@@ -10,6 +10,7 @@ use crate::{
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
+    input::trimmed_non_empty,
     relay::upstream_url,
     AppState,
 };
@@ -408,9 +409,9 @@ async fn diagnose_key(
     let probe_models: Vec<_> = endpoint
         .models
         .iter()
+        .filter(|&model| is_text_probe_model(model))
+        .filter(|&model| discovered_models.is_empty() || discovered_models.contains(model))
         .cloned()
-        .filter(|model| is_text_probe_model(model))
-        .filter(|model| discovered_models.is_empty() || discovered_models.contains(model))
         .collect();
     if !probe_models.is_empty() {
         for model in probe_models {
@@ -689,7 +690,7 @@ fn upstream_request(
     request
 }
 
-fn probe_request<'a>(endpoint: &EndpointTarget, model: &'a str) -> (&'static str, Value) {
+fn probe_request(endpoint: &EndpointTarget, model: &str) -> (&'static str, Value) {
     if endpoint.protocol == "anthropic" {
         return (
             "/v1/messages",
@@ -1022,7 +1023,7 @@ fn extract_model_ids(value: &Value) -> Vec<String> {
             .get("id")
             .or_else(|| item.get("name"))
             .and_then(Value::as_str);
-        let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        let Some(id) = trimmed_non_empty(id) else {
             continue;
         };
         if !models.iter().any(|model| model == id) {

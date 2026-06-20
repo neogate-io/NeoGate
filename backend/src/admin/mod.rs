@@ -879,7 +879,7 @@ struct UpdateAdminPasswordRequest {
 
 async fn update_admin_password_handler(
     State(state): State<Arc<AppState>>,
-    _admin: AdminAuth,
+    admin: AdminAuth,
     Json(req): Json<UpdateAdminPasswordRequest>,
 ) -> AppResult<Json<Value>> {
     if req.current_password.is_empty() {
@@ -889,31 +889,30 @@ async fn update_admin_password_handler(
     }
     auth::validate_user_password_input(&req.new_password)?;
 
-    let rows = sqlx::query(
+    let row = sqlx::query(
         r#"
-        SELECT id, password_hash
+        SELECT password_hash
         FROM admin
-        WHERE status = 'enabled'
-        ORDER BY id ASC
+        WHERE id = $1 AND status = 'enabled'
         "#,
     )
-    .fetch_all(&state.db.pool)
+    .bind(admin.admin_id)
+    .fetch_optional(&state.db.pool)
     .await?;
 
-    let Some(admin_id) = rows.iter().find_map(|row| {
-        let id: DbId = row.try_get("id").ok()?;
-        let password_hash: String = row.try_get("password_hash").ok()?;
-        auth::verify_user_password(
-            &req.current_password,
-            &state.config.admin_token_secret,
-            &password_hash,
-        )
-        .then_some(id)
-    }) else {
+    let Some(row) = row else {
+        return Err(AppError::Unauthorized);
+    };
+    let password_hash: String = row.try_get("password_hash")?;
+    if !auth::verify_user_password(
+        &req.current_password,
+        &state.config.admin_token_secret,
+        &password_hash,
+    ) {
         return Err(AppError::BadRequest(
             "current password is incorrect".to_string(),
         ));
-    };
+    }
 
     let password_hash =
         auth::hash_user_password(&req.new_password, &state.config.admin_token_secret);
@@ -928,7 +927,7 @@ async fn update_admin_password_handler(
         WHERE id = $1
         "#,
     )
-    .bind(admin_id)
+    .bind(admin.admin_id)
     .bind(password_hash)
     .execute(&state.db.pool)
     .await?;

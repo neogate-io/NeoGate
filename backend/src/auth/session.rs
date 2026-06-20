@@ -65,7 +65,10 @@ pub(super) async fn me(
     headers: HeaderMap,
 ) -> AppResult<Json<MeResponse>> {
     let token = super::bearer(&headers).ok_or(AppError::Unauthorized)?;
-    if super::validate_admin_token(token, &state.config.admin_token_secret) {
+    if let Some(claims) =
+        super::validate_admin_session_token_claims(token, &state.config.admin_token_secret)
+    {
+        super::validate_admin_session_claims(&state, claims).await?;
         return Ok(Json(MeResponse {
             role: "admin".to_string(),
             requires_password_change: false,

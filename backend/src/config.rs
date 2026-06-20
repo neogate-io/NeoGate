@@ -307,7 +307,7 @@ impl Config {
                 )?),
             },
             db_pool: DbPoolConfig::from_env()?,
-            cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", "*"),
+            cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", ""),
         };
         config.validate()?;
         Ok(config)
@@ -388,6 +388,11 @@ impl Config {
         }
         if self.usage_queue.size > 1_000_000 {
             anyhow::bail!("USAGE_QUEUE_SIZE must be <= 1000000");
+        }
+        if self.cors_allowed_origins.iter().any(|origin| origin == "*") {
+            tracing::warn!(
+                "CORS_ALLOWED_ORIGINS=* allows browser requests from any origin; set explicit origins for admin/user deployments"
+            );
         }
 
         Ok(())

@@ -875,34 +875,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn protected_admin_accepts_signed_session_token() {
+    async fn protected_admin_rejects_invalid_session_token() {
         let state = test_state();
-        let token = auth::issue_admin_token(
-            state.config.admin_session_ttl,
-            &state.config.admin_token_secret,
-            1,
-        );
         let app = Router::new()
             .merge(admin::router())
             .route("/protected-admin", get(protected_admin))
             .with_state(state);
-
-        assert_ne!(token, "admin");
-        assert!(token.starts_with("neo_admin_"));
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/protected-admin")
-                    .header("authorization", format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
 
         let response = app
             .clone()

@@ -923,10 +923,7 @@ async fn sync_channel_models_for_channel(
 
     if !active_models.is_empty() {
         sqlx::query(
-            "UPDATE channel_model
-             SET enabled = FALSE,
-                 status = 'disabled',
-                 updated_at = now()
+            "DELETE FROM channel_model
              WHERE channel_id = $1
                AND NOT (model = ANY($2))",
         )
@@ -935,16 +932,10 @@ async fn sync_channel_models_for_channel(
         .execute(&mut **tx)
         .await?;
     } else {
-        sqlx::query(
-            "UPDATE channel_model
-             SET enabled = FALSE,
-                 status = 'disabled',
-                 updated_at = now()
-             WHERE channel_id = $1",
-        )
-        .bind(channel_id)
-        .execute(&mut **tx)
-        .await?;
+        sqlx::query("DELETE FROM channel_model WHERE channel_id = $1")
+            .bind(channel_id)
+            .execute(&mut **tx)
+            .await?;
     }
 
     Ok(())

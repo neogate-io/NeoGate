@@ -2,11 +2,11 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { Coin, PriceTag, Search, UserFilled, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getPricingTemplates, syncPricingTemplates } from '../../api/prices'
+import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
-import type { PricingTemplate } from '../../types/admin'
+import type { ModelReferenceCatalogRecord } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
@@ -16,7 +16,7 @@ const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const loading = ref(false)
 const servicePolicy = ref<ServicePolicy | null>(null)
-const pricingTemplates = ref<PricingTemplate[]>([])
+const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
 const servicePolicySaving = ref(false)
 const syncingTemplates = ref(false)
 const referencePricesDialogOpen = ref(false)
@@ -24,7 +24,7 @@ const referencePriceSearch = ref('')
 
 const servicePolicyEditable = computed(() => servicePolicy.value?.service_mode === 'internal')
 const referencePricesLastUpdated = computed(() => {
-  const latest = pricingTemplates.value.reduce<number | null>((max, template) => {
+  const latest = modelReferenceCatalog.value.reduce<number | null>((max, template) => {
     const time = new Date(template.updated_at).getTime()
     if (Number.isNaN(time)) return max
     return max == null ? time : Math.max(max, time)
@@ -35,7 +35,7 @@ const referencePricesLastUpdated = computed(() => {
     : formatDateTime(new Date(latest).toISOString(), locale.value)
 })
 const sortedPricingTemplates = computed(() => {
-  return [...pricingTemplates.value].sort((left, right) => {
+  return [...modelReferenceCatalog.value].sort((left, right) => {
     const providerCompare = left.provider.localeCompare(right.provider)
     return providerCompare || left.model.localeCompare(right.model)
   })
@@ -45,8 +45,8 @@ const filteredPricingTemplates = computed(() => {
   if (!keyword) return sortedPricingTemplates.value
 
   return sortedPricingTemplates.value.filter((template) => {
-    return [template.provider, template.model, template.source].some((value) =>
-      value.toLowerCase().includes(keyword)
+    return [template.provider, template.model, template.display_name, template.source].some(
+      (value) => value.toLowerCase().includes(keyword)
     )
   })
 })
@@ -68,18 +68,40 @@ function formatSyncCount(value: number) {
   return value.toLocaleString('en-US')
 }
 
-function formatCacheWritePrice(template: PricingTemplate) {
-  return template.cache_write_price_usd_micros == null
-    ? t('noExtraCacheWriteFee')
-    : formatMicrosPerMillion(template.cache_write_price_usd_micros)
+function pricingBasisLabel(template: ModelReferenceCatalogRecord) {
+  return template.pricing_basis === 'image'
+    ? t('billingMeterImageGeneration')
+    : t('billingMeterToken')
 }
 
-function referencePricesSyncedMessage(result: { saved: number; fetched: number; skipped: number }) {
+function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
+  if (template.pricing_basis === 'image') {
+    return `${formatMicrosPerMillion(template.unit_price_usd_micros)} / ${t('perImage')}`
+  }
+  return `${formatMicrosPerMillion(template.input_price_usd_micros)} / ${formatMicrosPerMillion(
+    template.output_price_usd_micros
+  )}`
+}
+
+function formatCachePricePair(template: ModelReferenceCatalogRecord) {
+  if (template.pricing_basis === 'image') return '-'
+  const cacheRead =
+    template.cache_read_price_usd_micros == null
+      ? '$0'
+      : formatMicrosPerMillion(template.cache_read_price_usd_micros)
+  const cacheWrite =
+    template.cache_write_price_usd_micros == null
+      ? '$0'
+      : formatMicrosPerMillion(template.cache_write_price_usd_micros)
+  return `${cacheRead} / ${cacheWrite}`
+}
+
+function referencePricesSyncedMessage(result: { saved: number }) {
   if (locale.value === 'zh-CN') {
-    return `${t('referencePricesSynced')}：已保存 ${formatSyncCount(result.saved)} 条，源数据 ${formatSyncCount(result.fetched)} 个模型，跳过 ${formatSyncCount(result.skipped)} 条`
+    return `${t('referencePricesSynced')}，已更新 ${formatSyncCount(result.saved)} 条模型参考价。配置渠道价格时可一键应用。`
   }
 
-  return `${t('referencePricesSynced')}: saved ${formatSyncCount(result.saved)}, source models ${formatSyncCount(result.fetched)}, skipped ${formatSyncCount(result.skipped)}.`
+  return `${t('referencePricesSynced')}. Updated ${formatSyncCount(result.saved)} model reference prices. You can apply them when configuring channel prices.`
 }
 
 function referenceSyncConfirmContent() {
@@ -107,12 +129,12 @@ function readReferenceSyncError(err: unknown) {
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [policy, templates] = await Promise.all([
+      const [policy, catalog] = await Promise.all([
         getAdminServicePolicy(),
-        getPricingTemplates()
+        getModelReferenceCatalog()
       ])
       servicePolicy.value = policy
-      pricingTemplates.value = templates
+      modelReferenceCatalog.value = catalog
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -150,7 +172,7 @@ async function syncReferencePrices() {
   await withLoading(syncingTemplates, async () => {
     try {
       const result = await syncPricingTemplates()
-      pricingTemplates.value = await getPricingTemplates()
+      modelReferenceCatalog.value = await getModelReferenceCatalog()
       ElMessage.success(referencePricesSyncedMessage(result))
     } catch (err) {
       ElMessage.error(readReferenceSyncError(err))
@@ -246,7 +268,7 @@ onMounted(load)
         <span class="reference-result-count">
           {{ t('referencePricesResult') }}
           {{ filteredPricingTemplates.length.toLocaleString(locale) }} /
-          {{ pricingTemplates.length.toLocaleString(locale) }}
+          {{ modelReferenceCatalog.length.toLocaleString(locale) }}
         </span>
       </div>
       <el-table
@@ -255,29 +277,44 @@ onMounted(load)
         max-height="62vh"
         stripe
       >
-        <el-table-column prop="provider" :label="t('provider')" width="108" />
-        <el-table-column prop="model" :label="t('model')" min-width="210" />
-        <el-table-column :label="t('inputPrice')" min-width="116">
+        <el-table-column prop="provider" :label="t('provider')" width="112" />
+        <el-table-column prop="model" :label="t('modelName')" min-width="260" />
+        <el-table-column :label="t('pricingBasis')" width="92" align="center" header-align="center">
           <template #default="{ row }">
-            {{ formatMicrosPerMillion(row.input_price_usd_micros) }}
+            <span class="reference-meter-badge">{{ pricingBasisLabel(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('outputPrice')" min-width="116">
+        <el-table-column
+          class-name="reference-price-column"
+          min-width="180"
+          align="right"
+          header-align="right"
+        >
+          <template #header>
+            <span class="reference-price-head-label">{{ t('inputOutputPriceShort') }}</span>
+          </template>
           <template #default="{ row }">
-            {{ formatMicrosPerMillion(row.output_price_usd_micros) }}
+            <span class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('cacheReadPrice')" min-width="124">
+        <el-table-column
+          class-name="reference-price-column"
+          min-width="180"
+          align="right"
+          header-align="right"
+        >
+          <template #header>
+            <span class="reference-price-head-label">{{ t('cacheReadWritePriceShort') }}</span>
+          </template>
           <template #default="{ row }">
-            {{ formatMicrosPerMillion(row.cache_read_price_usd_micros) }}
+            <span class="reference-price-value">{{ formatCachePricePair(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('cacheWritePrice')" min-width="124">
+        <el-table-column :label="t('source')" width="118">
           <template #default="{ row }">
-            {{ formatCacheWritePrice(row) }}
+            <span class="reference-source-text">{{ row.source }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="source" :label="t('source')" width="108" />
         <template #empty>
           <el-empty :description="t('noData')" />
         </template>
@@ -392,12 +429,63 @@ onMounted(load)
   padding: 6px 0;
 }
 
+.reference-prices-table :deep(.el-table__header .cell) {
+  color: #4e5969;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.reference-prices-table :deep(.reference-price-column .cell) {
+  text-align: right;
+}
+
+.reference-price-head-label {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  white-space: nowrap;
+  width: 100%;
+}
+
 .reference-prices-table :deep(.cell) {
   font-size: 12px;
   line-height: 1.35;
-  padding: 0 8px;
+  padding: 0 10px;
   white-space: normal;
   word-break: break-word;
+}
+
+.reference-price-value {
+  color: #263242;
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.reference-meter-badge {
+  background: #f5f7fb;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  color: #5f6f85;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 680;
+  justify-content: center;
+  line-height: 1.2;
+  min-width: 58px;
+  padding: 4px 10px;
+}
+
+.reference-source-text {
+  color: #596579;
+  display: inline-block;
+  font-weight: 620;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 640px) {

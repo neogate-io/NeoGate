@@ -172,8 +172,26 @@ ALTER TABLE provider_price
 
 ALTER TABLE pricing_template
     ADD COLUMN billing_meter TEXT,
-    ADD COLUMN unit_price_usd_micros BIGINT CHECK (unit_price_usd_micros >= 0);
-UPDATE pricing_template SET billing_meter = 'token' WHERE billing_meter IS NULL;
+    ADD COLUMN unit_price_usd_micros BIGINT CHECK (unit_price_usd_micros >= 0),
+    ADD COLUMN pricing_basis TEXT;
+UPDATE pricing_template
+SET billing_meter = 'token',
+    pricing_basis = 'token'
+WHERE billing_meter IS NULL OR pricing_basis IS NULL;
+
+UPDATE pricing_template pt
+SET billing_meter = 'token',
+    unit_price_usd_micros = NULL,
+    pricing_basis = 'token'
+FROM provider_model pm
+WHERE pt.provider = pm.provider
+  AND pt.model = pm.model
+  AND pt.source = 'models_dev'
+  AND pt.pricing_basis = 'image'
+  AND pm.capabilities -> 'modalities' -> 'output' ? 'image';
+
 ALTER TABLE pricing_template
     ALTER COLUMN billing_meter SET NOT NULL,
-    ADD CONSTRAINT pricing_template_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+    ALTER COLUMN pricing_basis SET NOT NULL,
+    ADD CONSTRAINT pricing_template_billing_meter_check CHECK (billing_meter IN ('token', 'image')),
+    ADD CONSTRAINT pricing_template_pricing_basis_check CHECK (pricing_basis IN ('token', 'image'));

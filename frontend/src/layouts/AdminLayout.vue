@@ -35,10 +35,10 @@ const navGroups = computed(() => {
   if (servicePolicy.value?.service_mode === 'internal') {
     operationItems.push({ path: '/admin/apps', key: 'apps', icon: Promotion })
   }
-  operationItems.push(
-    { path: '/admin/credentials', key: 'credentialManagement', icon: Key },
-    { path: '/admin/usage', key: 'usage', icon: Monitor }
-  )
+  if (servicePolicy.value?.service_mode !== 'internal') {
+    operationItems.push({ path: '/admin/credentials', key: 'credentialManagement', icon: Key })
+  }
+  operationItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
   return [
     {
       key: 'adminNavOperations',

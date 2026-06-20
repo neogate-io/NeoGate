@@ -54,8 +54,9 @@ use self::{
         ChannelDiagnosticReport,
     },
     price::{
-        list_pricing_policies, list_pricing_templates, list_provider_models, list_provider_prices,
-        sync_pricing_templates, upsert_pricing_policy, upsert_provider_price, PricingPolicyRecord,
+        list_model_reference_catalog, list_pricing_policies, list_pricing_templates,
+        list_provider_models, list_provider_prices, sync_pricing_templates, upsert_pricing_policy,
+        upsert_provider_price, ModelReferenceCatalogRecord, PricingPolicyRecord,
         PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
@@ -135,6 +136,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/admin/providers", get(providers))
         .route("/api/admin/provider-models", get(provider_models))
         .route("/api/admin/upstream-models", post(upstream_models))
+        .route(
+            "/api/admin/model-reference-catalog",
+            get(model_reference_catalog),
+        )
         .route("/api/admin/pricing-templates", get(pricing_templates))
         .route(
             "/api/admin/pricing-templates/sync",
@@ -816,6 +821,13 @@ async fn pricing_templates(
     _admin: AdminAuth,
 ) -> AppResult<Json<Vec<PricingTemplateRecord>>> {
     Ok(Json(list_pricing_templates(&state).await?))
+}
+
+async fn model_reference_catalog(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<Vec<ModelReferenceCatalogRecord>>> {
+    Ok(Json(list_model_reference_catalog(&state).await?))
 }
 
 async fn smtp_setting(

@@ -15,6 +15,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
+  getProviderModels,
   getPricingTemplates,
   getProviderPrices,
   syncPricingTemplates,
@@ -36,10 +37,12 @@ import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type {
+  BillingMeter,
   Channel,
   ChannelKey,
   ChannelModel,
   PricingTemplate,
+  ProviderModel,
   ProviderPrice
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
@@ -104,6 +107,7 @@ const {
 
 const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
+const providerModels = ref<ProviderModel[]>([])
 const pricingLoading = ref(true)
 const channelsLoaded = ref(false)
 const priceDialogOpen = ref(false)
@@ -121,6 +125,9 @@ const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 
 const priceByModel = computed(
   () => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price]))
+)
+const providerModelByModel = computed(
+  () => new Map(providerModels.value.map((model) => [priceKey(model.provider, model.model), model]))
 )
 
 const diagnostic = useChannelDiagnostics(loadChannels)
@@ -434,16 +441,89 @@ function keyStatusTooltip(
 async function loadPricingData() {
   await withLoading(pricingLoading, async () => {
     try {
-      const [fetchedPrices, fetchedTemplates] = await Promise.all([
+      const [fetchedPrices, fetchedTemplates, fetchedProviderModels] = await Promise.all([
         getProviderPrices(),
-        getPricingTemplates()
+        getPricingTemplates(),
+        getProviderModels()
       ])
       prices.value = fetchedPrices
       templates.value = fetchedTemplates
+      providerModels.value = fetchedProviderModels
     } catch (err) {
       ElMessage.error(readError(err))
     }
   })
+}
+
+function capabilityValues(capabilities: Record<string, unknown>, path: string[]) {
+  let current: unknown = capabilities
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return []
+    current = (current as Record<string, unknown>)[key]
+  }
+  return Array.isArray(current)
+    ? current.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+    : []
+}
+
+function modelOutputModalities(provider: string, model: string) {
+  const record = providerModelByModel.value.get(priceKey(provider, model))
+  const output = record ? capabilityValues(record.capabilities, ['modalities', 'output']) : []
+  if (output.length > 0) return output
+
+  const template = findPricingTemplate(templates.value, provider, model)
+  if (!template || template.provider === provider) return output
+
+  const referenceRecord = providerModelByModel.value.get(priceKey(template.provider, model))
+  return referenceRecord
+    ? capabilityValues(referenceRecord.capabilities, ['modalities', 'output'])
+    : output
+}
+
+function canUseImageBilling(provider: string, model: string) {
+  const output = modelOutputModalities(provider, model)
+  return output.length === 1 && output[0] === 'image'
+}
+
+function defaultBillingMeterForModel(provider: string, model: string) {
+  return canUseImageBilling(provider, model) ? 'image' : 'token'
+}
+
+function isBillingMeterLocked(provider: string, model: string) {
+  return !canUseImageBilling(provider, model)
+}
+
+function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm) {
+  return (
+    template.billing_meter ===
+    (form.billingMeter ?? defaultBillingMeterForModel(form.provider, form.model))
+  )
+}
+
+function findApplicablePricingTemplate(form: ChannelPriceForm) {
+  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  return template && templateAppliesToForm(template, form) ? template : undefined
+}
+
+function hasManualPriceInput(form: ChannelPriceForm) {
+  if (form.billingMeter === 'image') return form.unitUsd > 0
+  return (
+    form.inputUsdPerMillion > 0 ||
+    form.outputUsdPerMillion > 0 ||
+    form.cacheReadUsdPerMillion > 0 ||
+    (form.cacheWriteUsdPerMillion ?? 0) > 0
+  )
+}
+
+function hasEnabledBillablePrice(price?: ProviderPrice, billingMeter?: BillingMeter | null) {
+  if (!price?.enabled) return false
+  if (billingMeter && price.billing_meter !== billingMeter) return false
+  if (price.billing_meter === 'image') return (price.unit_price_usd_micros ?? 0) > 0
+  return price.input_price_usd_micros > 0 || price.output_price_usd_micros > 0
+}
+
+function shouldSavePriceForm(form: ChannelPriceForm) {
+  return form.hasPriceRecord || hasReferencePrice(form) || hasManualPriceInput(form)
 }
 
 function openPriceDialog(row: Channel) {
@@ -455,7 +535,14 @@ function openPriceDialog(row: Channel) {
     const key = priceKey(row.provider, model)
     const price = priceByModel.value.get(key)
     const template = findPricingTemplate(templates.value, row.provider, model)
-    const billingMeter = price?.billing_meter ?? template?.billing_meter ?? null
+    const supportsImageBilling = canUseImageBilling(row.provider, model)
+    const savedBillingMeter =
+      price?.billing_meter === 'image' && supportsImageBilling
+        ? 'image'
+        : price?.billing_meter === 'token'
+          ? 'token'
+          : null
+    const billingMeter = savedBillingMeter ?? defaultBillingMeterForModel(row.provider, model)
     const inputPrice = price?.input_price_usd_micros ?? template?.input_price_usd_micros ?? 0
     const cacheWritePrice = template
       ? template.cache_write_price_usd_micros
@@ -478,8 +565,11 @@ function openPriceDialog(row: Channel) {
           ? 0
           : microUsdToUsd(cacheWritePrice),
       unitUsd: microUsdToUsd(price?.unit_price_usd_micros ?? template?.unit_price_usd_micros ?? 0),
-      enabled: price?.enabled ?? true,
-      hasPrice: Boolean(price),
+      enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
+      hasPrice: hasEnabledBillablePrice(price, billingMeter),
+      hasPriceRecord: Boolean(price),
+      billingMeterLocked: isBillingMeterLocked(row.provider, model),
+      canUseImageBilling: supportsImageBilling,
       templateSource: template ? pricingTemplateSourceLabel(template, row.provider) : undefined
     }
   }
@@ -487,7 +577,7 @@ function openPriceDialog(row: Channel) {
 }
 
 function hasReferencePrice(form: (typeof priceForms)[string]) {
-  return Boolean(findPricingTemplate(templates.value, form.provider, form.model))
+  return Boolean(findApplicablePricingTemplate(form))
 }
 
 function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
@@ -495,7 +585,7 @@ function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
 }
 
 function referencePriceSummary(form: (typeof priceForms)[string]) {
-  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  const template = findApplicablePricingTemplate(form)
   if (!template) return ''
   if (template.billing_meter === 'image') {
     const unit = template.unit_price_usd_micros
@@ -519,16 +609,17 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
 }
 
 function pricingTemplateSourceLabel(template: PricingTemplate, provider: string) {
+  if (template.source === 'models_dev') return ''
   const source = template.source.replace(/_/g, '.')
   return template.provider === provider ? source : `${template.provider} / ${source}`
 }
 
 function priceIconProvider(form: (typeof priceForms)[string]) {
-  return findPricingTemplate(templates.value, form.provider, form.model)?.provider ?? form.provider
+  return findApplicablePricingTemplate(form)?.provider ?? form.provider
 }
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
-  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  const template = findApplicablePricingTemplate(form)
   if (!template) return
   form.billingMeter = template.billing_meter
   form.inputUsdPerMillion = microUsdToUsd(template.input_price_usd_micros)
@@ -589,6 +680,7 @@ async function saveChannelPrices() {
   await withLoading(savingPrices, async () => {
     try {
       for (const form of Object.values(priceForms)) {
+        if (!shouldSavePriceForm(form)) continue
         const billingMeter = requireBillingMeter(form)
         await upsertProviderPrice({
           provider: form.provider,

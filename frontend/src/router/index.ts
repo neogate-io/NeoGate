@@ -256,6 +256,13 @@ router.beforeEach(async (to) => {
     }
   }
 
+  if (to.name === 'credentials') {
+    const servicePolicy = await getAdminServicePolicy().catch(() => null)
+    if (servicePolicy && servicePolicy.service_mode === 'internal') {
+      return '/admin/channels'
+    }
+  }
+
   if (to.name === 'userRecharge') {
     const servicePolicy = await getUserServicePolicy().catch(() => null)
     if (servicePolicy && !servicePolicy.recharge_enabled) {

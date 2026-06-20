@@ -1,5 +1,6 @@
 import type {
   BillingMeter,
+  ModelReferenceCatalogRecord,
   PricingPolicy,
   PricingTemplate,
   PricingTemplateSyncResult,
@@ -18,6 +19,10 @@ export function getProviderPrices() {
 
 export function getPricingTemplates() {
   return adminRequest<PricingTemplate[]>('/api/admin/pricing-templates')
+}
+
+export function getModelReferenceCatalog() {
+  return adminRequest<ModelReferenceCatalogRecord[]>('/api/admin/model-reference-catalog')
 }
 
 export function syncPricingTemplates(source = 'models_dev') {

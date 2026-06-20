@@ -14,6 +14,9 @@ export type ChannelPriceForm = {
   unitUsd: number
   enabled: boolean
   hasPrice: boolean
+  hasPriceRecord: boolean
+  billingMeterLocked: boolean
+  canUseImageBilling: boolean
   templateSource?: string
 }
 
@@ -34,6 +37,15 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+
+function formatUsdInput(value: number | string) {
+  if (value === '' || value === undefined || value === null) return ''
+  return `$${value}`
+}
+
+function parseUsdInput(value: string) {
+  return value.replace(/^\$/, '')
+}
 </script>
 
 <template>
@@ -69,13 +81,25 @@ const { t } = useLocale()
             <span>{{ row.model }}</span>
           </div>
           <div class="price-meter-cell">
+            <span v-if="row.billingMeterLocked" class="price-meter-static">
+              {{
+                row.billingMeter === 'image'
+                  ? t('billingMeterImageGeneration')
+                  : t('billingMeterToken')
+              }}
+            </span>
             <el-select
+              v-else
               v-model="row.billingMeter"
               class="price-meter-select"
               :placeholder="t('billingMeterRequired')"
             >
               <el-option :label="t('billingMeterToken')" value="token" />
-              <el-option :label="t('billingMeterImageGeneration')" value="image" />
+              <el-option
+                v-if="row.canUseImageBilling"
+                :label="t('billingMeterImageGeneration')"
+                value="image"
+              />
             </el-select>
           </div>
           <div class="price-pair-field">
@@ -84,7 +108,9 @@ const { t } = useLocale()
                 v-model="row.inputUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
+                :formatter="formatUsdInput"
                 :min="0"
+                :parser="parseUsdInput"
                 :step="0.01"
               />
               <span class="price-pair-separator">/</span>
@@ -92,7 +118,9 @@ const { t } = useLocale()
                 v-model="row.outputUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
+                :formatter="formatUsdInput"
                 :min="0"
+                :parser="parseUsdInput"
                 :step="0.01"
               />
             </div>
@@ -101,7 +129,9 @@ const { t } = useLocale()
                 v-model="row.unitUsd"
                 class="price-number-input"
                 :controls="false"
+                :formatter="formatUsdInput"
                 :min="0"
+                :parser="parseUsdInput"
                 :step="0.01"
               />
               <span class="price-unit-label">{{ t('perImage') }}</span>
@@ -114,7 +144,9 @@ const { t } = useLocale()
                 v-model="row.cacheReadUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
+                :formatter="formatUsdInput"
                 :min="0"
+                :parser="parseUsdInput"
                 :step="0.01"
               />
               <span class="price-pair-separator">/</span>
@@ -122,7 +154,9 @@ const { t } = useLocale()
                 v-model="row.cacheWriteUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
+                :formatter="formatUsdInput"
                 :min="0"
+                :parser="parseUsdInput"
                 :step="0.01"
               />
             </div>
@@ -131,11 +165,15 @@ const { t } = useLocale()
           <div class="reference-price-cell">
             <template v-if="hasReferencePrice(row)">
               <span class="reference-price-summary">{{ referencePriceSummary(row) }}</span>
-              <span class="reference-price-source">{{
-                row.templateSource || t('pricingTemplate')
-              }}</span>
+              <span v-if="row.templateSource" class="reference-price-source">
+                {{ row.templateSource }}
+              </span>
             </template>
-            <el-tag v-else :type="row.hasPrice ? 'info' : 'warning'">
+            <el-tag
+              v-else
+              class="reference-price-fallback-tag"
+              :type="row.hasPrice ? 'info' : 'warning'"
+            >
               {{ referencePriceFallbackLabel(row) }}
             </el-tag>
           </div>
@@ -171,11 +209,11 @@ const { t } = useLocale()
   align-items: center;
   display: grid;
   grid-template-columns:
-    minmax(140px, 0.7fr)
-    minmax(140px, 0.56fr)
-    minmax(170px, 0.8fr)
-    minmax(170px, 0.8fr)
-    minmax(170px, 0.84fr);
+    minmax(120px, 1fr)
+    106px
+    144px
+    144px
+    minmax(132px, 0.9fr);
 }
 
 .price-editor-head {
@@ -192,7 +230,7 @@ const { t } = useLocale()
 .price-editor-head-label,
 .price-editor-row > * {
   min-width: 0;
-  padding: 0 10px;
+  padding: 0 8px;
 }
 
 .price-editor-head-label {
@@ -264,7 +302,22 @@ const { t } = useLocale()
 }
 
 .price-meter-select {
-  width: 100%;
+  width: 96px;
+}
+
+.price-meter-static {
+  align-items: center;
+  background: #f5f7fb;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  color: #5f6f85;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 680;
+  justify-content: center;
+  line-height: 1.2;
+  min-width: 58px;
+  padding: 5px 10px;
 }
 
 .price-pair-input,
@@ -276,12 +329,12 @@ const { t } = useLocale()
   display: flex;
   gap: 3px;
   min-height: 34px;
-  padding: 0 6px;
-  width: 140px;
+  padding: 0 5px;
+  width: 128px;
 }
 
 .price-single-input {
-  width: 160px;
+  width: 136px;
 }
 
 .price-muted-cell,
@@ -293,9 +346,9 @@ const { t } = useLocale()
 }
 
 .price-number-input {
-  flex: 0 1 58px;
+  flex: 0 1 53px;
   min-width: 0;
-  width: 58px;
+  width: 53px;
 }
 
 .price-pair-separator {
@@ -317,7 +370,7 @@ const { t } = useLocale()
   color: #1f2937;
   font-size: 13px;
   font-weight: 500;
-  text-align: center;
+  text-align: right;
 }
 
 .reference-price-cell {
@@ -343,6 +396,28 @@ const { t } = useLocale()
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-price-fallback-tag {
+  animation: none;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  justify-self: start;
+  line-height: 1.1;
+  max-width: 108px;
+  min-width: 84px;
+  padding: 0 12px;
+  transition: none;
+}
+
+.reference-price-fallback-tag :deep(.el-tag__content) {
+  display: block;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  transition: none;
   white-space: nowrap;
 }
 

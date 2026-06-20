@@ -309,10 +309,18 @@ export type PricingTemplate = {
   cache_write_price_usd_micros?: number | null
   billing_meter: BillingMeter
   unit_price_usd_micros?: number | null
+  pricing_basis: BillingMeter
   source: string
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+export type ModelReferenceCatalogRecord = PricingTemplate & {
+  display_name: string
+  capabilities: Record<string, unknown>
+  model_source: string
+  model_updated_at: string
 }
 
 export type PricingTemplateSyncResult = {

@@ -57,8 +57,31 @@ pub struct PricingTemplateRecord {
     pub cache_write_price_usd_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_usd_micros: Option<i64>,
+    pub pricing_basis: BillingMeter,
     pub source: String,
     pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelReferenceCatalogRecord {
+    pub id: DbId,
+    pub provider: String,
+    pub model: String,
+    pub display_name: String,
+    pub input_price_usd_micros: i64,
+    pub output_price_usd_micros: i64,
+    pub cache_read_price_usd_micros: Option<i64>,
+    pub cache_write_price_usd_micros: Option<i64>,
+    pub billing_meter: BillingMeter,
+    pub unit_price_usd_micros: Option<i64>,
+    pub pricing_basis: BillingMeter,
+    pub source: String,
+    pub enabled: bool,
+    pub capabilities: Value,
+    pub model_source: String,
+    pub model_updated_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -171,6 +194,7 @@ struct PricingMicros {
     cache_write_price_usd_micros: Option<i64>,
     billing_meter: BillingMeter,
     unit_price_usd_micros: Option<i64>,
+    pricing_basis: BillingMeter,
 }
 
 fn default_enabled() -> bool {
@@ -214,7 +238,7 @@ pub async fn list_pricing_templates(state: &AppState) -> AppResult<Vec<PricingTe
         "SELECT id, provider, model, input_price_usd_micros,
                 output_price_usd_micros, cache_read_price_usd_micros,
                 cache_write_price_usd_micros, billing_meter,
-                unit_price_usd_micros, source, enabled,
+                unit_price_usd_micros, pricing_basis, source, enabled,
                 created_at, updated_at
          FROM pricing_template
          ORDER BY provider ASC, model ASC",
@@ -222,6 +246,26 @@ pub async fn list_pricing_templates(state: &AppState) -> AppResult<Vec<PricingTe
     .fetch_all(&state.db.pool)
     .await?;
     rows.iter().map(pricing_template_from_row).collect()
+}
+
+pub async fn list_model_reference_catalog(
+    state: &AppState,
+) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
+    let rows = sqlx::query(
+        "SELECT pt.id, pt.provider, pt.model, pm.display_name,
+                pt.input_price_usd_micros, pt.output_price_usd_micros,
+                pt.cache_read_price_usd_micros, pt.cache_write_price_usd_micros,
+                pt.billing_meter, pt.unit_price_usd_micros, pt.pricing_basis,
+                pt.source, pt.enabled, pm.capabilities, pm.source AS model_source,
+                pm.updated_at AS model_updated_at, pt.created_at, pt.updated_at
+         FROM pricing_template pt
+         JOIN provider_model pm
+           ON pm.provider = pt.provider AND pm.model = pt.model
+         ORDER BY pt.provider ASC, pt.model ASC",
+    )
+    .fetch_all(&state.db.pool)
+    .await?;
+    rows.iter().map(model_reference_catalog_from_row).collect()
 }
 
 pub async fn list_pricing_policies(state: &AppState) -> AppResult<Vec<PricingPolicyRecord>> {
@@ -435,8 +479,9 @@ fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<Pricin
         output_price_usd_micros: usd_per_million_to_micros(cost.output)?,
         cache_read_price_usd_micros: usd_per_million_to_micros(cost.cache_read),
         cache_write_price_usd_micros: usd_per_million_to_micros(cost.cache_write),
-        billing_meter: billing_meter_from_models_dev_model(model),
+        billing_meter: BillingMeter::Token,
         unit_price_usd_micros: None,
+        pricing_basis: BillingMeter::Token,
     })
 }
 
@@ -508,8 +553,8 @@ async fn upsert_synced_pricing_template(
          (provider, model, input_price_usd_micros,
           output_price_usd_micros, cache_read_price_usd_micros,
           cache_write_price_usd_micros, billing_meter,
-          unit_price_usd_micros, source, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
+          unit_price_usd_micros, pricing_basis, source, enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE)
          ON CONFLICT (provider, model)
          DO UPDATE SET
              input_price_usd_micros = EXCLUDED.input_price_usd_micros,
@@ -518,6 +563,7 @@ async fn upsert_synced_pricing_template(
              cache_write_price_usd_micros = EXCLUDED.cache_write_price_usd_micros,
              billing_meter = EXCLUDED.billing_meter,
              unit_price_usd_micros = EXCLUDED.unit_price_usd_micros,
+             pricing_basis = EXCLUDED.pricing_basis,
              source = EXCLUDED.source,
              enabled = TRUE,
              updated_at = now()
@@ -531,6 +577,7 @@ async fn upsert_synced_pricing_template(
     .bind(prices.cache_write_price_usd_micros)
     .bind(prices.billing_meter.as_str())
     .bind(prices.unit_price_usd_micros)
+    .bind(prices.pricing_basis.as_str())
     .bind(source)
     .execute(&state.db.pool)
     .await?;
@@ -636,6 +683,7 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         cache_write_price_usd_micros: req.cache_write_price_usd_micros,
         billing_meter: req.billing_meter,
         unit_price_usd_micros: req.unit_price_usd_micros,
+        pricing_basis: req.billing_meter,
     };
     if !prices_are_non_negative(prices) {
         return Err(AppError::BadRequest(
@@ -758,6 +806,7 @@ fn pricing_template_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingTe
         cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
         billing_meter: billing_meter_from_row(row)?,
         unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+        pricing_basis: pricing_basis_from_row(row)?,
         source: row.try_get("source")?,
         enabled: row.try_get("enabled")?,
         created_at: row.try_get("created_at")?,
@@ -765,8 +814,38 @@ fn pricing_template_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingTe
     })
 }
 
+fn model_reference_catalog_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> AppResult<ModelReferenceCatalogRecord> {
+    Ok(ModelReferenceCatalogRecord {
+        id: row.try_get("id")?,
+        provider: row.try_get("provider")?,
+        model: row.try_get("model")?,
+        display_name: row.try_get("display_name")?,
+        input_price_usd_micros: row.try_get("input_price_usd_micros")?,
+        output_price_usd_micros: row.try_get("output_price_usd_micros")?,
+        cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
+        cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+        billing_meter: billing_meter_from_row(row)?,
+        unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+        pricing_basis: pricing_basis_from_row(row)?,
+        source: row.try_get("source")?,
+        enabled: row.try_get("enabled")?,
+        capabilities: row.try_get("capabilities")?,
+        model_source: row.try_get("model_source")?,
+        model_updated_at: row.try_get("model_updated_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 fn billing_meter_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, sqlx::Error> {
     let value: String = row.try_get("billing_meter")?;
+    BillingMeter::from_strict_str(&value).map_err(|err| sqlx::Error::Decode(err.into()))
+}
+
+fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, sqlx::Error> {
+    let value: String = row.try_get("pricing_basis")?;
     BillingMeter::from_strict_str(&value).map_err(|err| sqlx::Error::Decode(err.into()))
 }
 
@@ -817,5 +896,27 @@ mod tests {
         assert_eq!(usd_per_million_to_micros(cost.output), Some(30_000_000));
         assert_eq!(usd_per_million_to_micros(cost.cache_read), Some(500_000));
         assert_eq!(usd_per_million_to_micros(cost.cache_write), Some(6_250_000));
+    }
+
+    #[test]
+    fn keeps_models_dev_image_output_cost_as_token_pricing() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["text"],"output":["image"]},
+                "cost":{"input":8,"output":30}
+            }"#,
+        )
+        .unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(
+            billing_meter_from_models_dev_model(&model),
+            BillingMeter::Image
+        );
+        assert_eq!(prices.billing_meter, BillingMeter::Token);
+        assert_eq!(prices.pricing_basis, BillingMeter::Token);
+        assert_eq!(prices.input_price_usd_micros, 8_000_000);
+        assert_eq!(prices.output_price_usd_micros, 30_000_000);
+        assert_eq!(prices.unit_price_usd_micros, None);
     }
 }

@@ -107,9 +107,15 @@ async function saveApp() {
 }
 
 async function removeApp(app: AppRecord) {
-  const confirmed = await confirmDialog(`确认删除应用「${app.name}」？`, '删除应用', {
-    confirmText: '删除'
-  })
+  const confirmed = await confirmDialog(
+    `确认删除${create.typeLabel(app.app_type)}“${app.name}”吗？`,
+    '删除应用',
+    {
+      confirmText: '删除',
+      danger: true,
+      type: 'warning'
+    }
+  )
   if (!confirmed) return
   try {
     await deleteApp(app.id)

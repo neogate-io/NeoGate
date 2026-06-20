@@ -5,6 +5,15 @@ export type UserKeyStatus = 'enabled' | 'disabled'
 export type ProjectStatus = 'enabled' | 'disabled'
 export type BillingMeter = 'token' | 'image'
 
+export type VersionCheckResult = {
+  current_version: string
+  latest_version: string
+  latest_tag: string
+  update_available: boolean
+  release_url: string
+  published_at?: string | null
+}
+
 export type CursorPage<T> = {
   items: T[]
   limit: number

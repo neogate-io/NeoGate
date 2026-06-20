@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
-import { Coin, PriceTag, Search, UserFilled, View } from '@element-plus/icons-vue'
+import { Coin, Link as LinkIcon, PriceTag, Refresh, Search, UserFilled, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
+import { checkLatestVersion } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
-import type { ModelReferenceCatalogRecord } from '../../types/admin'
+import type { ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
@@ -19,6 +20,8 @@ const servicePolicy = ref<ServicePolicy | null>(null)
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
 const servicePolicySaving = ref(false)
 const syncingTemplates = ref(false)
+const checkingVersion = ref(false)
+const versionCheck = ref<VersionCheckResult | null>(null)
 const referencePricesDialogOpen = ref(false)
 const referencePriceSearch = ref('')
 
@@ -62,6 +65,17 @@ const registrationDescription = computed(() => {
   return servicePolicy.value.service_mode === 'paid'
     ? t('registrationPaidEnabledDescription')
     : t('registrationInternalEnabledDescription')
+})
+const versionStatusLabel = computed(() => {
+  if (!versionCheck.value) return t('versionNotChecked')
+  return versionCheck.value.update_available ? t('versionUpdateAvailable') : t('versionUpToDate')
+})
+const versionStatusType = computed(() => {
+  if (!versionCheck.value) return 'info'
+  return versionCheck.value.update_available ? 'warning' : 'success'
+})
+const versionPublishedAt = computed(() => {
+  return formatDateTime(versionCheck.value?.published_at, locale.value)
 })
 
 function formatSyncCount(value: number) {
@@ -180,6 +194,17 @@ async function syncReferencePrices() {
   })
 }
 
+async function checkVersion() {
+  await withLoading(checkingVersion, async () => {
+    try {
+      versionCheck.value = await checkLatestVersion()
+      ElMessage.success(versionStatusLabel.value)
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
 onMounted(load)
 </script>
 
@@ -218,6 +243,53 @@ onMounted(load)
             @change="saveServicePolicy"
           />
         </header>
+      </section>
+
+      <section class="other-settings-card">
+        <header class="admin-settings-section-header other-settings-card-header">
+          <el-icon class="admin-settings-panel-icon"><Refresh /></el-icon>
+          <div class="other-settings-card-copy">
+            <div class="version-heading-row">
+              <h3>{{ t('versionCheck') }}</h3>
+              <el-tag :type="versionStatusType" effect="light" round>
+                {{ versionStatusLabel }}
+              </el-tag>
+            </div>
+            <p>{{ t('versionCheckDescription') }}</p>
+            <p class="other-settings-meta">
+              <span>{{ t('currentVersion') }}</span>
+              <strong>{{ versionCheck?.current_version ?? '-' }}</strong>
+              <span>{{ t('latestVersion') }}</span>
+              <strong>{{ versionCheck?.latest_tag ?? '-' }}</strong>
+            </p>
+            <p v-if="versionCheck" class="other-settings-meta">
+              <span>{{ t('releasePublishedAt') }}</span>
+              <strong>{{ versionPublishedAt }}</strong>
+            </p>
+          </div>
+        </header>
+        <div class="other-settings-actions">
+          <el-button
+            v-if="versionCheck"
+            class="admin-action-button"
+            :icon="LinkIcon"
+            tag="a"
+            :href="versionCheck.release_url"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {{ t('viewRelease') }}
+          </el-button>
+          <el-button
+            class="admin-action-button"
+            type="primary"
+            :icon="Refresh"
+            :loading="checkingVersion"
+            @click="checkVersion"
+          >
+            {{ t('checkLatestVersion') }}
+          </el-button>
+        </div>
       </section>
 
       <section class="other-settings-card">
@@ -362,6 +434,13 @@ onMounted(load)
   font-weight: 760;
   line-height: 1.25;
   margin: 0;
+}
+
+.version-heading-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .other-settings-card-copy p {

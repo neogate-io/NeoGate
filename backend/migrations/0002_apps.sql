@@ -83,20 +83,34 @@ CREATE TABLE app_message_delivery (
 );
 
 CREATE INDEX idx_app_type_status ON app(app_type, status, created_at DESC);
+CREATE INDEX idx_app_user_key ON app(user_key_id);
 CREATE INDEX idx_app_endpoint_type_enabled ON app_endpoint(endpoint_type, enabled);
-CREATE INDEX idx_app_message_conversation_created ON app_message(conversation_id, created_at DESC);
+CREATE INDEX idx_app_message_conversation_created ON app_message(conversation_id, created_at DESC, id DESC);
+CREATE INDEX idx_app_message_app_created ON app_message(app_id, created_at DESC, id DESC);
+CREATE INDEX idx_app_message_endpoint_created ON app_message(endpoint_id, created_at DESC, id DESC);
 CREATE INDEX idx_app_run_log_created ON app_run_log(created_at DESC, id DESC);
-CREATE INDEX idx_app_run_log_app_created ON app_run_log(app_id, created_at DESC);
-CREATE INDEX idx_app_run_log_endpoint_created ON app_run_log(endpoint_id, created_at DESC);
+CREATE INDEX idx_app_run_log_app_created ON app_run_log(app_id, created_at DESC, id DESC);
+CREATE INDEX idx_app_run_log_endpoint_created ON app_run_log(endpoint_id, created_at DESC, id DESC);
+CREATE INDEX idx_app_run_log_conversation_created ON app_run_log(conversation_id, created_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_task_upstream_held_billing_hold
     ON task_upstream USING GIN (billing_hold jsonb_path_ops)
     WHERE billing_status = 'held'
       AND billing_hold IS NOT NULL;
 
+DROP INDEX IF EXISTS idx_task_upstream_polling;
+DROP INDEX IF EXISTS idx_credit_allocation_active_stale;
 DROP INDEX IF EXISTS idx_billing_pending_created;
 DROP INDEX IF EXISTS idx_billing_pending_attempts_created;
 
+CREATE INDEX idx_task_upstream_polling
+    ON task_upstream(next_poll_at ASC, id ASC)
+    WHERE terminal = FALSE
+      AND next_poll_at IS NOT NULL;
+CREATE INDEX idx_credit_allocation_active_stale
+    ON credit_allocation(id ASC, created_at ASC)
+    WHERE status = 'active'
+      AND consumed_micro_usd + returned_micro_usd < amount_micro_usd;
 CREATE INDEX idx_billing_pending_created ON billing(created_at ASC)
     WHERE status IN ('pending', 'failed');
 CREATE INDEX idx_billing_pending_attempts_created ON billing(attempts ASC, created_at ASC)
@@ -113,28 +127,16 @@ CREATE INDEX idx_usage_relay_trace ON usage(relay_trace_id, relay_attempt, id)
     WHERE relay_trace_id IS NOT NULL;
 
 ALTER TABLE usage
-    ADD COLUMN billing_meter TEXT,
-    ADD COLUMN billable_units BIGINT CHECK (billable_units >= 0);
-UPDATE usage
-SET billing_meter = 'token',
-    billable_units = 0
-WHERE billing_meter IS NULL OR billable_units IS NULL;
-ALTER TABLE usage
-    ALTER COLUMN billing_meter SET NOT NULL,
-    ALTER COLUMN billable_units SET NOT NULL,
-    ADD CONSTRAINT usage_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+    ADD COLUMN billing_meter TEXT NOT NULL DEFAULT 'token',
+    ADD COLUMN billable_units BIGINT NOT NULL DEFAULT 0 CHECK (billable_units >= 0),
+    ADD CONSTRAINT usage_billing_meter_check CHECK (billing_meter IN ('token', 'image')) NOT VALID;
+ALTER TABLE usage VALIDATE CONSTRAINT usage_billing_meter_check;
 
 ALTER TABLE usage_daily
-    ADD COLUMN billing_meter TEXT,
-    ADD COLUMN billable_units BIGINT CHECK (billable_units >= 0);
-UPDATE usage_daily
-SET billing_meter = 'token',
-    billable_units = 0
-WHERE billing_meter IS NULL OR billable_units IS NULL;
-ALTER TABLE usage_daily
-    ALTER COLUMN billing_meter SET NOT NULL,
-    ALTER COLUMN billable_units SET NOT NULL,
-    ADD CONSTRAINT usage_daily_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+    ADD COLUMN billing_meter TEXT NOT NULL DEFAULT 'token',
+    ADD COLUMN billable_units BIGINT NOT NULL DEFAULT 0 CHECK (billable_units >= 0),
+    ADD CONSTRAINT usage_daily_billing_meter_check CHECK (billing_meter IN ('token', 'image')) NOT VALID;
+ALTER TABLE usage_daily VALIDATE CONSTRAINT usage_daily_billing_meter_check;
 
 DROP INDEX IF EXISTS idx_usage_daily_identity;
 CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
@@ -151,33 +153,22 @@ CREATE UNIQUE INDEX idx_usage_daily_identity ON usage_daily(
 );
 
 ALTER TABLE provider_model
-    ADD COLUMN billing_meter TEXT,
-    ADD COLUMN capabilities JSONB;
-UPDATE provider_model
-SET billing_meter = 'token',
-    capabilities = '{}'::JSONB
-WHERE billing_meter IS NULL OR capabilities IS NULL;
-ALTER TABLE provider_model
-    ALTER COLUMN billing_meter SET NOT NULL,
-    ALTER COLUMN capabilities SET NOT NULL,
-    ADD CONSTRAINT provider_model_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+    ADD COLUMN billing_meter TEXT NOT NULL DEFAULT 'token',
+    ADD COLUMN capabilities JSONB NOT NULL DEFAULT '{}'::JSONB,
+    ADD CONSTRAINT provider_model_billing_meter_check CHECK (billing_meter IN ('token', 'image')) NOT VALID;
+ALTER TABLE provider_model VALIDATE CONSTRAINT provider_model_billing_meter_check;
 
 ALTER TABLE provider_price
-    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN billing_meter TEXT NOT NULL DEFAULT 'token',
     ADD COLUMN unit_price_usd_micros BIGINT CHECK (unit_price_usd_micros >= 0);
-UPDATE provider_price SET billing_meter = 'token' WHERE billing_meter IS NULL;
 ALTER TABLE provider_price
-    ALTER COLUMN billing_meter SET NOT NULL,
-    ADD CONSTRAINT provider_price_billing_meter_check CHECK (billing_meter IN ('token', 'image'));
+    ADD CONSTRAINT provider_price_billing_meter_check CHECK (billing_meter IN ('token', 'image')) NOT VALID;
+ALTER TABLE provider_price VALIDATE CONSTRAINT provider_price_billing_meter_check;
 
 ALTER TABLE pricing_template
-    ADD COLUMN billing_meter TEXT,
+    ADD COLUMN billing_meter TEXT NOT NULL DEFAULT 'token',
     ADD COLUMN unit_price_usd_micros BIGINT CHECK (unit_price_usd_micros >= 0),
-    ADD COLUMN pricing_basis TEXT;
-UPDATE pricing_template
-SET billing_meter = 'token',
-    pricing_basis = 'token'
-WHERE billing_meter IS NULL OR pricing_basis IS NULL;
+    ADD COLUMN pricing_basis TEXT NOT NULL DEFAULT 'token';
 
 UPDATE pricing_template pt
 SET billing_meter = 'token',
@@ -191,7 +182,7 @@ WHERE pt.provider = pm.provider
   AND pm.capabilities -> 'modalities' -> 'output' ? 'image';
 
 ALTER TABLE pricing_template
-    ALTER COLUMN billing_meter SET NOT NULL,
-    ALTER COLUMN pricing_basis SET NOT NULL,
-    ADD CONSTRAINT pricing_template_billing_meter_check CHECK (billing_meter IN ('token', 'image')),
-    ADD CONSTRAINT pricing_template_pricing_basis_check CHECK (pricing_basis IN ('token', 'image'));
+    ADD CONSTRAINT pricing_template_billing_meter_check CHECK (billing_meter IN ('token', 'image')) NOT VALID,
+    ADD CONSTRAINT pricing_template_pricing_basis_check CHECK (pricing_basis IN ('token', 'image')) NOT VALID;
+ALTER TABLE pricing_template VALIDATE CONSTRAINT pricing_template_billing_meter_check;
+ALTER TABLE pricing_template VALIDATE CONSTRAINT pricing_template_pricing_basis_check;

@@ -1,4 +1,4 @@
-import type { PaymentSetting, SmtpSetting } from '../types/admin'
+import type { PaymentSetting, SmtpSetting, VersionCheckResult } from '../types/admin'
 import { adminRequest } from './request'
 
 export function getSmtpSetting() {
@@ -67,4 +67,8 @@ export function updateAdminPassword(input: {
     method: 'POST',
     body: JSON.stringify(input)
   })
+}
+
+export function checkLatestVersion() {
+  return adminRequest<VersionCheckResult>('/api/admin/settings/version')
 }

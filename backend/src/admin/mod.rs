@@ -8,6 +8,7 @@ pub(crate) mod project;
 pub(crate) mod provider;
 pub(crate) mod setting;
 mod user;
+pub(crate) mod version;
 
 use std::{convert::Infallible, sync::Arc};
 
@@ -84,6 +85,7 @@ use self::{
         UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
         UserRecord,
     },
+    version::{check_latest_version, VersionCheckResponse},
 };
 use crate::payment::settings::{
     get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
@@ -165,6 +167,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/admin/settings/admin-password",
             post(update_admin_password_handler),
         )
+        .route("/api/admin/settings/version", get(version_check_handler))
         .route(
             "/api/admin/provider-prices",
             get(provider_prices).post(upsert_provider_price_handler),
@@ -931,6 +934,13 @@ async fn update_admin_password_handler(
     .await?;
 
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn version_check_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<VersionCheckResponse>> {
+    Ok(Json(check_latest_version(&state).await?))
 }
 
 async fn sync_pricing_templates_handler(

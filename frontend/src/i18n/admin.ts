@@ -138,7 +138,7 @@ export const adminMessages = {
     smtpSettingsSaved: 'SMTP 设置已保存。',
     paymentSettings: '支付网关',
     paymentGatewayStatus: '网关状态',
-    paymentGatewayEnabled: '启用支付',
+    paymentGatewayEnabled: '启用支付功能',
     paymentGatewayProvider: '支付网关',
     paymentCallbackSettings: '回调设置',
     paymentReturnBaseUrl: '后端公网地址',

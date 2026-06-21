@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { DocumentCopy } from '@element-plus/icons-vue'
-import PublicHeader from '../../components/PublicHeader.vue'
+import PublicHeader from '../../components/common/PublicHeader.vue'
 import { useLocale } from '../../composables/useLocale'
 import { useScrollTo, useCopyText } from '../../composables/usePublicPage'
 

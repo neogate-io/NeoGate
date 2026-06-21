@@ -10,8 +10,8 @@
   --admin-heading: #0f172a;
   --admin-text-muted: #667085;
   --admin-text-soft: #98a2b3;
-  --admin-primary: #176baf;
-  --admin-primary-hover: #12598f;
+  --admin-primary: #168bd3;
+  --admin-primary-hover: #0f76b8;
   --admin-primary-soft: #eef7ff;
   --admin-primary-border: #b7d8f3;
   --admin-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
@@ -352,10 +352,10 @@
 }
 
 .admin-shell .table-toolbar .el-button--primary {
-  --el-button-bg-color: var(--brand-blue);
-  --el-button-border-color: var(--brand-blue);
-  --el-button-hover-bg-color: var(--brand-blue-hover);
-  --el-button-hover-border-color: var(--brand-blue-hover);
+  --el-button-bg-color: var(--admin-primary);
+  --el-button-border-color: var(--admin-primary);
+  --el-button-hover-bg-color: var(--admin-primary-hover);
+  --el-button-hover-border-color: var(--admin-primary-hover);
   box-shadow: none;
 }
 
@@ -2197,8 +2197,16 @@
   --el-button-border-color: var(--admin-primary);
   --el-button-hover-bg-color: var(--admin-primary-hover);
   --el-button-hover-border-color: var(--admin-primary-hover);
-  --el-button-active-bg-color: #0f4774;
-  --el-button-active-border-color: #0f4774;
+  --el-button-active-bg-color: var(--admin-primary-hover);
+  --el-button-active-border-color: var(--admin-primary-hover);
+}
+
+.admin-shell .el-button--primary:not(.is-disabled):hover,
+.admin-shell .el-button--primary:not(.is-disabled):focus,
+.admin-shell .el-button--primary:not(.is-disabled):active {
+  background-color: var(--admin-primary-hover);
+  border-color: var(--admin-primary-hover);
+  color: #ffffff;
 }
 
 .admin-shell .el-button--danger {

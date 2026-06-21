@@ -31,9 +31,9 @@ import {
   type ServiceMode,
   type ServicePolicy
 } from '../../api/policy'
-import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
+import LocaleToggleButton from '../../components/common/LocaleToggleButton.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
-import ProviderIcon from '../../components/ProviderIcon.vue'
+import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'

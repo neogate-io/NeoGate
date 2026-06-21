@@ -91,6 +91,16 @@ export function adjustCredit(
   })
 }
 
+export function adjustDefaultProjectCredit(userId: number, amountMicroUsd: number) {
+  return adminRequest<AdjustCreditResponse>(`/api/admin/users/${userId}/default-project-credit`, {
+    method: 'POST',
+    body: JSON.stringify({
+      amount_micro_usd: amountMicroUsd,
+      reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
+    })
+  })
+}
+
 export function adjustUserKeyModelCredit(userKeyId: number, model: string, amountMicroUsd: number) {
   return adminRequest<{
     user_key_model_id: number

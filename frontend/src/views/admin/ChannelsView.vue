@@ -30,7 +30,7 @@ import ChannelPriceDialog, {
   type ChannelPriceForm
 } from '../../components/admin/channels/ChannelPriceDialog.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
-import ProviderIcon from '../../components/ProviderIcon.vue'
+import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
 import { useLocale } from '../../composables/useLocale'
@@ -1498,10 +1498,10 @@ onMounted(loadInitialData)
 }
 
 .channel-price-model {
-  background: #eef7fd;
-  border: 1px solid #cde9f8;
+  background: var(--admin-primary-soft);
+  border: 1px solid var(--admin-primary-border);
   border-radius: 999px 0 0 999px;
-  color: #0f76b8;
+  color: var(--admin-primary);
   font-size: 12px;
   font-weight: 680;
   letter-spacing: 0;

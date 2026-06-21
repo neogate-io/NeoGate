@@ -3,8 +3,8 @@ import { computed } from 'vue'
 import { UserFilled } from '@element-plus/icons-vue'
 import { RouterLink } from 'vue-router'
 import LocaleToggleButton from './LocaleToggleButton.vue'
-import { useLocale } from '../composables/useLocale'
-import { useAuthStore } from '../stores/auth'
+import { useLocale } from '../../composables/useLocale'
+import { useAuthStore } from '../../stores/auth'
 
 defineProps<{
   headerClass?: string

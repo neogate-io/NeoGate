@@ -40,6 +40,11 @@ const plans = computed(() => [
   { key: 'enterprise', amount: 2000, name: t('enterprisePlan'), hint: t('enterprisePlanHint') }
 ])
 
+const paymentOptions = computed(() => [
+  { label: t('wechatPay'), value: 'wxpay' as PayType, icon: '/icons/wechat-pay.svg' },
+  { label: t('alipay'), value: 'alipay' as PayType, icon: '/icons/alipay.svg' }
+])
+
 const amountUsd = computed(() => {
   const custom = Number(customAmount.value)
   return Number.isInteger(custom) && custom > 0 ? custom : selectedAmount.value
@@ -162,8 +167,10 @@ async function submitRecharge() {
             type="button"
             @click="selectPlan(plan.amount)"
           >
-            <span v-if="plan.recommended" class="plan-badge">{{ t('recommended') }}</span>
-            <span class="plan-name">{{ plan.name }}</span>
+            <span class="plan-card-title">
+              <span class="plan-name">{{ plan.name }}</span>
+              <span v-if="plan.recommended" class="plan-badge">{{ t('recommended') }}</span>
+            </span>
             <strong>{{ formatUsdAmount(plan.amount) }}</strong>
             <span class="plan-hint">{{ plan.hint }}</span>
             <el-icon v-if="customAmount == null && selectedAmount === plan.amount"
@@ -221,11 +228,20 @@ async function submitRecharge() {
               <el-segmented
                 v-model="payType"
                 class="payment-methods"
-                :options="[
-                  { label: t('wechatPay'), value: 'wxpay' },
-                  { label: t('alipay'), value: 'alipay' }
-                ]"
-              />
+                :options="paymentOptions"
+              >
+                <template #default="{ item }">
+                  <span class="payment-method-option">
+                    <img
+                      class="payment-method-icon"
+                      :src="item.icon"
+                      :alt="item.label"
+                      aria-hidden="true"
+                    />
+                    <span>{{ item.label }}</span>
+                  </span>
+                </template>
+              </el-segmented>
             </dd>
           </div>
         </dl>
@@ -355,6 +371,7 @@ async function submitRecharge() {
   cursor: pointer;
   display: grid;
   gap: 8px;
+  grid-template-rows: auto auto 1fr;
   min-height: 142px;
   padding: 15px;
   position: relative;
@@ -366,20 +383,28 @@ async function submitRecharge() {
   border-color: var(--user-primary, #168bd3);
 }
 
+.plan-card-title {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
 .plan-badge {
   background: var(--user-primary, #168bd3);
   border-radius: 999px;
   color: #fff;
   font-size: 12px;
   font-weight: 780;
-  justify-self: start;
   padding: 4px 9px;
+  white-space: nowrap;
 }
 
 .plan-name {
   color: #334155;
   font-size: 14px;
   font-weight: 800;
+  min-width: 0;
 }
 
 .plan-card strong {
@@ -445,7 +470,58 @@ async function submitRecharge() {
 }
 
 .payment-methods {
+  --el-segmented-bg-color: #ffffff;
+  --el-segmented-item-selected-bg-color: var(--user-primary, #168bd3);
+  border: 1px solid #dbe8f4;
+  border-radius: 8px;
+  padding: 2px;
   width: 100%;
+}
+
+.payment-methods :deep(.el-segmented__item) {
+  border-radius: 6px;
+  color: #b4bfcc;
+  min-height: 42px;
+  padding: 0 8px;
+}
+
+.payment-methods :deep(.el-segmented__item.is-selected) {
+  box-shadow: 0 1px 3px rgb(22 139 211 / 18%);
+  color: #ffffff;
+}
+
+.payment-methods :deep(.el-segmented__item:not(.is-selected):hover) {
+  color: #b4bfcc;
+}
+
+.payment-methods :deep(.el-segmented__item-label) {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+
+.payment-method-option {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.payment-method-icon {
+  flex: 0 0 auto;
+  filter: grayscale(1) opacity(0.42);
+  height: 22px;
+  object-fit: contain;
+  width: 22px;
+}
+
+.payment-methods :deep(.el-segmented__item.is-selected) .payment-method-icon {
+  filter: brightness(0) invert(1);
+}
+
+.payment-methods :deep(.el-segmented__item:not(.is-selected):hover) .payment-method-icon {
+  filter: grayscale(1) opacity(0.42);
 }
 
 .recharge-summary-panel {
@@ -496,7 +572,9 @@ async function submitRecharge() {
 
 .recharge-submit {
   border-radius: 7px;
-  font-weight: 760;
+  font-size: 15px;
+  font-weight: 800;
+  min-height: 46px;
   width: 100%;
 }
 

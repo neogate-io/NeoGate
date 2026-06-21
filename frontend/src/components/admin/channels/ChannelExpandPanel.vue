@@ -145,16 +145,21 @@ const { t } = useLocale()
 }
 
 .expand-price-action.el-button {
-  --el-button-bg-color: var(--brand-blue);
-  --el-button-border-color: var(--brand-blue);
-  --el-button-hover-bg-color: var(--brand-blue-hover);
-  --el-button-hover-border-color: var(--brand-blue-hover);
+  --el-button-bg-color: var(--admin-primary);
+  --el-button-border-color: var(--admin-primary);
+  --el-button-hover-bg-color: var(--admin-primary-hover);
+  --el-button-hover-border-color: var(--admin-primary-hover);
   --el-button-hover-text-color: #ffffff;
   --el-button-text-color: #ffffff;
   box-shadow: none;
 }
 
-.expand-price-action.el-button:not(.is-disabled):hover {
+.expand-price-action.el-button:not(.is-disabled):hover,
+.expand-price-action.el-button:not(.is-disabled):focus,
+.expand-price-action.el-button:not(.is-disabled):active {
+  background-color: var(--admin-primary-hover);
+  border-color: var(--admin-primary-hover);
+  color: #ffffff;
   box-shadow: none;
 }
 
@@ -348,9 +353,9 @@ const { t } = useLocale()
 }
 
 .channel-detail-runtime-raw.is-cooldown {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary-border);
+  color: var(--admin-primary);
 }
 
 .channel-detail-runtime-raw.is-failed {

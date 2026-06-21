@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import ProviderIcon from '../../ProviderIcon.vue'
+import ProviderIcon from '../../common/ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { BillingMeter } from '../../../types/admin'
 

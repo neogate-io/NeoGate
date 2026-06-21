@@ -78,12 +78,12 @@ use self::{
         TestSmtpSettingResponse, UpsertSmtpSettingRequest,
     },
     user::{
-        adjust_credit, adjust_user_key_model_credit, create_user, create_user_key, delete_user,
-        delete_user_key, list_user_groups, list_user_keys, list_users, update_user,
-        update_user_key, CreateUserKeyRequest, CreateUserRequest, CreatedUserKey,
-        ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
-        UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
-        UserRecord,
+        adjust_credit, adjust_default_project_credit, adjust_user_key_model_credit, create_user,
+        create_user_key, delete_user, delete_user_key, list_user_groups, list_user_keys,
+        list_users, update_user, update_user_key, CreateUserKeyRequest, CreateUserRequest,
+        CreatedUserKey, ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest,
+        UpdateUserRequest, UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord,
+        UserPage, UserRecord,
     },
     version::{check_latest_version, VersionCheckResponse},
 };
@@ -101,6 +101,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/users/{id}",
             patch(update_user_handler).delete(delete_user_handler),
+        )
+        .route(
+            "/api/admin/users/{id}/default-project-credit",
+            post(adjust_default_project_credit_handler),
         )
         .route(
             "/api/admin/user-keys",
@@ -327,6 +331,13 @@ struct AdjustCreditRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct AdjustDefaultProjectCreditRequest {
+    amount_micro_usd: i64,
+    #[serde(default = "default_credit_reason")]
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct AdjustUserKeyModelCreditRequest {
     user_key_id: DbId,
     model: String,
@@ -367,6 +378,17 @@ async fn adjust_credit_handler(
         &req.reason,
     )
     .await?;
+    Ok(Json(AdjustCreditResponse { balance_micro_usd }))
+}
+
+async fn adjust_default_project_credit_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<AdjustDefaultProjectCreditRequest>,
+) -> AppResult<Json<AdjustCreditResponse>> {
+    let balance_micro_usd =
+        adjust_default_project_credit(&state, id, req.amount_micro_usd, &req.reason).await?;
     Ok(Json(AdjustCreditResponse { balance_micro_usd }))
 }
 

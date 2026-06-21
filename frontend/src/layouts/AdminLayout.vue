@@ -13,7 +13,7 @@ import {
   User
 } from '@element-plus/icons-vue'
 import { getAdminServicePolicy } from '../api/policy'
-import LocaleToggleButton from '../components/LocaleToggleButton.vue'
+import LocaleToggleButton from '../components/common/LocaleToggleButton.vue'
 import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'

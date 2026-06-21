@@ -31,6 +31,8 @@ pub struct UserRecord {
     pub email: String,
     pub username: Option<String>,
     pub status: String,
+    pub default_project_id: Option<DbId>,
+    pub default_project_name: Option<String>,
     pub user_group_id: DbId,
     pub user_group_code: String,
     pub user_group_name: String,
@@ -321,6 +323,7 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
             r#"
            )
            SELECT u.id, u.email, u.username, u.status,
+                  pw.default_project_id, pw.default_project_name,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
                   COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
@@ -329,11 +332,14 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
            FROM page_users u
            JOIN user_group ug ON ug.id = u.user_group_id
            LEFT JOIN LATERAL (
-               SELECT COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
+               SELECT p.id AS default_project_id,
+                      p.name AS default_project_name,
+                      COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
                       COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM project p
-               JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+               LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
+               GROUP BY p.id, p.name
            ) pw ON TRUE
            LEFT JOIN LATERAL (
                SELECT count(uk.id) AS user_key_count
@@ -446,6 +452,7 @@ pub async fn delete_user(state: &AppState, id: DbId) -> AppResult<()> {
 async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
     let row = sqlx::query(
         r#"SELECT u.id, u.email, u.username, u.status,
+                  pw.default_project_id, pw.default_project_name,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
                   COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
@@ -454,11 +461,14 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
            FROM "user" u
            JOIN user_group ug ON ug.id = u.user_group_id
            LEFT JOIN LATERAL (
-               SELECT COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
+               SELECT p.id AS default_project_id,
+                      p.name AS default_project_name,
+                      COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
                       COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM project p
-               JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+               LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
+               GROUP BY p.id, p.name
            ) pw ON TRUE
            LEFT JOIN (
                SELECT uk.user_id, count(uk.id) AS user_key_count
@@ -1066,6 +1076,36 @@ pub async fn adjust_credit(
     Ok(balance_after)
 }
 
+pub async fn adjust_default_project_credit(
+    state: &AppState,
+    user_id: DbId,
+    amount_micro_usd: i64,
+    reason: &str,
+) -> AppResult<i64> {
+    let mut tx = state.db.pool.begin().await?;
+    let project_id = project::default_project_for_user(&mut tx, user_id).await?;
+    let credit_account =
+        account::owner_credit_account_for_update(&mut tx, CreditAccountType::Project, project_id)
+            .await?;
+    if amount_micro_usd < 0 {
+        let recovered = state
+            .billing
+            .drain_hot_credit_account(&credit_account)
+            .await?;
+        recover_hot_credit_in_tx(&mut tx, &recovered).await?;
+    }
+    let balance_after = adjust_credit_in_tx(
+        &mut tx,
+        credit_account,
+        amount_micro_usd,
+        reason,
+        serde_json::json!({ "source": "admin", "user_id": user_id }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(balance_after)
+}
+
 pub async fn adjust_user_key_model_credit(
     state: &AppState,
     user_key_id: DbId,
@@ -1276,6 +1316,8 @@ pub fn user_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UserRecord> {
         email: row.try_get("email")?,
         username: row.try_get("username")?,
         status: row.try_get("status")?,
+        default_project_id: row.try_get("default_project_id")?,
+        default_project_name: row.try_get("default_project_name")?,
         user_group_id: row.try_get("user_group_id")?,
         user_group_code: row.try_get("user_group_code")?,
         user_group_name: row.try_get("user_group_name")?,

@@ -10,6 +10,7 @@ import {
   Key,
   Lock,
   Message,
+  Money,
   MoreFilled,
   Plus,
   Search,
@@ -18,7 +19,8 @@ import {
 } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getUserGroups, getUserKeys } from '../../api/userKeys'
+import CreditAdjustDialog from '../../components/admin/common/CreditAdjustDialog.vue'
+import { adjustDefaultProjectCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
 import {
   createUser,
   deleteUser,
@@ -43,7 +45,8 @@ import {
   formatDateTime,
   downloadCsv,
   formatMicroUsd,
-  maskApiKey
+  maskApiKey,
+  usdToMicroUsd
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
@@ -72,6 +75,7 @@ type UserStatusMeta = {
 
 const DEFAULT_USER_PAGE_SIZE = 50
 const USER_KEY_DIALOG_LIMIT = 100
+const DEFAULT_RECHARGE_USD = 0
 const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
 const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
   enabled: {
@@ -93,6 +97,8 @@ const apiKeySearch = ref('')
 const userDialogVisible = ref(false)
 const userDialogMode = ref<UserDialogMode>('create')
 const userDialogSaving = ref(false)
+const creditDialogVisible = ref(false)
+const creditSaving = ref(false)
 const deletingUserId = ref<number | null>(null)
 const approvingUserId = ref<number | null>(null)
 const togglingUserIds = useReactiveSet<number>()
@@ -109,6 +115,7 @@ const userForm = reactive<UserForm>({
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
+const amountUsd = ref(DEFAULT_RECHARGE_USD)
 const {
   currentPage: usersCurrentPage,
   pageSize: usersPageSize,
@@ -146,6 +153,10 @@ const emptyUsersDescription = computed(() =>
 const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
 const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
 const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
+const rechargePreviewMicroUsd = computed(() => {
+  if (!selectedUser.value) return usdToMicroUsd(amountUsd.value)
+  return selectedUser.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
+})
 const userMobileMetaText = (row: User) => {
   if (!isPaidServiceMode.value) return userStatusText(row.status)
   return `${userStatusText(row.status)} · ${row.user_key_count.toLocaleString(locale.value)} ${t('keys')}`
@@ -229,6 +240,13 @@ function openEditDialog(row: User) {
   userDialogMode.value = 'edit'
   fillUserForm(row)
   userDialogVisible.value = true
+}
+
+function openCreditDialog(row: User) {
+  if (!isPaidServiceMode.value) return
+  selectedUser.value = row
+  amountUsd.value = DEFAULT_RECHARGE_USD
+  creditDialogVisible.value = true
 }
 
 function userStatusConfirmMessage(email: string, status: UserStatus) {
@@ -366,6 +384,21 @@ async function confirmDeleteUser(row: User) {
     try {
       await deleteUser(row.id)
       ElMessage.success(t('userDeleted'))
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+async function submitCredit() {
+  const userId = selectedUser.value?.id
+  if (!userId) return
+  await withLoading(creditSaving, async () => {
+    try {
+      await adjustDefaultProjectCredit(userId, usdToMicroUsd(amountUsd.value))
+      ElMessage.success(t('creditUpdated'))
+      creditDialogVisible.value = false
       await reload()
     } catch (err) {
       ElMessage.error(readError(err))
@@ -572,6 +605,10 @@ onMounted(() => {
                     />
                     <template #dropdown>
                       <el-dropdown-menu class="admin-row-action-menu">
+                        <el-dropdown-item v-if="isPaidServiceMode" @click="openCreditDialog(row)">
+                          <el-icon><Money /></el-icon>
+                          <span>{{ t('recharge') }}</span>
+                        </el-dropdown-item>
                         <el-dropdown-item
                           class="is-danger"
                           :disabled="deletingUserId === row.id"
@@ -712,6 +749,10 @@ onMounted(() => {
                 />
                 <template #dropdown>
                   <el-dropdown-menu class="admin-row-action-menu">
+                    <el-dropdown-item v-if="isPaidServiceMode" @click="openCreditDialog(row)">
+                      <el-icon><Money /></el-icon>
+                      <span>{{ t('recharge') }}</span>
+                    </el-dropdown-item>
                     <el-dropdown-item
                       class="is-danger"
                       :disabled="deletingUserId === row.id"
@@ -839,6 +880,19 @@ onMounted(() => {
         </div>
       </template>
     </el-dialog>
+
+    <CreditAdjustDialog
+      v-if="selectedUser"
+      v-model:amount="amountUsd"
+      v-model:open="creditDialogVisible"
+      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :confirm-text="t('confirmRecharge')"
+      :current-balance-micro-usd="selectedUser.available_micro_usd"
+      :hint="t('accountCreditAdjustHint')"
+      :saving="creditSaving"
+      :title="t('accountRecharge')"
+      @submit="submitCredit"
+    />
 
     <el-dialog
       v-model="userKeysDialogVisible"
@@ -1190,15 +1244,15 @@ onMounted(() => {
 }
 
 .user-group-tag.is-standard {
-  background: #eef7fd;
-  border-color: #cde9f8;
-  color: #0f76b8;
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary-border);
+  color: var(--admin-primary);
 }
 
 .user-group-tag.is-premium {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary-border);
+  color: var(--admin-primary);
 }
 
 .user-credit-cell {

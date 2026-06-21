@@ -61,6 +61,8 @@ export type User = CreditBalance & {
   email: string
   username?: string | null
   status: UserStatus
+  default_project_id?: number | null
+  default_project_name?: string | null
   user_group_id: number
   user_group_code: string
   user_group_name: string

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Close, CopyDocument, Delete, Plus } from '@element-plus/icons-vue'
-import ProviderIcon from '../../ProviderIcon.vue'
+import ProviderIcon from '../../common/ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { ChannelForm } from '../../../composables/useChannels'
 import type { ChannelKey } from '../../../types/admin'

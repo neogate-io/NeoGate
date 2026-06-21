@@ -177,6 +177,7 @@ pub struct ListUsersQuery {
 pub struct ListUserKeysQuery {
     pub user_id: Option<DbId>,
     pub project_id: Option<DbId>,
+    pub default_project_only: Option<bool>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -226,7 +227,7 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     let email = normalize_email(&req.email)?;
     let password_hash = hash_user_password(&req.password, &state.config.admin_token_secret);
     let service_mode = service_mode(state).await?;
-    let username = create_user_username(req.username.as_deref(), &email, service_mode)?;
+    let username = create_user_username(req.username.as_deref(), &email)?;
     let mut tx = state.db.pool.begin().await?;
     if find_user_by_email(&mut tx, &email).await?.is_some() {
         return Err(user_email_exists_error());
@@ -335,12 +336,12 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
            ) pw ON TRUE
            LEFT JOIN LATERAL (
-               SELECT count(uk.id) AS user_key_count,
-                      COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+               SELECT count(uk.id) AS user_key_count
                FROM user_key uk
-               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               JOIN project p ON p.id = uk.project_id
                WHERE uk.user_id = u.id
+                 AND p.owner_user_id = u.id
+                 AND p.is_default = TRUE
            ) ukw ON TRUE
            ORDER BY u.created_at DESC, u.id DESC"#,
         );
@@ -460,12 +461,11 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
            ) pw ON TRUE
            LEFT JOIN (
-               SELECT uk.user_id,
-                      count(uk.id) AS user_key_count,
-                      COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+               SELECT uk.user_id, count(uk.id) AS user_key_count
                FROM user_key uk
-               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               JOIN project p ON p.id = uk.project_id
+                             AND p.owner_user_id = uk.user_id
+                             AND p.is_default = TRUE
                GROUP BY uk.user_id
            ) ukw ON ukw.user_id = u.id
            WHERE u.id = $1"#,
@@ -714,6 +714,11 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
         query_builder.push_bind(project_id);
     }
 
+    if query.default_project_only.unwrap_or(false) {
+        push_where_clause(&mut query_builder, &mut has_where)
+            .push("p.owner_user_id = uk.user_id AND p.is_default = TRUE");
+    }
+
     if let Some((created_at, id)) = cursor {
         push_where_clause(&mut query_builder, &mut has_where)
             .push("(uk.created_at, uk.id) < (")
@@ -879,13 +884,9 @@ fn normalize_optional_username(username: Option<&str>) -> AppResult<Option<Strin
         .transpose()
 }
 
-fn create_user_username(
-    username: Option<&str>,
-    email: &str,
-    service_mode: ServiceMode,
-) -> AppResult<Option<String>> {
+fn create_user_username(username: Option<&str>, email: &str) -> AppResult<Option<String>> {
     let username = normalize_optional_username(username)?;
-    if username.is_some() || service_mode != ServiceMode::Internal {
+    if username.is_some() {
         return Ok(username);
     }
 
@@ -1361,5 +1362,25 @@ mod tests {
         assert_eq!(value["ok"], true);
         assert!(value.get("api_key").is_none());
         assert!(value.get("key").is_none());
+    }
+
+    #[test]
+    fn create_user_username_derives_from_email_when_missing() {
+        assert_eq!(
+            create_user_username(None, "kevin@example.com").unwrap(),
+            Some("kevin".to_string())
+        );
+        assert_eq!(
+            create_user_username(Some("   "), "team.member@example.com").unwrap(),
+            Some("team.member".to_string())
+        );
+    }
+
+    #[test]
+    fn create_user_username_keeps_explicit_username() {
+        assert_eq!(
+            create_user_username(Some("  Alice  "), "alice@example.com").unwrap(),
+            Some("Alice".to_string())
+        );
     }
 }

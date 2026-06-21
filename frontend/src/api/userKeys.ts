@@ -6,6 +6,7 @@ export type UserKeyPage = CursorPage<UserKey>
 export type GetUserKeysFilters = {
   userId?: number
   projectId?: number
+  defaultProjectOnly?: boolean
   limit?: number
   cursor?: string
 }
@@ -25,6 +26,7 @@ export function getUserKeys(filters: GetUserKeysFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.userId != null) searchParams.set('user_id', String(filters.userId))
   if (filters.projectId != null) searchParams.set('project_id', String(filters.projectId))
+  if (filters.defaultProjectOnly) searchParams.set('default_project_only', 'true')
   if (filters.limit) searchParams.set('limit', String(filters.limit))
   if (filters.cursor) searchParams.set('cursor', filters.cursor)
 

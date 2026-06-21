@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { CreditCard, DocumentCopy, Link, Lock, Select } from '@element-plus/icons-vue'
+import { CreditCard, Lock, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getPaymentSetting, savePaymentSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { readError } from '../../utils/errors'
-import { copyTextWithMessage } from '../../utils/clipboard'
 
 const { t } = useLocale()
 
@@ -31,9 +30,6 @@ const zpayConfigured = computed(
     Boolean(form.zpayMerchantId.trim()) &&
     (secretKeySet.value || Boolean(form.zpaySecretKey.trim())) &&
     Boolean(form.zpaySiteName.trim())
-)
-const zpayNotifyUrl = computed(() =>
-  form.returnBaseUrl ? `${form.returnBaseUrl.replace(/\/+$/, '')}/api/payments/zpay/notify` : ''
 )
 
 function applySetting(setting: Awaited<ReturnType<typeof getPaymentSetting>>) {
@@ -80,11 +76,6 @@ function paymentPayload() {
     zpay_default_pay_type: form.zpayDefaultPayType,
     zpay_site_name: form.zpaySiteName
   }
-}
-
-async function copyZpayNotifyUrl() {
-  if (!zpayNotifyUrl.value) return
-  await copyTextWithMessage(zpayNotifyUrl.value, t('paymentCallbackUrlCopied'))
 }
 
 onMounted(load)
@@ -197,25 +188,6 @@ onMounted(load)
                   />
                 </el-form-item>
               </div>
-
-              <div class="payment-callback-summary">
-                <el-icon><Link /></el-icon>
-                <div>
-                  <span>{{ t('paymentCallbackSettings') }}</span>
-                  <strong>
-                    {{ zpayNotifyUrl || t('paymentCallbackUrlUnavailable') }}
-                  </strong>
-                </div>
-                <el-tooltip :content="t('copy')" placement="top" :show-after="600">
-                  <el-button
-                    class="payment-callback-copy"
-                    :aria-label="t('copy')"
-                    :disabled="!zpayNotifyUrl"
-                    :icon="DocumentCopy"
-                    @click="copyZpayNotifyUrl"
-                  />
-                </el-tooltip>
-              </div>
             </section>
           </div>
         </section>
@@ -238,7 +210,7 @@ onMounted(load)
 
 <style scoped>
 .payment-settings-form {
-  width: min(980px, 100%);
+  width: min(780px, 100%);
 }
 
 .payment-settings-form :deep(.admin-settings-body) {
@@ -408,60 +380,6 @@ onMounted(load)
   color: var(--admin-warning);
 }
 
-.payment-callback-summary {
-  align-items: start;
-  background: var(--admin-surface-muted);
-  border: 1px solid var(--admin-border-soft);
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: 28px minmax(0, 1fr) 34px;
-  max-width: 540px;
-  padding: 12px;
-}
-
-.payment-callback-summary .el-icon {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid var(--admin-border);
-  border-radius: 7px;
-  color: var(--brand-blue);
-  display: inline-flex;
-  height: 28px;
-  justify-content: center;
-  width: 28px;
-}
-
-.payment-callback-summary span {
-  color: var(--admin-text-muted);
-  display: block;
-  font-size: 12px;
-  font-weight: 680;
-  line-height: 1;
-  margin-bottom: 7px;
-}
-
-.payment-callback-summary strong {
-  color: var(--admin-text);
-  display: block;
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-    monospace;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.payment-callback-copy.el-button {
-  align-self: center;
-  border-radius: 7px;
-  height: 34px;
-  min-height: 34px;
-  padding: 0;
-  width: 34px;
-}
-
 @media (max-width: 980px) {
   .payment-zpay-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -480,10 +398,6 @@ onMounted(load)
     grid-column: 1 / -1;
     max-width: none;
   }
-
-  .payment-callback-summary {
-    max-width: none;
-  }
 }
 
 @media (max-width: 640px) {
@@ -499,15 +413,6 @@ onMounted(load)
   .payment-provider-panel-header {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .payment-callback-summary {
-    grid-template-columns: 28px minmax(0, 1fr);
-  }
-
-  .payment-callback-copy.el-button {
-    grid-column: 2;
-    justify-self: start;
   }
 
   .payment-api-field,

@@ -247,7 +247,7 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     .map_err(map_user_write_error)?;
     let user_id: DbId = row.try_get("id")?;
     if service_mode == ServiceMode::Paid {
-        project::create_default_project_for_user(&mut tx, user_id).await?;
+        project::ensure_default_project_for_user(&mut tx, user_id).await?;
     }
     tx.commit().await?;
     get_user(state, user_id).await
@@ -599,7 +599,7 @@ pub async fn claim_public_user_key(
         )
     };
     if created_user {
-        let project_id = project::create_default_project_for_user(&mut tx, user_id).await?;
+        let project_id = project::ensure_default_project_for_user(&mut tx, user_id).await?;
         let credit_account = account::owner_credit_account_for_update(
             &mut tx,
             CreditAccountType::Project,

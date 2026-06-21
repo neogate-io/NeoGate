@@ -22,7 +22,7 @@ use crate::{
         },
         provider::{
             ensure_custom_provider, ensure_newapi_provider, list_providers,
-            provider_default_endpoints, record_provider_models, ProviderRecord,
+            provider_default_endpoints, record_provider_models,
         },
         setting::{
             test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,
@@ -36,21 +36,25 @@ use crate::{
     error::{AppError, AppResult},
     payment::settings::{upsert_payment_setting, UpsertPaymentSettingRequest},
     setup::bootstrap::{
-        save_runtime_config, test_database, BootstrapConfigInput, BootstrapConfigResult,
+        apply_service_mode_env, save_runtime_config, save_service_mode_config, test_database,
+        validate_service_mode_config, BootstrapConfigInput, BootstrapConfigResult,
         TestDatabaseInput, TestDatabaseResult,
     },
     AppState,
 };
 
-pub const SERVICE_POLICY_SETTING_KEY: &str = "service_policy";
-const SERVICE_POLICY_CACHE_TTL: Duration = Duration::from_secs(10);
+pub use crate::admin::provider::ProviderRecord;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ServiceMode {
-    Internal,
-    Paid,
-}
+const SERVICE_POLICY_SETUP_COMPLETED_KEY: &str = "setup_completed";
+const SERVICE_POLICY_CREDIT_REQUIRED_KEY: &str = "credit_required";
+const SERVICE_POLICY_REGISTRATION_ENABLED_KEY: &str = "registration_enabled";
+const SERVICE_POLICY_UPDATED_KEYS: &[&str] = &[
+    SERVICE_POLICY_SETUP_COMPLETED_KEY,
+    SERVICE_POLICY_CREDIT_REQUIRED_KEY,
+    SERVICE_POLICY_REGISTRATION_ENABLED_KEY,
+];
+const SERVICE_POLICY_CACHE_TTL: Duration = Duration::from_secs(10);
+pub use crate::config::ServiceMode;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServicePolicyRecord {
@@ -144,7 +148,7 @@ pub struct SetupProviderPriceRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct SetupFetchUpstreamModelsRequest {
+pub struct SetupFetchUpstreamModelsRequest {
     provider: String,
     protocol: String,
     base_url: String,
@@ -152,12 +156,12 @@ struct SetupFetchUpstreamModelsRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct SetupFetchUpstreamModelsResponse {
+pub struct SetupFetchUpstreamModelsResponse {
     models: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct SetupPricingTemplateSyncResponse {
+pub struct SetupPricingTemplateSyncResponse {
     result: PricingTemplateSyncResult,
     templates: Vec<PricingTemplateRecord>,
 }
@@ -214,20 +218,8 @@ pub async fn current_service_policy(state: &AppState) -> AppResult<ServicePolicy
         return Ok(record);
     }
 
-    let Some(row) = sqlx::query("SELECT value, updated_at FROM setting WHERE key = $1")
-        .bind(SERVICE_POLICY_SETTING_KEY)
-        .fetch_optional(&state.db.pool)
-        .await?
-    else {
-        let record = record_from_stored(default_stored_policy(), None);
-        state.service_policy_cache.store(record.clone());
-        return Ok(record);
-    };
-
-    let value: serde_json::Value = row.try_get("value")?;
-    let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
-    let stored = normalize_stored_policy(serde_json::from_value(value)?);
-    let record = record_from_stored(stored, Some(updated_at));
+    let (stored, updated_at) = load_stored_policy(&state.db.pool).await?;
+    let record = record_from_stored(stored, updated_at);
     state.service_policy_cache.store(record.clone());
     Ok(record)
 }
@@ -284,6 +276,17 @@ async fn complete_setup(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CompleteSetupRequest>,
 ) -> AppResult<Json<ServicePolicyRecord>> {
+    let service_mode = req.service_mode;
+    let record = complete_setup_for_state(state.clone(), req).await?;
+    save_service_mode_config(service_mode).await?;
+    schedule_runtime_restart(state.runtime_restart_tx.clone());
+    Ok(Json(record))
+}
+
+pub async fn complete_setup_for_state(
+    state: Arc<AppState>,
+    req: CompleteSetupRequest,
+) -> AppResult<ServicePolicyRecord> {
     let mut tx = state.db.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('neogate.service_policy_setup'))")
         .execute(&mut *tx)
@@ -358,6 +361,8 @@ async fn complete_setup(
         }
         upsert_payment_setting(&state, payment).await?;
     }
+    validate_service_mode_config(req.service_mode)?;
+    apply_service_mode_env(req.service_mode);
 
     let stored = StoredServicePolicy {
         setup_completed: true,
@@ -385,13 +390,20 @@ async fn complete_setup(
     } else {
         tracing::info!("first-run setup completed without an initial upstream channel");
     }
-    Ok(Json(record))
+    Ok(record)
 }
 
 async fn setup_upstream_models(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SetupFetchUpstreamModelsRequest>,
 ) -> AppResult<Json<SetupFetchUpstreamModelsResponse>> {
+    Ok(Json(setup_upstream_models_for_state(&state, req).await?))
+}
+
+pub async fn setup_upstream_models_for_state(
+    state: &AppState,
+    req: SetupFetchUpstreamModelsRequest,
+) -> AppResult<SetupFetchUpstreamModelsResponse> {
     if current_service_policy(&state).await?.setup_completed {
         return Err(AppError::Conflict(
             "setup has already been completed".to_string(),
@@ -418,61 +430,78 @@ async fn setup_upstream_models(
         ));
     }
     if provider == "custom" {
-        ensure_custom_provider(&state).await?;
+        ensure_custom_provider(state).await?;
     }
     if provider == "newapi" {
-        ensure_newapi_provider(&state).await?;
+        ensure_newapi_provider(state).await?;
     }
-    provider_default_endpoints(&state, provider)
+    provider_default_endpoints(state, provider)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider}")))?;
 
-    let models = fetch_upstream_models(&state, protocol, base_url, secret).await?;
-    record_provider_models(&state, provider, &models, "upstream", false).await?;
-    Ok(Json(SetupFetchUpstreamModelsResponse { models }))
+    let models = fetch_upstream_models(state, protocol, base_url, secret).await?;
+    record_provider_models(state, provider, &models, "upstream", false).await?;
+    Ok(SetupFetchUpstreamModelsResponse { models })
 }
 
 async fn setup_providers(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<Vec<ProviderRecord>>> {
-    if current_service_policy(&state).await?.setup_completed {
+    Ok(Json(setup_providers_for_state(&state).await?))
+}
+
+pub async fn setup_providers_for_state(state: &AppState) -> AppResult<Vec<ProviderRecord>> {
+    if current_service_policy(state).await?.setup_completed {
         return Err(AppError::Conflict(
             "setup has already been completed".to_string(),
         ));
     }
-    Ok(Json(list_providers(&state).await?))
+    list_providers(state).await
 }
 
 async fn setup_sync_pricing_templates(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<SetupPricingTemplateSyncResponse>> {
-    if current_service_policy(&state).await?.setup_completed {
+    Ok(Json(setup_sync_pricing_templates_for_state(&state).await?))
+}
+
+pub async fn setup_sync_pricing_templates_for_state(
+    state: &AppState,
+) -> AppResult<SetupPricingTemplateSyncResponse> {
+    if current_service_policy(state).await?.setup_completed {
         return Err(AppError::Conflict(
             "setup has already been completed".to_string(),
         ));
     }
     let result = sync_pricing_templates(
-        &state,
+        state,
         SyncPricingTemplatesRequest {
             source: "models_dev".to_string(),
         },
     )
     .await?;
-    let templates = list_pricing_templates(&state).await?;
-    Ok(Json(SetupPricingTemplateSyncResponse { result, templates }))
+    let templates = list_pricing_templates(state).await?;
+    Ok(SetupPricingTemplateSyncResponse { result, templates })
 }
 
 async fn setup_test_smtp_setting(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpsertSmtpSettingRequest>,
 ) -> AppResult<Json<TestSmtpSettingResponse>> {
-    if current_service_policy(&state).await?.setup_completed {
+    Ok(Json(setup_test_smtp_setting_for_state(&state, req).await?))
+}
+
+pub async fn setup_test_smtp_setting_for_state(
+    state: &AppState,
+    req: UpsertSmtpSettingRequest,
+) -> AppResult<TestSmtpSettingResponse> {
+    if current_service_policy(state).await?.setup_completed {
         return Err(AppError::Conflict(
             "setup has already been completed".to_string(),
         ));
     }
 
-    Ok(Json(test_smtp_setting(&state, req).await?))
+    test_smtp_setting(state, req).await
 }
 
 async fn user_service_policy(
@@ -517,15 +546,20 @@ async fn update_admin_service_policy(
 async fn stored_policy_for_update(
     tx: &mut Transaction<'_, Postgres>,
 ) -> AppResult<StoredServicePolicy> {
-    let Some(row) = sqlx::query("SELECT value FROM setting WHERE key = $1 FOR UPDATE")
-        .bind(SERVICE_POLICY_SETTING_KEY)
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
-        return Ok(default_stored_policy());
-    };
-    let value: serde_json::Value = row.try_get("value")?;
-    Ok(normalize_stored_policy(serde_json::from_value(value)?))
+    let rows = sqlx::query(
+        "SELECT key, value
+         FROM setting
+         WHERE key = ANY($1)
+         FOR UPDATE",
+    )
+    .bind(SERVICE_POLICY_UPDATED_KEYS)
+    .fetch_all(&mut **tx)
+    .await?;
+    if !rows.is_empty() {
+        return stored_policy_from_setting_rows(&rows);
+    }
+
+    Ok(default_stored_policy())
 }
 
 async fn upsert_stored_policy(
@@ -533,24 +567,110 @@ async fn upsert_stored_policy(
     stored: StoredServicePolicy,
 ) -> AppResult<ServicePolicyRecord> {
     let stored = normalize_stored_policy(stored);
-    let value = serde_json::to_value(&stored)?;
+    upsert_policy_setting(
+        tx,
+        SERVICE_POLICY_SETUP_COMPLETED_KEY,
+        stored.setup_completed,
+    )
+    .await?;
+    upsert_policy_setting(
+        tx,
+        SERVICE_POLICY_CREDIT_REQUIRED_KEY,
+        stored.credit_required,
+    )
+    .await?;
+    upsert_policy_setting(
+        tx,
+        SERVICE_POLICY_REGISTRATION_ENABLED_KEY,
+        stored.registration_enabled.unwrap_or(false),
+    )
+    .await?;
     let row = sqlx::query(
+        "SELECT MAX(updated_at) AS updated_at
+         FROM setting
+         WHERE key = ANY($1)",
+    )
+    .bind(SERVICE_POLICY_UPDATED_KEYS)
+    .fetch_one(&mut **tx)
+    .await?;
+    let updated_at: Option<DateTime<Utc>> = row.try_get("updated_at")?;
+    Ok(record_from_stored(stored, updated_at))
+}
+
+async fn upsert_policy_setting(
+    tx: &mut Transaction<'_, Postgres>,
+    key: &str,
+    value: bool,
+) -> AppResult<()> {
+    sqlx::query(
         "INSERT INTO setting (key, value)
          VALUES ($1, $2)
          ON CONFLICT (key)
-         DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-         RETURNING value, updated_at",
+         DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
     )
-    .bind(SERVICE_POLICY_SETTING_KEY)
-    .bind(value)
-    .fetch_one(&mut **tx)
+    .bind(key)
+    .bind(serde_json::Value::Bool(value))
+    .execute(&mut **tx)
     .await?;
-    let value: serde_json::Value = row.try_get("value")?;
-    let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
-    Ok(record_from_stored(
-        normalize_stored_policy(serde_json::from_value(value)?),
-        Some(updated_at),
-    ))
+    Ok(())
+}
+
+async fn load_stored_policy(
+    pool: &sqlx::PgPool,
+) -> AppResult<(StoredServicePolicy, Option<DateTime<Utc>>)> {
+    let rows = sqlx::query(
+        "SELECT key, value, updated_at
+         FROM setting
+         WHERE key = ANY($1)",
+    )
+    .bind(SERVICE_POLICY_UPDATED_KEYS)
+    .fetch_all(pool)
+    .await?;
+    if !rows.is_empty() {
+        let updated_at = latest_policy_updated_at(&rows)?;
+        return Ok((stored_policy_from_setting_rows(&rows)?, updated_at));
+    }
+
+    Ok((default_stored_policy(), None))
+}
+
+fn stored_policy_from_setting_rows(
+    rows: &[sqlx::postgres::PgRow],
+) -> AppResult<StoredServicePolicy> {
+    let mut stored = default_stored_policy();
+    for row in rows {
+        let key: String = row.try_get("key")?;
+        let value: serde_json::Value = row.try_get("value")?;
+        match key.as_str() {
+            SERVICE_POLICY_SETUP_COMPLETED_KEY => stored.setup_completed = json_bool(&value),
+            SERVICE_POLICY_CREDIT_REQUIRED_KEY => stored.credit_required = json_bool(&value),
+            SERVICE_POLICY_REGISTRATION_ENABLED_KEY => {
+                stored.registration_enabled = Some(json_bool(&value))
+            }
+            _ => {}
+        }
+    }
+    Ok(normalize_stored_policy(stored))
+}
+
+fn latest_policy_updated_at(rows: &[sqlx::postgres::PgRow]) -> AppResult<Option<DateTime<Utc>>> {
+    rows.iter()
+        .map(|row| row.try_get("updated_at"))
+        .collect::<Result<Vec<DateTime<Utc>>, _>>()
+        .map(|values| values.into_iter().max())
+        .map_err(Into::into)
+}
+
+fn json_bool(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::String(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "y" | "on"
+        ),
+        serde_json::Value::Number(value) => value.as_i64().is_some_and(|value| value != 0),
+        _ => false,
+    }
 }
 
 async fn configure_initial_admin_credentials(
@@ -718,11 +838,16 @@ fn default_stored_policy() -> StoredServicePolicy {
 }
 
 fn normalize_stored_policy(mut stored: StoredServicePolicy) -> StoredServicePolicy {
-    if stored.service_mode == ServiceMode::Paid {
+    let service_mode = RuntimeProbe::from_env()
+        .ok()
+        .and_then(|probe| probe.service_mode)
+        .unwrap_or(ServiceMode::Internal);
+    stored.service_mode = service_mode;
+    if service_mode == ServiceMode::Paid {
         stored.credit_required = true;
     }
     if stored.registration_enabled.is_none() {
-        stored.registration_enabled = Some(stored.service_mode == ServiceMode::Paid);
+        stored.registration_enabled = Some(service_mode == ServiceMode::Paid);
     }
     stored
 }
@@ -793,20 +918,51 @@ mod tests {
 
     #[test]
     fn paid_mode_always_requires_credit_and_enables_recharge() {
+        std::env::set_var("SERVICE_MODE", "paid");
         let record = record_from_stored(
             StoredServicePolicy {
                 setup_completed: true,
-                service_mode: ServiceMode::Paid,
+                service_mode: ServiceMode::Internal,
                 credit_required: false,
                 registration_enabled: None,
             },
             None,
         );
+        std::env::remove_var("SERVICE_MODE");
 
         assert!(record.setup_completed);
         assert_eq!(record.service_mode, ServiceMode::Paid);
         assert!(record.credit_required);
         assert!(record.registration_enabled);
         assert!(record.recharge_enabled);
+    }
+
+    #[test]
+    fn stored_service_mode_does_not_drive_runtime_policy() {
+        std::env::remove_var("SERVICE_MODE");
+        std::env::remove_var("NEOGATE_ENV_FILE");
+        let record = record_from_stored(
+            StoredServicePolicy {
+                setup_completed: true,
+                service_mode: ServiceMode::Paid,
+                credit_required: false,
+                registration_enabled: Some(true),
+            },
+            None,
+        );
+
+        assert_eq!(record.service_mode, ServiceMode::Internal);
+        assert!(!record.credit_required);
+        assert!(!record.recharge_enabled);
+    }
+
+    #[test]
+    fn json_bool_accepts_scalar_setting_values() {
+        assert!(json_bool(&serde_json::Value::Bool(true)));
+        assert!(json_bool(&serde_json::Value::String("true".to_string())));
+        assert!(json_bool(&serde_json::Value::Number(1.into())));
+        assert!(!json_bool(&serde_json::Value::Bool(false)));
+        assert!(!json_bool(&serde_json::Value::String("false".to_string())));
+        assert!(!json_bool(&serde_json::Value::Number(0.into())));
     }
 }

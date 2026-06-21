@@ -35,14 +35,12 @@ export const publicMessages = {
     setupProgress: '设置进度',
     runtimeConfiguration: '运行环境配置',
     runtimeConfigurationDescription:
-      '填写数据库、站点名称和公网地址，NeoGate 会写入本节点可维护的环境变量。',
+      '填写数据库、站点名称和公网地址，NeoGate 会先验证配置，完成向导后再写入环境变量。',
     siteConfiguration: '站点信息',
     siteConfigurationDescription: '设置后台显示名称和服务对外访问地址。',
     databaseConfiguration: '数据库连接',
     databaseConfigurationDescription:
       '配置 NeoGate 使用的 PostgreSQL 数据库，并在保存前测试连通性。',
-    changeDatabaseConfiguration: '修改数据库连接',
-    changeDatabaseConfigurationHint: '开启后会写入新的 DATABASE_URL；不开启则保持当前数据库连接。',
     databaseHostLabel: '数据库主机',
     databasePortLabel: '数据库端口',
     databaseNameLabel: '数据库名称',
@@ -55,6 +53,17 @@ export const publicMessages = {
     databaseGeneratedUrl: '生成的 DATABASE_URL',
     testDatabaseConnection: '测试数据库连接',
     databaseConnectionSucceeded: '数据库连接测试成功。',
+    databasePasswordInvalid: '数据库密码不正确。请检查数据库密码。',
+    databaseNotFound: '数据库不存在。请检查数据库名称，或先创建该数据库。',
+    databasePermissionDenied: '数据库用户权限不足。请为该用户授予连接和建表所需权限。',
+    databaseUnavailable: '数据库暂时不可用。请稍后重试，或检查数据库是否正在启动。',
+    databaseUserNotFound: '数据库用户不存在。请检查数据库用户是否已创建。',
+    databaseAuthenticationFailed: '数据库用户认证失败。请检查数据库用户和密码。',
+    databaseConnectionFailed: '数据库连接失败。请检查主机、端口、防火墙和数据库监听地址。',
+    databaseConnectionTimeout: '数据库连接超时。请检查主机、端口和网络连通性。',
+    databaseUrlFormatInvalid: '数据库连接地址格式不正确。请检查填写内容。',
+    databaseNetworkError: '无法连接到数据库网络地址。请检查主机、端口和网络连通性。',
+    databaseTlsError: '数据库 SSL/TLS 握手失败。请检查 SSL 模式和证书配置。',
     siteNameLabel: '站点名称（SITE_NAME）',
     publicBaseUrlLabel: '公网访问地址（PUBLIC_BASE_URL）',
     siteNameRequired: '请输入站点名称。',
@@ -62,8 +71,7 @@ export const publicMessages = {
     publicBaseUrlInvalid: '公网访问地址必须是有效的 http 或 https URL。',
     databaseUrlRequired: '请输入数据库连接地址。',
     databaseUrlInvalid: '数据库连接地址必须以 postgres:// 或 postgresql:// 开头。',
-    saveRuntimeConfiguration: '保存运行环境配置',
-    runtimeConfigSaved: '配置已保存。请重启 NeoGate 后继续。',
+    runtimeConfigSaved: '运行环境配置已验证。完成向导后会写入配置文件并重启。',
     restartRequired: '需要重启',
     restartRequiredDescription: '运行环境配置已写入。重启 NeoGate 后再回到此页面继续初始化。',
     runtimeRestarting: '正在重启服务',
@@ -86,7 +94,7 @@ export const publicMessages = {
     setupPaymentEnabledHint: '已开启支付。用户可以在控制台发起充值，请继续完成支付参数配置。',
     setupPaymentDisabledHint: '已关闭支付。初始化后用户不能在线充值，可稍后在后台系统设置中启用。',
     setupFinishTitle: '确认并完成初始化',
-    setupFinishHint: '请最后确认本次首次运行设置。点击完成后，服务模式将写入系统策略。',
+    setupFinishHint: '请最后确认本次首次运行设置。点击完成后，服务模式将写入运行配置文件。',
     setupFinishDescriptionLong:
       '完成后会进入登录页。上游服务、SMTP 邮箱和支付网关都可以在后台继续补充或调整。',
     setupFinishInternalMode: '内部模式',
@@ -393,7 +401,7 @@ export const publicMessages = {
     minuteShort: '分钟',
     hourShort: '小时',
     dayShort: '天',
-    tomorrow: '明天',
+    tomorrow: '明天'
   },
   'en-US': {
     appTitle: 'NeoGate Admin',
@@ -432,15 +440,12 @@ export const publicMessages = {
     setupProgress: 'Setup progress',
     runtimeConfiguration: 'Runtime configuration',
     runtimeConfigurationDescription:
-      'Enter the database, site name, and public URL. NeoGate will save the environment settings this node can manage.',
+      'Enter the database, site name, and public URL. NeoGate verifies them now and writes the environment file when setup is completed.',
     siteConfiguration: 'Site information',
     siteConfigurationDescription: 'Set the admin display name and public service URL.',
     databaseConfiguration: 'Database connection',
     databaseConfigurationDescription:
       'Configure the PostgreSQL database NeoGate will use and test it before saving.',
-    changeDatabaseConfiguration: 'Change database connection',
-    changeDatabaseConfigurationHint:
-      'When enabled, a new DATABASE_URL will be written. Leave it off to keep the current database connection.',
     databaseHostLabel: 'Database host',
     databasePortLabel: 'Database port',
     databaseNameLabel: 'Database name',
@@ -453,6 +458,24 @@ export const publicMessages = {
     databaseGeneratedUrl: 'Generated DATABASE_URL',
     testDatabaseConnection: 'Test database connection',
     databaseConnectionSucceeded: 'Database connection test succeeded.',
+    databasePasswordInvalid: 'The database password is incorrect. Check the database password.',
+    databaseNotFound: 'The database does not exist. Check the database name or create it first.',
+    databasePermissionDenied:
+      'The database user does not have enough permissions. Grant connection and table creation permissions.',
+    databaseUnavailable:
+      'The database is temporarily unavailable. Try again later or check whether it is still starting.',
+    databaseUserNotFound: 'The database user does not exist. Check whether the user has been created.',
+    databaseAuthenticationFailed:
+      'Database authentication failed. Check the database user and password.',
+    databaseConnectionFailed:
+      'Could not connect to the database. Check the host, port, firewall, and listen address.',
+    databaseConnectionTimeout:
+      'The database connection timed out. Check the host, port, and network connectivity.',
+    databaseUrlFormatInvalid: 'The database connection URL is invalid. Check the value.',
+    databaseNetworkError:
+      'Could not reach the database network address. Check the host, port, and network connectivity.',
+    databaseTlsError:
+      'The database SSL/TLS handshake failed. Check the SSL mode and certificate settings.',
     siteNameLabel: 'Site name (SITE_NAME)',
     publicBaseUrlLabel: 'Public URL (PUBLIC_BASE_URL)',
     siteNameRequired: 'Enter the site name.',
@@ -460,8 +483,8 @@ export const publicMessages = {
     publicBaseUrlInvalid: 'The public URL must be a valid http or https URL.',
     databaseUrlRequired: 'Enter the database connection URL.',
     databaseUrlInvalid: 'The database URL must start with postgres:// or postgresql://.',
-    saveRuntimeConfiguration: 'Save runtime configuration',
-    runtimeConfigSaved: 'Configuration saved. Restart NeoGate to continue.',
+    runtimeConfigSaved:
+      'Runtime configuration verified. NeoGate will write the environment file and restart after setup is completed.',
     restartRequired: 'Restart required',
     restartRequiredDescription:
       'Runtime configuration has been written. Restart NeoGate, then return here to continue setup.',
@@ -490,7 +513,7 @@ export const publicMessages = {
       'Payments disabled. Users cannot recharge online after setup until you enable it in admin settings.',
     setupFinishTitle: 'Review and complete setup',
     setupFinishHint:
-      'Confirm this first-run setup. After completion, the service mode is saved to system policy.',
+      'Confirm this first-run setup. After completion, the service mode is saved to the runtime config file.',
     setupFinishDescriptionLong:
       'After completion, you will go to the sign-in page. Upstream service, SMTP email, and payment gateway settings can still be updated later in admin settings.',
     setupFinishInternalMode: 'Internal team mode',
@@ -802,6 +825,6 @@ export const publicMessages = {
     minuteShort: 'm',
     hourShort: 'h',
     dayShort: 'd',
-    tomorrow: 'Tomorrow',
-  },
+    tomorrow: 'Tomorrow'
+  }
 } satisfies LocaleMessages

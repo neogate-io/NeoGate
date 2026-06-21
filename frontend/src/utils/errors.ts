@@ -34,7 +34,18 @@ const generalApiErrorMessageKeys = {
   upstream_dns_error: 'genericUpstreamError',
   upstream_connect_error: 'genericUpstreamError',
   upstream_request_error: 'genericUpstreamError',
-  upstream_unavailable: 'genericUpstreamError'
+  upstream_unavailable: 'genericUpstreamError',
+  database_password_invalid: 'databasePasswordInvalid',
+  database_not_found: 'databaseNotFound',
+  database_permission_denied: 'databasePermissionDenied',
+  database_unavailable: 'databaseUnavailable',
+  database_user_not_found: 'databaseUserNotFound',
+  database_authentication_failed: 'databaseAuthenticationFailed',
+  database_connection_failed: 'databaseConnectionFailed',
+  database_connection_timeout: 'databaseConnectionTimeout',
+  database_url_invalid: 'databaseUrlFormatInvalid',
+  database_network_error: 'databaseNetworkError',
+  database_tls_error: 'databaseTlsError'
 } as Record<string, MessageKey>
 
 function tError(key: MessageKey) {

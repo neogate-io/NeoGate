@@ -78,7 +78,6 @@ const currentBusinessStep = ref<BusinessSetupStep>('admin-password')
 const includeUpstream = ref(true)
 const includePayment = ref(true)
 const reviewingRuntimeConfig = ref(false)
-const runtimeDatabaseChangeEnabled = ref(false)
 const fetchedModels = ref<string[]>([])
 const selectedFetchedModels = ref<string[]>([])
 const pricingTemplates = ref<PricingTemplate[]>([])
@@ -475,16 +474,26 @@ async function saveBootstrap() {
     try {
       const result = await bootstrapSetup({
         database_url:
-          bootstrapMissingDatabase.value || runtimeDatabaseChangeEnabled.value
+          bootstrapMissingDatabase.value || reviewingRuntimeConfig.value
             ? buildDatabaseUrl(false)
             : null,
         site_name: bootstrapForm.siteName,
         public_base_url: bootstrapForm.publicBaseUrl
       })
-      envFile.value = result.env_file
-      waitingForRestart.value = true
+      envFile.value = result.restart_required ? result.env_file : ''
+      waitingForRestart.value = result.restart_required
       restartWaitTimedOut.value = false
       ElMessage.success(t('runtimeConfigSaved'))
+      if (!result.restart_required) {
+        status.value = await getSetupStatus(true)
+        reviewingRuntimeConfig.value = false
+        providers.value = await getSetupProviders()
+        if (providers.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providers.value[0].code
+        }
+        applyProviderDefaults()
+        return
+      }
       if (reviewingRuntimeConfig.value) {
         waitingForRestart.value = false
         return
@@ -721,7 +730,7 @@ function validateRuntimeConfig() {
 }
 
 function validateDatabaseConfig() {
-  if (!bootstrapMissingDatabase.value && !runtimeDatabaseChangeEnabled.value) return true
+  if (!bootstrapMissingDatabase.value && !reviewingRuntimeConfig.value) return true
   const databaseUrl = buildDatabaseUrl(false).trim()
   if (!databaseUrl) {
     ElMessage.error(t('databaseUrlRequired'))
@@ -879,15 +888,9 @@ async function goToNextBusinessStep() {
 function goToPreviousBusinessStep() {
   if (currentBusinessStep.value === 'admin-password' && canReviewRuntimeConfig.value) {
     reviewingRuntimeConfig.value = true
-    runtimeDatabaseChangeEnabled.value = false
     return
   }
   goToAdjacentBusinessStep(-1)
-}
-
-function returnToBusinessSetup() {
-  reviewingRuntimeConfig.value = false
-  runtimeDatabaseChangeEnabled.value = false
 }
 
 function skipUpstreamStep() {
@@ -1247,81 +1250,62 @@ onMounted(load)
                 <p>{{ t('databaseConfigurationDescription') }}</p>
               </div>
             </div>
-            <div
-              v-if="reviewingRuntimeConfig && !bootstrapMissingDatabase"
-              class="setup-inline-control"
-            >
-              <span>
-                <strong>{{ t('changeDatabaseConfiguration') }}</strong>
-                <small>{{ t('changeDatabaseConfigurationHint') }}</small>
-              </span>
-              <el-switch v-model="runtimeDatabaseChangeEnabled" />
-            </div>
-            <template v-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled">
-              <div class="setup-grid two">
-                <el-form-item :label="t('databaseHostLabel')">
-                  <el-input v-model="bootstrapForm.databaseHost" />
-                </el-form-item>
-                <el-form-item class="setup-database-port-field" :label="t('databasePortLabel')">
-                  <el-input
-                    v-model="databasePortInput"
-                    autocomplete="off"
-                    inputmode="numeric"
-                    placeholder="5432"
+            <div class="setup-grid two">
+              <el-form-item :label="t('databaseHostLabel')">
+                <el-input v-model="bootstrapForm.databaseHost" />
+              </el-form-item>
+              <el-form-item class="setup-database-port-field" :label="t('databasePortLabel')">
+                <el-input
+                  v-model="databasePortInput"
+                  autocomplete="off"
+                  inputmode="numeric"
+                  placeholder="5432"
+                />
+              </el-form-item>
+              <el-form-item :label="t('databaseNameLabel')">
+                <el-input v-model="bootstrapForm.databaseName" />
+              </el-form-item>
+              <el-form-item :label="t('databaseUserLabel')">
+                <el-input v-model="bootstrapForm.databaseUser" />
+              </el-form-item>
+              <el-form-item :label="t('databasePasswordLabel')">
+                <el-input v-model="bootstrapForm.databasePassword" show-password />
+              </el-form-item>
+              <el-form-item :label="t('databaseSslModeLabel')">
+                <el-select v-model="bootstrapForm.databaseSslMode">
+                  <el-option
+                    v-for="option in databaseSslModeOptions"
+                    :key="option.value || 'auto'"
+                    :label="option.label"
+                    :value="option.value"
                   />
-                </el-form-item>
-                <el-form-item :label="t('databaseNameLabel')">
-                  <el-input v-model="bootstrapForm.databaseName" />
-                </el-form-item>
-                <el-form-item :label="t('databaseUserLabel')">
-                  <el-input v-model="bootstrapForm.databaseUser" />
-                </el-form-item>
-                <el-form-item :label="t('databasePasswordLabel')">
-                  <el-input v-model="bootstrapForm.databasePassword" show-password />
-                </el-form-item>
-                <el-form-item :label="t('databaseSslModeLabel')">
-                  <el-select v-model="bootstrapForm.databaseSslMode">
-                    <el-option
-                      v-for="option in databaseSslModeOptions"
-                      :key="option.value || 'auto'"
-                      :label="option.label"
-                      :value="option.value"
-                    />
-                  </el-select>
-                </el-form-item>
-              </div>
-              <div class="setup-env-file">
-                <span>{{ t('databaseGeneratedUrl') }}</span>
-                <code>{{ generatedDatabaseUrlPreview }}</code>
-              </div>
-              <div class="setup-field-actions">
-                <el-button
-                  :disabled="saving"
-                  :loading="testingDatabase"
-                  @click="testDatabaseConnection"
-                >
-                  {{ t('testDatabaseConnection') }}
-                </el-button>
-              </div>
-            </template>
+                </el-select>
+              </el-form-item>
+            </div>
+            <div class="setup-env-file">
+              <span>{{ t('databaseGeneratedUrl') }}</span>
+              <code>{{ generatedDatabaseUrlPreview }}</code>
+            </div>
+            <div class="setup-field-actions">
+              <el-button
+                :disabled="saving"
+                :loading="testingDatabase"
+                @click="testDatabaseConnection"
+              >
+                {{ t('testDatabaseConnection') }}
+              </el-button>
+            </div>
           </div>
 
           <div class="setup-actions runtime-actions">
             <el-button
-              v-if="reviewingRuntimeConfig"
-              :icon="ArrowRight"
-              :disabled="saving"
-              @click="returnToBusinessSetup"
-            >
-              {{ t('nextStep') }}
-            </el-button>
-            <el-button
               type="primary"
+              :icon="ArrowRight"
               :disabled="testingDatabase || waitingForRestart"
               :loading="saving"
               native-type="submit"
             >
-              {{ t('saveRuntimeConfiguration') }}
+              {{ t('nextStep') }}
             </el-button>
           </div>
         </el-form>

@@ -90,6 +90,10 @@ function orderStatusLabel(status: string) {
   return t('paymentStatusPending')
 }
 
+function paymentReturnUrl() {
+  return `${window.location.origin}/home/recharge`
+}
+
 async function openRechargeHistory() {
   historyDialogVisible.value = true
   if (!ordersLoaded.value) await reloadOrders()
@@ -121,7 +125,7 @@ async function submitRecharge() {
       const result = await createRechargeOrder(
         amountMicroUsd.value,
         payType.value,
-        window.location.href
+        paymentReturnUrl()
       )
       if (ordersLoaded.value || historyDialogVisible.value) await reloadOrders()
       if (result.checkout_url) {

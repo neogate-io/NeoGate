@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
-import { Coin, Link as LinkIcon, PriceTag, Refresh, Search, UserFilled, View } from '@element-plus/icons-vue'
+import {
+  Coin,
+  Link as LinkIcon,
+  PriceTag,
+  Refresh,
+  Search,
+  UserFilled,
+  View
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
@@ -251,7 +259,7 @@ onMounted(load)
           <div class="other-settings-card-copy">
             <div class="version-heading-row">
               <h3>{{ t('versionCheck') }}</h3>
-              <el-tag :type="versionStatusType" effect="light" round>
+              <el-tag class="version-status-tag" :type="versionStatusType" effect="light" round>
                 {{ versionStatusLabel }}
               </el-tag>
             </div>
@@ -315,6 +323,7 @@ onMounted(load)
           <el-button
             class="admin-action-button"
             type="primary"
+            :icon="Refresh"
             :loading="syncingTemplates"
             @click="syncReferencePrices"
           >
@@ -441,6 +450,16 @@ onMounted(load)
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.version-status-tag.el-tag {
+  animation: none;
+  transition: none;
+}
+
+.version-status-tag.el-tag :deep(*) {
+  animation: none;
+  transition: none;
 }
 
 .other-settings-card-copy p {

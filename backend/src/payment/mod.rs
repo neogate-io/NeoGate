@@ -95,6 +95,7 @@ struct GatewayNotification {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum PaymentStatus {
     Paid,
     Failed,
@@ -461,25 +462,6 @@ fn payload_json(params: &HashMap<String, String>) -> serde_json::Value {
         .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
         .collect();
     serde_json::Value::Object(object)
-}
-
-impl PaymentStatus {
-    fn from_gateway_value(value: Option<&String>) -> Self {
-        match value.map(|value| value.to_ascii_lowercase()) {
-            Some(value)
-                if matches!(
-                    value.as_str(),
-                    "paid" | "success" | "trade_success" | "trade_finished" | "1"
-                ) =>
-            {
-                Self::Paid
-            }
-            Some(value) if matches!(value.as_str(), "failed" | "fail" | "closed" | "0") => {
-                Self::Failed
-            }
-            _ => Self::Pending,
-        }
-    }
 }
 
 impl ZpayConfig {

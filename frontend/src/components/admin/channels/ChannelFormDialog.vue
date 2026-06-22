@@ -17,7 +17,6 @@ const props = defineProps<{
   mode: 'create' | 'edit'
   providerOptions: ChannelProviderOption[]
   providerValue: string
-  baseUrlReadonly: boolean
   fetchingModels: boolean
   submitting: boolean
   modelsInputPlaceholder: string
@@ -166,9 +165,7 @@ function keyHealthLabel(key: ChannelKey) {
         <el-input
           v-model="baseUrl"
           class="base-url-input"
-          :class="{ 'is-readonly': baseUrlReadonly }"
           :placeholder="t('baseUrlPlaceholder')"
-          :readonly="baseUrlReadonly"
         />
       </el-form-item>
 
@@ -356,16 +353,6 @@ function keyHealthLabel(key: ChannelKey) {
 
 :global(.provider-select-dropdown .el-select-dropdown__item.selected .provider-icon) {
   border-color: currentColor;
-}
-
-.base-url-input.is-readonly :deep(.el-input__wrapper) {
-  background: #f8fafc;
-  box-shadow: 0 0 0 1px #e3e8ef inset;
-}
-
-.base-url-input.is-readonly :deep(.el-input__inner) {
-  color: #667085;
-  -webkit-text-fill-color: #667085;
 }
 
 .manual-base-url-grid {

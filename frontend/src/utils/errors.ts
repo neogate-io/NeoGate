@@ -99,6 +99,10 @@ export function readModelFetchError(err: unknown, t: Translate) {
   return readError(err)
 }
 
+export function isNoModelsReturnedError(err: unknown) {
+  return err instanceof ApiError && err.message.trim().toLowerCase() === 'no models returned'
+}
+
 function readMappedApiError(
   err: unknown,
   messages: Record<string, MessageKey>,

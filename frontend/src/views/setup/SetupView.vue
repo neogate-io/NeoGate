@@ -38,7 +38,13 @@ import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
 import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
-import { ApiError, readError, readModelFetchError, readSmtpTestError } from '../../utils/errors'
+import {
+  ApiError,
+  isNoModelsReturnedError,
+  readError,
+  readModelFetchError,
+  readSmtpTestError
+} from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
@@ -584,10 +590,6 @@ async function fetchModels() {
         base_url: endpoint.base_url,
         secret: setupForm.secret
       })
-      if (result.models.length === 0) {
-        ElMessage.warning(t('modelsFetchEmpty'))
-        return
-      }
 
       fetchedModels.value = result.models
       selectedFetchedModels.value =
@@ -596,8 +598,19 @@ async function fetchModels() {
           : result.models.filter((model) => existingModels.includes(model))
       syncSelectedModelsToInput()
       modelPickerDialogOpen.value = true
-      ElMessage.success(t('modelsFetched'))
+      if (result.models.length === 0) {
+        ElMessage.warning(t('modelsFetchEmpty'))
+      } else {
+        ElMessage.success(t('modelsFetched'))
+      }
     } catch (err) {
+      if (isNoModelsReturnedError(err)) {
+        fetchedModels.value = existingModels
+        selectedFetchedModels.value = existingModels
+        modelPickerDialogOpen.value = true
+        ElMessage.warning(t('modelsFetchEmpty'))
+        return
+      }
       ElMessage.error(readModelFetchError(err, t))
     }
   })
@@ -1736,8 +1749,8 @@ onMounted(load)
 
     <ModelPickerDialog
       v-model:open="modelPickerDialogOpen"
+      v-model:models="fetchedModels"
       v-model:selected-models="selectedFetchedModels"
-      :models="fetchedModels"
       :all-selected="allFetchedModelsSelected"
       @toggle-all="toggleAllFetchedModels"
     />

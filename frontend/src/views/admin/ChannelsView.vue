@@ -84,8 +84,6 @@ const {
   editBaseUrl,
   secretInput,
   editSecretInput,
-  isCreateBaseUrlReadonly,
-  isEditBaseUrlReadonly,
   fetchedModels,
   selectedFetchedModels,
   allFetchedModelsSelected,
@@ -1119,7 +1117,6 @@ onMounted(loadInitialData)
       mode="create"
       :provider-options="providerOptions"
       :provider-value="createForm.provider"
-      :base-url-readonly="isCreateBaseUrlReadonly"
       :fetching-models="fetchingModels"
       :submitting="creating"
       :models-input-placeholder="modelsInputPlaceholder()"
@@ -1132,8 +1129,8 @@ onMounted(loadInitialData)
 
     <ModelPickerDialog
       v-model:open="modelPickerDialogOpen"
+      v-model:models="fetchedModels"
       v-model:selected-models="selectedFetchedModels"
-      :models="fetchedModels"
       :all-selected="allFetchedModelsSelected"
       @toggle-all="toggleAllFetchedModels"
     />
@@ -1146,7 +1143,6 @@ onMounted(loadInitialData)
       mode="edit"
       :provider-options="providerOptions"
       :provider-value="editingChannel?.provider ?? ''"
-      :base-url-readonly="isEditBaseUrlReadonly"
       :fetching-models="fetchingModels"
       :submitting="updating"
       :models-input-placeholder="modelsInputPlaceholder()"

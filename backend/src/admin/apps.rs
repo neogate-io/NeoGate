@@ -443,7 +443,7 @@ async fn ensure_system_apps_project_tx(
         .await?;
         project_id
     } else {
-        project::create_default_project_for_user(tx, user_id).await?
+        project::ensure_default_project_for_user(tx, user_id).await?
     };
 
     sqlx::query(

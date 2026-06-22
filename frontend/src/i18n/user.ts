@@ -7,7 +7,7 @@ export const userMessages = {
     apiKeySubtitle: '创建和管理用于调用服务的访问密钥',
     usageSubtitle: '查看调用记录、模型、费用和延迟',
     rechargeSubtitle: '选择套餐并查看充值订单',
-    personalSettings: '个人设置',
+    personalSettings: '设置',
     personalSettingsSubtitle: '维护登录密码和账号安全',
     welcomeBack: '欢迎回来',
     invocationStatus: '调用状态',

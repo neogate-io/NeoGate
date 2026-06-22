@@ -434,7 +434,7 @@ impl Visit for LogFields {
     }
 }
 
-async fn build_state(
+pub(crate) async fn build_state(
     config: Config,
     runtime_restart_tx: watch::Sender<bool>,
 ) -> anyhow::Result<Arc<AppState>> {

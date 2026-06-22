@@ -1,6 +1,30 @@
 import type { PaymentSetting, SmtpSetting, VersionCheckResult } from '../types/admin'
 import { adminRequest } from './request'
 
+export type SiteSetting = {
+  site_name: string
+  public_base_url?: string | null
+  env_write_supported: boolean
+}
+
+export function getSiteSetting() {
+  return adminRequest<SiteSetting>('/api/admin/settings/site')
+}
+
+export function saveSiteSetting(input: {
+  site_name: string
+  public_base_url: string
+}) {
+  return adminRequest<{
+    ok: boolean
+    restart_required: boolean
+    setting: SiteSetting
+  }>('/api/admin/settings/site', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
 export function getSmtpSetting() {
   return adminRequest<SmtpSetting>('/api/admin/settings/smtp')
 }

@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
+import { splitCommaList } from '../../../utils/channel'
 
 const open = defineModel<boolean>('open', { required: true })
 const selectedModels = defineModel<string[]>('selectedModels', { required: true })
+const models = defineModel<string[]>('models', { required: true })
 
-defineProps<{
-  models: string[]
+const props = defineProps<{
   allSelected: boolean
 }>()
 
@@ -14,6 +16,24 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+const manualModelInput = ref('')
+
+function addManualModels() {
+  const manualModels = splitCommaList(manualModelInput.value)
+  if (manualModels.length === 0) return
+
+  const existing = new Set(models.value)
+  const nextModels = [...models.value]
+  for (const model of manualModels) {
+    if (existing.has(model)) continue
+    existing.add(model)
+    nextModels.push(model)
+  }
+
+  models.value = nextModels
+  selectedModels.value = Array.from(new Set([...selectedModels.value, ...manualModels]))
+  manualModelInput.value = ''
+}
 </script>
 
 <template>
@@ -36,7 +56,7 @@ const { t } = useLocale()
           <label class="model-checkbox-item model-checkbox-all">
             <input
               type="checkbox"
-              :checked="allSelected"
+              :checked="props.allSelected"
               @change="emit('toggleAll', ($event.target as HTMLInputElement).checked)"
             />
             <span>{{ t('allModels') }}</span>
@@ -45,6 +65,15 @@ const { t } = useLocale()
             <input v-model="selectedModels" type="checkbox" :value="model" />
             <span>{{ model }}</span>
           </label>
+        </div>
+        <div class="manual-model-add">
+          <el-input
+            v-model="manualModelInput"
+            class="manual-model-input"
+            :placeholder="t('manualModelPlaceholder')"
+            @keyup.enter="addManualModels"
+          />
+          <el-button @click="addManualModels">{{ t('addManualModel') }}</el-button>
         </div>
       </div>
     </div>
@@ -69,6 +98,7 @@ const { t } = useLocale()
   align-items: center;
   display: flex;
   justify-content: flex-start;
+  min-width: 0;
 }
 
 .model-count {
@@ -76,6 +106,27 @@ const { t } = useLocale()
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.manual-model-add {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: stretch;
+  min-width: 0;
+  width: 100%;
+}
+
+.manual-model-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.manual-model-add :deep(.el-button) {
+  border-radius: 7px;
+  flex: 0 0 auto;
+  font-weight: 680;
+  min-height: 32px;
 }
 
 .model-select-panel {
@@ -114,11 +165,9 @@ const { t } = useLocale()
 }
 
 .model-checkbox-all {
-  border-bottom: 1px solid #edf1f6;
   color: #1f2937;
   font-weight: 760;
   grid-column: 1 / -1;
-  margin-bottom: 3px;
 }
 
 .model-checkbox-item input {
@@ -180,14 +229,18 @@ const { t } = useLocale()
 }
 
 @media (max-width: 760px) {
-  .model-picker-toolbar {
-    align-items: stretch;
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
   .model-count {
     white-space: normal;
+  }
+
+  .manual-model-add {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .manual-model-input {
+    max-width: none;
   }
 
   .model-checkbox-list {

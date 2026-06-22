@@ -31,32 +31,38 @@ import {
   type ServiceMode,
   type ServicePolicy
 } from '../../api/policy'
-import LocaleToggleButton from '../../components/LocaleToggleButton.vue'
+import LocaleToggleButton from '../../components/common/LocaleToggleButton.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
-import ProviderIcon from '../../components/ProviderIcon.vue'
+import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
 import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
-import { ApiError, readError, readModelFetchError, readSmtpTestError } from '../../utils/errors'
+import {
+  ApiError,
+  isNoModelsReturnedError,
+  readError,
+  readModelFetchError,
+  readSmtpTestError
+} from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
-type BusinessSetupStep = 'admin-password' | 'service-mode' | 'upstream' | 'smtp'
+type BusinessSetupStep =
+  | 'admin-password'
+  | 'service-mode'
+  | 'upstream'
+  | 'smtp'
+  | 'payment'
+  | 'finish'
 type SetupEndpointPayload = {
   protocol: Protocol
   base_url: string
   models: string[]
   enabled: boolean
 }
-
-const businessSetupSteps: BusinessSetupStep[] = [
-  'admin-password',
-  'service-mode',
-  'upstream',
-  'smtp'
-]
+const optionalBusinessSteps = new Set<BusinessSetupStep>(['upstream', 'smtp', 'payment'])
 
 const router = useRouter()
 const { t } = useLocale()
@@ -76,8 +82,8 @@ const envFile = ref('')
 const clusterEnvTemplate = ref('')
 const currentBusinessStep = ref<BusinessSetupStep>('admin-password')
 const includeUpstream = ref(true)
+const includePayment = ref(true)
 const reviewingRuntimeConfig = ref(false)
-const runtimeDatabaseChangeEnabled = ref(false)
 const fetchedModels = ref<string[]>([])
 const selectedFetchedModels = ref<string[]>([])
 const pricingTemplates = ref<PricingTemplate[]>([])
@@ -147,7 +153,7 @@ const smtpPortInput = computed({
 })
 
 const paymentForm = reactive({
-  enabled: false,
+  enabled: true,
   apiUrl: 'https://zpayz.cn/submit.php',
   merchantId: '',
   secretKey: '',
@@ -190,44 +196,142 @@ const setupRegistrationDescription = computed(() => {
     ? t('registrationPaidEnabledDescription')
     : t('registrationInternalEnabledDescription')
 })
-
-const setupSteps = computed(() => [
+const setupPaymentDescription = computed(() =>
+  paymentForm.enabled ? t('setupPaymentEnabledHint') : t('setupPaymentDisabledHint')
+)
+const shouldConfigureSmtp = computed(() => setupForm.registrationEnabled)
+const shouldShowPaymentStep = computed(() => setupForm.serviceMode === 'paid' && paymentForm.enabled)
+const shouldConfigurePayment = computed(
+  () => shouldShowPaymentStep.value && includePayment.value
+)
+const setupFinishModeTitle = computed(() =>
+  setupForm.serviceMode === 'paid' ? t('setupFinishPaidMode') : t('setupFinishInternalMode')
+)
+const setupFinishModeDetails = computed(() => [
   {
-    key: 'runtime',
-    title: t('setupStepRuntime'),
-    description: t('setupStepRuntimeDescription'),
-    done: status.value ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value : false,
-    active: Boolean(status.value?.bootstrap_required) || reviewingRuntimeConfig.value
+    key: 'credit',
+    value:
+      setupForm.serviceMode === 'paid' || setupForm.creditRequired
+        ? t('setupFinishCreditRequired')
+        : t('setupFinishCreditNotRequired')
   },
   {
-    key: 'admin-password',
-    title: t('setupStepAdminPassword'),
-    description: t('setupStepAdminPasswordDescription'),
-    done: isBusinessStepDone('admin-password'),
-    active: isBusinessStepActive('admin-password')
+    key: 'registration',
+    value: setupForm.registrationEnabled
+      ? t('setupFinishRegistrationEnabled')
+      : t('setupFinishRegistrationDisabled')
   },
-  {
-    key: 'service-mode',
-    title: t('setupStepServiceMode'),
-    description: t('setupStepServiceModeDescription'),
-    done: isBusinessStepDone('service-mode'),
-    active: isBusinessStepActive('service-mode')
-  },
+  ...(setupForm.serviceMode === 'paid'
+    ? [
+        {
+          key: 'payment-feature',
+          value: paymentForm.enabled
+            ? t('setupFinishPaymentEnabled')
+            : t('setupFinishPaymentDisabled')
+        }
+      ]
+    : [])
+])
+const setupFinishAddonItems = computed(() => [
   {
     key: 'upstream',
-    title: t('setupStepUpstream'),
-    description: t('setupStepUpstreamDescription'),
-    done: isBusinessStepDone('upstream'),
-    active: isBusinessStepActive('upstream')
+    icon: Tickets,
+    label: t('upstreamChannels'),
+    value: includeUpstream.value ? t('setupFinishUpstreamConfigured') : t('setupFinishSkipped')
   },
   {
     key: 'smtp',
-    title: t('setupStepSmtp'),
-    description: t('setupStepSmtpDescription'),
-    done: isBusinessStepDone('smtp'),
-    active: isBusinessStepActive('smtp')
+    icon: Message,
+    label: t('smtpSettings'),
+    value: shouldConfigureSmtp.value
+      ? smtpForm.enabled
+        ? t('setupFinishSmtpConfigured')
+        : t('setupFinishSkipped')
+      : t('setupFinishSmtpNotNeeded')
+  },
+  {
+    key: 'payment',
+    icon: CreditCard,
+    label: t('paymentSettings'),
+    value:
+      setupForm.serviceMode === 'paid'
+        ? shouldConfigurePayment.value
+          ? t('setupFinishPaymentConfigured')
+          : paymentForm.enabled
+            ? t('setupFinishSkipped')
+            : t('setupFinishPaymentDisabled')
+        : t('setupFinishPaymentNotNeeded')
   }
 ])
+const businessSetupSteps = computed<BusinessSetupStep[]>(() => [
+  'admin-password',
+  'service-mode',
+  'upstream',
+  ...(shouldConfigureSmtp.value ? (['smtp'] as const) : []),
+  ...(shouldShowPaymentStep.value ? (['payment'] as const) : []),
+  'finish'
+])
+const currentBusinessStepIndex = computed(() =>
+  businessSetupSteps.value.indexOf(currentBusinessStep.value)
+)
+const isLastBusinessStep = computed(
+  () => currentBusinessStepIndex.value === businessSetupSteps.value.length - 1
+)
+const canSkipCurrentBusinessStep = computed(() =>
+  optionalBusinessSteps.has(currentBusinessStep.value)
+)
+
+const setupSteps = computed(() => {
+  const businessStepMeta: Record<
+    BusinessSetupStep,
+    {
+      title: string
+      description: string
+    }
+  > = {
+    'admin-password': {
+      title: t('setupStepAdminPassword'),
+      description: t('setupStepAdminPasswordDescription')
+    },
+    'service-mode': {
+      title: t('setupStepServiceMode'),
+      description: t('setupStepServiceModeDescription')
+    },
+    upstream: {
+      title: t('setupStepUpstream'),
+      description: t('setupStepUpstreamDescription')
+    },
+    smtp: {
+      title: t('setupStepSmtp'),
+      description: t('setupStepSmtpDescription')
+    },
+    payment: {
+      title: t('setupStepPayment'),
+      description: t('setupStepPaymentDescription')
+    },
+    finish: {
+      title: t('setupStepFinish'),
+      description: t('setupStepFinishDescription')
+    }
+  }
+
+  return [
+    {
+      key: 'runtime',
+      title: t('setupStepRuntime'),
+      description: t('setupStepRuntimeDescription'),
+      done: status.value ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value : false,
+      active: Boolean(status.value?.bootstrap_required) || reviewingRuntimeConfig.value
+    },
+    ...businessSetupSteps.value.map((step) => ({
+      key: step,
+      title: businessStepMeta[step].title,
+      description: businessStepMeta[step].description,
+      done: isBusinessStepDone(step),
+      active: isBusinessStepActive(step)
+    }))
+  ]
+})
 
 const databaseSslModeOptions = computed(() => [
   { label: t('databaseSslAuto'), value: 'auto' },
@@ -310,6 +414,30 @@ watch(
   () => setupForm.serviceMode,
   (serviceMode) => {
     setupForm.registrationEnabled = serviceMode === 'paid'
+    if (serviceMode !== 'paid' && currentBusinessStep.value === 'payment') {
+      currentBusinessStep.value = 'service-mode'
+    }
+  }
+)
+
+watch(
+  () => setupForm.registrationEnabled,
+  (enabled) => {
+    if (!enabled && currentBusinessStep.value === 'smtp') {
+      currentBusinessStep.value = 'service-mode'
+    }
+  }
+)
+
+watch(
+  () => paymentForm.enabled,
+  (enabled) => {
+    if (enabled) {
+      includePayment.value = true
+    }
+    if (!enabled && currentBusinessStep.value === 'payment') {
+      currentBusinessStep.value = 'service-mode'
+    }
   }
 )
 
@@ -352,16 +480,26 @@ async function saveBootstrap() {
     try {
       const result = await bootstrapSetup({
         database_url:
-          bootstrapMissingDatabase.value || runtimeDatabaseChangeEnabled.value
+          bootstrapMissingDatabase.value || reviewingRuntimeConfig.value
             ? buildDatabaseUrl(false)
             : null,
         site_name: bootstrapForm.siteName,
         public_base_url: bootstrapForm.publicBaseUrl
       })
-      envFile.value = result.env_file
-      waitingForRestart.value = true
+      envFile.value = result.restart_required ? result.env_file : ''
+      waitingForRestart.value = result.restart_required
       restartWaitTimedOut.value = false
       ElMessage.success(t('runtimeConfigSaved'))
+      if (!result.restart_required) {
+        status.value = await getSetupStatus(true)
+        reviewingRuntimeConfig.value = false
+        providers.value = await getSetupProviders()
+        if (providers.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providers.value[0].code
+        }
+        applyProviderDefaults()
+        return
+      }
       if (reviewingRuntimeConfig.value) {
         waitingForRestart.value = false
         return
@@ -452,10 +590,6 @@ async function fetchModels() {
         base_url: endpoint.base_url,
         secret: setupForm.secret
       })
-      if (result.models.length === 0) {
-        ElMessage.warning(t('modelsFetchEmpty'))
-        return
-      }
 
       fetchedModels.value = result.models
       selectedFetchedModels.value =
@@ -464,8 +598,19 @@ async function fetchModels() {
           : result.models.filter((model) => existingModels.includes(model))
       syncSelectedModelsToInput()
       modelPickerDialogOpen.value = true
-      ElMessage.success(t('modelsFetched'))
+      if (result.models.length === 0) {
+        ElMessage.warning(t('modelsFetchEmpty'))
+      } else {
+        ElMessage.success(t('modelsFetched'))
+      }
     } catch (err) {
+      if (isNoModelsReturnedError(err)) {
+        fetchedModels.value = existingModels
+        selectedFetchedModels.value = existingModels
+        modelPickerDialogOpen.value = true
+        ElMessage.warning(t('modelsFetchEmpty'))
+        return
+      }
       ElMessage.error(readModelFetchError(err, t))
     }
   })
@@ -544,9 +689,9 @@ async function submitSetup() {
               enabled: price.enabled
             }))
           : [],
-        smtp: smtpForm.enabled ? smtpPayload() : null,
+        smtp: shouldConfigureSmtp.value && smtpForm.enabled ? smtpPayload() : null,
         payment:
-          setupForm.serviceMode === 'paid' && paymentForm.enabled
+          shouldConfigurePayment.value
             ? {
                 payment_enabled: true,
                 return_base_url: status.value?.public_base_url || bootstrapForm.publicBaseUrl,
@@ -571,7 +716,8 @@ async function submitSetup() {
 function validateSetup() {
   if (!validateAdminStep()) return false
   if (includeUpstream.value && !validateUpstreamStep()) return false
-  if (!validateSmtpStep()) return false
+  if (shouldConfigureSmtp.value && smtpForm.enabled && !validateSmtpStep()) return false
+  if (shouldConfigurePayment.value && !validatePaymentFields()) return false
   return true
 }
 
@@ -597,7 +743,7 @@ function validateRuntimeConfig() {
 }
 
 function validateDatabaseConfig() {
-  if (!bootstrapMissingDatabase.value && !runtimeDatabaseChangeEnabled.value) return true
+  if (!bootstrapMissingDatabase.value && !reviewingRuntimeConfig.value) return true
   const databaseUrl = buildDatabaseUrl(false).trim()
   if (!databaseUrl) {
     ElMessage.error(t('databaseUrlRequired'))
@@ -657,7 +803,6 @@ function validateUpstreamStep() {
 }
 
 function validateSmtpStep() {
-  if (!smtpForm.enabled) return true
   if (!smtpForm.host.trim()) {
     ElMessage.error(t('smtpHostRequired'))
     return false
@@ -668,6 +813,26 @@ function validateSmtpStep() {
   }
   if (!smtpForm.fromEmail.trim()) {
     ElMessage.error(t('smtpFromEmailRequired'))
+    return false
+  }
+  return true
+}
+
+function validatePaymentFields() {
+  if (!isValidHttpUrl(paymentForm.apiUrl.trim())) {
+    ElMessage.error(t('zpayApiUrlRequired'))
+    return false
+  }
+  if (!paymentForm.merchantId.trim()) {
+    ElMessage.error(t('zpayMerchantIdRequired'))
+    return false
+  }
+  if (!paymentForm.secretKey.trim()) {
+    ElMessage.error(t('zpaySecretKeyRequired'))
+    return false
+  }
+  if (!paymentForm.siteName.trim()) {
+    ElMessage.error(t('zpaySiteNameRequired'))
     return false
   }
   return true
@@ -714,42 +879,69 @@ function readReferenceSyncError(err: unknown) {
 
 async function goToNextBusinessStep() {
   if (currentBusinessStep.value === 'admin-password' && !validateAdminStep()) return
+  if (currentBusinessStep.value === 'service-mode') {
+    includePayment.value = setupForm.serviceMode === 'paid' && paymentForm.enabled
+  }
   if (currentBusinessStep.value === 'upstream' && !validateUpstreamStep()) return
   if (currentBusinessStep.value === 'upstream') {
     if (!(await prepareUpstreamPrices())) return
     includeUpstream.value = true
   }
-  const nextIndex = businessSetupSteps.indexOf(currentBusinessStep.value) + 1
-  currentBusinessStep.value = businessSetupSteps[nextIndex] ?? currentBusinessStep.value
+  if (currentBusinessStep.value === 'smtp') {
+    if (!validateSmtpStep()) return
+    smtpForm.enabled = true
+  }
+  if (currentBusinessStep.value === 'payment' && !validatePaymentFields()) return
+  if (currentBusinessStep.value === 'payment') {
+    includePayment.value = true
+  }
+  goToAdjacentBusinessStep(1)
 }
 
 function goToPreviousBusinessStep() {
   if (currentBusinessStep.value === 'admin-password' && canReviewRuntimeConfig.value) {
     reviewingRuntimeConfig.value = true
-    runtimeDatabaseChangeEnabled.value = false
     return
   }
-  const previousIndex = businessSetupSteps.indexOf(currentBusinessStep.value) - 1
-  currentBusinessStep.value = businessSetupSteps[previousIndex] ?? currentBusinessStep.value
-}
-
-function returnToBusinessSetup() {
-  reviewingRuntimeConfig.value = false
-  runtimeDatabaseChangeEnabled.value = false
+  goToAdjacentBusinessStep(-1)
 }
 
 function skipUpstreamStep() {
   includeUpstream.value = false
-  currentBusinessStep.value = 'smtp'
+  goToAdjacentBusinessStep(1)
 }
 
-async function skipSmtpAndSubmit() {
+function skipSmtpStep() {
   smtpForm.enabled = false
-  await submitSetup()
+  goToAdjacentBusinessStep(1)
+}
+
+function skipPaymentStep() {
+  goToAdjacentBusinessStep(1)
+  includePayment.value = false
+}
+
+function skipOptionalBusinessStep() {
+  if (currentBusinessStep.value === 'upstream') {
+    skipUpstreamStep()
+    return
+  }
+  if (currentBusinessStep.value === 'smtp') {
+    skipSmtpStep()
+    return
+  }
+  if (currentBusinessStep.value === 'payment') {
+    skipPaymentStep()
+  }
+}
+
+function goToAdjacentBusinessStep(offset: -1 | 1) {
+  const nextStep = businessSetupSteps.value[currentBusinessStepIndex.value + offset]
+  if (nextStep) currentBusinessStep.value = nextStep
 }
 
 async function handleBusinessSubmit() {
-  if (currentBusinessStep.value === 'smtp') {
+  if (isLastBusinessStep.value) {
     await submitSetup()
     return
   }
@@ -762,7 +954,7 @@ function isBusinessStepActive(step: BusinessSetupStep) {
 
 function isBusinessStepDone(step: BusinessSetupStep) {
   if (!showBusinessSetup.value) return false
-  return businessSetupSteps.indexOf(currentBusinessStep.value) > businessSetupSteps.indexOf(step)
+  return currentBusinessStepIndex.value > businessSetupSteps.value.indexOf(step)
 }
 
 function applyProviderDefaults() {
@@ -1071,81 +1263,62 @@ onMounted(load)
                 <p>{{ t('databaseConfigurationDescription') }}</p>
               </div>
             </div>
-            <div
-              v-if="reviewingRuntimeConfig && !bootstrapMissingDatabase"
-              class="setup-inline-control"
-            >
-              <span>
-                <strong>{{ t('changeDatabaseConfiguration') }}</strong>
-                <small>{{ t('changeDatabaseConfigurationHint') }}</small>
-              </span>
-              <el-switch v-model="runtimeDatabaseChangeEnabled" />
-            </div>
-            <template v-if="bootstrapMissingDatabase || runtimeDatabaseChangeEnabled">
-              <div class="setup-grid two">
-                <el-form-item :label="t('databaseHostLabel')">
-                  <el-input v-model="bootstrapForm.databaseHost" />
-                </el-form-item>
-                <el-form-item class="setup-database-port-field" :label="t('databasePortLabel')">
-                  <el-input
-                    v-model="databasePortInput"
-                    autocomplete="off"
-                    inputmode="numeric"
-                    placeholder="5432"
+            <div class="setup-grid two">
+              <el-form-item :label="t('databaseHostLabel')">
+                <el-input v-model="bootstrapForm.databaseHost" />
+              </el-form-item>
+              <el-form-item class="setup-database-port-field" :label="t('databasePortLabel')">
+                <el-input
+                  v-model="databasePortInput"
+                  autocomplete="off"
+                  inputmode="numeric"
+                  placeholder="5432"
+                />
+              </el-form-item>
+              <el-form-item :label="t('databaseNameLabel')">
+                <el-input v-model="bootstrapForm.databaseName" />
+              </el-form-item>
+              <el-form-item :label="t('databaseUserLabel')">
+                <el-input v-model="bootstrapForm.databaseUser" />
+              </el-form-item>
+              <el-form-item :label="t('databasePasswordLabel')">
+                <el-input v-model="bootstrapForm.databasePassword" show-password />
+              </el-form-item>
+              <el-form-item :label="t('databaseSslModeLabel')">
+                <el-select v-model="bootstrapForm.databaseSslMode">
+                  <el-option
+                    v-for="option in databaseSslModeOptions"
+                    :key="option.value || 'auto'"
+                    :label="option.label"
+                    :value="option.value"
                   />
-                </el-form-item>
-                <el-form-item :label="t('databaseNameLabel')">
-                  <el-input v-model="bootstrapForm.databaseName" />
-                </el-form-item>
-                <el-form-item :label="t('databaseUserLabel')">
-                  <el-input v-model="bootstrapForm.databaseUser" />
-                </el-form-item>
-                <el-form-item :label="t('databasePasswordLabel')">
-                  <el-input v-model="bootstrapForm.databasePassword" show-password />
-                </el-form-item>
-                <el-form-item :label="t('databaseSslModeLabel')">
-                  <el-select v-model="bootstrapForm.databaseSslMode">
-                    <el-option
-                      v-for="option in databaseSslModeOptions"
-                      :key="option.value || 'auto'"
-                      :label="option.label"
-                      :value="option.value"
-                    />
-                  </el-select>
-                </el-form-item>
-              </div>
-              <div class="setup-env-file">
-                <span>{{ t('databaseGeneratedUrl') }}</span>
-                <code>{{ generatedDatabaseUrlPreview }}</code>
-              </div>
-              <div class="setup-field-actions">
-                <el-button
-                  :disabled="saving"
-                  :loading="testingDatabase"
-                  @click="testDatabaseConnection"
-                >
-                  {{ t('testDatabaseConnection') }}
-                </el-button>
-              </div>
-            </template>
+                </el-select>
+              </el-form-item>
+            </div>
+            <div class="setup-env-file">
+              <span>{{ t('databaseGeneratedUrl') }}</span>
+              <code>{{ generatedDatabaseUrlPreview }}</code>
+            </div>
+            <div class="setup-field-actions">
+              <el-button
+                :disabled="saving"
+                :loading="testingDatabase"
+                @click="testDatabaseConnection"
+              >
+                {{ t('testDatabaseConnection') }}
+              </el-button>
+            </div>
           </div>
 
           <div class="setup-actions runtime-actions">
             <el-button
-              v-if="reviewingRuntimeConfig"
-              :icon="ArrowRight"
-              :disabled="saving"
-              @click="returnToBusinessSetup"
-            >
-              {{ t('nextStep') }}
-            </el-button>
-            <el-button
               type="primary"
+              :icon="ArrowRight"
               :disabled="testingDatabase || waitingForRestart"
               :loading="saving"
               native-type="submit"
             >
-              {{ t('saveRuntimeConfiguration') }}
+              {{ t('nextStep') }}
             </el-button>
           </div>
         </el-form>
@@ -1238,31 +1411,16 @@ onMounted(load)
               </span>
               <el-switch v-model="setupForm.creditRequired" />
             </div>
-            <template v-if="setupForm.serviceMode === 'paid'">
-              <div class="setup-section compact nested-setup-section">
-                <div class="setup-inline-control payment-enable-control">
-                  <span>
-                    <strong>{{ t('paymentSettings') }}</strong>
-                    <small>{{ t('setupPaymentHint') }}</small>
-                  </span>
-                  <el-switch v-model="paymentForm.enabled" />
-                </div>
-                <div v-if="paymentForm.enabled" class="setup-grid two optional-grid">
-                  <el-form-item :label="t('zpayApiUrl')"
-                    ><el-input v-model="paymentForm.apiUrl"
-                  /></el-form-item>
-                  <el-form-item :label="t('zpaySiteName')"
-                    ><el-input v-model="paymentForm.siteName"
-                  /></el-form-item>
-                  <el-form-item :label="t('zpayMerchantId')"
-                    ><el-input v-model="paymentForm.merchantId"
-                  /></el-form-item>
-                  <el-form-item :label="t('zpaySecretKey')"
-                    ><el-input v-model="paymentForm.secretKey" show-password
-                  /></el-form-item>
-                </div>
-              </div>
-            </template>
+            <div
+              v-if="setupForm.serviceMode === 'paid'"
+              class="setup-inline-control payment-enable-control"
+            >
+              <span>
+                <strong>{{ t('paymentGatewayEnabled') }}</strong>
+                <small>{{ setupPaymentDescription }}</small>
+              </span>
+              <el-switch v-model="paymentForm.enabled" />
+            </div>
           </div>
 
           <div
@@ -1448,6 +1606,105 @@ onMounted(load)
             </div>
           </div>
 
+          <div v-else-if="currentBusinessStep === 'payment'" class="setup-section compact">
+            <div class="setup-section-heading">
+              <span class="setup-title-icon">
+                <el-icon><CreditCard /></el-icon>
+              </span>
+              <div>
+                <h2>{{ t('paymentSettings') }}</h2>
+                <p>{{ t('setupPaymentHint') }}</p>
+              </div>
+            </div>
+
+            <div class="setup-payment-groups">
+              <section class="setup-mini-section">
+                <header class="setup-mini-section-header">
+                  <el-icon><Lock /></el-icon>
+                  <h3>{{ t('zpaySettings') }}</h3>
+                </header>
+                <div class="setup-grid payment-zpay-grid">
+                  <el-form-item class="payment-api-field" :label="t('zpayApiUrl')">
+                    <el-input
+                      v-model="paymentForm.apiUrl"
+                      autocomplete="off"
+                      :placeholder="t('zpayApiUrlPlaceholder')"
+                    />
+                  </el-form-item>
+                  <el-form-item :label="t('zpaySiteName')">
+                    <el-input
+                      v-model="paymentForm.siteName"
+                      autocomplete="off"
+                      :placeholder="t('zpaySiteNamePlaceholder')"
+                    />
+                  </el-form-item>
+                  <el-form-item :label="t('zpayDefaultPayType')">
+                    <el-select v-model="paymentForm.payType">
+                      <el-option :label="t('wechatPay')" value="wxpay" />
+                      <el-option :label="t('alipay')" value="alipay" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item :label="t('zpayMerchantId')">
+                    <el-input
+                      v-model="paymentForm.merchantId"
+                      autocomplete="off"
+                      :placeholder="t('zpayMerchantIdPlaceholder')"
+                    />
+                  </el-form-item>
+                  <el-form-item :label="t('zpaySecretKey')">
+                    <el-input
+                      v-model="paymentForm.secretKey"
+                      autocomplete="new-password"
+                      :placeholder="t('zpaySecretKeyPlaceholder')"
+                      show-password
+                      type="password"
+                    />
+                  </el-form-item>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div v-else-if="currentBusinessStep === 'finish'" class="setup-section compact">
+            <div class="setup-finish-header">
+              <div>
+                <h2>{{ t('setupFinishTitle') }}</h2>
+                <p>{{ t('setupFinishHint') }}</p>
+              </div>
+            </div>
+
+            <section class="setup-finish-mode-card">
+              <span class="setup-finish-mode-icon">
+                <el-icon><CreditCard v-if="setupForm.serviceMode === 'paid'" /><Briefcase v-else /></el-icon>
+              </span>
+              <div class="setup-finish-mode-copy">
+                <span class="setup-finish-eyebrow">{{ t('serviceMode') }}</span>
+                <h3>{{ setupFinishModeTitle }}</h3>
+                <div class="setup-finish-mode-details">
+                  <span v-for="item in setupFinishModeDetails" :key="item.key">
+                    {{ item.value }}
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <div class="setup-finish-addon-list">
+              <div v-for="item in setupFinishAddonItems" :key="item.key" class="setup-finish-addon-row">
+                <span class="setup-finish-addon-icon">
+                  <el-icon><component :is="item.icon" /></el-icon>
+                </span>
+                <div>
+                  <span class="setup-finish-label">{{ item.label }}</span>
+                  <span class="setup-finish-addon-value">{{ item.value }}</span>
+                </div>
+              </div>
+            </div>
+
+            <p class="setup-finish-note">
+              {{ t('setupFinishDescriptionLong') }}
+            </p>
+          </div>
+
           <div class="setup-actions sticky">
             <el-button
               v-if="currentBusinessStep !== 'admin-password' || canReviewRuntimeConfig"
@@ -1458,14 +1715,14 @@ onMounted(load)
               {{ t('previousStep') }}
             </el-button>
             <el-button
-              v-if="currentBusinessStep === 'upstream'"
+              v-if="canSkipCurrentBusinessStep"
               :disabled="saving || fetchingModels || configuringPrices"
-              @click="skipUpstreamStep"
+              @click="skipOptionalBusinessStep"
             >
               {{ t('skipStep') }}
             </el-button>
             <el-button
-              v-if="currentBusinessStep !== 'smtp'"
+              v-if="!isLastBusinessStep"
               type="primary"
               :icon="ArrowRight"
               :loading="currentBusinessStep === 'upstream' && configuringPrices"
@@ -1475,16 +1732,7 @@ onMounted(load)
               {{ t('nextStep') }}
             </el-button>
             <el-button
-              v-if="currentBusinessStep === 'smtp'"
-              :loading="saving && !smtpForm.enabled"
-              :type="smtpForm.enabled ? undefined : 'primary'"
-              :disabled="saving && smtpForm.enabled"
-              @click="skipSmtpAndSubmit"
-            >
-              {{ t('skipStep') }}
-            </el-button>
-            <el-button
-              v-if="currentBusinessStep === 'smtp' && smtpForm.enabled"
+              v-if="currentBusinessStep === 'finish'"
               class="setup-submit"
               type="primary"
               :icon="Select"
@@ -1501,8 +1749,8 @@ onMounted(load)
 
     <ModelPickerDialog
       v-model:open="modelPickerDialogOpen"
+      v-model:models="fetchedModels"
       v-model:selected-models="selectedFetchedModels"
-      :models="fetchedModels"
       :all-selected="allFetchedModelsSelected"
       @toggle-all="toggleAllFetchedModels"
     />
@@ -1512,6 +1760,7 @@ onMounted(load)
 <style scoped>
 .setup-shell {
   --setup-footer-height: 38px;
+  --setup-panel-height: clamp(620px, calc(100dvh - var(--setup-footer-height) - 68px), 760px);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 252, 0.96)),
     linear-gradient(135deg, rgba(22, 139, 211, 0.1), rgba(5, 150, 105, 0.05) 46%, transparent 46%),
@@ -1754,8 +2003,9 @@ onMounted(load)
   display: grid;
   gap: 16px;
   margin-bottom: 0;
-  min-height: min(560px, calc(100dvh - var(--setup-footer-height) - 68px));
+  height: var(--setup-panel-height);
   min-width: 0;
+  overflow: hidden;
   padding: 22px;
   width: min(680px, 100%);
 }
@@ -1764,8 +2014,11 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: 100%;
   max-width: none;
   min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   width: 100%;
 }
 
@@ -1860,13 +2113,6 @@ onMounted(load)
 
 .setup-section.compact {
   gap: 10px;
-}
-
-.nested-setup-section {
-  border-top: 1px solid #edf1f5;
-  display: grid;
-  gap: 12px;
-  padding-top: 14px;
 }
 
 .setup-grid {
@@ -2074,8 +2320,130 @@ onMounted(load)
   gap: 8px;
 }
 
-.optional-grid {
-  margin-top: 10px;
+.setup-payment-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.payment-zpay-grid {
+  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.payment-api-field {
+  grid-column: 1 / -1;
+}
+
+.setup-finish-header {
+  display: grid;
+  gap: 6px;
+}
+
+.setup-finish-mode-card {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  padding: 14px 16px;
+}
+
+.setup-finish-mode-icon,
+.setup-finish-addon-icon {
+  align-items: center;
+  border-radius: 8px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.setup-finish-mode-icon {
+  background: #168bd3;
+  color: #ffffff;
+  font-size: 21px;
+  height: 42px;
+  width: 42px;
+}
+
+.setup-finish-mode-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.setup-finish-eyebrow,
+.setup-finish-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.3;
+}
+
+.setup-finish-mode-copy h3 {
+  color: #172033;
+  font-size: 22px;
+  font-weight: 860;
+  letter-spacing: 0;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.setup-finish-mode-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.setup-finish-mode-details span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  padding-right: 10px;
+}
+
+.setup-finish-addon-list {
+  border-top: 1px solid #edf1f5;
+  display: grid;
+  gap: 0;
+}
+
+.setup-finish-addon-row {
+  align-items: center;
+  border-bottom: 1px solid #edf1f5;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  min-height: 64px;
+  padding: 11px 2px;
+}
+
+.setup-finish-addon-icon {
+  background: #f1f7fb;
+  color: #168bd3;
+  font-size: 17px;
+  height: 32px;
+  width: 32px;
+}
+
+.setup-finish-addon-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.setup-finish-addon-value {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.setup-finish-note {
+  background: #f8fafc;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  color: #334155 !important;
+  padding: 12px 14px;
 }
 
 .setup-smtp-groups {
@@ -2170,9 +2538,9 @@ onMounted(load)
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), #ffffff 40%);
   border-top: 1px solid #edf1f5;
   bottom: 0;
-  margin: 0 -6px -8px;
+  margin: 0;
   margin-top: auto;
-  padding: 12px 6px 0;
+  padding: 12px 0 0;
   position: sticky;
   z-index: 1;
 }
@@ -2249,8 +2617,15 @@ onMounted(load)
   }
 
   .setup-panel {
+    height: auto;
     min-height: auto;
+    overflow: visible;
     width: 100%;
+  }
+
+  .setup-panel > .el-form {
+    height: auto;
+    overflow: visible;
   }
 
   .smtp-auth-grid,
@@ -2282,8 +2657,17 @@ onMounted(load)
 
   .smtp-connection-grid,
   .smtp-auth-grid,
-  .smtp-sender-grid {
+  .smtp-sender-grid,
+  .payment-zpay-grid {
     grid-template-columns: 1fr;
+  }
+
+  .setup-finish-mode-card {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-api-field {
+    grid-column: auto;
   }
 
   .smtp-standard-field {

@@ -13,7 +13,7 @@ import {
   User
 } from '@element-plus/icons-vue'
 import { getAdminServicePolicy } from '../api/policy'
-import LocaleToggleButton from '../components/LocaleToggleButton.vue'
+import LocaleToggleButton from '../components/common/LocaleToggleButton.vue'
 import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
@@ -37,21 +37,25 @@ const navGroups = computed(() => {
   }
   if (servicePolicy.value?.service_mode !== 'internal') {
     operationItems.push({ path: '/admin/credentials', key: 'credentialManagement', icon: Key })
+    operationItems.push({ path: '/admin/keys', key: 'userManagement', icon: User })
   }
   operationItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
-  return [
+  const groups: AdminNavGroup[] = [
     {
       key: 'adminNavOperations',
       items: operationItems
-    },
-    {
+    }
+  ]
+  if (servicePolicy.value?.service_mode !== 'paid') {
+    groups.push({
       key: 'adminNavAccounts',
       items: [
         { path: '/admin/keys', key: 'userManagement', icon: User },
         { path: '/admin/projects', key: 'projectManagement', icon: FolderOpened }
       ]
-    }
-  ] satisfies AdminNavGroup[]
+    })
+  }
+  return groups
 })
 
 const settingItems = computed(() => {

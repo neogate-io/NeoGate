@@ -17,6 +17,7 @@ import {
 } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, type Component, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import CreditAdjustDialog from '../../components/admin/common/CreditAdjustDialog.vue'
 import {
   addProjectMember,
   createProject,
@@ -74,7 +75,7 @@ type ProjectMemberForm = {
 }
 
 const DEFAULT_PAGE_SIZE = 50
-const DEFAULT_RECHARGE_USD = 100
+const DEFAULT_RECHARGE_USD = 0
 const PROJECT_STATUS_META: Record<ProjectStatus, ProjectStatusMeta> = {
   enabled: {
     labelKey: 'enabled',
@@ -800,51 +801,20 @@ onMounted(loadServicePolicy)
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="creditDialogVisible"
-      class="user-admin-dialog user-credit-dialog project-credit-dialog"
+    <CreditAdjustDialog
+      v-if="selectedProject"
+      v-model:amount="amountUsd"
+      v-model:open="creditDialogVisible"
+      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :confirm-text="t('confirmAdjustment')"
+      :current-balance-micro-usd="selectedProject.available_micro_usd"
+      :hint="t('projectCreditAdjustHint')"
+      :saving="creditSaving"
+      :subject-label="t('project')"
+      :subject-name="selectedProject.name"
       :title="t('projectBalance')"
-      width="440px"
-    >
-      <div v-if="selectedProject" class="project-credit-dialog-body">
-        <div class="project-credit-project-name">
-          <span>{{ t('project') }}</span>
-          <strong>{{ selectedProject.name }}</strong>
-        </div>
-
-        <section class="project-credit-balance-card">
-          <div class="project-credit-balance-row">
-            <span>{{ t('availableBalance') }}</span>
-            <strong>{{ formatMicroUsd(selectedProject.available_micro_usd, 2) }}</strong>
-          </div>
-        </section>
-
-        <div class="project-credit-amount-section">
-          <label class="project-credit-amount-label">{{ t('amountUsd') }}</label>
-          <el-input-number
-            v-model="amountUsd"
-            :controls="false"
-            :min="-100000"
-            :precision="2"
-            :step="1"
-          />
-          <p class="project-credit-hint">{{ t('projectCreditAdjustHint') }}</p>
-        </div>
-
-        <div class="project-credit-result-card">
-          <span>{{ t('afterAdjustment') }}</span>
-          <strong>{{ formatMicroUsd(rechargePreviewMicroUsd, 2) }}</strong>
-        </div>
-      </div>
-      <template #footer>
-        <div class="admin-dialog-footer user-dialog-footer">
-          <el-button @click="creditDialogVisible = false">{{ t('cancel') }}</el-button>
-          <el-button type="primary" :loading="creditSaving" @click="submitCredit">
-            {{ t('save') }}
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
+      @submit="submitCredit"
+    />
 
     <el-dialog
       v-model="membersDialogVisible"
@@ -1280,144 +1250,6 @@ onMounted(loadServicePolicy)
   font-size: 12px;
 }
 
-:global(.project-credit-dialog .el-dialog__body) {
-  padding-top: 8px;
-}
-
-:global(.project-credit-dialog .el-dialog__footer) {
-  padding-top: 8px;
-}
-
-:global(.project-credit-dialog .admin-dialog-footer) {
-  border-top: 0;
-}
-
-.project-credit-dialog-body {
-  display: grid;
-  gap: 16px;
-}
-
-/* Project name row */
-.project-credit-project-name {
-  align-items: baseline;
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-}
-
-.project-credit-project-name span {
-  color: #667085;
-  font-size: 12.5px;
-  font-weight: 600;
-  flex: 0 0 auto;
-  line-height: 1.2;
-}
-
-.project-credit-project-name strong {
-  color: #1d2939;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Balance card */
-.project-credit-balance-card {
-  background: #f8f9fb;
-  border-radius: 8px;
-  display: grid;
-  gap: 8px;
-  padding: 14px 16px;
-}
-
-.project-credit-balance-row {
-  align-items: baseline;
-  display: flex;
-  justify-content: space-between;
-  min-width: 0;
-}
-
-.project-credit-balance-row span {
-  color: #667085;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.project-credit-balance-row strong {
-  color: #1d2939;
-  font-feature-settings: 'tnum';
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  line-height: 1.25;
-  text-align: right;
-}
-
-/* Amount input section */
-.project-credit-amount-section {
-  display: grid;
-  gap: 6px;
-}
-
-.project-credit-amount-label {
-  color: #3f4a5c;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.project-credit-amount-section :deep(.el-input-number) {
-  width: 100%;
-}
-
-.project-credit-amount-section :deep(.el-input__wrapper) {
-  border-radius: 7px;
-  min-height: 40px;
-}
-
-.project-credit-amount-section :deep(.el-input__inner) {
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.project-credit-hint {
-  color: #667085;
-  font-size: 12px;
-  line-height: 1.5;
-  margin: 0;
-}
-
-/* Result highlight card */
-.project-credit-result-card {
-  align-items: center;
-  background: #f0f7ff;
-  border: 1px solid #b9d9f5;
-  border-radius: 8px;
-  display: flex;
-  justify-content: space-between;
-  padding: 14px 16px;
-}
-
-.project-credit-result-card span {
-  color: #3f4a5c;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.project-credit-result-card strong {
-  color: #0f76b8;
-  font-feature-settings: 'tnum';
-  font-size: 18px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
 .project-keys-dialog-body {
   display: grid;
   gap: 14px;
@@ -1553,5 +1385,6 @@ onMounted(loadServicePolicy)
   .project-member-add-form {
     grid-template-columns: 1fr;
   }
+
 }
 </style>

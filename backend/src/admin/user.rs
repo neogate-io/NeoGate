@@ -31,6 +31,8 @@ pub struct UserRecord {
     pub email: String,
     pub username: Option<String>,
     pub status: String,
+    pub default_project_id: Option<DbId>,
+    pub default_project_name: Option<String>,
     pub user_group_id: DbId,
     pub user_group_code: String,
     pub user_group_name: String,
@@ -177,6 +179,7 @@ pub struct ListUsersQuery {
 pub struct ListUserKeysQuery {
     pub user_id: Option<DbId>,
     pub project_id: Option<DbId>,
+    pub default_project_only: Option<bool>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -226,7 +229,7 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     let email = normalize_email(&req.email)?;
     let password_hash = hash_user_password(&req.password, &state.config.admin_token_secret);
     let service_mode = service_mode(state).await?;
-    let username = create_user_username(req.username.as_deref(), &email, service_mode)?;
+    let username = create_user_username(req.username.as_deref(), &email)?;
     let mut tx = state.db.pool.begin().await?;
     if find_user_by_email(&mut tx, &email).await?.is_some() {
         return Err(user_email_exists_error());
@@ -247,7 +250,7 @@ pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<
     .map_err(map_user_write_error)?;
     let user_id: DbId = row.try_get("id")?;
     if service_mode == ServiceMode::Paid {
-        project::create_default_project_for_user(&mut tx, user_id).await?;
+        project::ensure_default_project_for_user(&mut tx, user_id).await?;
     }
     tx.commit().await?;
     get_user(state, user_id).await
@@ -320,6 +323,7 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
             r#"
            )
            SELECT u.id, u.email, u.username, u.status,
+                  pw.default_project_id, pw.default_project_name,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
                   COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
@@ -328,19 +332,22 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
            FROM page_users u
            JOIN user_group ug ON ug.id = u.user_group_id
            LEFT JOIN LATERAL (
-               SELECT COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
+               SELECT p.id AS default_project_id,
+                      p.name AS default_project_name,
+                      COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
                       COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM project p
-               JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+               LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
+               GROUP BY p.id, p.name
            ) pw ON TRUE
            LEFT JOIN LATERAL (
-               SELECT count(uk.id) AS user_key_count,
-                      COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+               SELECT count(uk.id) AS user_key_count
                FROM user_key uk
-               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               JOIN project p ON p.id = uk.project_id
                WHERE uk.user_id = u.id
+                 AND p.owner_user_id = u.id
+                 AND p.is_default = TRUE
            ) ukw ON TRUE
            ORDER BY u.created_at DESC, u.id DESC"#,
         );
@@ -445,6 +452,7 @@ pub async fn delete_user(state: &AppState, id: DbId) -> AppResult<()> {
 async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
     let row = sqlx::query(
         r#"SELECT u.id, u.email, u.username, u.status,
+                  pw.default_project_id, pw.default_project_name,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
                   COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
@@ -453,19 +461,21 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
            FROM "user" u
            JOIN user_group ug ON ug.id = u.user_group_id
            LEFT JOIN LATERAL (
-               SELECT COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
+               SELECT p.id AS default_project_id,
+                      p.name AS default_project_name,
+                      COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
                       COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
                FROM project p
-               JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
+               LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
+               GROUP BY p.id, p.name
            ) pw ON TRUE
            LEFT JOIN (
-               SELECT uk.user_id,
-                      count(uk.id) AS user_key_count,
-                      COALESCE(sum(kw.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(kw.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+               SELECT uk.user_id, count(uk.id) AS user_key_count
                FROM user_key uk
-               LEFT JOIN credit_account kw ON kw.owner_type = 'user_key' AND kw.owner_id = uk.id
+               JOIN project p ON p.id = uk.project_id
+                             AND p.owner_user_id = uk.user_id
+                             AND p.is_default = TRUE
                GROUP BY uk.user_id
            ) ukw ON ukw.user_id = u.id
            WHERE u.id = $1"#,
@@ -599,7 +609,7 @@ pub async fn claim_public_user_key(
         )
     };
     if created_user {
-        let project_id = project::create_default_project_for_user(&mut tx, user_id).await?;
+        let project_id = project::ensure_default_project_for_user(&mut tx, user_id).await?;
         let credit_account = account::owner_credit_account_for_update(
             &mut tx,
             CreditAccountType::Project,
@@ -712,6 +722,11 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
     if let Some(project_id) = query.project_id {
         push_where_clause(&mut query_builder, &mut has_where).push("uk.project_id = ");
         query_builder.push_bind(project_id);
+    }
+
+    if query.default_project_only.unwrap_or(false) {
+        push_where_clause(&mut query_builder, &mut has_where)
+            .push("p.owner_user_id = uk.user_id AND p.is_default = TRUE");
     }
 
     if let Some((created_at, id)) = cursor {
@@ -879,13 +894,9 @@ fn normalize_optional_username(username: Option<&str>) -> AppResult<Option<Strin
         .transpose()
 }
 
-fn create_user_username(
-    username: Option<&str>,
-    email: &str,
-    service_mode: ServiceMode,
-) -> AppResult<Option<String>> {
+fn create_user_username(username: Option<&str>, email: &str) -> AppResult<Option<String>> {
     let username = normalize_optional_username(username)?;
-    if username.is_some() || service_mode != ServiceMode::Internal {
+    if username.is_some() {
         return Ok(username);
     }
 
@@ -1059,6 +1070,36 @@ pub async fn adjust_credit(
         amount_micro_usd,
         reason,
         serde_json::json!({ "source": "admin" }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(balance_after)
+}
+
+pub async fn adjust_default_project_credit(
+    state: &AppState,
+    user_id: DbId,
+    amount_micro_usd: i64,
+    reason: &str,
+) -> AppResult<i64> {
+    let mut tx = state.db.pool.begin().await?;
+    let project_id = project::default_project_for_user(&mut tx, user_id).await?;
+    let credit_account =
+        account::owner_credit_account_for_update(&mut tx, CreditAccountType::Project, project_id)
+            .await?;
+    if amount_micro_usd < 0 {
+        let recovered = state
+            .billing
+            .drain_hot_credit_account(&credit_account)
+            .await?;
+        recover_hot_credit_in_tx(&mut tx, &recovered).await?;
+    }
+    let balance_after = adjust_credit_in_tx(
+        &mut tx,
+        credit_account,
+        amount_micro_usd,
+        reason,
+        serde_json::json!({ "source": "admin", "user_id": user_id }),
     )
     .await?;
     tx.commit().await?;
@@ -1275,6 +1316,8 @@ pub fn user_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UserRecord> {
         email: row.try_get("email")?,
         username: row.try_get("username")?,
         status: row.try_get("status")?,
+        default_project_id: row.try_get("default_project_id")?,
+        default_project_name: row.try_get("default_project_name")?,
         user_group_id: row.try_get("user_group_id")?,
         user_group_code: row.try_get("user_group_code")?,
         user_group_name: row.try_get("user_group_name")?,
@@ -1361,5 +1404,25 @@ mod tests {
         assert_eq!(value["ok"], true);
         assert!(value.get("api_key").is_none());
         assert!(value.get("key").is_none());
+    }
+
+    #[test]
+    fn create_user_username_derives_from_email_when_missing() {
+        assert_eq!(
+            create_user_username(None, "kevin@example.com").unwrap(),
+            Some("kevin".to_string())
+        );
+        assert_eq!(
+            create_user_username(Some("   "), "team.member@example.com").unwrap(),
+            Some("team.member".to_string())
+        );
+    }
+
+    #[test]
+    fn create_user_username_keeps_explicit_username() {
+        assert_eq!(
+            create_user_username(Some("  Alice  "), "alice@example.com").unwrap(),
+            Some("Alice".to_string())
+        );
     }
 }

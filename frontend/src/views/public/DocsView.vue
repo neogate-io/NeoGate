@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { DocumentCopy, Key, Link, Money } from '@element-plus/icons-vue'
-import PublicHeader from '../../components/PublicHeader.vue'
+import PublicHeader from '../../components/common/PublicHeader.vue'
 import { useLocale } from '../../composables/useLocale'
 import { useScrollTo, useCopyText } from '../../composables/usePublicPage'
 
@@ -96,19 +96,19 @@ const content = computed(() => {
         [
           '1) 复制并运行安装命令',
           '从首页或本页复制对应系统的安装命令，在终端中执行。',
-          '/docs/auto-config-run-command.svg',
+          '/assets/auto-config-run-command.svg',
           '运行 NeoGate 安装命令的终端截图'
         ],
         [
           '2) 按提示填写配置',
           '输入 NeoGate API Key，选择要配置的客户端和模型。需要时脚本会检查或安装依赖。',
-          '/docs/auto-config-answer-prompts.svg',
+          '/assets/auto-config-answer-prompts.svg',
           '填写 API Key、客户端和模型的终端截图'
         ],
         [
           '3) 完成后验证客户端',
           '看到配置写入成功后，重新运行 codex 或 claude，发送一条测试消息确认可用。',
-          '/docs/auto-config-complete.svg',
+          '/assets/auto-config-complete.svg',
           '自动配置完成的终端截图'
         ]
       ],
@@ -222,19 +222,19 @@ const content = computed(() => {
       [
         '1) Copy and run the install command',
         'Copy the command for your operating system from the home page or this page, then run it in a terminal.',
-        '/docs/auto-config-run-command.svg',
+        '/assets/auto-config-run-command.svg',
         'Terminal screenshot running the NeoGate install command'
       ],
       [
         '2) Answer the prompts',
         'Enter the NeoGate API key, select the client and model, and let the script check or install dependencies if needed.',
-        '/docs/auto-config-answer-prompts.svg',
+        '/assets/auto-config-answer-prompts.svg',
         'Terminal screenshot entering API key, client, and model'
       ],
       [
         '3) Verify the client',
         'After the script reports successful writes, run codex or claude again and send one test message.',
-        '/docs/auto-config-complete.svg',
+        '/assets/auto-config-complete.svg',
         'Terminal screenshot showing automatic configuration completed'
       ]
     ],

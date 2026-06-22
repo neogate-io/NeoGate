@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
-import ProviderIcon from '../../components/ProviderIcon.vue'
+import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'

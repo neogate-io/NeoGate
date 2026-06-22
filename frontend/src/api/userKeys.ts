@@ -6,6 +6,7 @@ export type UserKeyPage = CursorPage<UserKey>
 export type GetUserKeysFilters = {
   userId?: number
   projectId?: number
+  defaultProjectOnly?: boolean
   limit?: number
   cursor?: string
 }
@@ -25,6 +26,7 @@ export function getUserKeys(filters: GetUserKeysFilters = {}) {
   const searchParams = new URLSearchParams()
   if (filters.userId != null) searchParams.set('user_id', String(filters.userId))
   if (filters.projectId != null) searchParams.set('project_id', String(filters.projectId))
+  if (filters.defaultProjectOnly) searchParams.set('default_project_only', 'true')
   if (filters.limit) searchParams.set('limit', String(filters.limit))
   if (filters.cursor) searchParams.set('cursor', filters.cursor)
 
@@ -83,6 +85,16 @@ export function adjustCredit(
     body: JSON.stringify({
       credit_account_type: creditAccountType,
       owner_id: ownerId,
+      amount_micro_usd: amountMicroUsd,
+      reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
+    })
+  })
+}
+
+export function adjustDefaultProjectCredit(userId: number, amountMicroUsd: number) {
+  return adminRequest<AdjustCreditResponse>(`/api/admin/users/${userId}/default-project-credit`, {
+    method: 'POST',
+    body: JSON.stringify({
       amount_micro_usd: amountMicroUsd,
       reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
     })

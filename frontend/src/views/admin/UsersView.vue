@@ -10,6 +10,7 @@ import {
   Key,
   Lock,
   Message,
+  Money,
   MoreFilled,
   Plus,
   Search,
@@ -18,7 +19,8 @@ import {
 } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getUserGroups, getUserKeys } from '../../api/userKeys'
+import CreditAdjustDialog from '../../components/admin/common/CreditAdjustDialog.vue'
+import { adjustDefaultProjectCredit, getUserGroups, getUserKeys } from '../../api/userKeys'
 import {
   createUser,
   deleteUser,
@@ -43,7 +45,8 @@ import {
   formatDateTime,
   downloadCsv,
   formatMicroUsd,
-  maskApiKey
+  maskApiKey,
+  usdToMicroUsd
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
@@ -72,6 +75,7 @@ type UserStatusMeta = {
 
 const DEFAULT_USER_PAGE_SIZE = 50
 const USER_KEY_DIALOG_LIMIT = 100
+const DEFAULT_RECHARGE_USD = 0
 const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
 const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
   enabled: {
@@ -93,6 +97,8 @@ const apiKeySearch = ref('')
 const userDialogVisible = ref(false)
 const userDialogMode = ref<UserDialogMode>('create')
 const userDialogSaving = ref(false)
+const creditDialogVisible = ref(false)
+const creditSaving = ref(false)
 const deletingUserId = ref<number | null>(null)
 const approvingUserId = ref<number | null>(null)
 const togglingUserIds = useReactiveSet<number>()
@@ -109,6 +115,7 @@ const userForm = reactive<UserForm>({
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
+const amountUsd = ref(DEFAULT_RECHARGE_USD)
 const {
   currentPage: usersCurrentPage,
   pageSize: usersPageSize,
@@ -135,9 +142,8 @@ const showUsersPagination = computed(
     (usersPage.value.items.length > 0 || usersCurrentPage.value > 1 || usersPage.value.has_more)
 )
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
-const showAccountBalance = computed(() =>
-  Boolean(servicePolicy.value?.credit_required || servicePolicy.value?.recharge_enabled)
-)
+const isPaidServiceMode = computed(() => servicePolicy.value?.service_mode === 'paid')
+const showAccountBalance = computed(() => isPaidServiceMode.value)
 const defaultUserGroupId = computed(
   () => userGroups.value.find((group) => group.is_default)?.id ?? userGroups.value[0]?.id ?? 0
 )
@@ -147,6 +153,14 @@ const emptyUsersDescription = computed(() =>
 const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
 const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
 const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
+const rechargePreviewMicroUsd = computed(() => {
+  if (!selectedUser.value) return usdToMicroUsd(amountUsd.value)
+  return selectedUser.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
+})
+const userMobileMetaText = (row: User) => {
+  if (!isPaidServiceMode.value) return userStatusText(row.status)
+  return `${userStatusText(row.status)} · ${row.user_key_count.toLocaleString(locale.value)} ${t('keys')}`
+}
 const {
   resetAndReload: resetUsersAndReload,
   nextPage: nextUsersPage,
@@ -169,12 +183,6 @@ async function loadUsers() {
     limit: usersPageSize.value,
     cursor: usersCurrentCursor.value
   })
-}
-
-function formatAvailableUsd(row: Pick<CreditBalance, 'available_micro_usd'>) {
-  if (!isCreditRequired.value) return t('unlimitedCredit')
-  if (row.available_micro_usd <= 0) return t('creditDepleted')
-  return formatMicroUsd(row.available_micro_usd, 2)
 }
 
 function creditCellClass(row: Pick<CreditBalance, 'available_micro_usd'>): CreditClass {
@@ -234,6 +242,13 @@ function openEditDialog(row: User) {
   userDialogVisible.value = true
 }
 
+function openCreditDialog(row: User) {
+  if (!isPaidServiceMode.value) return
+  selectedUser.value = row
+  amountUsd.value = DEFAULT_RECHARGE_USD
+  creditDialogVisible.value = true
+}
+
 function userStatusConfirmMessage(email: string, status: UserStatus) {
   return t('changeUserStatusConfirm')
     .replace('{email}', email)
@@ -245,14 +260,10 @@ function userStatusConfirmType(status: UserStatus): ConfirmType {
 }
 
 function confirmStatusChange(email: string, status: UserStatus) {
-  return confirmDialog(
-    userStatusConfirmMessage(email, status),
-    t('confirmAction'),
-    {
-      confirmText: t('save'),
-      type: userStatusConfirmType(status)
-    }
-  )
+  return confirmDialog(userStatusConfirmMessage(email, status), t('confirmAction'), {
+    confirmText: t('save'),
+    type: userStatusConfirmType(status)
+  })
 }
 
 async function submitUserDialog() {
@@ -293,6 +304,7 @@ async function submitCreateUser() {
 }
 
 async function openUserKeysDialog(row: User) {
+  if (!isPaidServiceMode.value) return
   selectedUser.value = row
   userKeysDialogVisible.value = true
   selectedUserKeys.value = []
@@ -379,6 +391,21 @@ async function confirmDeleteUser(row: User) {
   })
 }
 
+async function submitCredit() {
+  const userId = selectedUser.value?.id
+  if (!userId) return
+  await withLoading(creditSaving, async () => {
+    try {
+      await adjustDefaultProjectCredit(userId, usdToMicroUsd(amountUsd.value))
+      ElMessage.success(t('creditUpdated'))
+      creditDialogVisible.value = false
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
 async function searchUsers() {
   await resetUsersAndReload()
 }
@@ -413,6 +440,7 @@ async function loadSelectedUserKeys() {
   if (!selectedUser.value) return
   const page = await getUserKeys({
     userId: selectedUser.value.id,
+    defaultProjectOnly: true,
     limit: USER_KEY_DIALOG_LIMIT
   })
   selectedUserKeys.value = page.items
@@ -537,8 +565,7 @@ onMounted(() => {
                 </span>
                 <span class="user-mobile-email">{{ row.email }}</span>
                 <span class="user-mobile-meta">
-                  {{ userStatusText(row.status) }} · {{ row.user_key_count.toLocaleString(locale) }}
-                  {{ t('keys') }}
+                  {{ userMobileMetaText(row) }}
                 </span>
                 <span class="user-mobile-row-actions">
                   <el-button
@@ -549,7 +576,12 @@ onMounted(() => {
                     :loading="approvingUserId === row.id"
                     @click="approveUser(row)"
                   />
-                  <el-tooltip :content="t('viewApiKeys')" placement="top" :show-after="600">
+                  <el-tooltip
+                    v-if="isPaidServiceMode"
+                    :content="t('viewApiKeys')"
+                    placement="top"
+                    :show-after="600"
+                  >
                     <el-button
                       class="admin-action-button icon-only-action"
                       :aria-label="t('viewApiKeys')"
@@ -573,6 +605,10 @@ onMounted(() => {
                     />
                     <template #dropdown>
                       <el-dropdown-menu class="admin-row-action-menu">
+                        <el-dropdown-item v-if="isPaidServiceMode" @click="openCreditDialog(row)">
+                          <el-icon><Money /></el-icon>
+                          <span>{{ t('recharge') }}</span>
+                        </el-dropdown-item>
                         <el-dropdown-item
                           class="is-danger"
                           :disabled="deletingUserId === row.id"
@@ -602,6 +638,7 @@ onMounted(() => {
           </template>
         </el-table-column>
         <el-table-column
+          v-if="isPaidServiceMode"
           :label="t('userApiKeyCount')"
           min-width="104"
           align="center"
@@ -683,7 +720,12 @@ onMounted(() => {
                 :loading="approvingUserId === row.id"
                 @click="approveUser(row)"
               />
-              <el-tooltip :content="t('viewApiKeys')" placement="top" :show-after="600">
+              <el-tooltip
+                v-if="isPaidServiceMode"
+                :content="t('viewApiKeys')"
+                placement="top"
+                :show-after="600"
+              >
                 <el-button
                   class="admin-action-button icon-only-action"
                   :aria-label="t('viewApiKeys')"
@@ -707,6 +749,10 @@ onMounted(() => {
                 />
                 <template #dropdown>
                   <el-dropdown-menu class="admin-row-action-menu">
+                    <el-dropdown-item v-if="isPaidServiceMode" @click="openCreditDialog(row)">
+                      <el-icon><Money /></el-icon>
+                      <span>{{ t('recharge') }}</span>
+                    </el-dropdown-item>
                     <el-dropdown-item
                       class="is-danger"
                       :disabled="deletingUserId === row.id"
@@ -835,6 +881,19 @@ onMounted(() => {
       </template>
     </el-dialog>
 
+    <CreditAdjustDialog
+      v-if="selectedUser"
+      v-model:amount="amountUsd"
+      v-model:open="creditDialogVisible"
+      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :confirm-text="t('confirmRecharge')"
+      :current-balance-micro-usd="selectedUser.available_micro_usd"
+      :hint="t('accountCreditAdjustHint')"
+      :saving="creditSaving"
+      :title="t('accountRecharge')"
+      @submit="submitCredit"
+    />
+
     <el-dialog
       v-model="userKeysDialogVisible"
       class="user-admin-dialog user-keys-dialog"
@@ -864,19 +923,6 @@ onMounted(() => {
                   </el-tooltip>
                 </div>
               </template>
-            </el-table-column>
-            <el-table-column :label="t('projectName')" min-width="128">
-              <template #default="{ row }">
-                <span class="user-key-project-name">{{ row.project_name }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column
-              :label="t('availableCredit')"
-              width="96"
-              align="center"
-              header-align="center"
-            >
-              <template #default="{ row }">{{ formatAvailableUsd(row) }}</template>
             </el-table-column>
             <el-table-column :label="t('status')" width="84" align="center" header-align="center">
               <template #default="{ row }">
@@ -1198,15 +1244,15 @@ onMounted(() => {
 }
 
 .user-group-tag.is-standard {
-  background: #eef7fd;
-  border-color: #cde9f8;
-  color: #0f76b8;
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary-border);
+  color: var(--admin-primary);
 }
 
 .user-group-tag.is-premium {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary-border);
+  color: var(--admin-primary);
 }
 
 .user-credit-cell {

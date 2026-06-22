@@ -53,14 +53,20 @@ pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRe
         .fetch_optional(&state.db.pool)
         .await?
     else {
-        let config = PaymentConfig::default_for_site(&state.config.site_name);
+        let mut config = PaymentConfig::default_for_site(&state.config.site_name);
+        config.return_base_url = state.config.public_base_url.clone();
         return Ok(record_from_config(&config, false, None));
     };
 
     let value: serde_json::Value = row.try_get("value")?;
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let setting: StoredPaymentSetting = serde_json::from_value(value)?;
-    Ok(record_from_stored(setting, true, Some(updated_at)))
+    Ok(record_from_stored(
+        setting,
+        true,
+        Some(updated_at),
+        state.config.public_base_url.clone(),
+    ))
 }
 
 pub async fn upsert_payment_setting(
@@ -68,7 +74,8 @@ pub async fn upsert_payment_setting(
     req: UpsertPaymentSettingRequest,
 ) -> AppResult<PaymentSettingRecord> {
     let existing = existing_payment_setting(state).await?;
-    let return_base_url = optional_trimmed(req.return_base_url);
+    let return_base_url =
+        optional_trimmed(req.return_base_url).or_else(|| state.config.public_base_url.clone());
     let zpay_api_url = optional_trimmed(Some(req.zpay_api_url))
         .unwrap_or_else(|| default_zpay_api_url().to_string());
     let zpay_merchant_id = optional_trimmed(req.zpay_merchant_id);
@@ -123,7 +130,12 @@ pub async fn upsert_payment_setting(
     let value: serde_json::Value = row.try_get("value")?;
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let setting: StoredPaymentSetting = serde_json::from_value(value)?;
-    Ok(record_from_stored(setting, true, Some(updated_at)))
+    Ok(record_from_stored(
+        setting,
+        true,
+        Some(updated_at),
+        state.config.public_base_url.clone(),
+    ))
 }
 
 pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig> {
@@ -143,7 +155,9 @@ pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig
         } else {
             Vec::new()
         },
-        return_base_url: setting.return_base_url,
+        return_base_url: setting
+            .return_base_url
+            .or_else(|| state.config.public_base_url.clone()),
         zpay: ZpayConfig {
             api_url: setting.zpay_api_url,
             merchant_id: setting.zpay_merchant_id,
@@ -192,11 +206,12 @@ fn record_from_stored(
     setting: StoredPaymentSetting,
     configured: bool,
     updated_at: Option<DateTime<Utc>>,
+    fallback_return_base_url: Option<String>,
 ) -> PaymentSettingRecord {
     PaymentSettingRecord {
         configured,
         payment_enabled: setting.payment_enabled,
-        return_base_url: setting.return_base_url,
+        return_base_url: setting.return_base_url.or(fallback_return_base_url),
         zpay_api_url: setting
             .zpay_api_url
             .unwrap_or_else(|| default_zpay_api_url().to_string()),

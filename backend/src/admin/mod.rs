@@ -74,14 +74,15 @@ use self::{
         OPENAI_OAUTH_PROTOCOL,
     },
     setting::{
-        get_smtp_setting, test_smtp_setting, upsert_smtp_setting, SmtpSettingRecord,
-        TestSmtpSettingResponse, UpsertSmtpSettingRequest,
+        get_site_setting, get_smtp_setting, test_smtp_setting, upsert_site_setting,
+        upsert_smtp_setting, SiteSettingRecord, SmtpSettingRecord, TestSmtpSettingResponse,
+        UpsertSiteSettingRequest, UpsertSiteSettingResponse, UpsertSmtpSettingRequest,
     },
     user::{
-        adjust_credit, adjust_user_key_model_credit, create_user, create_user_key, delete_user,
-        delete_user_key, list_user_groups, list_user_keys, list_users, update_user,
-        update_user_key, CreateUserKeyRequest, CreateUserRequest, CreatedUserKey,
-        ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
+        adjust_credit, adjust_default_project_credit, adjust_user_key_model_credit, create_user,
+        create_user_key, delete_user, delete_user_key, list_user_groups, list_user_keys,
+        list_users, update_user, update_user_key, CreateUserKeyRequest, CreateUserRequest,
+        CreatedUserKey, ListUserKeysQuery, ListUsersQuery, UpdateUserKeyRequest, UpdateUserRequest,
         UserGroupRecord, UserKeyModelCreditRecord, UserKeyPage, UserKeyRecord, UserPage,
         UserRecord,
     },
@@ -101,6 +102,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/users/{id}",
             patch(update_user_handler).delete(delete_user_handler),
+        )
+        .route(
+            "/api/admin/users/{id}/default-project-credit",
+            post(adjust_default_project_credit_handler),
         )
         .route(
             "/api/admin/user-keys",
@@ -162,6 +167,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/settings/payment",
             get(payment_setting).post(upsert_payment_setting_handler),
+        )
+        .route(
+            "/api/admin/settings/site",
+            get(site_setting).post(upsert_site_setting_handler),
         )
         .route(
             "/api/admin/settings/admin-password",
@@ -327,6 +336,13 @@ struct AdjustCreditRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct AdjustDefaultProjectCreditRequest {
+    amount_micro_usd: i64,
+    #[serde(default = "default_credit_reason")]
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct AdjustUserKeyModelCreditRequest {
     user_key_id: DbId,
     model: String,
@@ -367,6 +383,17 @@ async fn adjust_credit_handler(
         &req.reason,
     )
     .await?;
+    Ok(Json(AdjustCreditResponse { balance_micro_usd }))
+}
+
+async fn adjust_default_project_credit_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<AdjustDefaultProjectCreditRequest>,
+) -> AppResult<Json<AdjustCreditResponse>> {
+    let balance_micro_usd =
+        adjust_default_project_credit(&state, id, req.amount_micro_usd, &req.reason).await?;
     Ok(Json(AdjustCreditResponse { balance_micro_usd }))
 }
 
@@ -869,6 +896,27 @@ async fn upsert_payment_setting_handler(
     Json(req): Json<UpsertPaymentSettingRequest>,
 ) -> AppResult<Json<PaymentSettingRecord>> {
     Ok(Json(upsert_payment_setting(&state, req).await?))
+}
+
+async fn site_setting(_admin: AdminAuth) -> AppResult<Json<SiteSettingRecord>> {
+    Ok(Json(get_site_setting()?))
+}
+
+async fn upsert_site_setting_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpsertSiteSettingRequest>,
+) -> AppResult<Json<UpsertSiteSettingResponse>> {
+    let result = upsert_site_setting(req).await?;
+    schedule_admin_runtime_restart(state.runtime_restart_tx.clone());
+    Ok(Json(result))
+}
+
+fn schedule_admin_runtime_restart(restart_tx: tokio::sync::watch::Sender<bool>) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let _ = restart_tx.send(true);
+    });
 }
 
 #[derive(Debug, Deserialize)]

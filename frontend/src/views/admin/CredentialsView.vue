@@ -18,7 +18,7 @@ import {
   refreshCredential as refreshCredentialApi,
   uploadCredentialFile
 } from '../../api/credentials'
-import ProviderIcon from '../../components/ProviderIcon.vue'
+import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'

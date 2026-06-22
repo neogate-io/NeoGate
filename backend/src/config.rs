@@ -1,6 +1,7 @@
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 pub const DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES: usize = 16 * 1024 * 1024;
@@ -43,6 +44,7 @@ pub enum RuntimeMode {
 #[derive(Clone, Debug)]
 pub struct RuntimeProbe {
     pub runtime_mode: RuntimeMode,
+    pub service_mode: Option<ServiceMode>,
     pub bind_addr: SocketAddr,
     pub database_url: Option<String>,
     pub redis_url: Option<String>,
@@ -58,6 +60,13 @@ pub enum ProcessRole {
     All,
     Api,
     Worker,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceMode {
+    Internal,
+    Paid,
 }
 
 impl ProcessRole {
@@ -104,6 +113,23 @@ impl RuntimeMode {
         match self {
             Self::Standalone => "standalone",
             Self::Distributed => "distributed",
+        }
+    }
+}
+
+impl ServiceMode {
+    pub fn from_env_value(value: &str) -> Result<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "internal" => Ok(Self::Internal),
+            "paid" => Ok(Self::Paid),
+            _ => anyhow::bail!("SERVICE_MODE must be internal or paid"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::Paid => "paid",
         }
     }
 }
@@ -416,9 +442,11 @@ impl RuntimeProbe {
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(default_env_file);
+        let service_mode = service_mode_from_env_file(&env_file)?;
 
         Ok(Self {
             runtime_mode,
+            service_mode,
             bind_addr,
             database_url: optional("DATABASE_URL"),
             redis_url: optional("REDIS_URL"),
@@ -462,6 +490,10 @@ impl RuntimeProbe {
             && self.site_configured()
             && self.secrets_configured()
             && (!self.runtime_mode.is_distributed() || self.redis_configured())
+    }
+
+    pub fn service_mode_configured(&self) -> bool {
+        self.service_mode.is_some()
     }
 }
 
@@ -547,6 +579,19 @@ fn required(name: &str) -> Result<String> {
 
 fn optional(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn optional_from_env_file(name: &str, path: &std::path::Path) -> Option<String> {
+    let iter = dotenvy::from_path_iter(path).ok()?;
+    iter.flatten()
+        .find_map(|(key, value)| (key == name && !value.trim().is_empty()).then_some(value))
+}
+
+fn service_mode_from_env_file(path: &std::path::Path) -> Result<Option<ServiceMode>> {
+    optional("SERVICE_MODE")
+        .or_else(|| optional_from_env_file("SERVICE_MODE", path))
+        .map(|value| ServiceMode::from_env_value(&value))
+        .transpose()
 }
 
 fn parse_u64(name: &str, default: u64) -> Result<u64> {
@@ -677,5 +722,18 @@ mod tests {
             ProcessRole::Worker
         );
         assert!(ProcessRole::from_env_value("scheduler").is_err());
+    }
+
+    #[test]
+    fn service_mode_accepts_known_values_case_insensitively() {
+        assert_eq!(
+            ServiceMode::from_env_value("internal").unwrap(),
+            ServiceMode::Internal
+        );
+        assert_eq!(
+            ServiceMode::from_env_value("PAID").unwrap(),
+            ServiceMode::Paid
+        );
+        assert!(ServiceMode::from_env_value("billing").is_err());
     }
 }

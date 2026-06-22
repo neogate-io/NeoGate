@@ -32,7 +32,7 @@ import {
   withManualProvidersFirst,
   type ChannelProviderOption
 } from '../utils/channel'
-import { readError, readModelFetchError } from '../utils/errors'
+import { isNoModelsReturnedError, readError, readModelFetchError } from '../utils/errors'
 import { withLoading, withLoadingValue } from './useLoadingTask'
 
 type Translate = (key: MessageKey) => string
@@ -131,18 +131,14 @@ export function useChannels(t: Translate) {
   const createBaseUrl = computed({
     get: () => visibleBaseUrl(createForm),
     set: (value: string) => {
-      if (isManualBaseUrlProvider(createForm.provider)) {
-        setVisibleBaseUrl(createForm, value)
-      }
+      setVisibleBaseUrl(createForm, value)
     }
   })
 
   const editBaseUrl = computed({
     get: () => visibleBaseUrl(editForm),
     set: (value: string) => {
-      if (isManualBaseUrlProvider(editForm.provider)) {
-        setVisibleBaseUrl(editForm, value)
-      }
+      setVisibleBaseUrl(editForm, value)
     }
   })
 
@@ -163,10 +159,6 @@ export function useChannels(t: Translate) {
   const providerOptions = computed(() => {
     return withManualProvidersFirst(providers.value)
   })
-
-  const isCreateCustomProvider = computed(() => isManualBaseUrlProvider(createForm.provider))
-  const isCreateBaseUrlReadonly = computed(() => !isManualBaseUrlProvider(createForm.provider))
-  const isEditBaseUrlReadonly = computed(() => !isManualBaseUrlProvider(editForm.provider))
 
   const keyCounts = computed(() => {
     const counts = new Map<number, number>()
@@ -334,10 +326,6 @@ export function useChannels(t: Translate) {
           secret,
           use_credentials: form.use_credentials
         })
-        if (models.length === 0) {
-          ElMessage.warning(t('modelsFetchEmpty'))
-          return
-        }
 
         fetchedModels.value = models
         selectedFetchedModels.value =
@@ -346,8 +334,19 @@ export function useChannels(t: Translate) {
             : models.filter((model) => existingModels.includes(model))
         syncSelectedModelsToInput()
         modelPickerDialogOpen.value = true
-        ElMessage.success(t('modelsFetched'))
+        if (models.length === 0) {
+          ElMessage.warning(t('modelsFetchEmpty'))
+        } else {
+          ElMessage.success(t('modelsFetched'))
+        }
       } catch (err) {
+        if (isNoModelsReturnedError(err)) {
+          fetchedModels.value = existingModels
+          selectedFetchedModels.value = existingModels
+          modelPickerDialogOpen.value = true
+          ElMessage.warning(t('modelsFetchEmpty'))
+          return
+        }
         ElMessage.error(readModelFetchError(err, t))
       }
     })
@@ -726,9 +725,6 @@ export function useChannels(t: Translate) {
     editBaseUrl,
     secretInput,
     editSecretInput,
-    isCreateCustomProvider,
-    isCreateBaseUrlReadonly,
-    isEditBaseUrlReadonly,
     fetchedModels,
     selectedFetchedModels,
     allFetchedModelsSelected,

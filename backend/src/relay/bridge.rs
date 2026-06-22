@@ -51,7 +51,7 @@ const OPENAI_TO_ANTHROPIC_DROP_FIELDS: &[&str] = &[
     "user",
 ];
 
-pub(super) fn messages_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
+pub(crate) fn messages_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
     let mut value: Value = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let stream = value
@@ -188,7 +188,7 @@ fn anthropic_tool_choice_to_openai(value: &Value) -> Option<Value> {
     }
 }
 
-pub(super) fn openai_chat_to_anthropic_messages(body: Bytes) -> AppResult<Bytes> {
+pub(crate) fn openai_chat_to_anthropic_messages(body: Bytes) -> AppResult<Bytes> {
     let mut value: Value = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
 
@@ -238,26 +238,10 @@ pub(super) fn openai_chat_to_anthropic_messages(body: Bytes) -> AppResult<Bytes>
 }
 
 fn content_to_text(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Array(items) => items
-            .iter()
-            .filter_map(|item| match item {
-                Value::String(text) => Some(text.as_str()),
-                Value::Object(object)
-                    if object.get("type").and_then(Value::as_str) == Some("text") =>
-                {
-                    object.get("text").and_then(Value::as_str)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
+    content_value_to_text(value, &["text"], false)
 }
 
-pub(super) async fn finish_chat_as_anthropic(
+pub(crate) async fn finish_chat_as_anthropic(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
@@ -281,7 +265,7 @@ pub(super) async fn finish_chat_as_anthropic(
     .await
 }
 
-pub(super) async fn finish_anthropic_as_openai_chat(
+pub(crate) async fn finish_anthropic_as_openai_chat(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
@@ -499,18 +483,7 @@ fn anthropic_response_to_openai_chat(body: &[u8], fallback_model: &str) -> AppRe
 
 fn anthropic_content_to_text(content: Option<&Value>) -> String {
     content
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    (item.get("type").and_then(Value::as_str) == Some("text"))
-                        .then(|| item.get("text").and_then(Value::as_str))
-                        .flatten()
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
+        .map(|value| content_value_to_text(value, &["text"], false))
         .unwrap_or_default()
 }
 
@@ -891,6 +864,606 @@ impl BridgeSseConverter for AnthropicSseToOpenAiChat {
 
     fn stopped(&self) -> bool {
         self.stopped
+    }
+}
+
+pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<Bytes> {
+    let mut value: Value = serde_json::from_slice(&body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("request body must be a JSON object".to_string()))?;
+    let input = object
+        .remove("input")
+        .ok_or_else(|| AppError::BadRequest("input is required".to_string()))?;
+    let (system, messages) = openai_response_input_to_anthropic_messages(&input)?;
+    object.insert("messages".to_string(), Value::Array(messages));
+    if !system.is_empty() {
+        object.insert("system".to_string(), Value::String(system.join("\n")));
+    }
+    rename_field(object, "max_output_tokens", "max_tokens");
+    for key in [
+        "background",
+        "include",
+        "instructions",
+        "metadata",
+        "parallel_tool_calls",
+        "previous_response_id",
+        "prompt",
+        "reasoning",
+        "service_tier",
+        "store",
+        "text",
+        "tool_choice",
+        "tools",
+        "top_logprobs",
+        "truncation",
+        "user",
+    ] {
+        object.remove(key);
+    }
+
+    Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
+fn openai_response_input_to_anthropic_messages(
+    input: &Value,
+) -> AppResult<(Vec<String>, Vec<Value>)> {
+    match input {
+        Value::String(text) => Ok((Vec::new(), vec![json!({ "role": "user", "content": text })])),
+        Value::Array(items) => {
+            let mut system = Vec::new();
+            let mut messages = Vec::new();
+            for item in items {
+                let object = item.as_object().ok_or_else(|| {
+                    AppError::BadRequest("input items must be JSON objects".to_string())
+                })?;
+                let role = object.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = object
+                    .get("content")
+                    .map(openai_response_content_to_text)
+                    .unwrap_or_default();
+                if content.is_empty() {
+                    continue;
+                }
+                match role {
+                    "system" | "developer" => system.push(content),
+                    "assistant" => {
+                        messages.push(json!({ "role": "assistant", "content": content }));
+                    }
+                    _ => messages.push(json!({ "role": "user", "content": content })),
+                }
+            }
+            if messages.is_empty() {
+                return Err(AppError::BadRequest(
+                    "input must contain at least one user or assistant message".to_string(),
+                ));
+            }
+            Ok((system, messages))
+        }
+        _ => Err(AppError::BadRequest(
+            "input must be a string or an array".to_string(),
+        )),
+    }
+}
+
+fn openai_response_content_to_text(value: &Value) -> String {
+    content_value_to_text(value, &["input_text", "output_text", "text"], true)
+}
+
+fn content_value_to_text(value: &Value, text_types: &[&str], allow_object: bool) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| content_item_text(item, text_types))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(_) if allow_object => content_item_text(value, text_types)
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn content_item_text<'a>(item: &'a Value, text_types: &[&str]) -> Option<&'a str> {
+    match item {
+        Value::String(text) => Some(text.as_str()),
+        Value::Object(object)
+            if object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| text_types.contains(&kind)) =>
+        {
+            object.get("text").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) async fn finish_anthropic_as_openai_response(
+    ctx: RelayContext,
+    status: StatusCode,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    if ctx.streamed {
+        return finish_bridge_stream(
+            ctx,
+            status,
+            upstream_response,
+            AnthropicSseToOpenAiResponse::new,
+            "ignored trailing upstream body read error after completed Anthropic response fallback stream",
+        );
+    }
+    finish_bridge_json(
+        ctx,
+        status,
+        upstream_response,
+        anthropic_response_to_openai_response,
+        "ignored trailing upstream body read error after parsing complete Anthropic response fallback",
+    )
+    .await
+}
+
+fn anthropic_response_to_openai_response(body: &[u8], fallback_model: &str) -> AppResult<Bytes> {
+    let value: Value = serde_json::from_slice(body)?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_anthropic_fallback");
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_model);
+    let text = anthropic_content_to_text(value.get("content"));
+    let input_tokens = value
+        .get("usage")
+        .and_then(|usage| usage.get("input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let output_tokens = value
+        .get("usage")
+        .and_then(|usage| usage.get("output_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let payload = json!({
+        "id": id,
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "background": false,
+        "model": model,
+        "output": [{
+            "id": format!("msg_{id}"),
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": text,
+                "annotations": [],
+            }],
+        }],
+        "usage": openai_response_usage(input_tokens, output_tokens),
+    });
+    Ok(Bytes::from(serde_json::to_vec(&payload)?))
+}
+
+fn openai_response_usage(input_tokens: i64, output_tokens: i64) -> Value {
+    json!({
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens.saturating_add(output_tokens),
+        "input_tokens_details": { "cached_tokens": 0 },
+        "output_tokens_details": { "reasoning_tokens": 0 },
+    })
+}
+
+struct AnthropicSseToOpenAiResponse {
+    buffer: Vec<u8>,
+    model: String,
+    response_id: String,
+    output_item_id: String,
+    content_index: i64,
+    sequence_number: i64,
+    response_started: bool,
+    output_started: bool,
+    content_started: bool,
+    stopped: bool,
+    text: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    status: &'static str,
+}
+
+impl AnthropicSseToOpenAiResponse {
+    fn new(model: String) -> Self {
+        Self {
+            buffer: Vec::new(),
+            model,
+            response_id: "resp_anthropic_fallback".to_string(),
+            output_item_id: "msg_anthropic_fallback".to_string(),
+            content_index: 0,
+            sequence_number: 0,
+            response_started: false,
+            output_started: false,
+            content_started: false,
+            stopped: false,
+            text: String::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+            status: "completed",
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) -> Bytes {
+        self.buffer.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.buffer.drain(..=index).collect::<Vec<_>>();
+            while matches!(line.last(), Some(b'\n' | b'\r')) {
+                line.pop();
+            }
+            self.push_line(&line, &mut out);
+        }
+        Bytes::from(out)
+    }
+
+    fn push_line(&mut self, line: &[u8], out: &mut Vec<u8>) {
+        let Ok(line) = std::str::from_utf8(line) else {
+            return;
+        };
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            return;
+        };
+        if data.is_empty() {
+            return;
+        }
+        if data == "[DONE]" {
+            self.finish(out);
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        self.observe_anthropic_event(&value, out);
+    }
+
+    fn observe_anthropic_event(&mut self, value: &Value, out: &mut Vec<u8>) {
+        match value.get("type").and_then(Value::as_str) {
+            Some("message_start") => self.start_from_message(value, out),
+            Some("content_block_delta") => self.push_content_delta(value, out),
+            Some("message_delta") => self.observe_message_delta(value),
+            Some("message_stop") => self.finish(out),
+            _ => {}
+        }
+    }
+
+    fn start_from_message(&mut self, value: &Value, out: &mut Vec<u8>) {
+        if let Some(message) = value.get("message") {
+            if let Some(id) = message.get("id").and_then(Value::as_str) {
+                self.response_id = format!("resp_{id}");
+                self.output_item_id = id.to_string();
+            }
+            if let Some(model) = message.get("model").and_then(Value::as_str) {
+                self.model = model.to_string();
+            }
+            self.observe_usage(message);
+        }
+        self.ensure_content_started(out);
+    }
+
+    fn push_content_delta(&mut self, value: &Value, out: &mut Vec<u8>) {
+        self.ensure_content_started(out);
+        let Some(text) = value
+            .get("delta")
+            .filter(|delta| delta.get("type").and_then(Value::as_str) == Some("text_delta"))
+            .and_then(|delta| delta.get("text"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        self.text.push_str(text);
+        self.output_tokens = self.output_tokens.saturating_add(estimate_tokens(text));
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_text.delta",
+            json!({
+                "type": "response.output_text.delta",
+                "sequence_number": sequence_number,
+                "item_id": self.output_item_id,
+                "output_index": 0,
+                "content_index": self.content_index,
+                "delta": text,
+            }),
+        );
+    }
+
+    fn observe_message_delta(&mut self, value: &Value) {
+        if value
+            .get("delta")
+            .and_then(|delta| delta.get("stop_reason"))
+            .and_then(Value::as_str)
+            == Some("max_tokens")
+        {
+            self.status = "incomplete";
+        }
+        self.observe_usage(value);
+    }
+
+    fn observe_usage(&mut self, value: &Value) {
+        let Some(usage) = value.get("usage") else {
+            return;
+        };
+        self.input_tokens = usage
+            .get("input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.input_tokens);
+        self.output_tokens = usage
+            .get("output_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.output_tokens);
+    }
+
+    fn ensure_content_started(&mut self, out: &mut Vec<u8>) {
+        self.ensure_response_started(out);
+        if !self.output_started {
+            self.output_started = true;
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.output_item.added",
+                json!({
+                    "type": "response.output_item.added",
+                    "sequence_number": sequence_number,
+                    "output_index": 0,
+                    "item": {
+                        "id": self.output_item_id,
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    },
+                }),
+            );
+        }
+        if !self.content_started {
+            self.content_started = true;
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.content_part.added",
+                json!({
+                    "type": "response.content_part.added",
+                    "sequence_number": sequence_number,
+                    "item_id": self.output_item_id,
+                    "output_index": 0,
+                    "content_index": self.content_index,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                    },
+                }),
+            );
+        }
+    }
+
+    fn ensure_response_started(&mut self, out: &mut Vec<u8>) {
+        if self.response_started {
+            return;
+        }
+        self.response_started = true;
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.created",
+            json!({
+                "type": "response.created",
+                "sequence_number": sequence_number,
+                "response": self.response_payload("in_progress"),
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.in_progress",
+            json!({
+                "type": "response.in_progress",
+                "sequence_number": sequence_number,
+                "response": self.response_payload("in_progress"),
+            }),
+        );
+    }
+
+    fn finish(&mut self, out: &mut Vec<u8>) {
+        if self.stopped {
+            return;
+        }
+        self.ensure_content_started(out);
+        self.stopped = true;
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_text.done",
+            json!({
+                "type": "response.output_text.done",
+                "sequence_number": sequence_number,
+                "item_id": self.output_item_id,
+                "output_index": 0,
+                "content_index": self.content_index,
+                "text": self.text,
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.content_part.done",
+            json!({
+                "type": "response.content_part.done",
+                "sequence_number": sequence_number,
+                "item_id": self.output_item_id,
+                "output_index": 0,
+                "content_index": self.content_index,
+                "part": {
+                    "type": "output_text",
+                    "text": self.text,
+                    "annotations": [],
+                },
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "sequence_number": sequence_number,
+                "output_index": 0,
+                "item": self.output_item_payload("completed"),
+            }),
+        );
+        let event_type = if self.status == "completed" {
+            "response.completed"
+        } else {
+            "response.incomplete"
+        };
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            event_type,
+            json!({
+                "type": event_type,
+                "sequence_number": sequence_number,
+                "response": self.response_payload(self.status),
+            }),
+        );
+    }
+
+    fn response_payload(&self, status: &str) -> Value {
+        let output = if status == "in_progress" {
+            Vec::new()
+        } else {
+            vec![self.output_item_payload("completed")]
+        };
+        json!({
+            "id": self.response_id,
+            "object": "response",
+            "created_at": 0,
+            "status": status,
+            "background": false,
+            "model": self.model,
+            "output": output,
+            "usage": openai_response_usage(self.input_tokens, self.output_tokens),
+        })
+    }
+
+    fn output_item_payload(&self, status: &str) -> Value {
+        json!({
+            "id": self.output_item_id,
+            "type": "message",
+            "status": status,
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": self.text,
+                "annotations": [],
+            }],
+        })
+    }
+
+    fn push_event(&self, out: &mut Vec<u8>, event: &str, data: Value) {
+        out.extend_from_slice(format!("event: {event}\n").as_bytes());
+        out.extend_from_slice(format!("data: {data}\n\n").as_bytes());
+    }
+
+    fn next_sequence_number(&mut self) -> i64 {
+        let sequence_number = self.sequence_number;
+        self.sequence_number = self.sequence_number.saturating_add(1);
+        sequence_number
+    }
+}
+
+impl BridgeSseConverter for AnthropicSseToOpenAiResponse {
+    fn push(&mut self, chunk: &[u8]) -> Bytes {
+        Self::push(self, chunk)
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    #[test]
+    fn converts_openai_response_request_to_anthropic_messages() {
+        let body = Bytes::from_static(
+            br#"{"model":"claude-sonnet-4","input":[{"role":"developer","content":[{"type":"input_text","text":"Be terse."}]},{"role":"user","content":[{"type":"input_text","text":"Reply OK"}]}],"max_output_tokens":16,"store":false,"reasoning":{"effort":"low"}}"#,
+        );
+
+        let converted = openai_response_to_anthropic_messages(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["model"], "claude-sonnet-4");
+        assert_eq!(value["max_tokens"], 16);
+        assert_eq!(value["system"], "Be terse.");
+        assert_eq!(value["messages"][0]["role"], "user");
+        assert_eq!(value["messages"][0]["content"], "Reply OK");
+        assert!(value.get("input").is_none());
+        assert!(value.get("max_output_tokens").is_none());
+        assert!(value.get("store").is_none());
+        assert!(value.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn converts_anthropic_message_response_to_openai_response() {
+        let body = br#"{"id":"msg-1","model":"claude-sonnet-4","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":1}}"#;
+
+        let converted = anthropic_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["id"], "msg-1");
+        assert_eq!(value["object"], "response");
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["model"], "claude-sonnet-4");
+        assert_eq!(value["output"][0]["type"], "message");
+        assert_eq!(value["output"][0]["content"][0]["type"], "output_text");
+        assert_eq!(value["output"][0]["content"][0]["text"], "OK");
+        assert_eq!(value["usage"]["input_tokens"], 8);
+        assert_eq!(value["usage"]["output_tokens"], 1);
+        assert_eq!(value["usage"]["total_tokens"], 9);
+    }
+
+    #[test]
+    fn converts_anthropic_stream_to_openai_response_events() {
+        let mut converter = AnthropicSseToOpenAiResponse::new("claude-sonnet-4".to_string());
+        let mut out = Vec::new();
+        out.extend_from_slice(&converter.push(br#"data: {"type":"message_start","message":{"id":"msg-1","model":"claude-sonnet-4","usage":{"input_tokens":8,"output_tokens":0}}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"O"}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"K"}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"message_stop"}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        let text = String::from_utf8(out).unwrap();
+
+        assert!(text.contains("event: response.created"));
+        assert!(text.contains("event: response.output_text.delta"));
+        assert!(text.contains(r#""delta":"O""#));
+        assert!(text.contains(r#""delta":"K""#));
+        assert!(text.contains("event: response.completed"));
+        assert!(text.contains(r#""text":"OK""#));
+        assert!(text.contains(r#""input_tokens":8"#));
+        assert!(text.contains(r#""output_tokens":1"#));
     }
 }
 

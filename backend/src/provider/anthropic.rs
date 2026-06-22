@@ -15,7 +15,6 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     error::{AppError, AppResult},
-    provider::bridge,
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -23,7 +22,7 @@ use crate::{
 };
 
 use crate::relay::{
-    describe_upstream_http_failure, ensure_key_backed_async_upstream, finish_relay,
+    bridge, describe_upstream_http_failure, ensure_key_backed_async_upstream, finish_relay,
     finish_task_json_response, forward_anthropic, forward_anthropic_bound, forward_openai,
     log_upstream_http_failure, prepare_relay_body, raw_upstream_response, read_upstream_error_body,
     record_upstream_http_failure, record_upstream_transport_failure_for_failover,

@@ -25,10 +25,10 @@ use crate::{
 use crate::relay::{ensure_key_backed_async_upstream, raw_upstream_response, response_from_bytes};
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 use crate::{
-    provider::{bridge, newapi},
+    provider::newapi,
     relay::{
-        describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_anthropic,
-        forward_openai, forward_openai_bound, forward_openai_with_content_type,
+        bridge, describe_upstream_http_failure, finish_relay, finish_task_json_response,
+        forward_anthropic, forward_openai, forward_openai_bound, forward_openai_with_content_type,
         handle_upstream_http_error, log_upstream_http_failure, prepare_relay_body,
         read_upstream_error_body, record_upstream_http_failure,
         record_upstream_transport_failure_for_failover, release_empty_hold,
@@ -44,8 +44,11 @@ const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
 const OPENAI_CHAT_PROTOCOLS: [UpstreamProtocol; 2] =
     [UpstreamProtocol::Openai, UpstreamProtocol::Anthropic];
 const OPENAI_PROTOCOLS: [UpstreamProtocol; 1] = [UpstreamProtocol::Openai];
-const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 2] =
-    [UpstreamProtocol::OpenAiOauth, UpstreamProtocol::Openai];
+const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 3] = [
+    UpstreamProtocol::OpenAiOauth,
+    UpstreamProtocol::Openai,
+    UpstreamProtocol::Anthropic,
+];
 
 #[derive(Debug, Clone)]
 struct ImageRequestMeta {
@@ -332,6 +335,10 @@ async fn relay_openai(
                 let body = bridge::openai_chat_to_anthropic_messages(body.clone())?;
                 forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
             }
+            UpstreamProtocol::Anthropic if path == "/v1/responses" => {
+                let body = bridge::openai_response_to_anthropic_messages(body.clone())?;
+                forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
+            }
             UpstreamProtocol::Anthropic => Err(AppError::BadRequest(format!(
                 "Anthropic fallback is not supported for {path}"
             ))),
@@ -347,15 +354,7 @@ async fn relay_openai(
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
                     ctx.relay_final = true;
-                    if protocol == UpstreamProtocol::Anthropic {
-                        return bridge::finish_anthropic_as_openai_chat(
-                            ctx,
-                            status,
-                            upstream_response,
-                        )
-                        .await;
-                    }
-                    return finish_relay(ctx, Ok(upstream_response)).await;
+                    return finish_openai_relay_success(ctx, status, upstream_response).await;
                 }
 
                 let body = read_upstream_error_body(upstream_response).await;
@@ -474,6 +473,25 @@ async fn relay_openai(
                 return finish_relay(ctx, Err(err)).await;
             }
         }
+    }
+}
+
+async fn finish_openai_relay_success(
+    ctx: RelayContext,
+    status: StatusCode,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    if ctx.protocol != UpstreamProtocol::Anthropic {
+        return finish_relay(ctx, Ok(upstream_response)).await;
+    }
+    match ctx.path {
+        "/v1/chat/completions" => {
+            bridge::finish_anthropic_as_openai_chat(ctx, status, upstream_response).await
+        }
+        "/v1/responses" => {
+            bridge::finish_anthropic_as_openai_response(ctx, status, upstream_response).await
+        }
+        _ => finish_relay(ctx, Ok(upstream_response)).await,
     }
 }
 

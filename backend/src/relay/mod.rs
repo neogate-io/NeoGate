@@ -1,5 +1,6 @@
 mod affinity;
 mod body;
+pub(crate) mod bridge;
 mod credential;
 mod error;
 mod limit;

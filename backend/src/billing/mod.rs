@@ -575,11 +575,20 @@ fn prefetch_locks() -> Arc<Vec<Mutex<()>>> {
 fn ordered_credit_accounts(accounts: BillingAccounts<'_>) -> Vec<CreditAccountId> {
     let mut credit_accounts = Vec::with_capacity(3);
     if let Some(credit_account) = accounts.user_key_model_credit_account {
+        push_unique_credit_account(&mut credit_accounts, credit_account);
+    }
+    push_unique_credit_account(&mut credit_accounts, accounts.user_key_credit_account);
+    push_unique_credit_account(&mut credit_accounts, accounts.project_credit_account);
+    credit_accounts
+}
+
+fn push_unique_credit_account(
+    credit_accounts: &mut Vec<CreditAccountId>,
+    credit_account: &CreditAccountId,
+) {
+    if !credit_accounts.contains(credit_account) {
         credit_accounts.push(credit_account.clone());
     }
-    credit_accounts.push(accounts.user_key_credit_account.clone());
-    credit_accounts.push(accounts.project_credit_account.clone());
-    credit_accounts
 }
 
 fn prefetch_lock_index(accounts: BillingAccounts<'_>, len: usize) -> usize {

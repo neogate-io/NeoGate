@@ -17,7 +17,8 @@ pub(super) async fn finish_bridge_json(
     convert: fn(&[u8], &str) -> AppResult<Bytes>,
     trailing_error_message: &'static str,
 ) -> AppResult<Response> {
-    let (body, trailing_error) = read_body_until_error(upstream_response).await;
+    let (body, trailing_error) =
+        read_body_until_error(upstream_response, ctx.state.config.relay.body_limit_bytes).await?;
     let converted = match convert(&body, &ctx.model) {
         Ok(converted) => {
             if let Some(err) = trailing_error {
@@ -58,20 +59,28 @@ pub(super) async fn finish_bridge_json(
 
 async fn read_body_until_error(
     upstream_response: reqwest::Response,
-) -> (Vec<u8>, Option<reqwest::Error>) {
+    limit_bytes: usize,
+) -> AppResult<(Vec<u8>, Option<reqwest::Error>)> {
     let mut body = Vec::new();
     let mut stream = upstream_response.bytes_stream();
     let mut trailing_error = None;
     while let Some(chunk) = stream.next().await {
         match chunk {
-            Ok(chunk) => body.extend_from_slice(&chunk),
+            Ok(chunk) => {
+                if body.len().saturating_add(chunk.len()) > limit_bytes {
+                    return Err(AppError::PayloadTooLarge(
+                        "upstream bridge response body exceeded limit".to_string(),
+                    ));
+                }
+                body.extend_from_slice(&chunk);
+            }
             Err(err) => {
                 trailing_error = Some(err);
                 break;
             }
         }
     }
-    (body, trailing_error)
+    Ok((body, trailing_error))
 }
 
 pub(super) trait BridgeSseConverter {

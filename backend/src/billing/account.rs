@@ -115,12 +115,16 @@ pub(crate) async fn decrement_reserved_returning_balance(
          SET reserved_micro_usd = reserved_micro_usd - $2,
              updated_at = now()
          WHERE id = $1
+           AND reserved_micro_usd >= $2
          RETURNING balance_micro_usd",
     )
     .bind(credit_account.id)
     .bind(amount_micro_usd)
-    .fetch_one(&mut **tx)
-    .await?;
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(AppError::Conflict(
+        "reserved credit is insufficient".to_string(),
+    ))?;
     Ok(row.try_get("balance_micro_usd")?)
 }
 
@@ -135,12 +139,17 @@ pub(crate) async fn debit_reserved_balance(
              reserved_micro_usd = reserved_micro_usd - $2,
              updated_at = now()
          WHERE id = $1
+           AND balance_micro_usd >= $2
+           AND reserved_micro_usd >= $2
          RETURNING balance_micro_usd",
     )
     .bind(credit_account.id)
     .bind(amount_micro_usd)
-    .fetch_one(&mut **tx)
-    .await?;
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(AppError::Conflict(
+        "reserved credit is insufficient".to_string(),
+    ))?;
     Ok(row.try_get("balance_micro_usd")?)
 }
 
@@ -149,7 +158,7 @@ pub(crate) async fn mark_allocation_returned(
     allocation_id: DbId,
     amount_micro_usd: i64,
 ) -> AppResult<()> {
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE credit_allocation
          SET returned_micro_usd = returned_micro_usd + $2,
              status = CASE
@@ -158,12 +167,18 @@ pub(crate) async fn mark_allocation_returned(
                  ELSE status
              END,
              updated_at = now()
-         WHERE id = $1",
+         WHERE id = $1
+           AND consumed_micro_usd + returned_micro_usd + $2 <= amount_micro_usd",
     )
     .bind(allocation_id)
     .bind(amount_micro_usd)
     .execute(&mut **tx)
     .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "credit allocation return exceeds available amount".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -172,7 +187,7 @@ pub(crate) async fn mark_allocation_consumed(
     allocation_id: DbId,
     amount_micro_usd: i64,
 ) -> AppResult<()> {
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE credit_allocation
          SET consumed_micro_usd = consumed_micro_usd + $2,
              status = CASE
@@ -181,12 +196,18 @@ pub(crate) async fn mark_allocation_consumed(
                  ELSE status
              END,
              updated_at = now()
-         WHERE id = $1",
+         WHERE id = $1
+           AND consumed_micro_usd + returned_micro_usd + $2 <= amount_micro_usd",
     )
     .bind(allocation_id)
     .bind(amount_micro_usd)
     .execute(&mut **tx)
     .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "credit allocation consume exceeds available amount".to_string(),
+        ));
+    }
     Ok(())
 }
 

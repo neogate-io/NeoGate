@@ -624,7 +624,7 @@ async fn fetch_pending_billing_records(
     let rows = sqlx::query(
         "SELECT id, transaction_id, payload
          FROM billing
-         WHERE status IN ('pending', 'failed')
+         WHERE status = 'pending'
            AND NOT (id = ANY($2::BIGINT[]))
          ORDER BY attempts ASC, created_at ASC
          LIMIT $1
@@ -670,7 +670,7 @@ async fn process_billing_outbox_record(pool: &PgPool, id: DbId) -> AppResult<Opt
     let row = sqlx::query(
         "SELECT id, transaction_id, payload
          FROM billing
-         WHERE id = $1 AND status IN ('pending', 'failed')
+         WHERE id = $1 AND status = 'pending'
          FOR UPDATE",
     )
     .bind(id)
@@ -737,7 +737,7 @@ async fn mark_billing_records_processed(
          SET status = 'processed',
              processed_at = now(),
              last_error = NULL
-         WHERE id = ANY($1) AND status IN ('pending', 'failed')",
+         WHERE id = ANY($1) AND status = 'pending'",
     )
     .bind(ids)
     .execute(&mut **tx)
@@ -759,7 +759,7 @@ async fn process_billing_payload(
          SET status = 'processed',
              processed_at = now(),
              last_error = NULL
-         WHERE id = $1 AND status IN ('pending', 'failed')",
+         WHERE id = $1 AND status = 'pending'",
     )
     .bind(id)
     .execute(&mut **tx)

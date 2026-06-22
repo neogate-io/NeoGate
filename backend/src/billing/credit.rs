@@ -1,12 +1,16 @@
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet, VecDeque},
     hash::{Hash, Hasher},
-    sync::{LazyLock, Mutex},
+    sync::LazyLock,
 };
 
 use async_trait::async_trait;
+use tokio::sync::{Mutex, MutexGuard};
 
-use crate::{error::AppResult, id::DbId};
+use crate::{
+    error::{AppError, AppResult},
+    id::DbId,
+};
 
 use super::{CreditAccountId, DebitPart};
 
@@ -227,7 +231,7 @@ impl HotCreditStore for MemoryHotCreditStore {
         if amount_micro_usd <= 0 {
             return Ok(());
         }
-        let mut balances = self.lock_shard_for_credit_account(&credit_account);
+        let mut balances = self.lock_shard_for_credit_account(&credit_account).await;
         let account_hot = balances.entry(credit_account).or_default();
         account_hot.total_available_micro_usd += amount_micro_usd;
         account_hot.segments.push_back(HotSegment {
@@ -241,7 +245,7 @@ impl HotCreditStore for MemoryHotCreditStore {
         &self,
         credit_account: &CreditAccountId,
     ) -> AppResult<Vec<DebitPart>> {
-        let mut balances = self.lock_shard_for_credit_account(credit_account);
+        let mut balances = self.lock_shard_for_credit_account(credit_account).await;
         let account_hot = balances.entry(credit_account.clone()).or_default();
         let generation = account_hot.generation;
         account_hot.generation = account_hot.generation.wrapping_add(1);
@@ -273,17 +277,10 @@ impl HotCreditStore for MemoryHotCreditStore {
             .collect::<Vec<_>>();
         shard_ids.sort_unstable();
         shard_ids.dedup();
-        let mut shards = shard_ids
-            .into_iter()
-            .map(|id| {
-                (
-                    id,
-                    self.shards[id]
-                        .lock()
-                        .expect("hot credit store shard poisoned"),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut shards = Vec::with_capacity(shard_ids.len());
+        for id in shard_ids {
+            shards.push((id, self.shards[id].lock().await));
+        }
 
         let available = credit_accounts
             .iter()
@@ -334,6 +331,23 @@ impl HotCreditStore for MemoryHotCreditStore {
                 }
             }
         }
+        if remaining > 0 {
+            for part in parts.iter().rev() {
+                let Some((_, balances)) = shards
+                    .iter_mut()
+                    .find(|(id, _)| *id == Self::shard_index(&part.credit_account))
+                else {
+                    continue;
+                };
+                let account_hot = balances.entry(part.credit_account.clone()).or_default();
+                account_hot.total_available_micro_usd += part.amount_micro_usd;
+                account_hot.segments.push_front(HotSegment {
+                    allocation_id: part.allocation_id,
+                    available_micro_usd: part.amount_micro_usd,
+                });
+            }
+            return Ok(None);
+        }
         Ok(Some(parts))
     }
 
@@ -343,7 +357,9 @@ impl HotCreditStore for MemoryHotCreditStore {
             if part.amount_micro_usd <= 0 {
                 continue;
             }
-            let mut balances = self.lock_shard_for_credit_account(&part.credit_account);
+            let mut balances = self
+                .lock_shard_for_credit_account(&part.credit_account)
+                .await;
             let account_hot = balances.entry(part.credit_account.clone()).or_default();
             if account_hot.generation != part.generation {
                 returned.push(part.clone());
@@ -371,7 +387,7 @@ impl HotCreditStore for MemoryHotCreditStore {
         }
 
         for (credit_account, allocation_ids) in by_credit_account {
-            let mut balances = self.lock_shard_for_credit_account(&credit_account);
+            let mut balances = self.lock_shard_for_credit_account(&credit_account).await;
             let Some(account_hot) = balances.get_mut(&credit_account) else {
                 continue;
             };
@@ -407,13 +423,11 @@ impl MemoryHotCreditStore {
         hasher.finish() as usize % HOT_CREDIT_SHARDS
     }
 
-    fn lock_shard_for_credit_account(
+    async fn lock_shard_for_credit_account(
         &self,
         credit_account: &CreditAccountId,
-    ) -> std::sync::MutexGuard<'_, HashMap<CreditAccountId, CreditAccountHotCredit>> {
-        self.shards[Self::shard_index(credit_account)]
-            .lock()
-            .expect("hot credit store shard poisoned")
+    ) -> MutexGuard<'_, HashMap<CreditAccountId, CreditAccountHotCredit>> {
+        self.shards[Self::shard_index(credit_account)].lock().await
     }
 }
 
@@ -526,28 +540,14 @@ impl HotCreditStore for RedisHotCreditStore {
             return Ok(None);
         }
         let mut parts = Vec::new();
-        for chunk in values.chunks_exact(4) {
-            let credit_account_index = chunk[0]
-                .parse::<usize>()
-                .ok()
-                .and_then(|value| value.checked_sub(1));
-            let Some(credit_account) = credit_account_index
-                .and_then(|index| credit_accounts.get(index))
-                .cloned()
-            else {
-                continue;
-            };
-            let allocation_id = chunk[1].parse::<DbId>().unwrap_or_default();
-            let amount = chunk[2].parse::<i64>().unwrap_or_default();
-            let generation = chunk[3].parse::<u64>().unwrap_or_default();
-            if allocation_id > 0 && amount > 0 {
-                parts.push(DebitPart {
-                    credit_account,
-                    allocation_id,
-                    amount_micro_usd: amount,
-                    generation,
-                });
-            }
+        let mut chunks = values.chunks_exact(4);
+        for chunk in &mut chunks {
+            parts.push(decode_redis_debit_part(credit_accounts, chunk)?);
+        }
+        if !chunks.remainder().is_empty() {
+            return Err(AppError::BadRequest(
+                "invalid redis hot credit debit response".to_string(),
+            ));
         }
         Ok(Some(parts))
     }
@@ -604,6 +604,43 @@ impl HotCreditStore for RedisHotCreditStore {
         }
         Ok(())
     }
+}
+
+fn decode_redis_debit_part(
+    credit_accounts: &[CreditAccountId],
+    chunk: &[String],
+) -> AppResult<DebitPart> {
+    let account_position = chunk[0].parse::<usize>().map_err(|err| {
+        AppError::BadRequest(format!("invalid redis hot credit account index: {err}"))
+    })?;
+    let Some(account_index) = account_position.checked_sub(1) else {
+        return Err(AppError::BadRequest(
+            "invalid redis hot credit account index: 0".to_string(),
+        ));
+    };
+    let credit_account = credit_accounts.get(account_index).cloned().ok_or_else(|| {
+        AppError::BadRequest("redis hot credit account index out of range".to_string())
+    })?;
+    let allocation_id = chunk[1].parse::<DbId>().map_err(|err| {
+        AppError::BadRequest(format!("invalid redis hot credit allocation id: {err}"))
+    })?;
+    let amount_micro_usd = chunk[2]
+        .parse::<i64>()
+        .map_err(|err| AppError::BadRequest(format!("invalid redis hot credit amount: {err}")))?;
+    let generation = chunk[3].parse::<u64>().map_err(|err| {
+        AppError::BadRequest(format!("invalid redis hot credit generation: {err}"))
+    })?;
+    if allocation_id <= 0 || amount_micro_usd <= 0 {
+        return Err(AppError::BadRequest(
+            "invalid redis hot credit debit part".to_string(),
+        ));
+    }
+    Ok(DebitPart {
+        credit_account,
+        allocation_id,
+        amount_micro_usd,
+        generation,
+    })
 }
 
 fn decode_hot_segment(credit_account: &CreditAccountId, item: &str) -> Option<DebitPart> {

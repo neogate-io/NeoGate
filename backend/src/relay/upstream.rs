@@ -383,29 +383,77 @@ pub(crate) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
     let latency_ms = ctx.started.elapsed().as_millis() as i64;
     match err {
         AppError::UpstreamRequest(upstream_error) => {
+            let error_kind = upstream_error.kind.type_code();
+            let reason =
+                upstream_request_failure_reason(upstream_error.kind, &upstream_error.detail);
+            let detail = upstream_request_failure_detail(reason);
             let client_response = json!({
                 "error": {
                     "message": upstream_error.kind.user_message(),
-                    "code": upstream_error.kind.type_code(),
+                    "code": error_kind,
                     "upstream": upstream_error.provider,
                     "retryable": upstream_error.retryable,
                 }
             })
             .to_string();
-            let line = format_relay_upstream_failure_log(
-                ctx,
-                upstream_error.kind.type_code(),
-                upstream_error.retryable,
-                upstream_error.status(),
-                latency_ms,
-                &upstream_error.detail,
-                &client_response,
-            );
             if upstream_error.status().is_server_error() {
-                tracing::error!("{line}");
+                tracing::error!(
+                    channel = %ctx.upstream.channel_name,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    channel_key_id = ?ctx.upstream.channel_key_id,
+                    credential_id = ?ctx.upstream.credential_id,
+                    provider = %ctx.upstream.provider,
+                    protocol = ctx.protocol.as_str(),
+                    model = %ctx.model,
+                    path = ctx.path,
+                    upstream = %ctx.upstream.base_url,
+                    status = upstream_error.status().as_u16(),
+                    client_status = upstream_error.status().as_u16(),
+                    latency_ms,
+                    error_kind,
+                    reason,
+                    detail,
+                    retryable = upstream_error.retryable,
+                    client_response = %client_response,
+                    "upstream request failed"
+                );
             } else {
-                tracing::warn!("{line}");
+                tracing::warn!(
+                    channel = %ctx.upstream.channel_name,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    channel_key_id = ?ctx.upstream.channel_key_id,
+                    credential_id = ?ctx.upstream.credential_id,
+                    provider = %ctx.upstream.provider,
+                    protocol = ctx.protocol.as_str(),
+                    model = %ctx.model,
+                    path = ctx.path,
+                    upstream = %ctx.upstream.base_url,
+                    status = upstream_error.status().as_u16(),
+                    client_status = upstream_error.status().as_u16(),
+                    latency_ms,
+                    error_kind,
+                    reason,
+                    detail,
+                    retryable = upstream_error.retryable,
+                    client_response = %client_response,
+                    "upstream request failed"
+                );
             }
+            tracing::debug!(
+                channel_id = ctx.upstream.channel_id,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                provider = %ctx.upstream.provider,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                path = ctx.path,
+                upstream = %ctx.upstream.base_url,
+                error_kind,
+                reason,
+                source_error = %upstream_error.detail,
+                "upstream request failure detail"
+            );
         }
         err => {
             tracing::error!(
@@ -427,40 +475,34 @@ pub(crate) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
     }
 }
 
-fn format_relay_upstream_failure_log(
-    ctx: &RelayContext,
-    error_kind: &str,
-    retryable: bool,
-    status: StatusCode,
-    latency_ms: i64,
-    error: &str,
-    client_response: &str,
-) -> String {
-    format!(
-        "upstream request failed | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream={} status={} latency={}ms error_kind={} retryable={} error={} client_status={} client_response={}",
-        ctx.upstream.channel_name,
-        ctx.upstream.channel_id,
-        ctx.upstream.channel_endpoint_id,
-        optional_id(ctx.upstream.channel_key_id),
-        optional_id(ctx.upstream.credential_id),
-        ctx.upstream.provider,
-        ctx.protocol.as_str(),
-        ctx.model,
-        ctx.path,
-        ctx.upstream.base_url,
-        status.as_u16(),
-        latency_ms,
-        error_kind,
-        retryable,
-        error,
-        status.as_u16(),
-        client_response
-    )
+fn upstream_request_failure_reason(kind: UpstreamErrorKind, detail: &str) -> &'static str {
+    let detail = detail.to_ascii_lowercase();
+    match kind {
+        UpstreamErrorKind::Timeout => "timeout",
+        UpstreamErrorKind::Tls
+            if detail.contains("close_notify")
+                || detail.contains("unexpectedeof")
+                || detail.contains("unexpected eof") =>
+        {
+            "tls_unexpected_eof"
+        }
+        UpstreamErrorKind::Tls => "tls_error",
+        UpstreamErrorKind::Dns => "dns_resolution_failed",
+        UpstreamErrorKind::Connect => "connect_failed",
+        UpstreamErrorKind::Request => "request_error",
+    }
 }
 
-fn optional_id(id: Option<i64>) -> String {
-    id.map(|id| id.to_string())
-        .unwrap_or_else(|| "none".to_string())
+fn upstream_request_failure_detail(reason: &str) -> &'static str {
+    match reason {
+        "timeout" => "upstream did not respond before the request timed out",
+        "tls_unexpected_eof" => "peer closed the TLS connection before sending close_notify",
+        "tls_error" => "TLS connection to upstream failed",
+        "dns_resolution_failed" => "upstream hostname could not be resolved",
+        "connect_failed" => "could not connect to upstream",
+        "request_error" => "upstream request failed before a response was received",
+        _ => "upstream request failed before a response was received",
+    }
 }
 
 pub(crate) fn upstream_url(base_url: &str, path: &str) -> String {
@@ -519,6 +561,21 @@ mod tests {
                 "/v1/chat/completions"
             ),
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+    }
+
+    #[test]
+    fn upstream_request_failure_reason_identifies_tls_unexpected_eof() {
+        assert_eq!(
+            upstream_request_failure_reason(
+                UpstreamErrorKind::Tls,
+                "peer closed connection without sending TLS close_notify"
+            ),
+            "tls_unexpected_eof"
+        );
+        assert_eq!(
+            upstream_request_failure_detail("tls_unexpected_eof"),
+            "peer closed the TLS connection before sending close_notify"
         );
     }
 }

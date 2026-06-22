@@ -535,8 +535,8 @@ async fn flush_returned_billing_part(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     part: &DebitPart,
 ) -> AppResult<()> {
-    account::decrement_reserved(tx, &part.credit_account, part.amount_micro_usd).await?;
     account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+    account::decrement_reserved(tx, &part.credit_account, part.amount_micro_usd).await?;
     Ok(())
 }
 
@@ -1009,9 +1009,9 @@ async fn flush_billing_part(
     billing: &BillingCharge,
     part: &DebitPart,
 ) -> AppResult<()> {
+    account::mark_allocation_consumed(tx, part.allocation_id, part.amount_micro_usd).await?;
     let balance_after =
         account::debit_reserved_balance(tx, &part.credit_account, part.amount_micro_usd).await?;
-    account::mark_allocation_consumed(tx, part.allocation_id, part.amount_micro_usd).await?;
 
     sqlx::query(
         "INSERT INTO credit_ledger

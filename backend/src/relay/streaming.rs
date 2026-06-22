@@ -289,7 +289,7 @@ impl Drop for StreamingRelay {
         let first_response_ms = self.first_response_ms;
 
         tokio::spawn(async move {
-            tracing::warn!(
+            tracing::info!(
                 provider = %ctx.upstream.provider,
                 channel_id = ctx.upstream.channel_id,
                 channel_name = %ctx.upstream.channel_name,
@@ -419,7 +419,7 @@ struct StreamUsageParser {
     buffered: Vec<u8>,
     latest: Option<TokenUsage>,
     completed: bool,
-    disabled: bool,
+    skipping_oversized_line: bool,
     limit_bytes: usize,
 }
 
@@ -429,22 +429,30 @@ impl StreamUsageParser {
             buffered: Vec::new(),
             latest: None,
             completed: false,
-            disabled: false,
+            skipping_oversized_line: false,
             limit_bytes,
         }
     }
 
     fn observe(&mut self, chunk: &[u8]) {
-        if self.disabled {
+        if self.skipping_oversized_line {
+            if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.skipping_oversized_line = false;
+                self.observe(&chunk[offset + 1..]);
+            }
             return;
         }
         if self.buffered.len().saturating_add(chunk.len()) > self.limit_bytes {
-            tracing::warn!(
+            tracing::debug!(
                 limit_bytes = self.limit_bytes,
-                "streamed relay response exceeded usage parse buffer; skipping usage parse"
+                "streamed relay response line exceeded usage parse buffer; skipping oversized line"
             );
             self.buffered.clear();
-            self.disabled = true;
+            if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.observe(&chunk[offset + 1..]);
+            } else {
+                self.skipping_oversized_line = true;
+            }
             return;
         }
 
@@ -507,7 +515,7 @@ impl StreamUsageParser {
     }
 
     fn finish(&mut self) -> Option<TokenUsage> {
-        if self.disabled {
+        if self.skipping_oversized_line {
             return self.latest;
         }
         if !self.buffered.is_empty() {
@@ -557,7 +565,7 @@ mod tests {
 
         parser.observe(&vec![b'a'; 1025]);
 
-        assert!(parser.disabled);
+        assert!(parser.skipping_oversized_line);
         assert!(parser.buffered.is_empty());
         assert!(parser.finish().is_none());
     }
@@ -573,6 +581,25 @@ mod tests {
         parser.observe(&vec![b'a'; 1025]);
 
         let usage = parser.finish().expect("latest usage should be retained");
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn stream_usage_parser_recovers_after_oversized_line() {
+        let mut parser = StreamUsageParser::new(128);
+
+        parser.observe(b"data: ");
+        parser.observe(&vec![b'a'; 256]);
+        parser.observe(
+            br#"
+data: {"usage":{"input_tokens":10,"output_tokens":3}}
+"#,
+        );
+
+        let usage = parser
+            .finish()
+            .expect("usage after oversized line should be parsed");
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 3);
     }

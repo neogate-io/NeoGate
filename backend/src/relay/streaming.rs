@@ -285,26 +285,46 @@ impl Drop for StreamingRelay {
             return;
         };
         let status = self.status;
+        let stream_complete = self.usage.stream_complete();
         let token_usage = self.usage.finish();
         let first_response_ms = self.first_response_ms;
 
         tokio::spawn(async move {
-            tracing::info!(
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                path = ctx.path,
-                base_url = %ctx.upstream.base_url,
-                status = status.as_u16(),
-                streamed = ctx.streamed,
-                latency_ms = ctx.started.elapsed().as_millis() as i64,
-                "downstream client closed relay stream before completion"
-            );
+            if stream_complete {
+                tracing::debug!(
+                    provider = %ctx.upstream.provider,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_name = %ctx.upstream.channel_name,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    channel_key_id = ?ctx.upstream.channel_key_id,
+                    credential_id = ?ctx.upstream.credential_id,
+                    protocol = ctx.protocol.as_str(),
+                    model = %ctx.model,
+                    path = ctx.path,
+                    base_url = %ctx.upstream.base_url,
+                    status = status.as_u16(),
+                    streamed = ctx.streamed,
+                    latency_ms = ctx.started.elapsed().as_millis() as i64,
+                    "downstream client closed relay stream after completed response"
+                );
+            } else {
+                tracing::info!(
+                    provider = %ctx.upstream.provider,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_name = %ctx.upstream.channel_name,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    channel_key_id = ?ctx.upstream.channel_key_id,
+                    credential_id = ?ctx.upstream.credential_id,
+                    protocol = ctx.protocol.as_str(),
+                    model = %ctx.model,
+                    path = ctx.path,
+                    base_url = %ctx.upstream.base_url,
+                    status = status.as_u16(),
+                    streamed = ctx.streamed,
+                    latency_ms = ctx.started.elapsed().as_millis() as i64,
+                    "downstream client closed relay stream before completion"
+                );
+            }
             let billing = if status.is_success() {
                 settle_successful_hold(&ctx, token_usage, "dropped successful stream").await
             } else {
@@ -316,10 +336,12 @@ impl Drop for StreamingRelay {
             } else {
                 key_failure_from_context(&ctx, "upstream error".to_string()).await
             };
+            let error_summary = (!stream_complete)
+                .then(|| "downstream stream closed before completion".to_string());
             let usage = usage_from_context(
                 &ctx,
                 Some(status.as_u16() as i32),
-                Some("downstream stream closed before completion".to_string()),
+                error_summary,
                 first_response_ms,
                 token_usage,
                 billing,
@@ -496,8 +518,8 @@ impl StreamUsageParser {
         let Ok(line) = std::str::from_utf8(line) else {
             return (None, false);
         };
-        if line.strip_prefix("event:").map(str::trim) == Some("message_stop") {
-            return (None, true);
+        if let Some(event) = line.strip_prefix("event:").map(str::trim) {
+            return (None, stream_event_is_terminal(event));
         }
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
             return (None, false);
@@ -510,7 +532,7 @@ impl StreamUsageParser {
         }
         (
             parse_usage_from_sse_data(data),
-            data.contains("message_stop") && sse_data_type_is(data, "message_stop"),
+            sse_data_has_terminal_type(data),
         )
     }
 
@@ -524,6 +546,20 @@ impl StreamUsageParser {
         }
         self.latest
     }
+}
+
+fn stream_event_is_terminal(event: &str) -> bool {
+    matches!(
+        event,
+        "message_stop" | "response.completed" | "response.failed" | "response.cancelled"
+    )
+}
+
+fn sse_data_has_terminal_type(data: &str) -> bool {
+    data.contains("message_stop") && sse_data_type_is(data, "message_stop")
+        || data.contains("response.completed") && sse_data_type_is(data, "response.completed")
+        || data.contains("response.failed") && sse_data_type_is(data, "response.failed")
+        || data.contains("response.cancelled") && sse_data_type_is(data, "response.cancelled")
 }
 
 fn sse_data_type_is(data: &str, expected: &str) -> bool {
@@ -609,6 +645,31 @@ data: {"usage":{"input_tokens":10,"output_tokens":3}}
         let mut parser = StreamUsageParser::new(1024);
 
         parser.observe(b"data: [DONE]\n");
+
+        assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_responses_completed_event() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: response.completed
+data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":3}}}
+"#,
+        );
+
+        assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_responses_completed_data() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":3}}}
+"#,
+        );
 
         assert!(parser.completed);
     }

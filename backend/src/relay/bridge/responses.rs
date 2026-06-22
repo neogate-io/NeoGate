@@ -22,10 +22,15 @@ pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<By
     let input = object
         .remove("input")
         .ok_or_else(|| AppError::BadRequest("input is required".to_string()))?;
-    let (system, messages) = openai_response_input_to_anthropic_messages(&input)?;
+    let cache_control = openai_response_cache_control(object);
+    let (system, mut messages) = openai_response_input_to_anthropic_messages(&input)?;
+    let mut system = (!system.is_empty()).then(|| Value::String(system.join("\n")));
+    if let Some(cache_control) = cache_control.as_ref() {
+        apply_anthropic_cache_control(system.as_mut(), &mut messages, cache_control);
+    }
     object.insert("messages".to_string(), Value::Array(messages));
-    if !system.is_empty() {
-        object.insert("system".to_string(), Value::String(system.join("\n")));
+    if let Some(system) = system {
+        object.insert("system".to_string(), system);
     }
     rename_field(object, "max_output_tokens", "max_tokens");
     if let Some(tools) = object
@@ -48,6 +53,8 @@ pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<By
         "parallel_tool_calls",
         "previous_response_id",
         "prompt",
+        "prompt_cache_key",
+        "prompt_cache_retention",
         "reasoning",
         "service_tier",
         "store",
@@ -60,6 +67,89 @@ pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<By
     }
 
     Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
+fn openai_response_cache_control(object: &Map<String, Value>) -> Option<Value> {
+    (object.contains_key("prompt_cache_key") || object.contains_key("prompt_cache_retention"))
+        .then(|| json!({ "type": "ephemeral" }))
+}
+
+fn apply_anthropic_cache_control(
+    system: Option<&mut Value>,
+    messages: &mut [Value],
+    cache_control: &Value,
+) {
+    let mut applied = 0;
+    if let Some(system) = system {
+        if add_cache_control_to_content(system, cache_control) {
+            applied += 1;
+        }
+    }
+
+    let message_count = messages.len();
+    let final_index = message_count.checked_sub(1);
+    for (index, message) in messages.iter_mut().enumerate().rev() {
+        if applied >= 4 {
+            break;
+        }
+        if Some(index) == final_index && message_count > 1 {
+            continue;
+        }
+        if add_cache_control_to_message(message, cache_control) {
+            applied += 1;
+            break;
+        }
+    }
+
+    if applied == 0 {
+        if let Some(message) = messages.last_mut() {
+            add_cache_control_to_message(message, cache_control);
+        }
+    }
+}
+
+fn add_cache_control_to_message(message: &mut Value, cache_control: &Value) -> bool {
+    let Some(content) = message
+        .as_object_mut()
+        .and_then(|message| message.get_mut("content"))
+    else {
+        return false;
+    };
+    add_cache_control_to_content(content, cache_control)
+}
+
+fn add_cache_control_to_content(content: &mut Value, cache_control: &Value) -> bool {
+    match content {
+        Value::String(text) if !text.is_empty() => {
+            *content = Value::Array(vec![json!({
+                "type": "text",
+                "text": text,
+                "cache_control": cache_control,
+            })]);
+            true
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut().rev() {
+                let Some(object) = item.as_object_mut() else {
+                    continue;
+                };
+                if object.get("type").and_then(Value::as_str) != Some("text") {
+                    continue;
+                }
+                if object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    continue;
+                }
+                object.insert("cache_control".to_string(), cache_control.clone());
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 fn rename_field(object: &mut Map<String, Value>, from: &str, to: &str) {
@@ -934,6 +1024,29 @@ mod response_tests {
         assert_eq!(value["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(value["messages"][2]["content"][0]["tool_use_id"], "call_1");
         assert_eq!(value["messages"][2]["content"][0]["content"], "Sunny");
+    }
+
+    #[test]
+    fn converts_openai_prompt_cache_key_to_anthropic_cache_control() {
+        let body = Bytes::from_static(
+            br#"{"model":"claude-sonnet-4","prompt_cache_key":"trace-1","prompt_cache_retention":"24h","input":[{"role":"developer","content":[{"type":"input_text","text":"Stable instructions"}]},{"role":"user","content":[{"type":"input_text","text":"Stable context"}]},{"role":"user","content":[{"type":"input_text","text":"Fresh question"}]}],"max_output_tokens":16}"#,
+        );
+
+        let converted = openai_response_to_anthropic_messages(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert!(value.get("prompt_cache_key").is_none());
+        assert!(value.get("prompt_cache_retention").is_none());
+        assert_eq!(value["system"][0]["type"], "text");
+        assert_eq!(value["system"][0]["text"], "Stable instructions");
+        assert_eq!(value["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(value["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(value["messages"][0]["content"][0]["text"], "Stable context");
+        assert_eq!(
+            value["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(value["messages"][1]["content"], "Fresh question");
     }
 
     #[test]

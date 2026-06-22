@@ -60,7 +60,18 @@ pub(crate) fn body(
     )
 }
 
-fn body_from_stream(
+pub(crate) fn body_from_bytes(ctx: RelayContext, status: StatusCode, bytes: Bytes) -> Body {
+    let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
+    body_from_stream(
+        ctx,
+        status,
+        Some(bytes.len() as u64),
+        usage_buffer_limit_bytes,
+        futures_util::stream::once(async move { Ok(bytes) }).boxed(),
+    )
+}
+
+pub(crate) fn body_from_stream(
     ctx: RelayContext,
     status: StatusCode,
     content_length: Option<u64>,

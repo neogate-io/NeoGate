@@ -304,6 +304,72 @@ impl Selector {
         )
     }
 
+    pub(crate) async fn select_with_affinity_excluding_protocols(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        affinity_cache: &super::affinity::ChannelAffinityCache,
+        protocols: &[UpstreamProtocol],
+        model: &str,
+        affinity_key: Option<&ChannelAffinityKey>,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let mut last_unavailable = None;
+
+        for &protocol in protocols {
+            if let Some(affinity_key) = affinity_key {
+                if let Some(target) = affinity_cache.get(affinity_key) {
+                    if let Some(upstream) = self.selected_affinity_upstream(
+                        secrets,
+                        &snapshot,
+                        protocol,
+                        model,
+                        now,
+                        &model_blocks,
+                        &target,
+                        attempted,
+                    )? {
+                        tracing::debug!(
+                            rule = affinity_key.rule,
+                            protocol = protocol.as_str(),
+                            model,
+                            channel_id = upstream.channel_id,
+                            channel_endpoint_id = upstream.channel_endpoint_id,
+                            channel_key_id = ?upstream.channel_key_id,
+                            credential_id = ?upstream.credential_id,
+                            "selected upstream from channel affinity cache"
+                        );
+                        return Ok((protocol, upstream));
+                    }
+                }
+            }
+
+            match self.select_from_snapshot(
+                secrets,
+                &snapshot,
+                protocol,
+                model,
+                now,
+                &model_blocks,
+                attempted,
+            ) {
+                Ok(upstream) => return Ok((protocol, upstream)),
+                Err(AppError::UpstreamUnavailable(message)) => {
+                    last_unavailable = Some(message);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(AppError::UpstreamUnavailable(
+            last_unavailable
+                .unwrap_or_else(|| format!("no available upstream channel for {model}")),
+        ))
+    }
+
     fn selected_affinity_upstream(
         &self,
         secrets: &SecretStore,

@@ -25,13 +25,14 @@ use crate::{
 use crate::relay::{ensure_key_backed_async_upstream, raw_upstream_response, response_from_bytes};
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 use crate::{
-    provider::newapi,
+    provider::{bridge, newapi},
     relay::{
-        describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_openai,
-        forward_openai_bound, forward_openai_with_content_type, handle_upstream_http_error,
-        log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
-        record_upstream_http_failure, record_upstream_transport_failure_for_failover,
-        release_empty_hold, reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
+        describe_upstream_http_failure, finish_relay, finish_task_json_response, forward_anthropic,
+        forward_openai, forward_openai_bound, forward_openai_with_content_type,
+        handle_upstream_http_error, log_upstream_http_failure, prepare_relay_body,
+        read_upstream_error_body, record_upstream_http_failure,
+        record_upstream_transport_failure_for_failover, release_empty_hold,
+        reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
         selector::{AttemptedUpstream, ModelCooldown, SelectedUpstream, UpstreamProtocol},
         should_failover_retryable_upstream_failure, task_status_from_value, BodyKind,
         ChannelAffinityKey, PreparedRelayBody, RelayBody, RelayContext,
@@ -40,6 +41,11 @@ use crate::{
 
 const MODEL_UNAVAILABLE_MAX_REROUTES: usize = 3;
 const MODEL_UNAVAILABLE_BLOCK_HOURS: i64 = 12;
+const OPENAI_CHAT_PROTOCOLS: [UpstreamProtocol; 2] =
+    [UpstreamProtocol::Openai, UpstreamProtocol::Anthropic];
+const OPENAI_PROTOCOLS: [UpstreamProtocol; 1] = [UpstreamProtocol::Openai];
+const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 2] =
+    [UpstreamProtocol::OpenAiOauth, UpstreamProtocol::Openai];
 
 #[derive(Debug, Clone)]
 struct ImageRequestMeta {
@@ -321,7 +327,18 @@ async fn relay_openai(
             relay_final: false,
             _image_sync_permit: None,
         };
-        let response = forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await;
+        let response = match protocol {
+            UpstreamProtocol::Anthropic if path == "/v1/chat/completions" => {
+                let body = bridge::openai_chat_to_anthropic_messages(body.clone())?;
+                forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
+            }
+            UpstreamProtocol::Anthropic => Err(AppError::BadRequest(format!(
+                "Anthropic fallback is not supported for {path}"
+            ))),
+            UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
+                forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await
+            }
+        };
 
         match response {
             Ok(upstream_response) => {
@@ -330,6 +347,14 @@ async fn relay_openai(
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
                     ctx.relay_final = true;
+                    if protocol == UpstreamProtocol::Anthropic {
+                        return bridge::finish_anthropic_as_openai_chat(
+                            ctx,
+                            status,
+                            upstream_response,
+                        )
+                        .await;
+                    }
                     return finish_relay(ctx, Ok(upstream_response)).await;
                 }
 
@@ -549,6 +574,7 @@ async fn relay_openai_image(
         let response = forward_openai_with_content_type(
             &state,
             &upstream,
+            protocol,
             body.clone(),
             path,
             meta.content_type.clone(),
@@ -1421,39 +1447,24 @@ async fn select_upstream_excluding(
     affinity_key: Option<&ChannelAffinityKey>,
     attempted: &[AttemptedUpstream],
 ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
-    if path == "/v1/responses" {
-        match state
-            .selector
-            .select_with_affinity_excluding(
-                &state.db.pool,
-                &state.secrets,
-                &state.channel_affinity,
-                UpstreamProtocol::OpenAiOauth,
-                model,
-                affinity_key,
-                attempted,
-            )
-            .await
-        {
-            Ok(upstream) => return Ok((UpstreamProtocol::OpenAiOauth, upstream)),
-            Err(AppError::UpstreamUnavailable(_)) => {}
-            Err(err) => return Err(err),
-        }
-    }
+    let protocols = match path {
+        "/v1/chat/completions" => &OPENAI_CHAT_PROTOCOLS[..],
+        "/v1/responses" => &OPENAI_RESPONSES_PROTOCOLS[..],
+        _ => &OPENAI_PROTOCOLS[..],
+    };
 
-    let upstream = state
+    state
         .selector
-        .select_with_affinity_excluding(
+        .select_with_affinity_excluding_protocols(
             &state.db.pool,
             &state.secrets,
             &state.channel_affinity,
-            UpstreamProtocol::Openai,
+            protocols,
             model,
             affinity_key,
             attempted,
         )
-        .await?;
-    Ok((UpstreamProtocol::Openai, upstream))
+        .await
 }
 
 fn log_relay_transport_failover(ctx: &RelayContext, summary: &str, failover_attempt: usize) {

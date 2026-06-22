@@ -21,6 +21,7 @@ export type CreateUserPayload = {
 export type UpdateUserPayload = {
   email?: string
   username?: string | null
+  password?: string
   status?: UserStatus
   user_group_id?: number
 }

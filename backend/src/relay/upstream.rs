@@ -22,8 +22,9 @@ pub(crate) async fn forward_openai(
     if protocol == UpstreamProtocol::OpenAiOauth {
         return forward_openai_oauth(state, upstream, body, path).await;
     }
+    ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, UpstreamProtocol::Openai, path, || {
+    send_upstream_request(state, upstream, protocol, path, || {
         state
             .http
             .post(url.clone())
@@ -37,13 +38,15 @@ pub(crate) async fn forward_openai(
 pub(crate) async fn forward_openai_with_content_type(
     state: &AppState,
     upstream: &SelectedUpstream,
+    protocol: UpstreamProtocol,
     body: Bytes,
     path: &str,
     content_type: HeaderValue,
     accept_event_stream: bool,
 ) -> AppResult<reqwest::Response> {
+    ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, UpstreamProtocol::Openai, path, || {
+    send_upstream_request(state, upstream, protocol, path, || {
         let mut request = state
             .http
             .post(url.clone())
@@ -56,6 +59,16 @@ pub(crate) async fn forward_openai_with_content_type(
         request
     })
     .await
+}
+
+fn ensure_openai_protocol(protocol: UpstreamProtocol) -> AppResult<()> {
+    if protocol == UpstreamProtocol::Openai {
+        return Ok(());
+    }
+    Err(AppError::BadRequest(format!(
+        "{} cannot be sent with OpenAI forwarding",
+        protocol.as_str()
+    )))
 }
 
 async fn forward_openai_oauth(
@@ -311,7 +324,12 @@ async fn send_upstream_request<F>(
 where
     F: FnOnce() -> reqwest::RequestBuilder,
 {
-    match tokio::time::timeout(state.config.http.upstream_timeout, build().send()).await {
+    match tokio::time::timeout(
+        state.config.http.upstream_timeout,
+        build().header("accept-encoding", "identity").send(),
+    )
+    .await
+    {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(err)) => Err(AppError::Reqwest(err)),
         Err(_) => Err(AppError::UpstreamRequest(UpstreamRequestError::new(

@@ -85,7 +85,6 @@ function Warn([string]$Text) {
 }
 
 function Fail([string]$Text) {
-  Write-Host $Text -ForegroundColor Red
   throw $Text
 }
 
@@ -188,12 +187,30 @@ function Run-Command {
 function Verify-ApiKey {
   $result = Invoke-NeoGateRequest -Uri "$ApiRoot/api/user-key/verify" -Headers @{ authorization = "Bearer $ApiKey" }
   switch ($result.Status) {
-    200 { Success 'API key verified'; return }
-    401 { Fail "API key was rejected by $ApiRoot" }
-    403 { Fail "API key was rejected by $ApiRoot" }
+    200 { Success 'API key verified'; return $true }
+    401 { Warn "API key was rejected by $ApiRoot"; return $false }
+    403 { Warn "API key was rejected by $ApiRoot"; return $false }
     404 { Fail 'Verification endpoint was not found. Make sure NeoGate is up to date and BaseUrl is correct.' }
     0 { Fail "Could not connect to $ApiRoot. $($result.Body)" }
     default { Fail "API key verification failed with HTTP $($result.Status). $($result.Body)" }
+  }
+}
+
+function Read-AndVerifyApiKey {
+  while ($true) {
+    if (-not $ApiKey) {
+      $script:ApiKey = Read-SecretText 'Enter API key'
+    }
+    if (-not $ApiKey) {
+      Warn 'API key cannot be empty'
+      $script:ApiKey = $null
+      continue
+    }
+    if (Verify-ApiKey) {
+      return
+    }
+    Warn 'Please enter the API key again.'
+    $script:ApiKey = $null
   }
 }
 
@@ -518,60 +535,64 @@ function Test-ClaudeRelay {
 $InstallStep = 0
 $InstallTotalSteps = 6
 
-if ($BaseUrl -eq '__NEOGATE_' + 'DEFAULT_BASE_URL__') {
-  Fail 'install script was not dynamically generated. Use the install command from the NeoGate page.'
-}
-
-Normalize-BaseUrl
-
-Write-Host "$AppName Windows installer"
-
-Step 'Verify API key'
-if (-not $ApiKey) {
-  $ApiKey = Read-SecretText 'Enter API key'
-}
-if (-not $ApiKey) { Fail 'API key cannot be empty' }
-Verify-ApiKey
-
-Step 'Choose client'
-Select-Client
-Success (Selected-ClientName)
-
-Step 'Choose default model'
-Select-Model
-
-Write-Host ''
-Write-Host 'Config summary'
-Write-Host "Client     $(Selected-ClientName)"
-Write-Host "Base URL   $(Selected-BaseUrl)"
-Write-Host "Model      $(Selected-Model)"
-Write-Host "Config     $(Selected-ConfigFile)"
-
-Step 'Check dependencies'
-if (Confirm-DefaultYes 'Check dependencies?') {
-  Install-Node
-  if ($Client -eq 'claude') {
-    Install-ClaudeCode
-  } else {
-    Install-CodexCli
+try {
+  if ($BaseUrl -eq '__NEOGATE_' + 'DEFAULT_BASE_URL__') {
+    Fail 'install script was not dynamically generated. Use the install command from the NeoGate page.'
   }
-} else {
-  Warn 'Skipped dependency check/install'
-}
 
-Step 'Write config'
-if (Confirm-DefaultYes 'Write config?') {
-  if ($Client -eq 'claude') {
-    Write-ClaudeConfig
-    Step 'Test gateway'
-    Test-ClaudeRelay
-    Success 'Claude Code configured'
+  Normalize-BaseUrl
+
+  Write-Host "$AppName Windows installer"
+
+  Step 'Verify API key'
+  Read-AndVerifyApiKey
+
+  Step 'Choose client'
+  Select-Client
+  Success (Selected-ClientName)
+
+  Step 'Choose default model'
+  Select-Model
+
+  Write-Host ''
+  Write-Host 'Config summary'
+  Write-Host "Client     $(Selected-ClientName)"
+  Write-Host "Base URL   $(Selected-BaseUrl)"
+  Write-Host "Model      $(Selected-Model)"
+  Write-Host "Config     $(Selected-ConfigFile)"
+
+  Step 'Check dependencies'
+  if (Confirm-DefaultYes 'Check dependencies?') {
+    Install-Node
+    if ($Client -eq 'claude') {
+      Install-ClaudeCode
+    } else {
+      Install-CodexCli
+    }
   } else {
-    Write-CodexConfig
-    Step 'Test gateway'
-    Test-CodexRelay
-    Success 'Codex CLI configured'
+    Warn 'Skipped dependency check/install'
   }
-} else {
-  Warn 'Skipped config update'
+
+  Step 'Write config'
+  if (Confirm-DefaultYes 'Write config?') {
+    if ($Client -eq 'claude') {
+      Write-ClaudeConfig
+      Step 'Test gateway'
+      Test-ClaudeRelay
+      Success 'Claude Code configured'
+    } else {
+      Write-CodexConfig
+      Step 'Test gateway'
+      Test-CodexRelay
+      Success 'Codex CLI configured'
+    }
+  } else {
+    Warn 'Skipped config update'
+  }
+} catch {
+  $message = $_.Exception.Message
+  if (-not $message) { $message = "$_" }
+  Write-Host $message -ForegroundColor Red
+  $global:LASTEXITCODE = 1
+  return
 }

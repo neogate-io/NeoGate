@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     error::{AppError, AppResult},
+    provider::bridge,
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -23,7 +24,7 @@ use crate::{
 
 use crate::relay::{
     describe_upstream_http_failure, ensure_key_backed_async_upstream, finish_relay,
-    finish_task_json_response, forward_anthropic, forward_anthropic_bound,
+    finish_task_json_response, forward_anthropic, forward_anthropic_bound, forward_openai,
     log_upstream_http_failure, prepare_relay_body, raw_upstream_response, read_upstream_error_body,
     record_upstream_http_failure, record_upstream_transport_failure_for_failover,
     release_empty_hold, reserve_credit, respond_upstream_http_failure, response_from_bytes,
@@ -39,6 +40,9 @@ pub(crate) struct AnthropicBatchListQuery {
     after_id: Option<String>,
     before_id: Option<String>,
 }
+
+const ANTHROPIC_MESSAGE_PROTOCOLS: [UpstreamProtocol; 2] =
+    [UpstreamProtocol::Anthropic, UpstreamProtocol::Openai];
 
 pub(crate) async fn anthropic_messages(
     State(state): State<Arc<AppState>>,
@@ -64,13 +68,13 @@ pub(crate) async fn anthropic_messages(
     let mut attempted_upstreams = Vec::new();
     loop {
         let started = Instant::now();
-        let upstream = state
+        let (protocol, upstream) = state
             .selector
-            .select_with_affinity_excluding(
+            .select_with_affinity_excluding_protocols(
                 &state.db.pool,
                 &state.secrets,
                 &state.channel_affinity,
-                UpstreamProtocol::Anthropic,
+                &ANTHROPIC_MESSAGE_PROTOCOLS,
                 &meta.model,
                 channel_affinity_key.as_ref(),
                 &attempted_upstreams,
@@ -99,7 +103,7 @@ pub(crate) async fn anthropic_messages(
             state: Arc::clone(&state),
             auth: auth.clone(),
             upstream,
-            protocol: UpstreamProtocol::Anthropic,
+            protocol,
             path: "/v1/messages",
             model: meta.model.clone(),
             streamed: meta.stream,
@@ -113,7 +117,25 @@ pub(crate) async fn anthropic_messages(
             relay_final: false,
             _image_sync_permit: None,
         };
-        let response = forward_anthropic(&state, &headers, &ctx.upstream, body.clone()).await;
+        let response = match protocol {
+            UpstreamProtocol::Anthropic => {
+                forward_anthropic(&state, &headers, &ctx.upstream, body.clone()).await
+            }
+            UpstreamProtocol::Openai => {
+                let body = bridge::messages_to_openai_chat(body.clone())?;
+                forward_openai(
+                    &state,
+                    &ctx.upstream,
+                    protocol,
+                    body,
+                    "/v1/chat/completions",
+                )
+                .await
+            }
+            UpstreamProtocol::OpenAiOauth => Err(AppError::BadRequest(
+                "openai_oauth does not support Anthropic messages".to_string(),
+            )),
+        };
 
         match response {
             Ok(upstream_response) => {
@@ -121,6 +143,10 @@ pub(crate) async fn anthropic_messages(
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
                     ctx.relay_final = true;
+                    if protocol == UpstreamProtocol::Openai {
+                        return bridge::finish_chat_as_anthropic(ctx, status, upstream_response)
+                            .await;
+                    }
                     return finish_relay(ctx, Ok(upstream_response)).await;
                 }
 

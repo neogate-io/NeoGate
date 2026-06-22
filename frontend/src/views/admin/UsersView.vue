@@ -318,11 +318,17 @@ async function copyApiKey(row: UserKey) {
 async function submitEditUser() {
   const user = selectedUser.value
   if (!user) return
+  const password = userForm.password
+  if (password && password.length < 8) {
+    ElMessage.error(t('passwordMinLength'))
+    return
+  }
   await withLoading(userDialogSaving, async () => {
     try {
       await updateUser(user.id, {
         email: userForm.email.trim(),
         username: userForm.username.trim() || null,
+        ...(password ? { password } : {}),
         status: userForm.status,
         user_group_id: userForm.userGroupId
       })
@@ -836,15 +842,15 @@ onMounted(() => {
               show-word-limit
             />
           </el-form-item>
-          <el-form-item
-            v-if="isUserCreateDialog"
-            class="user-dialog-field is-wide"
-            :label="t('loginPassword')"
-          >
+          <el-form-item class="user-dialog-field is-compact" :label="t('loginPassword')">
             <el-input
               v-model="userForm.password"
               autocomplete="new-password"
-              :placeholder="t('loginPasswordPlaceholder')"
+              :placeholder="
+                isUserCreateDialog
+                  ? t('loginPasswordPlaceholder')
+                  : t('editUserPasswordPlaceholder')
+              "
               :prefix-icon="Lock"
               show-password
               type="password"

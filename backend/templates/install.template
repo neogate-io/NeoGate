@@ -124,6 +124,7 @@ message() {
       elevated_missing) printf '%s' "此步骤需要管理员权限，但 sudo 不可用。" ;;
       key_verified) printf '%s' "API 密钥验证成功" ;;
       key_rejected) printf 'API 密钥被 %s 拒绝' "$1" ;;
+      reenter_api_key) printf '%s' "请重新输入 API 密钥。" ;;
       verify_not_found) printf '%s' "找不到验证接口。请确认 NeoGate 已更新且 BASE_URL 正确。" ;;
       connect_failed) printf '无法连接到 %s' "$1" ;;
       verify_failed) printf 'API 密钥验证失败，HTTP %s' "$1" ;;
@@ -227,6 +228,7 @@ message() {
     elevated_missing) printf '%s' "This step needs elevated privileges, but sudo is not available." ;;
     key_verified) printf '%s' "API key verified" ;;
     key_rejected) printf 'API key was rejected by %s' "$1" ;;
+    reenter_api_key) printf '%s' "Please enter the API key again." ;;
     verify_not_found) printf '%s' "Verification endpoint was not found. Make sure NeoGate is up to date and BASE_URL is correct." ;;
     connect_failed) printf 'Could not connect to %s' "$1" ;;
     verify_failed) printf 'API key verification failed with HTTP %s' "$1" ;;
@@ -451,24 +453,32 @@ has_tty() {
 
 prompt_secret() {
   local prompt="$1"
+  local force="${2:-0}"
   local value
 
-  if [[ -n "$API_KEY" ]]; then
+  if [[ "$force" != "1" && -n "$API_KEY" ]]; then
     return 0
   fi
 
   has_tty || die "$(message no_tty_api_key)"
-  printf '%s' "$prompt" >/dev/tty
-  stty -echo </dev/tty
-  IFS= read -r value </dev/tty || {
-    stty echo </dev/tty
-    die "$(message read_api_key_failed)"
-  }
-  stty echo </dev/tty
-  printf '\n' >/dev/tty
 
-  [[ -n "$value" ]] || die "$(message empty_api_key)"
-  API_KEY="$value"
+  while true; do
+    printf '%s' "$prompt" >/dev/tty
+    stty -echo </dev/tty
+    IFS= read -r value </dev/tty || {
+      stty echo </dev/tty
+      die "$(message read_api_key_failed)"
+    }
+    stty echo </dev/tty
+    printf '\n' >/dev/tty
+
+    if [[ -n "$value" ]]; then
+      API_KEY="$value"
+      return 0
+    fi
+
+    warn "$(message empty_api_key)"
+  done
 }
 
 confirm_default_yes() {
@@ -694,7 +704,8 @@ verify_api_key() {
       ;;
     401|403)
       print_response_hint "$body_file"
-      die "$(message key_rejected "$API_ROOT")"
+      warn "$(message key_rejected "$API_ROOT")"
+      return 1
       ;;
     404)
       print_response_hint "$body_file"
@@ -708,6 +719,17 @@ verify_api_key() {
       die "$(message verify_failed "$status")"
       ;;
   esac
+}
+
+prompt_and_verify_api_key() {
+  prompt_secret "$(message api_key_prompt)"
+
+  while ! verify_api_key; do
+    has_tty || die "$(message no_tty_api_key)"
+    warn "$(message reenter_api_key)"
+    API_KEY=""
+    prompt_secret "$(message api_key_prompt)" 1
+  done
 }
 
 extract_model_ids() {
@@ -1195,8 +1217,7 @@ main() {
   log "$(message installer_title "$APP_NAME")"
 
   step "$(message step_verify_key)"
-  prompt_secret "$(message api_key_prompt)"
-  verify_api_key
+  prompt_and_verify_api_key
 
   step "$(message step_choose_client)"
   select_client

@@ -46,7 +46,7 @@ pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
 pub(crate) use limit::ImageSyncLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
-pub(crate) use streaming::RelayContext;
+pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::upstream_url;
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type,
@@ -90,6 +90,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/images/variations",
             post(openai::openai_image_variations),
         )
+        .route(
+            "/anthropic",
+            get(anthropic_gateway_probe).head(anthropic_gateway_probe),
+        )
         .route("/anthropic/v1/messages/models", get(list_anthropic_models))
         .route("/v1/messages", post(anthropic::anthropic_messages))
         .route(
@@ -114,6 +118,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/messages/batches/{message_batch_id}/results",
             get(anthropic::anthropic_message_batch_results),
         )
+}
+
+async fn anthropic_gateway_probe() -> StatusCode {
+    StatusCode::NO_CONTENT
 }
 
 pub(crate) async fn finish_task_json_response(

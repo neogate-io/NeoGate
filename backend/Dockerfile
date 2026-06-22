@@ -5,6 +5,7 @@ ARG DEBIAN_IMAGE=${DOCKER_HUB_PREFIX}library/debian:bookworm-slim
 FROM ${RUST_IMAGE} AS builder
 
 ARG CARGO_REGISTRY_MIRROR=
+ARG CARGO_BUILD_JOBS=1
 
 WORKDIR /app/neogate
 
@@ -25,7 +26,7 @@ COPY deploy/systemd/start-neogate.sh ./deploy/systemd/start-neogate.sh
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release -p neogate -p neogate-scheduler
+    cargo build --release -j ${CARGO_BUILD_JOBS} -p neogate -p neogate-scheduler
 
 FROM ${DEBIAN_IMAGE} AS runtime
 

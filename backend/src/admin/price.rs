@@ -592,7 +592,7 @@ fn normalize_template_provider(provider: &str) -> Option<&'static str> {
         "deepseek" => Some("deepseek"),
         "qwen" | "dashscope" | "alibaba" => Some("qwen"),
         "moonshot" | "kimi" => Some("moonshot"),
-        "zhipu" | "bigmodel" => Some("zhipu"),
+        "zhipu" | "zhipuai" | "bigmodel" => Some("zhipu"),
         "doubao" | "volcengine" | "volcengine-ark" => Some("doubao"),
         "baidu" | "qianfan" => Some("baidu"),
         "tencent" | "hunyuan" => Some("tencent"),
@@ -881,6 +881,8 @@ mod tests {
             Some("google")
         );
         assert_eq!(normalize_template_provider("dashscope"), Some("qwen"));
+        assert_eq!(normalize_template_provider("zhipuai"), Some("zhipu"));
+        assert_eq!(normalize_template_provider("zhipuai-coding-plan"), None);
         assert_eq!(normalize_template_provider("unknown-provider"), None);
     }
 

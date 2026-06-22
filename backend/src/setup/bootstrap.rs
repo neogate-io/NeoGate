@@ -333,6 +333,30 @@ pub fn apply_service_mode_env(service_mode: ServiceMode) {
     std::env::set_var("SERVICE_MODE", service_mode.as_str());
 }
 
+pub async fn save_site_config(site_name: String, public_base_url: String) -> AppResult<()> {
+    let probe = RuntimeProbe::from_env()?;
+    if probe.runtime_mode.is_distributed() {
+        return Err(AppError::BadRequest(
+            "cluster mode requires external shared configuration".to_string(),
+        ));
+    }
+
+    let site_name = optional_trimmed(Some(site_name))
+        .ok_or_else(|| AppError::BadRequest("SITE_NAME is required".to_string()))?;
+    let public_base_url = optional_trimmed(Some(public_base_url))
+        .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
+    validate_public_base_url(&public_base_url)?;
+    std::env::set_var("SITE_NAME", &site_name);
+    std::env::set_var("PUBLIC_BASE_URL", &public_base_url);
+    upsert_env_file(
+        &probe.env_file,
+        &[
+            ("SITE_NAME".to_string(), site_name),
+            ("PUBLIC_BASE_URL".to_string(), public_base_url),
+        ],
+    )
+}
+
 pub async fn save_service_mode_config(service_mode: ServiceMode) -> AppResult<()> {
     validate_service_mode_config(service_mode)?;
     apply_service_mode_env(service_mode);

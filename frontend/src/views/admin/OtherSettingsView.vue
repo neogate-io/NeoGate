@@ -3,6 +3,7 @@ import { computed, h, onMounted, ref } from 'vue'
 import {
   Coin,
   Link as LinkIcon,
+  Monitor,
   PriceTag,
   Refresh,
   Search,
@@ -12,7 +13,7 @@ import {
 import { ElMessage } from 'element-plus'
 import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
-import { checkLatestVersion } from '../../api/settings'
+import { checkLatestVersion, getSiteSetting, saveSiteSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
@@ -25,6 +26,12 @@ const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const loading = ref(false)
 const servicePolicy = ref<ServicePolicy | null>(null)
+const siteSettingSaving = ref(false)
+const siteForm = ref({
+  siteName: '',
+  publicBaseUrl: '',
+  envWriteSupported: false
+})
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
 const servicePolicySaving = ref(false)
 const syncingTemplates = ref(false)
@@ -73,6 +80,11 @@ const registrationDescription = computed(() => {
   return servicePolicy.value.service_mode === 'paid'
     ? t('registrationPaidEnabledDescription')
     : t('registrationInternalEnabledDescription')
+})
+const siteSettingDescription = computed(() => {
+  return siteForm.value.envWriteSupported
+    ? t('siteSettingsDescription')
+    : t('siteSettingsReadOnlyDescription')
 })
 const versionStatusLabel = computed(() => {
   if (!versionCheck.value) return t('versionNotChecked')
@@ -148,15 +160,62 @@ function readReferenceSyncError(err: unknown) {
   return readError(err)
 }
 
+function applySiteSetting(setting: Awaited<ReturnType<typeof getSiteSetting>>) {
+  siteForm.value = {
+    siteName: setting.site_name || 'NeoGate',
+    publicBaseUrl: setting.public_base_url ?? '',
+    envWriteSupported: setting.env_write_supported
+  }
+}
+
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [policy, catalog] = await Promise.all([
+      const [policy, siteSetting, catalog] = await Promise.all([
         getAdminServicePolicy(),
+        getSiteSetting(),
         getModelReferenceCatalog()
       ])
       servicePolicy.value = policy
+      applySiteSetting(siteSetting)
       modelReferenceCatalog.value = catalog
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+async function saveSiteConfig() {
+  const siteName = siteForm.value.siteName.trim()
+  const publicBaseUrl = siteForm.value.publicBaseUrl.trim()
+  if (!siteName) {
+    ElMessage.error(t('siteNameRequired'))
+    return
+  }
+  if (!publicBaseUrl) {
+    ElMessage.error(t('publicBaseUrlRequired'))
+    return
+  }
+
+  try {
+    const url = new URL(publicBaseUrl)
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
+  } catch {
+    ElMessage.error(t('publicBaseUrlInvalid'))
+    return
+  }
+
+  await withLoading(siteSettingSaving, async () => {
+    try {
+      const result = await saveSiteSetting({
+        site_name: siteName,
+        public_base_url: publicBaseUrl
+      })
+      applySiteSetting(result.setting)
+      servicePolicy.value = await getAdminServicePolicy(true).catch(() => servicePolicy.value)
+      ElMessage.success(
+        result.restart_required ? t('siteSettingsSavedRestartRequired') : t('siteSettingsSaved')
+      )
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -219,6 +278,47 @@ onMounted(load)
 <template>
   <section class="admin-settings-view other-settings-view">
     <div v-loading="loading" class="other-settings-grid">
+      <section class="other-settings-card">
+        <header class="admin-settings-section-header other-settings-card-header">
+          <el-icon class="admin-settings-panel-icon"><Monitor /></el-icon>
+          <div class="other-settings-card-copy">
+            <h3>{{ t('siteSettings') }}</h3>
+            <p>{{ siteSettingDescription }}</p>
+          </div>
+        </header>
+        <el-form
+          class="site-settings-inline-form"
+          label-position="top"
+          @submit.prevent="saveSiteConfig"
+        >
+          <el-form-item :label="t('siteNameLabel')">
+            <el-input
+              v-model="siteForm.siteName"
+              :disabled="!siteForm.envWriteSupported || siteSettingSaving"
+              :placeholder="t('siteNamePlaceholder')"
+            />
+          </el-form-item>
+          <el-form-item :label="t('publicBaseUrlLabel')">
+            <el-input
+              v-model="siteForm.publicBaseUrl"
+              :disabled="!siteForm.envWriteSupported || siteSettingSaving"
+              :placeholder="t('publicBaseUrlPlaceholder')"
+            />
+          </el-form-item>
+        </el-form>
+        <div class="other-settings-actions">
+          <el-button
+            class="admin-action-button"
+            type="primary"
+            :disabled="!siteForm.envWriteSupported"
+            :loading="siteSettingSaving"
+            @click="saveSiteConfig"
+          >
+            {{ t('save') }}
+          </el-button>
+        </div>
+      </section>
+
       <section class="other-settings-card">
         <header class="admin-settings-section-header other-settings-card-header">
           <el-icon class="admin-settings-panel-icon"><Coin /></el-icon>
@@ -487,6 +587,24 @@ onMounted(load)
   font-weight: 720;
 }
 
+.site-settings-inline-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+}
+
+.site-settings-inline-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.site-settings-inline-form :deep(.el-form-item__label) {
+  color: var(--admin-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 6px;
+}
+
 .other-settings-actions {
   border-top: 1px solid var(--admin-border-soft);
   display: flex;
@@ -608,6 +726,10 @@ onMounted(load)
   .other-settings-actions .el-button {
     flex: 1 1 0;
     min-width: 0;
+  }
+
+  .site-settings-inline-form {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

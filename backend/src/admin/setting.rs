@@ -4,11 +4,33 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{
+    config::RuntimeProbe,
     email::{smtp_test_error, EmailConfig, EmailService, SMTP_SETTING_KEY},
     error::{AppError, AppResult},
     input::trimmed_non_empty_owned,
+    setup::bootstrap::save_site_config,
     AppState,
 };
+
+#[derive(Debug, Serialize)]
+pub struct SiteSettingRecord {
+    pub site_name: String,
+    pub public_base_url: Option<String>,
+    pub env_write_supported: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertSiteSettingRequest {
+    pub site_name: String,
+    pub public_base_url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpsertSiteSettingResponse {
+    pub ok: bool,
+    pub restart_required: bool,
+    pub setting: SiteSettingRecord,
+}
 
 #[derive(Debug, Serialize)]
 pub struct SmtpSettingRecord {
@@ -53,6 +75,27 @@ struct StoredSmtpSetting {
     from_email: String,
     from_name: Option<String>,
     subject_prefix: Option<String>,
+}
+
+pub fn get_site_setting() -> AppResult<SiteSettingRecord> {
+    let probe = RuntimeProbe::from_env()?;
+    let env_write_supported = !probe.runtime_mode.is_distributed();
+    Ok(SiteSettingRecord {
+        site_name: probe.site_name.unwrap_or_else(|| "NeoGate".to_string()),
+        public_base_url: probe.public_base_url,
+        env_write_supported,
+    })
+}
+
+pub async fn upsert_site_setting(
+    req: UpsertSiteSettingRequest,
+) -> AppResult<UpsertSiteSettingResponse> {
+    save_site_config(req.site_name, req.public_base_url).await?;
+    Ok(UpsertSiteSettingResponse {
+        ok: true,
+        restart_required: true,
+        setting: get_site_setting()?,
+    })
 }
 
 pub async fn get_smtp_setting(state: &AppState) -> AppResult<SmtpSettingRecord> {

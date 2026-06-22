@@ -526,6 +526,10 @@ function shouldSavePriceForm(form: ChannelPriceForm) {
   return form.hasPriceRecord || hasReferencePrice(form) || hasManualPriceInput(form)
 }
 
+function shouldEnablePriceForm(form: ChannelPriceForm) {
+  return form.enabled || hasManualPriceInput(form)
+}
+
 function openPriceDialog(row: Channel) {
   for (const key of Object.keys(priceForms)) {
     delete priceForms[key]
@@ -691,7 +695,7 @@ async function saveChannelPrices() {
           cache_write_price_usd_micros: cacheWritePricePayload(form),
           billing_meter: billingMeter,
           unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
-          enabled: form.enabled
+          enabled: shouldEnablePriceForm(form)
         })
       }
       ElMessage.success(t('priceSaved'))

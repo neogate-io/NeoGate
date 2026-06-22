@@ -103,13 +103,13 @@ pub(crate) fn openai_responses_affinity_key_from_value(
 }
 
 pub(crate) fn anthropic_messages_affinity_key_from_value(
-    model: &str,
+    _model: &str,
     value: &Value,
 ) -> Option<ChannelAffinityKey> {
     affinity_key_from_value(
         "anthropic_messages_metadata_user_id",
         UpstreamProtocol::Anthropic,
-        model,
+        "",
         value,
         &["metadata", "user_id"],
     )
@@ -180,7 +180,17 @@ mod tests {
         let key = anthropic_messages_affinity_key_from_value("claude-sonnet-4", &value).unwrap();
 
         assert_eq!(key.rule, "anthropic_messages_metadata_user_id");
+        assert_eq!(key.model, "");
         assert_eq!(key.value, "user-1");
+    }
+
+    #[test]
+    fn anthropic_affinity_key_ignores_model_name() {
+        let value: Value = serde_json::from_str(r#"{"metadata":{"user_id":"trace-1"}}"#).unwrap();
+        let sonnet = anthropic_messages_affinity_key_from_value("claude-sonnet-4", &value).unwrap();
+        let haiku = anthropic_messages_affinity_key_from_value("claude-haiku-4", &value).unwrap();
+
+        assert_eq!(sonnet, haiku);
     }
 
     #[test]

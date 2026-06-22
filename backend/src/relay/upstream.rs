@@ -12,6 +12,20 @@ use crate::{
 use super::selector::{SelectedUpstream, UpstreamProtocol};
 use super::streaming::RelayContext;
 
+const ANTHROPIC_CLI_PASSTHROUGH_HEADERS: &[&str] = &[
+    "x-stainless-arch",
+    "x-stainless-lang",
+    "x-stainless-os",
+    "x-stainless-package-version",
+    "x-stainless-retry-count",
+    "x-stainless-runtime",
+    "x-stainless-runtime-version",
+    "x-stainless-timeout",
+    "user-agent",
+    "x-app",
+    "anthropic-dangerous-direct-browser-access",
+];
+
 pub(crate) async fn forward_openai(
     state: &AppState,
     upstream: &SelectedUpstream,
@@ -270,7 +284,7 @@ pub(crate) async fn forward_anthropic(
                 request = request.header("anthropic-beta", beta);
             }
 
-            request
+            apply_anthropic_cli_passthrough_headers(request, headers)
         },
     )
     .await
@@ -309,9 +323,21 @@ pub(crate) async fn forward_anthropic_bound(
                 .header("content-type", "application/json")
                 .body(body);
         }
-        request
+        apply_anthropic_cli_passthrough_headers(request, headers)
     })
     .await
+}
+
+fn apply_anthropic_cli_passthrough_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &HeaderMap,
+) -> reqwest::RequestBuilder {
+    for name in ANTHROPIC_CLI_PASSTHROUGH_HEADERS {
+        if let Some(value) = headers.get(*name) {
+            request = request.header(*name, value.clone());
+        }
+    }
+    request
 }
 
 async fn send_upstream_request<F>(

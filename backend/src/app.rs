@@ -162,12 +162,17 @@ async fn log_http_response(
     auth_context: auth::RequestAuthLogContext,
 ) -> Response {
     let started = Instant::now();
-    let request_line = format!("{} {}", request.method(), request.uri().path());
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let request_line = format!("{method} {path}");
 
     let response = next.run(request).await;
     let status = response.status();
     let (response, error_code, error_message) = response_error_for_log(response).await;
     let elapsed_ms = started.elapsed().as_millis();
+    if should_skip_successful_relay_access_log(&method, &path, status, error_message.is_some()) {
+        return response;
+    }
     let (auth, subject_id) = auth_context.snapshot();
     log_http_request_event(
         &request_line,
@@ -179,6 +184,29 @@ async fn log_http_response(
         error_message,
     );
     response
+}
+
+fn should_skip_successful_relay_access_log(
+    method: &Method,
+    path: &str,
+    status: StatusCode,
+    has_error: bool,
+) -> bool {
+    if *method != Method::POST || !status.is_success() || has_error {
+        return false;
+    }
+    matches!(
+        path,
+        "/v1/chat/completions"
+            | "/v1/embeddings"
+            | "/v1/moderations"
+            | "/v1/responses"
+            | "/v1/images/generations"
+            | "/v1/images/edits"
+            | "/v1/images/variations"
+            | "/v1/messages"
+            | "/anthropic/v1/messages"
+    )
 }
 
 fn log_http_request_event(

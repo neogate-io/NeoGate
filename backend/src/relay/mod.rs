@@ -575,85 +575,124 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
     let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
 
-    let mut line = String::from("relay request");
-    push_field(&mut line, "relay_trace_id", ctx.relay_trace_id);
-    push_field(&mut line, "path", ctx.path);
-    push_field(&mut line, "user_id", usage.user_id);
-    push_field(&mut line, "project_id", usage.project_id);
-    push_field(&mut line, "user_key_id", usage.user_key_id);
-    push_field(&mut line, "provider", &usage.provider);
-    push_field(&mut line, "protocol", ctx.protocol.as_str());
+    let mut info = String::from("relay request");
+    push_field(&mut info, "trace", short_trace_id(ctx.relay_trace_id));
+    push_field(&mut info, "path", ctx.path);
+    push_field(&mut info, "user", usage.user_id);
+    push_field(&mut info, "key", usage.user_key_id);
     push_field(
-        &mut line,
+        &mut info,
         "model",
         usage.model.as_deref().unwrap_or(&ctx.model),
     );
-    push_field(&mut line, "channel_id", usage.channel_id);
-    push_field(&mut line, "channel_name", &ctx.upstream.channel_name);
-    push_field(
-        &mut line,
-        "channel_endpoint_id",
-        ctx.upstream.channel_endpoint_id,
-    );
-    push_opt(&mut line, "channel_key_id", usage.channel_key_id);
-    push_opt(&mut line, "credential_id", usage.credential_id);
-    push_field(&mut line, "upstream", &ctx.upstream.base_url);
-    push_opt(&mut line, "status", usage.status_code);
-    push_field(&mut line, "streamed", usage.streamed);
-    push_field(&mut line, "relay_attempt", usage.relay_attempt);
-    push_field(&mut line, "relay_final", usage.relay_final);
-    push_field(&mut line, "latency_ms", usage.latency_ms);
-    push_opt(&mut line, "first_response_ms", usage.first_response_ms);
-    push_opt_f64(
-        &mut line,
-        "output_tokens_per_second",
-        usage.output_tokens_per_second,
-    );
-
-    push_request_params(&mut line, &ctx.request_params);
-    push_opt(&mut line, "input_tokens", input_tokens);
-    push_opt(&mut line, "output_tokens", output_tokens);
-    push_opt(&mut line, "total_tokens", total_tokens);
-    push_opt(&mut line, "cached_input_tokens", cached_input_tokens);
-    push_opt(
-        &mut line,
-        "cache_creation_input_tokens",
-        cache_creation_input_tokens,
-    );
-    push_opt(
-        &mut line,
-        "cache_creation_input_tokens_5m",
-        cache_creation_input_tokens_5m,
-    );
-    push_opt(
-        &mut line,
-        "cache_creation_input_tokens_1h",
-        cache_creation_input_tokens_1h,
-    );
-    push_opt(
-        &mut line,
-        "reasoning_output_tokens",
-        reasoning_output_tokens,
-    );
-    push_opt(&mut line, "audio_input_tokens", audio_input_tokens);
-    push_opt(&mut line, "audio_output_tokens", audio_output_tokens);
-    if billing.is_some() || usage.billable_units > 0 {
-        push_field(&mut line, "billing_meter", usage.billing_meter.as_str());
-        push_field(&mut line, "billable_units", usage.billable_units);
+    push_field(&mut info, "channel", usage.channel_id);
+    push_opt(&mut info, "status", usage.status_code);
+    push_field(&mut info, "latency_ms", usage.latency_ms);
+    push_opt(&mut info, "first_ms", usage.first_response_ms);
+    push_opt(&mut info, "in", input_tokens);
+    push_opt(&mut info, "out", output_tokens);
+    push_opt(&mut info, "cached", cached_input_tokens);
+    push_opt(&mut info, "reasoning", reasoning_output_tokens);
+    push_opt(&mut info, "cost", cost_micro_usd);
+    push_info_request_params(&mut info, &ctx.request_params);
+    if usage.relay_attempt > 1 {
+        push_field(&mut info, "attempt", usage.relay_attempt);
     }
-    push_opt(&mut line, "cost_micro_usd", cost_micro_usd);
-    if let Some(status) = billing.map(|billing| billing.status.as_str()) {
-        push_field(&mut line, "billing_status", status);
+    if !usage.relay_final {
+        push_field(&mut info, "final", false);
     }
     if let Some(error) = usage
         .error_summary
         .as_deref()
         .filter(|error| !error.is_empty())
     {
-        push_field(&mut line, "error", error);
+        push_field(&mut info, "error", error);
+    }
+    tracing::info!("{info}");
+
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
     }
 
-    tracing::info!("{line}");
+    let mut detail = String::from("relay request detail");
+    push_field(&mut detail, "relay_trace_id", ctx.relay_trace_id);
+    push_field(&mut detail, "path", ctx.path);
+    push_field(&mut detail, "user_id", usage.user_id);
+    push_field(&mut detail, "project_id", usage.project_id);
+    push_field(&mut detail, "user_key_id", usage.user_key_id);
+    push_field(&mut detail, "provider", &usage.provider);
+    push_field(&mut detail, "protocol", ctx.protocol.as_str());
+    push_field(
+        &mut detail,
+        "model",
+        usage.model.as_deref().unwrap_or(&ctx.model),
+    );
+    push_field(&mut detail, "channel_id", usage.channel_id);
+    push_field(&mut detail, "channel_name", &ctx.upstream.channel_name);
+    push_field(
+        &mut detail,
+        "channel_endpoint_id",
+        ctx.upstream.channel_endpoint_id,
+    );
+    push_opt(&mut detail, "channel_key_id", usage.channel_key_id);
+    push_opt(&mut detail, "credential_id", usage.credential_id);
+    push_field(&mut detail, "upstream", &ctx.upstream.base_url);
+    push_opt(&mut detail, "status", usage.status_code);
+    push_field(&mut detail, "streamed", usage.streamed);
+    push_field(&mut detail, "relay_attempt", usage.relay_attempt);
+    push_field(&mut detail, "relay_final", usage.relay_final);
+    push_field(&mut detail, "latency_ms", usage.latency_ms);
+    push_opt(&mut detail, "first_response_ms", usage.first_response_ms);
+    push_opt_f64(
+        &mut detail,
+        "output_tokens_per_second",
+        usage.output_tokens_per_second,
+    );
+
+    push_request_params(&mut detail, &ctx.request_params);
+    push_opt(&mut detail, "input_tokens", input_tokens);
+    push_opt(&mut detail, "output_tokens", output_tokens);
+    push_opt(&mut detail, "total_tokens", total_tokens);
+    push_opt(&mut detail, "cached_input_tokens", cached_input_tokens);
+    push_opt(
+        &mut detail,
+        "cache_creation_input_tokens",
+        cache_creation_input_tokens,
+    );
+    push_opt(
+        &mut detail,
+        "cache_creation_input_tokens_5m",
+        cache_creation_input_tokens_5m,
+    );
+    push_opt(
+        &mut detail,
+        "cache_creation_input_tokens_1h",
+        cache_creation_input_tokens_1h,
+    );
+    push_opt(
+        &mut detail,
+        "reasoning_output_tokens",
+        reasoning_output_tokens,
+    );
+    push_opt(&mut detail, "audio_input_tokens", audio_input_tokens);
+    push_opt(&mut detail, "audio_output_tokens", audio_output_tokens);
+    if billing.is_some() || usage.billable_units > 0 {
+        push_field(&mut detail, "billing_meter", usage.billing_meter.as_str());
+        push_field(&mut detail, "billable_units", usage.billable_units);
+    }
+    push_opt(&mut detail, "cost_micro_usd", cost_micro_usd);
+    if let Some(status) = billing.map(|billing| billing.status.as_str()) {
+        push_field(&mut detail, "billing_status", status);
+    }
+    if let Some(error) = usage
+        .error_summary
+        .as_deref()
+        .filter(|error| !error.is_empty())
+    {
+        push_field(&mut detail, "error", error);
+    }
+
+    tracing::debug!("{detail}");
 }
 
 fn push_request_params(line: &mut String, params: &RelayRequestParams) {
@@ -692,6 +731,21 @@ fn push_request_params(line: &mut String, params: &RelayRequestParams) {
         params.image_quality.as_deref(),
     );
     push_opt_str(line, "request_image_style", params.image_style.as_deref());
+}
+
+fn push_info_request_params(line: &mut String, params: &RelayRequestParams) {
+    push_opt_str(line, "effort", params.reasoning_effort.as_deref());
+    push_opt(line, "tools", params.tool_count);
+    push_opt_str(line, "tool_choice", params.tool_choice.as_deref());
+}
+
+fn short_trace_id(trace_id: Uuid) -> String {
+    trace_id
+        .as_hyphenated()
+        .to_string()
+        .chars()
+        .take(8)
+        .collect()
 }
 
 fn push_field(line: &mut String, key: &str, value: impl std::fmt::Display) {

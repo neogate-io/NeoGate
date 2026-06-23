@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
-use axum::{body::to_bytes, response::Response};
+use axum::{body::to_bytes, http::HeaderMap, response::Response};
 use bytes::Bytes;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -86,7 +86,9 @@ pub(super) async fn run_app_message(
         "stream": false
     }))?);
     let auth = user_auth_for_key_id(&state, runtime.user_key_id).await?;
-    let response = openai::openai_chat_completion_response(Arc::clone(&state), auth, body).await;
+    let response =
+        openai::openai_chat_completion_response(Arc::clone(&state), auth, HeaderMap::new(), body)
+            .await;
     match response {
         Ok(response) => {
             let status = response.status();

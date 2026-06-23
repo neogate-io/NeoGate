@@ -120,14 +120,7 @@ pub(crate) fn openai_response_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
     }
     remove_fields(
         object,
-        &[
-            "include",
-            "instructions",
-            "metadata",
-            "parallel_tool_calls",
-            "store",
-            "truncation",
-        ],
+        &["include", "instructions", "metadata", "store", "truncation"],
     );
     Ok(Bytes::from(serde_json::to_vec(&value)?))
 }
@@ -2051,6 +2044,39 @@ mod response_tests {
         assert_eq!(value["messages"][0]["content"], "Reply OK");
         assert!(value.get("input").is_none());
         assert!(value.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn converts_openai_response_tools_and_tool_history_to_openai_chat() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","input":[{"role":"user","content":[{"type":"input_text","text":"Lookup weather"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"city\":\"Shanghai\"}"},{"type":"function_call_output","call_id":"call_1","output":"Sunny"}],"tools":[{"type":"function","name":"lookup","description":"Lookup weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}],"tool_choice":{"type":"function","name":"lookup"},"parallel_tool_calls":true,"max_output_tokens":16}"#,
+        );
+
+        let converted = openai_response_to_openai_chat(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["tools"][0]["type"], "function");
+        assert_eq!(value["tools"][0]["function"]["name"], "lookup");
+        assert_eq!(
+            value["tools"][0]["function"]["parameters"]["properties"]["city"]["type"],
+            "string"
+        );
+        assert_eq!(value["tool_choice"]["type"], "function");
+        assert_eq!(value["tool_choice"]["function"]["name"], "lookup");
+        assert_eq!(value["parallel_tool_calls"], true);
+        assert_eq!(value["messages"][1]["role"], "assistant");
+        assert_eq!(value["messages"][1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(
+            value["messages"][1]["tool_calls"][0]["function"]["name"],
+            "lookup"
+        );
+        assert_eq!(
+            value["messages"][1]["tool_calls"][0]["function"]["arguments"],
+            "{\"city\":\"Shanghai\"}"
+        );
+        assert_eq!(value["messages"][2]["role"], "tool");
+        assert_eq!(value["messages"][2]["tool_call_id"], "call_1");
+        assert_eq!(value["messages"][2]["content"], "Sunny");
     }
 
     #[test]

@@ -170,6 +170,9 @@ async fn log_http_response(
     let status = response.status();
     let (response, error_code, error_message) = response_error_for_log(response).await;
     let elapsed_ms = started.elapsed().as_millis();
+    if should_skip_health_check_log(&path) {
+        return response;
+    }
     if should_skip_successful_relay_access_log(&method, &path, status, error_message.is_some()) {
         return response;
     }
@@ -184,6 +187,10 @@ async fn log_http_response(
         error_message,
     );
     response
+}
+
+fn should_skip_health_check_log(path: &str) -> bool {
+    matches!(path, "/healthz" | "/readyz" | "/livez")
 }
 
 fn should_skip_successful_relay_access_log(

@@ -767,6 +767,25 @@ async fn process_billing_payload(
     Ok(usage)
 }
 
+async fn record_billing_failure(pool: &PgPool, id: DbId, err: &AppError) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE billing
+         SET attempts = attempts + 1,
+             status = CASE
+                 WHEN attempts + 1 >= $2 THEN 'failed'
+                 ELSE status
+             END,
+             last_error = $3
+         WHERE id = $1 AND status IN ('pending', 'failed')",
+    )
+    .bind(id)
+    .bind(BILLING_MAX_ATTEMPTS)
+    .bind(err.to_string().chars().take(500).collect::<String>())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,23 +841,4 @@ mod tests {
             .expect("billing outbox sender poisoned")
             .is_none());
     }
-}
-
-async fn record_billing_failure(pool: &PgPool, id: DbId, err: &AppError) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE billing
-         SET attempts = attempts + 1,
-             status = CASE
-                 WHEN attempts + 1 >= $2 THEN 'failed'
-                 ELSE status
-             END,
-             last_error = $3
-         WHERE id = $1 AND status IN ('pending', 'failed')",
-    )
-    .bind(id)
-    .bind(BILLING_MAX_ATTEMPTS)
-    .bind(err.to_string().chars().take(500).collect::<String>())
-    .execute(pool)
-    .await?;
-    Ok(())
 }

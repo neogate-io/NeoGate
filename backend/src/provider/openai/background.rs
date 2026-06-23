@@ -18,7 +18,7 @@ use crate::{
     relay::{
         ensure_key_backed_async_upstream, finish_relay, forward_openai, forward_openai_bound,
         handle_upstream_http_error, release_empty_hold, reserve_credit, response_from_bytes,
-        selector::{SelectedUpstream, UpstreamProtocol},
+        selector::{SelectedUpstream, SelectionConstraints, UpstreamProtocol},
         task_status_from_value, ChannelAffinityKey, RelayContext, RelayRequestParams,
     },
     task::{billing as task_billing, jobs, upstream as upstream_task},
@@ -46,7 +46,10 @@ pub(super) async fn create_background_response(
             &state.channel_affinity,
             UpstreamProtocol::Openai,
             &model,
-            channel_affinity_key.as_ref(),
+            SelectionConstraints {
+                affinity_key: channel_affinity_key.as_ref(),
+                attempted: &[],
+            },
         )
         .await?;
     ensure_key_backed_async_upstream(&upstream)?;

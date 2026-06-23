@@ -38,6 +38,22 @@ const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 type RouteIndex = HashMap<UpstreamProtocol, HashMap<String, Vec<usize>>>;
 type WildcardRouteIndex = HashMap<UpstreamProtocol, Vec<usize>>;
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SelectionConstraints<'a> {
+    pub(crate) affinity_key: Option<&'a ChannelAffinityKey>,
+    pub(crate) attempted: &'a [AttemptedUpstream],
+}
+
+struct SelectionScope<'a> {
+    secrets: &'a SecretStore,
+    snapshot: &'a RoutingCache,
+    protocol: UpstreamProtocol,
+    model: &'a str,
+    now: DateTime<Utc>,
+    model_blocks: ModelBlockLookup<'a>,
+    attempted: &'a [AttemptedUpstream],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpstreamProtocol {
     Openai,
@@ -240,9 +256,16 @@ impl Selector {
         model: &str,
     ) -> AppResult<SelectedUpstream> {
         let snapshot = self.routing_snapshot(pool).await?;
-        let now = Utc::now();
-        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        self.select_from_snapshot(secrets, &snapshot, protocol, model, now, &model_blocks, &[])
+        let scope = SelectionScope {
+            secrets,
+            snapshot: &snapshot,
+            protocol,
+            model,
+            now: Utc::now(),
+            model_blocks: ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks),
+            attempted: &[],
+        };
+        self.select_from_snapshot(&scope)
     }
 
     pub(crate) async fn select_with_affinity(
@@ -252,7 +275,7 @@ impl Selector {
         affinity_cache: &super::affinity::ChannelAffinityCache,
         protocol: UpstreamProtocol,
         model: &str,
-        affinity_key: Option<&ChannelAffinityKey>,
+        constraints: SelectionConstraints<'_>,
     ) -> AppResult<SelectedUpstream> {
         self.select_with_affinity_excluding(
             pool,
@@ -260,8 +283,7 @@ impl Selector {
             affinity_cache,
             protocol,
             model,
-            affinity_key,
-            &[],
+            constraints,
         )
         .await
     }
@@ -273,24 +295,21 @@ impl Selector {
         affinity_cache: &super::affinity::ChannelAffinityCache,
         protocol: UpstreamProtocol,
         model: &str,
-        affinity_key: Option<&ChannelAffinityKey>,
-        attempted: &[AttemptedUpstream],
+        constraints: SelectionConstraints<'_>,
     ) -> AppResult<SelectedUpstream> {
         let snapshot = self.routing_snapshot(pool).await?;
-        let now = Utc::now();
-        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        if let Some(affinity_key) = affinity_key {
+        let scope = SelectionScope {
+            secrets,
+            snapshot: &snapshot,
+            protocol,
+            model,
+            now: Utc::now(),
+            model_blocks: ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks),
+            attempted: constraints.attempted,
+        };
+        if let Some(affinity_key) = constraints.affinity_key {
             if let Some(target) = affinity_cache.get(affinity_key) {
-                if let Some(upstream) = self.selected_affinity_upstream(
-                    secrets,
-                    &snapshot,
-                    protocol,
-                    model,
-                    now,
-                    &model_blocks,
-                    &target,
-                    attempted,
-                )? {
+                if let Some(upstream) = self.selected_affinity_upstream(&scope, &target)? {
                     tracing::debug!(
                         rule = affinity_key.rule,
                         protocol = protocol.as_str(),
@@ -306,15 +325,7 @@ impl Selector {
             }
         }
 
-        self.select_from_snapshot(
-            secrets,
-            &snapshot,
-            protocol,
-            model,
-            now,
-            &model_blocks,
-            attempted,
-        )
+        self.select_from_snapshot(&scope)
     }
 
     pub(crate) async fn select_with_affinity_excluding_protocols(
@@ -324,27 +335,26 @@ impl Selector {
         affinity_cache: &super::affinity::ChannelAffinityCache,
         protocols: &[UpstreamProtocol],
         model: &str,
-        affinity_key: Option<&ChannelAffinityKey>,
-        attempted: &[AttemptedUpstream],
+        constraints: SelectionConstraints<'_>,
     ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
-        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
         let mut last_unavailable = None;
 
         for &protocol in protocols {
-            if let Some(affinity_key) = affinity_key {
+            let scope = SelectionScope {
+                secrets,
+                snapshot: &snapshot,
+                protocol,
+                model,
+                now,
+                model_blocks: ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks),
+                attempted: constraints.attempted,
+            };
+
+            if let Some(affinity_key) = constraints.affinity_key {
                 if let Some(target) = affinity_cache.get(affinity_key) {
-                    if let Some(upstream) = self.selected_affinity_upstream(
-                        secrets,
-                        &snapshot,
-                        protocol,
-                        model,
-                        now,
-                        &model_blocks,
-                        &target,
-                        attempted,
-                    )? {
+                    if let Some(upstream) = self.selected_affinity_upstream(&scope, &target)? {
                         tracing::debug!(
                             rule = affinity_key.rule,
                             protocol = protocol.as_str(),
@@ -360,15 +370,7 @@ impl Selector {
                 }
             }
 
-            match self.select_from_snapshot(
-                secrets,
-                &snapshot,
-                protocol,
-                model,
-                now,
-                &model_blocks,
-                attempted,
-            ) {
+            match self.select_from_snapshot(&scope) {
                 Ok(upstream) => return Ok((protocol, upstream)),
                 Err(AppError::UpstreamUnavailable(message)) => {
                     last_unavailable = Some(message);
@@ -385,32 +387,27 @@ impl Selector {
 
     fn selected_affinity_upstream(
         &self,
-        secrets: &SecretStore,
-        snapshot: &RoutingCache,
-        protocol: UpstreamProtocol,
-        model: &str,
-        now: DateTime<Utc>,
-        model_blocks: &ModelBlockLookup<'_>,
+        scope: &SelectionScope<'_>,
         target: &UpstreamAffinityTarget,
-        attempted: &[AttemptedUpstream],
     ) -> AppResult<Option<SelectedUpstream>> {
-        let Some(channel) = snapshot.channels.iter().find(|channel| {
+        let Some(channel) = scope.snapshot.channels.iter().find(|channel| {
             channel.id == target.channel_id && channel.endpoint_id == target.channel_endpoint_id
         }) else {
             return Ok(None);
         };
         if !channel_is_available(
-            snapshot,
+            scope.snapshot,
             channel,
-            protocol,
-            model,
-            now,
-            model_blocks,
-            attempted,
+            scope.protocol,
+            scope.model,
+            scope.now,
+            &scope.model_blocks,
+            scope.attempted,
         ) {
             return Ok(None);
         }
-        let keys = snapshot
+        let keys = scope
+            .snapshot
             .keys
             .get(&channel.id)
             .map(Vec::as_slice)
@@ -418,50 +415,54 @@ impl Selector {
         let Some(key) = keys.iter().find(|key| {
             key.credential_id == target.credential_id
                 && (!channel.use_credentials).then_some(key.id) == target.channel_key_id
-                && key_is_available(channel, key, model, now, model_blocks)
-                && !was_attempted(channel, key, attempted)
+                && key_is_available(channel, key, scope.model, scope.now, &scope.model_blocks)
+                && !was_attempted(channel, key, scope.attempted)
         }) else {
             return Ok(None);
         };
-        Ok(Some(
-            self.selected_upstream_from_candidate(secrets, channel, key)?,
-        ))
+        Ok(Some(self.selected_upstream_from_candidate(
+            scope.secrets,
+            channel,
+            key,
+        )?))
     }
 
-    fn select_from_snapshot(
-        &self,
-        secrets: &SecretStore,
-        snapshot: &RoutingCache,
-        protocol: UpstreamProtocol,
-        model: &str,
-        now: DateTime<Utc>,
-        model_blocks: &ModelBlockLookup<'_>,
-        attempted: &[AttemptedUpstream],
-    ) -> AppResult<SelectedUpstream> {
-        let channel =
-            choose_channel_for_request(snapshot, protocol, model, now, model_blocks, attempted)
-                .ok_or_else(|| {
-                    AppError::UpstreamUnavailable(unavailable_channel_message(
-                        snapshot,
-                        protocol,
-                        model,
-                        now,
-                        model_blocks,
-                    ))
-                })?;
-        let keys = snapshot
+    fn select_from_snapshot(&self, scope: &SelectionScope<'_>) -> AppResult<SelectedUpstream> {
+        let channel = choose_channel_for_request(
+            scope.snapshot,
+            scope.protocol,
+            scope.model,
+            scope.now,
+            &scope.model_blocks,
+            scope.attempted,
+        )
+        .ok_or_else(|| {
+            AppError::UpstreamUnavailable(unavailable_channel_message(
+                scope.snapshot,
+                scope.protocol,
+                scope.model,
+                scope.now,
+                &scope.model_blocks,
+            ))
+        })?;
+        let keys = scope
+            .snapshot
             .keys
             .get(&channel.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let key =
-            choose_key(channel, keys, model, now, model_blocks, attempted).ok_or_else(|| {
-                AppError::UpstreamUnavailable(format!(
-                    "channel {} has no available key",
-                    channel.name
-                ))
-            })?;
-        self.selected_upstream_from_candidate(secrets, channel, key)
+        let key = choose_key(
+            channel,
+            keys,
+            scope.model,
+            scope.now,
+            &scope.model_blocks,
+            scope.attempted,
+        )
+        .ok_or_else(|| {
+            AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
+        })?;
+        self.selected_upstream_from_candidate(scope.secrets, channel, key)
     }
 
     fn selected_upstream_from_candidate(

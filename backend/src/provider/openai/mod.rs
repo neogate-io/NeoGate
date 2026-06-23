@@ -29,7 +29,9 @@ use crate::relay::{
     log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
     record_upstream_http_failure, record_upstream_transport_failure_for_failover, reserve_credit,
     respond_upstream_http_failure,
-    selector::{AttemptedUpstream, ModelCooldown, SelectedUpstream, UpstreamProtocol},
+    selector::{
+        AttemptedUpstream, ModelCooldown, SelectedUpstream, SelectionConstraints, UpstreamProtocol,
+    },
     should_failover_retryable_upstream_failure, BodyKind, ChannelAffinityKey, PreparedRelayBody,
     RelayBody, RelayContext,
 };
@@ -587,8 +589,10 @@ async fn select_upstream_excluding(
             &state.channel_affinity,
             protocols,
             model,
-            affinity_key,
-            attempted,
+            SelectionConstraints {
+                affinity_key,
+                attempted,
+            },
         )
         .await
 }

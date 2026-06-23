@@ -404,7 +404,7 @@ pub async fn setup_upstream_models_for_state(
     state: &AppState,
     req: SetupFetchUpstreamModelsRequest,
 ) -> AppResult<SetupFetchUpstreamModelsResponse> {
-    if current_service_policy(&state).await?.setup_completed {
+    if current_service_policy(state).await?.setup_completed {
         return Err(AppError::Conflict(
             "setup has already been completed".to_string(),
         ));

@@ -43,7 +43,7 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
         state.config.task.upstream_poll_interval,
     )
     .await?;
-    let concurrency = tasks.len().min(MAX_CONCURRENT_POLLED_TASKS).max(1);
+    let concurrency = tasks.len().clamp(1, MAX_CONCURRENT_POLLED_TASKS);
     stream::iter(tasks)
         .for_each_concurrent(concurrency, |task| {
             let state = Arc::clone(state);

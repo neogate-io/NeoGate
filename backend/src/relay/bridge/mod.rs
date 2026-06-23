@@ -1,20 +1,24 @@
-mod chat;
-mod responses;
+mod anthropic_to_chat;
+mod anthropic_to_responses;
+mod chat_to_anthropic;
+mod chat_to_responses;
+mod common;
+mod responses_common;
+mod responses_to_anthropic;
+mod responses_to_chat;
 mod stream;
 
 use serde_json::{json, Map, Value};
 
-pub(crate) use chat::{
+pub(crate) use anthropic_to_chat::{
     anthropic_cache_creation_tokens, anthropic_usage_input_tokens, anthropic_usage_output_tokens,
 };
-pub(crate) use chat::{
-    finish_anthropic_as_openai_chat, finish_chat_as_anthropic, messages_to_openai_chat,
-    openai_chat_to_anthropic_messages,
-};
-pub(crate) use responses::{
-    finish_anthropic_as_openai_response, finish_openai_chat_as_openai_response,
-    openai_response_to_anthropic_messages, openai_response_to_openai_chat,
-};
+pub(crate) use anthropic_to_chat::{finish_anthropic_as_openai_chat, messages_to_openai_chat};
+pub(crate) use anthropic_to_responses::finish_anthropic_as_openai_response;
+pub(crate) use chat_to_anthropic::{finish_chat_as_anthropic, openai_chat_to_anthropic_messages};
+pub(crate) use chat_to_responses::finish_openai_chat_as_openai_response;
+pub(crate) use responses_to_anthropic::openai_response_to_anthropic_messages;
+pub(crate) use responses_to_chat::openai_response_to_openai_chat;
 
 pub(super) fn finish_reason_to_anthropic(reason: &str) -> &'static str {
     match reason {

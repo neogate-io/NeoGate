@@ -174,31 +174,19 @@ sudo systemctl reload nginx
 部署完成后，可以先查看容器是否都处于 `running` 或 `healthy` 状态：
 
 ```bash
-# 海外
 docker compose ps
-
-# 中国大陆
-docker compose -f docker-compose.cn.yml ps
 ```
 
 通常会看到 `postgres`、`backend`、`web` 三个服务。若服务状态不是 `running`/`healthy`，可以查看日志定位原因：
 
 ```bash
-# 海外
 docker compose logs -f
-
-# 中国大陆
-docker compose -f docker-compose.cn.yml logs -f
 ```
 
 也可以只查看某个服务的日志，例如单机部署的后端：
 
 ```bash
-# 海外
 docker compose logs -f backend
-
-# 中国大陆
-docker compose -f docker-compose.cn.yml logs -f backend
 ```
 
 最后在浏览器访问 `http://服务器IP:8080`。如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。

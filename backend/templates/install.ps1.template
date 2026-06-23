@@ -492,17 +492,37 @@ function Test-CodexRelay {
     Warn 'Skipping final relay test'
     return
   }
-  $payload = @{ model = $CodexModel; input = 'Reply with OK only.'; max_output_tokens = 16 } | ConvertTo-Json -Compress
-  $result = Invoke-NeoGateRequest -Uri "$BaseUrl/responses" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $payload
+  $responsesPayload = @{ model = $CodexModel; input = 'Reply with OK only.'; max_output_tokens = 16 } | ConvertTo-Json -Compress
+  $result = Invoke-NeoGateRequest -Uri "$BaseUrl/responses" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $responsesPayload
   if ($result.Status -ge 200 -and $result.Status -lt 300) {
-    Success 'Gateway relay test succeeded'
+    Success 'Responses API relay test succeeded'
+    return
   } elseif ($result.Status -eq 401 -or $result.Status -eq 403) {
     Fail "Gateway relay rejected the API key with HTTP $($result.Status)"
   } elseif ($result.Status -eq 0) {
     Fail "Could not connect to $BaseUrl"
   } else {
-    Warn "Test failed: HTTP $($result.Status). The upstream or price config for model $CodexModel may not be ready."
+    Warn "Responses API test failed: HTTP $($result.Status). The upstream or price config for model $CodexModel may not be ready."
     if ($result.Body) { Detail $result.Body }
+  }
+
+  $chatPayload = @{
+    model = $CodexModel
+    messages = @(@{ role = 'user'; content = 'Reply with OK only.' })
+    max_tokens = 16
+  } | ConvertTo-Json -Depth 10 -Compress
+  $chatResult = Invoke-NeoGateRequest -Uri "$BaseUrl/chat/completions" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $chatPayload
+  if ($chatResult.Status -ge 200 -and $chatResult.Status -lt 300) {
+    Success 'Chat Completions relay test succeeded'
+    Warn 'Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses; Codex may not work with an upstream that only supports chat/completions.'
+  } elseif ($chatResult.Status -eq 401 -or $chatResult.Status -eq 403) {
+    Fail "Gateway relay rejected the API key with HTTP $($chatResult.Status)"
+  } elseif ($chatResult.Status -eq 0) {
+    Fail "Could not connect to $BaseUrl"
+  } else {
+    Warn "Chat Completions test failed: HTTP $($chatResult.Status). The upstream or price config for model $CodexModel may not be ready."
+    if ($chatResult.Body) { Detail $chatResult.Body }
+    Warn 'Both Responses API and Chat Completions tests failed.'
   }
 }
 

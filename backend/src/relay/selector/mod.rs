@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::admin::channel::ResponsesMode;
+
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tokio::sync::{Mutex, RwLock};
@@ -107,6 +109,7 @@ pub struct SelectedUpstream {
     pub provider: String,
     pub channel_name: String,
     pub base_url: String,
+    pub responses_mode: ResponsesMode,
     pub secret: String,
     pub account_id: Option<String>,
 }
@@ -144,6 +147,7 @@ pub struct ChannelCandidate {
     pub provider: String,
     pub name: String,
     pub base_url: String,
+    pub responses_mode: ResponsesMode,
     pub models: Vec<String>,
     pub priority: i32,
     pub weight: i32,
@@ -489,6 +493,7 @@ impl Selector {
             provider: channel.provider.clone(),
             channel_name: channel.name.clone(),
             base_url: channel.base_url.clone(),
+            responses_mode: channel.responses_mode,
             secret: runtime.secret,
             account_id: runtime.account_id,
         })

@@ -124,6 +124,9 @@ export type ChannelEndpoint = {
   protocol: EndpointProtocol
   base_url: string
   models: string[]
+  responses_mode: 'native' | 'chat_fallback' | 'disabled'
+  responses_mode_source: 'auto' | 'manual' | 'probed'
+  responses_probe: Record<string, unknown>
   enabled: boolean
   healthy: boolean
   last_error?: string | null

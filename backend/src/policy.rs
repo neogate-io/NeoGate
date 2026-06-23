@@ -758,6 +758,7 @@ async fn create_setup_channel(
                 protocol,
                 base_url,
                 models,
+                responses_mode: None,
                 enabled: endpoint.enabled,
             }
         })

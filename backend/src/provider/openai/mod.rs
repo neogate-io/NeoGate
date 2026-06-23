@@ -15,6 +15,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
+    admin::channel::ResponsesMode,
     auth::UserAuth,
     error::{AppError, AppResult},
     task::{jobs, upstream as upstream_task},
@@ -281,6 +282,19 @@ async fn relay_openai(
         )
         .await?;
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
+        if path == "/v1/responses" && upstream.responses_mode == ResponsesMode::Disabled {
+            tracing::info!(
+                provider = %upstream.provider,
+                channel_id = upstream.channel_id,
+                channel_name = %upstream.channel_name,
+                channel_endpoint_id = upstream.channel_endpoint_id,
+                protocol = protocol.as_str(),
+                model = %meta.model,
+                path,
+                "skipping upstream because responses API is disabled for this endpoint"
+            );
+            continue;
+        }
         let price = state
             .billing
             .price_for(
@@ -330,6 +344,20 @@ async fn relay_openai(
             UpstreamProtocol::Anthropic => Err(AppError::BadRequest(format!(
                 "Anthropic fallback is not supported for {path}"
             ))),
+            UpstreamProtocol::Openai
+                if path == "/v1/responses"
+                    && ctx.upstream.responses_mode == ResponsesMode::ChatFallback =>
+            {
+                let body = bridge::openai_response_to_openai_chat(body.clone())?;
+                forward_openai(
+                    &state,
+                    &ctx.upstream,
+                    protocol,
+                    body,
+                    "/v1/chat/completions",
+                )
+                .await
+            }
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
                 forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await
             }
@@ -469,15 +497,15 @@ async fn finish_openai_relay_success(
     status: StatusCode,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    if ctx.protocol != UpstreamProtocol::Anthropic {
-        return finish_relay(ctx, Ok(upstream_response)).await;
-    }
-    match ctx.path {
-        "/v1/chat/completions" => {
+    match (ctx.protocol, ctx.path, ctx.upstream.responses_mode) {
+        (UpstreamProtocol::Anthropic, "/v1/chat/completions", _) => {
             bridge::finish_anthropic_as_openai_chat(ctx, status, upstream_response).await
         }
-        "/v1/responses" => {
+        (UpstreamProtocol::Anthropic, "/v1/responses", _) => {
             bridge::finish_anthropic_as_openai_response(ctx, status, upstream_response).await
+        }
+        (UpstreamProtocol::Openai, "/v1/responses", ResponsesMode::ChatFallback) => {
+            bridge::finish_openai_chat_as_openai_response(ctx, status, upstream_response).await
         }
         _ => finish_relay(ctx, Ok(upstream_response)).await,
     }

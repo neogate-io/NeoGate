@@ -25,11 +25,14 @@ export function getAllChannelKeys() {
   return adminRequest<ChannelKey[]>('/api/admin/channel-keys')
 }
 
-export function createChannelKey(channelId: number, payload: {
-  name: string
-  secret: string
-  enabled: boolean
-}) {
+export function createChannelKey(
+  channelId: number,
+  payload: {
+    name: string
+    secret: string
+    enabled: boolean
+  }
+) {
   return adminRequest<ChannelKey>(`/api/admin/channels/${channelId}/keys`, {
     method: 'POST',
     body: JSON.stringify(payload)
@@ -74,6 +77,7 @@ export async function createChannel(payload: {
     protocol: EndpointProtocol
     base_url: string
     models: string[]
+    responses_mode?: 'auto' | 'native' | 'chat_fallback' | 'disabled'
     enabled: boolean
   }>
   enabled: boolean
@@ -109,20 +113,24 @@ export async function createChannel(payload: {
   return channel
 }
 
-export function updateChannel(id: number, payload: {
-  name: string
-  endpoints: Array<{
-    protocol: EndpointProtocol
-    base_url: string
-    models: string[]
+export function updateChannel(
+  id: number,
+  payload: {
+    name: string
+    endpoints: Array<{
+      protocol: EndpointProtocol
+      base_url: string
+      models: string[]
+      responses_mode?: 'auto' | 'native' | 'chat_fallback' | 'disabled'
+      enabled: boolean
+    }>
     enabled: boolean
-  }>
-  enabled: boolean
-  priority: number
-  weight: number
-  key_selection_mode: KeySelectionMode
-  use_credentials: boolean
-}) {
+    priority: number
+    weight: number
+    key_selection_mode: KeySelectionMode
+    use_credentials: boolean
+  }
+) {
   return adminRequest<Channel>(`/api/admin/channels/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({
@@ -137,7 +145,11 @@ export function updateChannel(id: number, payload: {
   })
 }
 
-export function updateChannelModel(channelId: number, model: string, payload: { enabled: boolean }) {
+export function updateChannelModel(
+  channelId: number,
+  model: string,
+  payload: { enabled: boolean }
+) {
   return adminRequest<ChannelModel>(
     `/api/admin/channels/${channelId}/models/${encodeURIComponent(model)}`,
     {

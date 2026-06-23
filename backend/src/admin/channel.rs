@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::{AssertSqlSafe, Postgres, Row, Transaction};
 
 use crate::{
@@ -25,6 +26,39 @@ use super::provider::{
 pub enum KeySelectionMode {
     Polling,
     Random,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesMode {
+    Native,
+    ChatFallback,
+    Disabled,
+}
+
+impl ResponsesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::ChatFallback => "chat_fallback",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+impl FromStr for ResponsesMode {
+    type Err = AppError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "native" => Ok(Self::Native),
+            "chat_fallback" => Ok(Self::ChatFallback),
+            "disabled" => Ok(Self::Disabled),
+            other => Err(AppError::BadRequest(format!(
+                "invalid responses_mode: {other}"
+            ))),
+        }
+    }
 }
 
 impl KeySelectionMode {
@@ -60,6 +94,9 @@ pub struct ChannelEndpointRecord {
     pub protocol: String,
     pub base_url: String,
     pub models: Vec<String>,
+    pub responses_mode: String,
+    pub responses_mode_source: String,
+    pub responses_probe: Value,
     pub enabled: bool,
     pub healthy: bool,
     pub last_error: Option<String>,
@@ -139,6 +176,7 @@ pub struct ChannelEndpointInput {
     pub base_url: Option<String>,
     #[serde(default)]
     pub models: Vec<String>,
+    pub responses_mode: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -148,6 +186,9 @@ struct NormalizedEndpoint {
     protocol: String,
     base_url: String,
     models: Vec<String>,
+    responses_mode: ResponsesMode,
+    responses_mode_source: String,
+    responses_probe: Value,
     enabled: bool,
 }
 
@@ -244,6 +285,8 @@ pub async fn create_channel(
     }
     sync_channel_models_for_channel(&mut tx, channel_id, &provider_code).await?;
     tx.commit().await?;
+
+    probe_auto_responses_modes(state, channel_id).await?;
 
     get_channel(state, channel_id).await
 }
@@ -351,6 +394,8 @@ pub async fn update_channel(
     }
     tx.commit().await?;
 
+    probe_auto_responses_modes(state, id).await?;
+
     let endpoints = endpoints_by_channel(state, &[id]).await?;
     let models = models_by_channel(state, &[id]).await?;
     let probe_samples = recent_probe_samples_by_channel(state, &[id], 12).await?;
@@ -437,6 +482,9 @@ pub async fn create_channel_key(
     .await?;
     reset_channel_endpoint_health(&mut tx, channel_id).await?;
     tx.commit().await?;
+    if req.enabled {
+        probe_auto_responses_modes(state, channel_id).await?;
+    }
     channel_key_from_row(&row)
 }
 
@@ -559,6 +607,7 @@ pub async fn update_channel_key(
     tx.commit().await?;
     if replacing_secret {
         state.secrets.forget(id);
+        probe_auto_responses_modes(state, channel_id).await?;
     }
     channel_key_from_row(&row)
 }
@@ -581,6 +630,236 @@ async fn ensure_provider_exists(state: &AppState, provider_code: &str) -> AppRes
         .map(|_| ())
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
     Ok(())
+}
+
+async fn probe_auto_responses_modes(state: &AppState, channel_id: DbId) -> AppResult<()> {
+    let key = first_enabled_channel_key(state, channel_id).await?;
+    let rows = sqlx::query(
+        "SELECT id, base_url, models
+         FROM channel_endpoint
+         WHERE channel_id = $1
+           AND protocol = 'openai'
+           AND responses_mode_source = 'auto'
+           AND enabled = TRUE
+         ORDER BY created_at ASC",
+    )
+    .bind(channel_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let mut updated = false;
+    for row in rows {
+        let endpoint_id: DbId = row.try_get("id")?;
+        let base_url: String = row.try_get("base_url")?;
+        let models: Vec<String> = row.try_get("models")?;
+        let (mode, source, probe) = match first_configured_model(&models) {
+            None => (
+                ResponsesMode::Native,
+                "auto",
+                skipped_responses_probe(None, "endpoint has no configured model"),
+            ),
+            Some(model) => match key.as_ref() {
+                None => (
+                    ResponsesMode::Native,
+                    "auto",
+                    skipped_responses_probe(Some(model), "channel has no enabled healthy key"),
+                ),
+                Some((_, secret)) => {
+                    let probe = probe_responses_capability(state, &base_url, secret, model).await;
+                    (mode_from_responses_probe(&probe), "probed", probe)
+                }
+            },
+        };
+        update_responses_probe(state, endpoint_id, mode, source, probe).await?;
+        updated = true;
+    }
+
+    if updated {
+        state.selector.invalidate().await;
+    }
+
+    Ok(())
+}
+
+fn first_configured_model(models: &[String]) -> Option<&str> {
+    models
+        .iter()
+        .map(String::as_str)
+        .find(|model| !model.trim().is_empty())
+}
+
+fn skipped_responses_probe(model: Option<&str>, reason: &str) -> Value {
+    let mut probe = json!({
+        "checked_at": Utc::now(),
+        "ok": false,
+        "skipped": true,
+        "reason": reason
+    });
+    if let Some(model) = model {
+        probe["model"] = Value::String(model.to_string());
+    }
+    probe
+}
+
+fn mode_from_responses_probe(probe: &Value) -> ResponsesMode {
+    if probe.get("responses").is_some_and(probe_ok) {
+        ResponsesMode::Native
+    } else if probe.get("chat_completions").is_some_and(probe_ok) {
+        ResponsesMode::ChatFallback
+    } else {
+        ResponsesMode::Native
+    }
+}
+
+fn probe_ok(probe: &Value) -> bool {
+    probe.get("ok").and_then(Value::as_bool).unwrap_or(false)
+}
+
+async fn first_enabled_channel_key(
+    state: &AppState,
+    channel_id: DbId,
+) -> AppResult<Option<(DbId, String)>> {
+    let Some(row) = sqlx::query(
+        "SELECT id, secret_ciphertext
+         FROM channel_key
+         WHERE channel_id = $1
+           AND enabled = TRUE
+           AND healthy = TRUE
+         ORDER BY created_at ASC
+         LIMIT 1",
+    )
+    .bind(channel_id)
+    .fetch_optional(&state.db.pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let key_id: DbId = row.try_get("id")?;
+    let secret_ciphertext: String = row.try_get("secret_ciphertext")?;
+    let secret = state.secrets.plaintext(key_id, &secret_ciphertext)?;
+    Ok(Some((key_id, secret)))
+}
+
+async fn update_responses_probe(
+    state: &AppState,
+    endpoint_id: DbId,
+    mode: ResponsesMode,
+    source: &str,
+    probe: Value,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET responses_mode = $2,
+             responses_mode_source = $3,
+             responses_probe = $4,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(endpoint_id)
+    .bind(mode.as_str())
+    .bind(source)
+    .bind(probe)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn probe_responses_capability(
+    state: &AppState,
+    base_url: &str,
+    secret: &str,
+    model: &str,
+) -> Value {
+    let responses_body = json!({
+        "model": model,
+        "input": "Reply with OK only.",
+        "max_output_tokens": 8
+    });
+    let responses =
+        probe_openai_endpoint(state, base_url, secret, "/v1/responses", responses_body).await;
+    if probe_ok(&responses) {
+        return json!({
+            "checked_at": Utc::now(),
+            "model": model,
+            "responses": responses,
+            "inferred_mode": ResponsesMode::Native.as_str()
+        });
+    }
+
+    let chat_body = json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": "Reply with OK only." }],
+        "max_tokens": 8
+    });
+    let chat =
+        probe_openai_endpoint(state, base_url, secret, "/v1/chat/completions", chat_body).await;
+    let inferred = if probe_ok(&chat) {
+        ResponsesMode::ChatFallback
+    } else {
+        ResponsesMode::Native
+    };
+
+    json!({
+        "checked_at": Utc::now(),
+        "model": model,
+        "responses": responses,
+        "chat_completions": chat,
+        "inferred_mode": inferred.as_str()
+    })
+}
+
+async fn probe_openai_endpoint(
+    state: &AppState,
+    base_url: &str,
+    secret: &str,
+    path: &str,
+    body: Value,
+) -> Value {
+    let url = crate::relay::upstream_url(base_url, path);
+    match state
+        .http
+        .post(url)
+        .bearer_auth(secret)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let ok = response.status().is_success();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|err| format!("failed to read response body: {err}"));
+            json!({
+                "ok": ok,
+                "status": status,
+                "error": if ok { Value::Null } else { Value::String(truncate_probe_error(&body)) }
+            })
+        }
+        Err(err) => json!({
+            "ok": false,
+            "status": null,
+            "error": truncate_probe_error(&err.to_string())
+        }),
+    }
+}
+
+fn truncate_probe_error(value: &str) -> String {
+    const LIMIT: usize = 500;
+    let value = value.trim();
+    if value.len() <= LIMIT {
+        value.to_string()
+    } else {
+        let end = value
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= LIMIT)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &value[..end])
+    }
 }
 
 async fn normalize_create_endpoints(
@@ -618,6 +897,7 @@ async fn normalize_create_endpoints(
                     protocol: endpoint.protocol,
                     base_url: Some(endpoint.base_url),
                     models: default_models.clone(),
+                    responses_mode: None,
                     enabled: true,
                 })
                 .collect();
@@ -647,6 +927,7 @@ async fn normalize_create_endpoints(
             protocol,
             base_url: Some(base_url),
             models: req.models.clone(),
+            responses_mode: None,
             enabled: true,
         }]
         .iter(),
@@ -695,6 +976,7 @@ async fn normalize_update_endpoints(
             protocol,
             base_url: Some(base_url),
             models: req.models.clone().unwrap_or_default(),
+            responses_mode: None,
             enabled: true,
         }]
         .iter(),
@@ -747,10 +1029,15 @@ fn normalize_endpoint_inputs<'a>(
         let base_url = trimmed_non_empty(input.base_url.as_deref())
             .ok_or_else(|| AppError::BadRequest("base_url is required".to_string()))?
             .to_string();
+        let (responses_mode, responses_mode_source) =
+            normalize_responses_mode(input.responses_mode.as_deref())?;
         endpoints.push(NormalizedEndpoint {
             protocol,
             base_url,
             models: input.models.clone(),
+            responses_mode,
+            responses_mode_source,
+            responses_probe: Value::Object(Default::default()),
             enabled: input.enabled,
         });
     }
@@ -791,6 +1078,13 @@ fn validate_protocol(protocol: &str) -> AppResult<String> {
     }
 }
 
+fn normalize_responses_mode(value: Option<&str>) -> AppResult<(ResponsesMode, String)> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None | Some("auto") => Ok((ResponsesMode::Native, "auto".to_string())),
+        Some(value) => Ok((ResponsesMode::from_str(value)?, "manual".to_string())),
+    }
+}
+
 fn credential_endpoint_inputs(
     provider_code: &str,
     use_credentials: bool,
@@ -817,6 +1111,7 @@ fn credential_endpoint_inputs(
         protocol: OPENAI_OAUTH_PROTOCOL.to_string(),
         base_url,
         models,
+        responses_mode: None,
         enabled: inputs.iter().any(|input| input.enabled),
     }]
 }
@@ -840,13 +1135,17 @@ async fn insert_endpoint(
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO channel_endpoint
-         (channel_id, protocol, base_url, models, enabled)
-         VALUES ($1, $2, $3, $4, $5)",
+         (channel_id, protocol, base_url, models, responses_mode, responses_mode_source,
+          responses_probe, enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(channel_id)
     .bind(endpoint.protocol)
     .bind(endpoint.base_url)
     .bind(endpoint.models)
+    .bind(endpoint.responses_mode.as_str())
+    .bind(endpoint.responses_mode_source)
+    .bind(endpoint.responses_probe)
     .bind(endpoint.enabled)
     .execute(&mut **tx)
     .await?;
@@ -860,11 +1159,15 @@ async fn upsert_endpoint(
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO channel_endpoint
-         (channel_id, protocol, base_url, models, enabled)
-         VALUES ($1, $2, $3, $4, $5)
+         (channel_id, protocol, base_url, models, responses_mode, responses_mode_source,
+          responses_probe, enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (channel_id, protocol) DO UPDATE
          SET base_url = EXCLUDED.base_url,
              models = EXCLUDED.models,
+             responses_mode = EXCLUDED.responses_mode,
+             responses_mode_source = EXCLUDED.responses_mode_source,
+             responses_probe = EXCLUDED.responses_probe,
              enabled = EXCLUDED.enabled,
              updated_at = now()",
     )
@@ -872,6 +1175,9 @@ async fn upsert_endpoint(
     .bind(endpoint.protocol)
     .bind(endpoint.base_url)
     .bind(endpoint.models)
+    .bind(endpoint.responses_mode.as_str())
+    .bind(endpoint.responses_mode_source)
+    .bind(endpoint.responses_probe)
     .bind(endpoint.enabled)
     .execute(&mut **tx)
     .await?;
@@ -1010,7 +1316,9 @@ async fn endpoints_by_channel(
     }
 
     let rows = sqlx::query(
-        "SELECT id, channel_id, protocol, base_url, models, enabled, healthy,
+        "SELECT id, channel_id, protocol, base_url, models, responses_mode,
+                responses_mode_source, responses_probe,
+                enabled, healthy,
                 last_error, cooldown_until, created_at, updated_at
          FROM channel_endpoint ce
          WHERE ce.channel_id = ANY($1)
@@ -1141,6 +1449,9 @@ fn endpoint_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelEndpointRe
         protocol: row.try_get("protocol")?,
         base_url: row.try_get("base_url")?,
         models: row.try_get("models")?,
+        responses_mode: row.try_get("responses_mode")?,
+        responses_mode_source: row.try_get("responses_mode_source")?,
+        responses_probe: row.try_get("responses_probe")?,
         enabled: row.try_get("enabled")?,
         healthy: row.try_get("healthy")?,
         last_error: row.try_get("last_error")?,

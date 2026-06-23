@@ -163,8 +163,13 @@ message() {
       claude_config_updated) printf '%s' "配置已更新" ;;
       relay_skipped) printf '%s' "跳过最终转发测试" ;;
       relay_testing) printf '正在请求 %s/responses' "$1" ;;
+      chat_relay_testing) printf '正在请求 %s/chat/completions' "$1" ;;
       claude_relay_testing) printf '正在请求 %s/v1/messages' "$1" ;;
       relay_succeeded) printf '%s' "网关转发测试成功" ;;
+      responses_relay_succeeded) printf '%s' "Responses API 转发测试成功" ;;
+      chat_relay_succeeded) printf '%s' "Chat Completions 转发测试成功" ;;
+      responses_failed_chat_succeeded) printf '%s' "Responses API 测试失败，但 Chat Completions 测试成功。当前 Codex 配置使用 responses；如果上游只支持 chat/completions，Codex 可能无法正常调用。" ;;
+      both_relay_failed) printf '%s' "Responses API 和 Chat Completions 测试均未通过。" ;;
       relay_rejected) printf '网关转发拒绝了 API 密钥，HTTP %s' "$1" ;;
       relay_failed) printf "测试未通过：HTTP %s。模型 %s 的上游或价格配置可能还没就绪。" "$1" "$2" ;;
       relay_upstream_hint) printf "模型 %s 的上游或价格配置可能还没就绪。" "$1" ;;
@@ -267,8 +272,13 @@ message() {
     claude_config_updated) printf '%s' "Config updated" ;;
     relay_skipped) printf '%s' "Skipping final relay test" ;;
     relay_testing) printf 'Requesting %s/responses' "$1" ;;
+    chat_relay_testing) printf 'Requesting %s/chat/completions' "$1" ;;
     claude_relay_testing) printf 'Requesting %s/v1/messages' "$1" ;;
     relay_succeeded) printf '%s' "Gateway relay test succeeded" ;;
+    responses_relay_succeeded) printf '%s' "Responses API relay test succeeded" ;;
+    chat_relay_succeeded) printf '%s' "Chat Completions relay test succeeded" ;;
+    responses_failed_chat_succeeded) printf '%s' "Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses; Codex may not work with an upstream that only supports chat/completions." ;;
+    both_relay_failed) printf '%s' "Both Responses API and Chat Completions tests failed." ;;
     relay_rejected) printf 'Gateway relay rejected the API key with HTTP %s' "$1" ;;
     relay_failed) printf "Test failed: HTTP %s. The upstream or price config for model %s may not be ready." "$1" "$2" ;;
     relay_upstream_hint) printf "The upstream or price config for model %s may not be ready." "$1" ;;
@@ -1114,45 +1124,77 @@ json_escape() {
 }
 
 test_gateway_relay() {
-  local body_file payload status escaped_model
+  local responses_body_file chat_body_file responses_payload chat_payload responses_status chat_status escaped_model
 
   if [[ "$SKIP_RELAY_TEST" == "1" ]]; then
     warn "$(message relay_skipped)"
     return 0
   fi
 
-  body_file="$TMP_DIR/relay-response.json"
-  rm -f "$body_file"
+  responses_body_file="$TMP_DIR/relay-responses-response.json"
+  chat_body_file="$TMP_DIR/relay-chat-response.json"
+  rm -f "$responses_body_file" "$chat_body_file"
   escaped_model="$(json_escape "$CODEX_MODEL")"
-  payload='{"model":"'"$escaped_model"'","input":"Reply with OK only.","max_output_tokens":16}'
+  responses_payload='{"model":"'"$escaped_model"'","input":"Reply with OK only.","max_output_tokens":16}'
+  chat_payload='{"model":"'"$escaped_model"'","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'
 
   log "$(message relay_testing "$BASE_URL")"
-  status="$(
-    http_status "$body_file" \
+  responses_status="$(
+    http_status "$responses_body_file" \
       -X POST \
       -H "authorization: Bearer $API_KEY" \
       -H "content-type: application/json" \
-      --data "$payload" \
+      --data "$responses_payload" \
       "$BASE_URL/responses"
   )"
 
-  case "$status" in
+  case "$responses_status" in
     2??)
-      success "$(message relay_succeeded)"
+      success "$(message responses_relay_succeeded)"
+      return 0
       ;;
     401|403)
-      print_response_hint "$body_file"
-      die "$(message relay_rejected "$status")"
+      print_response_hint "$responses_body_file"
+      die "$(message relay_rejected "$responses_status")"
+      ;;
+    000)
+      die "$(message connect_failed "$BASE_URL")"
+      ;;
+  esac
+
+  print_relay_failure_hint "$responses_body_file" "$CODEX_MODEL"
+  warn "$(message relay_failed "$responses_status" "$CODEX_MODEL")"
+
+  log "$(message chat_relay_testing "$BASE_URL")"
+  chat_status="$(
+    http_status "$chat_body_file" \
+      -X POST \
+      -H "authorization: Bearer $API_KEY" \
+      -H "content-type: application/json" \
+      --data "$chat_payload" \
+      "$BASE_URL/chat/completions"
+  )"
+
+  case "$chat_status" in
+    2??)
+      success "$(message chat_relay_succeeded)"
+      warn "$(message responses_failed_chat_succeeded)"
+      ;;
+    401|403)
+      print_response_hint "$chat_body_file"
+      die "$(message relay_rejected "$chat_status")"
       ;;
     000)
       die "$(message connect_failed "$BASE_URL")"
       ;;
     *)
-      print_relay_failure_hint "$body_file" "$CODEX_MODEL"
-      warn "$(message relay_failed "$status" "$CODEX_MODEL")"
-      return 0
+      print_relay_failure_hint "$chat_body_file" "$CODEX_MODEL"
+      warn "$(message relay_failed "$chat_status" "$CODEX_MODEL")"
+      warn "$(message both_relay_failed)"
       ;;
   esac
+
+  return 0
 }
 
 test_claude_gateway_relay() {

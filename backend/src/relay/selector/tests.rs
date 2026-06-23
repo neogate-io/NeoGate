@@ -16,6 +16,7 @@ fn candidate(name: &str, priority: i32, weight: i32, models: Vec<&str>) -> Chann
         provider: "openai".to_string(),
         name: name.to_string(),
         base_url: "https://example.com".to_string(),
+        responses_mode: ResponsesMode::Native,
         models: models.into_iter().map(str::to_string).collect(),
         priority,
         weight,
@@ -466,6 +467,7 @@ fn affinity_target_preserves_selected_upstream_identity() {
         provider: "openai".to_string(),
         channel_name: "primary".to_string(),
         base_url: "https://example.com".to_string(),
+        responses_mode: ResponsesMode::Native,
         secret: "secret".to_string(),
         account_id: None,
     };

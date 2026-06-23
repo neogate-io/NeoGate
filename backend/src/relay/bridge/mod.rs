@@ -12,7 +12,8 @@ pub(crate) use chat::{
     openai_chat_to_anthropic_messages,
 };
 pub(crate) use responses::{
-    finish_anthropic_as_openai_response, openai_response_to_anthropic_messages,
+    finish_anthropic_as_openai_response, finish_openai_chat_as_openai_response,
+    openai_response_to_anthropic_messages, openai_response_to_openai_chat,
 };
 
 pub(super) fn finish_reason_to_anthropic(reason: &str) -> &'static str {

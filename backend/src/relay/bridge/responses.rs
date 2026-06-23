@@ -47,32 +47,153 @@ pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<By
         object.insert("tool_choice".to_string(), tool_choice);
     }
     openai_reasoning_to_anthropic_thinking(object);
-    for key in [
-        "background",
-        "include",
-        "instructions",
-        "metadata",
-        "parallel_tool_calls",
-        "previous_response_id",
-        "prompt",
-        "prompt_cache_key",
-        "prompt_cache_retention",
-        "service_tier",
-        "store",
-        "text",
-        "top_logprobs",
-        "truncation",
-        "user",
-    ] {
-        object.remove(key);
-    }
+    remove_fields(
+        object,
+        &[
+            "background",
+            "include",
+            "instructions",
+            "metadata",
+            "parallel_tool_calls",
+            "previous_response_id",
+            "prompt",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "service_tier",
+            "store",
+            "text",
+            "top_logprobs",
+            "truncation",
+            "user",
+        ],
+    );
 
+    Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
+pub(crate) fn openai_response_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
+    let mut value: Value = serde_json::from_slice(&body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("request body must be a JSON object".to_string()))?;
+    if object
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(AppError::BadRequest(
+            "responses chat fallback does not support background=true".to_string(),
+        ));
+    }
+    if object.get("previous_response_id").is_some() {
+        return Err(AppError::BadRequest(
+            "responses chat fallback does not support previous_response_id".to_string(),
+        ));
+    }
+    let input = object
+        .remove("input")
+        .ok_or_else(|| AppError::BadRequest("input is required".to_string()))?;
+    let (system, mut messages) = openai_response_input_to_chat_messages(&input)?;
+    if !system.is_empty() {
+        messages.insert(
+            0,
+            json!({
+                "role": "system",
+                "content": system.join("\n"),
+            }),
+        );
+    }
+    object.insert("messages".to_string(), Value::Array(messages));
+    rename_field(object, "max_output_tokens", "max_tokens");
+    if let Some(tools) = object
+        .remove("tools")
+        .and_then(openai_response_tools_to_openai_chat)
+    {
+        object.insert("tools".to_string(), tools);
+    }
+    if let Some(tool_choice) = object
+        .remove("tool_choice")
+        .and_then(|value| openai_response_tool_choice_to_openai_chat(&value))
+    {
+        object.insert("tool_choice".to_string(), tool_choice);
+    }
+    remove_fields(
+        object,
+        &[
+            "include",
+            "instructions",
+            "metadata",
+            "parallel_tool_calls",
+            "store",
+            "truncation",
+        ],
+    );
     Ok(Bytes::from(serde_json::to_vec(&value)?))
 }
 
 fn openai_response_cache_control(object: &Map<String, Value>) -> Option<Value> {
     (object.contains_key("prompt_cache_key") || object.contains_key("prompt_cache_retention"))
         .then(|| json!({ "type": "ephemeral" }))
+}
+
+fn openai_response_input_to_chat_messages(input: &Value) -> AppResult<(Vec<String>, Vec<Value>)> {
+    match input {
+        Value::String(text) => Ok((Vec::new(), vec![json!({ "role": "user", "content": text })])),
+        Value::Array(items) => {
+            let mut system = Vec::new();
+            let mut messages = Vec::new();
+            for item in items {
+                let object = item.as_object().ok_or_else(|| {
+                    AppError::BadRequest("input items must be JSON objects".to_string())
+                })?;
+                match object.get("type").and_then(Value::as_str) {
+                    Some("function_call") => {
+                        if let Some(message) = openai_response_function_call_to_openai_chat(item) {
+                            messages.push(message);
+                        }
+                        continue;
+                    }
+                    Some("function_call_output") => {
+                        if let Some(message) = openai_response_function_output_to_openai_chat(item)
+                        {
+                            messages.push(message);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                let role = object.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = object
+                    .get("content")
+                    .map(openai_response_content_to_text)
+                    .unwrap_or_default();
+                if content.is_empty() {
+                    continue;
+                }
+                match role {
+                    "system" | "developer" => system.push(content),
+                    "assistant" => messages.push(json!({
+                        "role": "assistant",
+                        "content": content,
+                    })),
+                    _ => messages.push(json!({
+                        "role": "user",
+                        "content": content,
+                    })),
+                }
+            }
+            if messages.is_empty() {
+                return Err(AppError::BadRequest(
+                    "input must contain at least one user or assistant message".to_string(),
+                ));
+            }
+            Ok((system, messages))
+        }
+        _ => Err(AppError::BadRequest(
+            "input must be a string or an array".to_string(),
+        )),
+    }
 }
 
 fn apply_anthropic_cache_control(
@@ -159,6 +280,12 @@ fn rename_field(object: &mut Map<String, Value>, from: &str, to: &str) {
     }
 }
 
+fn remove_fields(object: &mut Map<String, Value>, fields: &[&str]) {
+    for field in fields {
+        object.remove(*field);
+    }
+}
+
 fn openai_response_input_to_anthropic_messages(
     input: &Value,
 ) -> AppResult<(Vec<String>, Vec<Value>)> {
@@ -224,6 +351,46 @@ fn openai_response_tools_to_anthropic(value: Value) -> Option<Value> {
     (!converted.is_empty()).then_some(Value::Array(converted))
 }
 
+fn openai_response_tools_to_openai_chat(value: Value) -> Option<Value> {
+    let tools = value.as_array()?;
+    let converted = tools
+        .iter()
+        .filter_map(openai_response_tool_to_openai_chat)
+        .collect::<Vec<_>>();
+    (!converted.is_empty()).then_some(Value::Array(converted))
+}
+
+fn openai_response_tool_to_openai_chat(tool: &Value) -> Option<Value> {
+    let object = tool.as_object()?;
+    match object.get("type").and_then(Value::as_str) {
+        Some("function") | None => {}
+        _ => return None,
+    }
+    let name = object.get("name").and_then(Value::as_str)?;
+    if name.is_empty() {
+        return None;
+    }
+    let parameters = object
+        .get("parameters")
+        .filter(|schema| schema.as_object().is_some())
+        .cloned()
+        .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
+    let mut function = Map::from_iter([
+        ("name".to_string(), Value::String(name.to_string())),
+        ("parameters".to_string(), parameters),
+    ]);
+    if let Some(description) = object.get("description").and_then(Value::as_str) {
+        function.insert(
+            "description".to_string(),
+            Value::String(description.to_string()),
+        );
+    }
+    Some(json!({
+        "type": "function",
+        "function": function,
+    }))
+}
+
 fn openai_response_tool_to_anthropic(tool: &Value) -> Option<Value> {
     let object = tool.as_object()?;
     match object.get("type").and_then(Value::as_str) {
@@ -250,6 +417,23 @@ fn openai_response_tool_to_anthropic(tool: &Value) -> Option<Value> {
         );
     }
     Some(Value::Object(converted))
+}
+
+fn openai_response_tool_choice_to_openai_chat(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(choice) => Some(Value::String(choice.to_string())),
+        Value::Object(object) => match object.get("type").and_then(Value::as_str)? {
+            "auto" | "none" | "required" => object.get("type").cloned(),
+            "function" => object.get("name").and_then(Value::as_str).map(|name| {
+                json!({
+                    "type": "function",
+                    "function": { "name": name },
+                })
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn openai_response_tool_choice_to_anthropic(value: &Value) -> Option<Value> {
@@ -315,6 +499,44 @@ fn openai_response_function_output_to_anthropic(item: &Value) -> Option<Value> {
     }))
 }
 
+fn openai_response_function_call_to_openai_chat(item: &Value) -> Option<Value> {
+    let name = item.get("name").and_then(Value::as_str)?;
+    let id = item
+        .get("call_id")
+        .or_else(|| item.get("id"))
+        .and_then(Value::as_str)?;
+    let arguments = item
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
+    Some(json!({
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [{
+            "id": id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments,
+            },
+        }],
+    }))
+}
+
+fn openai_response_function_output_to_openai_chat(item: &Value) -> Option<Value> {
+    let id = item.get("call_id").and_then(Value::as_str)?;
+    let content = item
+        .get("output")
+        .or_else(|| item.get("content"))
+        .map(openai_response_content_to_text)
+        .unwrap_or_default();
+    Some(json!({
+        "role": "tool",
+        "tool_call_id": id,
+        "content": content,
+    }))
+}
+
 fn openai_response_content_to_text(value: &Value) -> String {
     content_value_to_text(value, &["input_text", "output_text", "text"], true)
 }
@@ -341,6 +563,144 @@ pub(crate) async fn finish_anthropic_as_openai_response(
         "ignored trailing upstream body read error after parsing complete Anthropic response fallback",
     )
     .await
+}
+
+pub(crate) async fn finish_openai_chat_as_openai_response(
+    ctx: RelayContext,
+    status: StatusCode,
+    upstream_response: reqwest::Response,
+) -> AppResult<Response> {
+    if ctx.streamed {
+        return finish_bridge_stream(
+            ctx,
+            status,
+            upstream_response,
+            OpenAiChatSseToOpenAiResponse::new,
+            "ignored trailing upstream body read error after completed OpenAI chat response fallback stream",
+        );
+    }
+    finish_bridge_json(
+        ctx,
+        status,
+        upstream_response,
+        openai_chat_response_to_openai_response,
+        "ignored trailing upstream body read error after parsing complete OpenAI chat response fallback",
+    )
+    .await
+}
+
+fn openai_chat_response_to_openai_response(body: &[u8], fallback_model: &str) -> AppResult<Bytes> {
+    let value: Value = serde_json::from_slice(body)?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_chat_fallback");
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_model);
+    let usage = value.get("usage");
+    let choice = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first());
+    let message = choice.and_then(|choice| choice.get("message"));
+    let finish_reason = choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(Value::as_str);
+    let output = openai_chat_message_to_response_output(message, id);
+    let status = if finish_reason == Some("length") {
+        "incomplete"
+    } else {
+        "completed"
+    };
+    let payload = json!({
+        "id": id,
+        "object": "response",
+        "created_at": value.get("created").and_then(Value::as_i64).unwrap_or(0),
+        "status": status,
+        "background": false,
+        "model": model,
+        "output": output,
+        "usage": openai_response_usage(
+            usage,
+            openai_chat_usage_tokens(usage, "prompt_tokens"),
+            openai_chat_usage_tokens(usage, "completion_tokens")
+        ),
+    });
+    Ok(Bytes::from(serde_json::to_vec(&payload)?))
+}
+
+fn openai_chat_message_to_response_output(
+    message: Option<&Value>,
+    response_id: &str,
+) -> Vec<Value> {
+    let Some(message) = message else {
+        return vec![openai_response_message_item(
+            format!("msg_{response_id}"),
+            String::new(),
+            "completed",
+        )];
+    };
+    let mut output = Vec::new();
+    if let Some(reasoning) = message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        output.push(openai_response_reasoning_item(
+            format!("rs_{response_id}"),
+            reasoning.to_string(),
+            "completed",
+        ));
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for call in tool_calls {
+            if let Some(item) = openai_chat_tool_call_to_response_function_call(call) {
+                output.push(item);
+            }
+        }
+    }
+    let content = message
+        .get("content")
+        .map(openai_response_content_to_text)
+        .unwrap_or_default();
+    if !content.is_empty() || output.is_empty() {
+        output.push(openai_response_message_item(
+            format!("msg_{response_id}_{}", output.len()),
+            content,
+            "completed",
+        ));
+    }
+    output
+}
+
+fn openai_chat_tool_call_to_response_function_call(call: &Value) -> Option<Value> {
+    let id = call
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("call_chat");
+    let function = call.get("function")?;
+    let name = function.get("name").and_then(Value::as_str)?;
+    let arguments = function
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
+    Some(json!({
+        "id": id,
+        "type": "function_call",
+        "status": "completed",
+        "call_id": id,
+        "name": name,
+        "arguments": arguments,
+    }))
+}
+
+fn openai_chat_usage_tokens(usage: Option<&Value>, field: &str) -> i64 {
+    usage
+        .and_then(|usage| usage.get(field))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
 }
 
 fn anthropic_response_to_openai_response(body: &[u8], fallback_model: &str) -> AppResult<Bytes> {
@@ -559,11 +919,7 @@ impl AnthropicSseToOpenAiResponse {
     fn push(&mut self, chunk: &[u8]) -> Bytes {
         self.buffer.extend_from_slice(chunk);
         let mut out = Vec::new();
-        while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
-            let mut line = self.buffer.drain(..=index).collect::<Vec<_>>();
-            while matches!(line.last(), Some(b'\n' | b'\r')) {
-                line.pop();
-            }
+        for line in drain_sse_lines(&mut self.buffer) {
             self.push_line(&line, &mut out);
         }
         Bytes::from(out)
@@ -1197,6 +1553,465 @@ impl BridgeSseConverter for AnthropicSseToOpenAiResponse {
     }
 }
 
+struct OpenAiChatSseToOpenAiResponse {
+    buffer: Vec<u8>,
+    model: String,
+    response_id: String,
+    output_item_id: String,
+    sequence_number: i64,
+    response_started: bool,
+    output_started: bool,
+    content_started: bool,
+    reasoning_started: bool,
+    reasoning_finished: bool,
+    stopped: bool,
+    text: String,
+    reasoning_text: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    cached_input_tokens: i64,
+    status: &'static str,
+}
+
+impl OpenAiChatSseToOpenAiResponse {
+    fn new(model: String) -> Self {
+        Self {
+            buffer: Vec::new(),
+            model,
+            response_id: "resp_chat_fallback".to_string(),
+            output_item_id: "msg_chat_fallback".to_string(),
+            sequence_number: 0,
+            response_started: false,
+            output_started: false,
+            content_started: false,
+            reasoning_started: false,
+            reasoning_finished: false,
+            stopped: false,
+            text: String::new(),
+            reasoning_text: String::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_input_tokens: 0,
+            status: "completed",
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) -> Bytes {
+        self.buffer.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        for line in drain_sse_lines(&mut self.buffer) {
+            self.push_line(&line, &mut out);
+        }
+        Bytes::from(out)
+    }
+
+    fn push_line(&mut self, line: &[u8], out: &mut Vec<u8>) {
+        let Ok(line) = std::str::from_utf8(line) else {
+            return;
+        };
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            return;
+        };
+        if data.is_empty() {
+            return;
+        }
+        if data == "[DONE]" {
+            self.finish(out);
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        self.observe_chunk(&value, out);
+    }
+
+    fn observe_chunk(&mut self, value: &Value, out: &mut Vec<u8>) {
+        if let Some(id) = value.get("id").and_then(Value::as_str) {
+            self.response_id = format!("resp_{id}");
+            self.output_item_id = format!("msg_{id}");
+        }
+        if let Some(model) = value.get("model").and_then(Value::as_str) {
+            self.model = model.to_string();
+        }
+        self.observe_usage(value.get("usage"));
+        let Some(choice) = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+        else {
+            return;
+        };
+        if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
+            self.status = "incomplete";
+        }
+        let Some(delta) = choice.get("delta") else {
+            return;
+        };
+        if let Some(reasoning) = delta
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            self.push_reasoning_delta(reasoning, out);
+        }
+        if let Some(content) = delta
+            .get("content")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            self.push_content_delta(content, out);
+        }
+    }
+
+    fn observe_usage(&mut self, usage: Option<&Value>) {
+        let Some(usage) = usage else {
+            return;
+        };
+        self.input_tokens = usage
+            .get("prompt_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.input_tokens);
+        self.output_tokens = usage
+            .get("completion_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.output_tokens);
+        self.cached_input_tokens = usage
+            .get("prompt_tokens_details")
+            .and_then(|details| details.get("cached_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(self.cached_input_tokens);
+    }
+
+    fn push_reasoning_delta(&mut self, reasoning: &str, out: &mut Vec<u8>) {
+        self.ensure_response_started(out);
+        if !self.reasoning_started {
+            self.reasoning_started = true;
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.output_item.added",
+                json!({
+                    "type": "response.output_item.added",
+                    "sequence_number": sequence_number,
+                    "output_index": 0,
+                    "item": {
+                        "id": self.reasoning_item_id(),
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": [],
+                    },
+                }),
+            );
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.reasoning_summary_part.added",
+                json!({
+                    "type": "response.reasoning_summary_part.added",
+                    "sequence_number": sequence_number,
+                    "item_id": self.reasoning_item_id(),
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "part": { "type": "summary_text", "text": "" },
+                }),
+            );
+        }
+        self.reasoning_text.push_str(reasoning);
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.reasoning_summary_text.delta",
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "sequence_number": sequence_number,
+                "item_id": self.reasoning_item_id(),
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": reasoning,
+            }),
+        );
+    }
+
+    fn push_content_delta(&mut self, content: &str, out: &mut Vec<u8>) {
+        if self.reasoning_started && !self.reasoning_finished {
+            self.finish_reasoning(out);
+        }
+        self.ensure_content_started(out);
+        self.text.push_str(content);
+        self.output_tokens = self.output_tokens.saturating_add(estimate_tokens(content));
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_text.delta",
+            json!({
+                "type": "response.output_text.delta",
+                "sequence_number": sequence_number,
+                "item_id": self.output_item_id,
+                "output_index": self.message_output_index(),
+                "content_index": 0,
+                "delta": content,
+            }),
+        );
+    }
+
+    fn ensure_content_started(&mut self, out: &mut Vec<u8>) {
+        self.ensure_response_started(out);
+        if !self.output_started {
+            self.output_started = true;
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.output_item.added",
+                json!({
+                    "type": "response.output_item.added",
+                    "sequence_number": sequence_number,
+                    "output_index": self.message_output_index(),
+                    "item": {
+                        "id": self.output_item_id,
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    },
+                }),
+            );
+        }
+        if !self.content_started {
+            self.content_started = true;
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.content_part.added",
+                json!({
+                    "type": "response.content_part.added",
+                    "sequence_number": sequence_number,
+                    "item_id": self.output_item_id,
+                    "output_index": self.message_output_index(),
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                    },
+                }),
+            );
+        }
+    }
+
+    fn ensure_response_started(&mut self, out: &mut Vec<u8>) {
+        if self.response_started {
+            return;
+        }
+        self.response_started = true;
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.created",
+            json!({
+                "type": "response.created",
+                "sequence_number": sequence_number,
+                "response": self.response_payload("in_progress"),
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.in_progress",
+            json!({
+                "type": "response.in_progress",
+                "sequence_number": sequence_number,
+                "response": self.response_payload("in_progress"),
+            }),
+        );
+    }
+
+    fn finish_reasoning(&mut self, out: &mut Vec<u8>) {
+        if !self.reasoning_started || self.reasoning_finished {
+            return;
+        }
+        self.reasoning_finished = true;
+        let item_id = self.reasoning_item_id();
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.reasoning_summary_text.done",
+            json!({
+                "type": "response.reasoning_summary_text.done",
+                "sequence_number": sequence_number,
+                "item_id": item_id,
+                "output_index": 0,
+                "summary_index": 0,
+                "text": self.reasoning_text,
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "sequence_number": sequence_number,
+                "output_index": 0,
+                "item": openai_response_reasoning_item(item_id, self.reasoning_text.clone(), "completed"),
+            }),
+        );
+    }
+
+    fn finish(&mut self, out: &mut Vec<u8>) {
+        if self.stopped {
+            return;
+        }
+        if self.reasoning_started && !self.reasoning_finished {
+            self.finish_reasoning(out);
+        }
+        if !self.output_started && self.text.is_empty() {
+            self.ensure_content_started(out);
+        }
+        self.stopped = true;
+        if self.output_started {
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.output_text.done",
+                json!({
+                    "type": "response.output_text.done",
+                    "sequence_number": sequence_number,
+                    "item_id": self.output_item_id,
+                    "output_index": self.message_output_index(),
+                    "content_index": 0,
+                    "text": self.text,
+                }),
+            );
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.content_part.done",
+                json!({
+                    "type": "response.content_part.done",
+                    "sequence_number": sequence_number,
+                    "item_id": self.output_item_id,
+                    "output_index": self.message_output_index(),
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": self.text,
+                        "annotations": [],
+                    },
+                }),
+            );
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.output_item.done",
+                json!({
+                    "type": "response.output_item.done",
+                    "sequence_number": sequence_number,
+                    "output_index": self.message_output_index(),
+                    "item": self.output_item_payload("completed"),
+                }),
+            );
+        }
+        let event_type = if self.status == "completed" {
+            "response.completed"
+        } else {
+            "response.incomplete"
+        };
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            event_type,
+            json!({
+                "type": event_type,
+                "sequence_number": sequence_number,
+                "response": self.response_payload(self.status),
+            }),
+        );
+    }
+
+    fn response_payload(&self, status: &str) -> Value {
+        let mut output = Vec::new();
+        if status != "in_progress" {
+            if self.reasoning_started {
+                output.push(openai_response_reasoning_item(
+                    self.reasoning_item_id(),
+                    self.reasoning_text.clone(),
+                    "completed",
+                ));
+            }
+            if self.output_started || !self.text.is_empty() {
+                output.push(self.output_item_payload("completed"));
+            }
+        }
+        json!({
+            "id": self.response_id,
+            "object": "response",
+            "created_at": 0,
+            "status": status,
+            "background": false,
+            "model": self.model,
+            "output": output,
+            "usage": openai_response_usage(
+                Some(&json!({
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": self.output_tokens,
+                    "cache_read_input_tokens": self.cached_input_tokens,
+                })),
+                self.input_tokens,
+                self.output_tokens,
+            ),
+        })
+    }
+
+    fn output_item_payload(&self, status: &str) -> Value {
+        openai_response_message_item(self.output_item_id.clone(), self.text.clone(), status)
+    }
+
+    fn message_output_index(&self) -> i64 {
+        if self.reasoning_started {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn reasoning_item_id(&self) -> String {
+        format!("rs_{}", self.output_item_id)
+    }
+
+    fn push_event(&self, out: &mut Vec<u8>, event: &str, data: Value) {
+        out.extend_from_slice(format!("event: {event}\n").as_bytes());
+        out.extend_from_slice(format!("data: {data}\n\n").as_bytes());
+    }
+
+    fn next_sequence_number(&mut self) -> i64 {
+        let sequence_number = self.sequence_number;
+        self.sequence_number = self.sequence_number.saturating_add(1);
+        sequence_number
+    }
+}
+
+impl BridgeSseConverter for OpenAiChatSseToOpenAiResponse {
+    fn push(&mut self, chunk: &[u8]) -> Bytes {
+        Self::push(self, chunk)
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped
+    }
+}
+
+fn drain_sse_lines(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
+    let mut lines = Vec::new();
+    while let Some(index) = buffer.iter().position(|byte| *byte == b'\n') {
+        let mut line = buffer.drain(..=index).collect::<Vec<_>>();
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod response_tests {
     use super::*;
@@ -1221,6 +2036,37 @@ mod response_tests {
         assert!(value.get("max_output_tokens").is_none());
         assert!(value.get("store").is_none());
         assert!(value.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn converts_openai_response_request_to_openai_chat() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","input":"Reply OK","max_output_tokens":16,"temperature":0.2}"#,
+        );
+        let converted = openai_response_to_openai_chat(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+        assert_eq!(value["model"], "GLM-5.1");
+        assert_eq!(value["max_tokens"], 16);
+        assert_eq!(value["messages"][0]["role"], "user");
+        assert_eq!(value["messages"][0]["content"], "Reply OK");
+        assert!(value.get("input").is_none());
+        assert!(value.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn converts_openai_chat_response_to_openai_response() {
+        let body = br#"{"id":"chatcmpl-1","created":123,"model":"GLM-5.1","choices":[{"finish_reason":"stop","message":{"role":"assistant","reasoning_content":"Think.","content":"OK"}}],"usage":{"prompt_tokens":4,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":1}}}"#;
+        let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+        assert_eq!(value["id"], "chatcmpl-1");
+        assert_eq!(value["object"], "response");
+        assert_eq!(value["model"], "GLM-5.1");
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["output"][0]["type"], "reasoning");
+        assert_eq!(value["output"][1]["type"], "message");
+        assert_eq!(value["output"][1]["content"][0]["text"], "OK");
+        assert_eq!(value["usage"]["input_tokens"], 4);
+        assert_eq!(value["usage"]["output_tokens"], 3);
     }
 
     #[test]

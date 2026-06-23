@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use axum::http::{HeaderMap, Method, StatusCode};
+use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
-use futures_util::StreamExt;
+use futures_util::{stream, StreamExt};
 use serde_json::Value;
 
 use crate::{
@@ -17,6 +18,8 @@ use super::{
     results::AnthropicResultsUsageParser,
     upstream::{self, UpstreamTask, UpstreamTaskType},
 };
+
+const MAX_CONCURRENT_POLLED_TASKS: usize = 8;
 
 pub(crate) fn spawn(state: Arc<AppState>) {
     if !state.config.process_role.runs_background() {
@@ -40,11 +43,26 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
         state.config.task.upstream_poll_interval,
     )
     .await?;
-    for task in tasks {
-        if let Err(err) = poll_task(state, task).await {
-            tracing::warn!("failed to poll one upstream async task: {err}");
-        }
-    }
+    let concurrency = tasks.len().min(MAX_CONCURRENT_POLLED_TASKS).max(1);
+    stream::iter(tasks)
+        .for_each_concurrent(concurrency, |task| {
+            let state = Arc::clone(state);
+            async move {
+                let task_id = task.id;
+                let task_type = task.task_type;
+                match poll_task(&state, task).await {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            task_id,
+                            ?task_type,
+                            "failed to poll one upstream async task: {err}"
+                        );
+                    }
+                }
+            }
+        })
+        .await;
     release_stale_terminal_holds(state).await?;
     cleanup_expired_tasks(state).await?;
     Ok(())
@@ -90,18 +108,29 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     let response = match task.task_type {
         UpstreamTaskType::OpenAiResponse => {
             let path = format!("/v1/responses/{}", task.upstream_task_id);
-            forward_openai_bound(state, &upstream, Method::GET, &path, None).await?
+            poll_upstream_response(
+                state,
+                forward_openai_bound(state, &upstream, Method::GET, &path, None),
+                task.id,
+                task.task_type,
+            )
+            .await?
         }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {
             let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
-            forward_anthropic_bound(
+            poll_upstream_response(
                 state,
-                &HeaderMap::new(),
-                &upstream,
-                Method::GET,
-                &path,
-                None,
+                forward_anthropic_bound(
+                    state,
+                    &HeaderMap::new(),
+                    &upstream,
+                    Method::GET,
+                    &path,
+                    None,
+                ),
+                task.id,
+                task.task_type,
             )
             .await?
         }
@@ -111,7 +140,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     if !status.is_success() {
         return Ok(());
     }
-    let body = response.bytes().await?;
+    let body = read_response_bytes(state, response, task.id, task.task_type).await?;
     let value: Value = serde_json::from_slice(&body)?;
     let (status_text, terminal) = task_status_from_value(&value, &task);
     let mut usage = parse_usage_from_bytes(&body, false);
@@ -146,15 +175,66 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     Ok(())
 }
 
+async fn poll_upstream_response<F>(
+    state: &AppState,
+    response: F,
+    task_id: i64,
+    task_type: UpstreamTaskType,
+) -> AppResult<reqwest::Response>
+where
+    F: Future<Output = AppResult<reqwest::Response>>,
+{
+    match tokio::time::timeout(state.config.http.upstream_timeout, response).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                task_id,
+                ?task_type,
+                timeout_secs = state.config.http.upstream_timeout.as_secs(),
+                "timed out polling upstream async task response"
+            );
+            Err(crate::error::AppError::UpstreamUnavailable(
+                "upstream async task poll timed out".to_string(),
+            ))
+        }
+    }
+}
+
+async fn read_response_bytes(
+    state: &AppState,
+    response: reqwest::Response,
+    task_id: i64,
+    task_type: UpstreamTaskType,
+) -> AppResult<Bytes> {
+    match tokio::time::timeout(state.config.http.upstream_timeout, response.bytes()).await {
+        Ok(result) => Ok(result?),
+        Err(_) => {
+            tracing::warn!(
+                task_id,
+                ?task_type,
+                timeout_secs = state.config.http.upstream_timeout.as_secs(),
+                "timed out reading upstream async task response body"
+            );
+            Err(crate::error::AppError::UpstreamUnavailable(
+                "upstream async task response body timed out".to_string(),
+            ))
+        }
+    }
+}
+
 async fn poll_anthropic_batch_results_usage(
     state: &AppState,
     task: &UpstreamTask,
     upstream: &SelectedUpstream,
 ) -> AppResult<Option<TokenUsage>> {
     let path = format!("/v1/messages/batches/{}/results", task.upstream_task_id);
-    let response =
-        forward_anthropic_bound(state, &HeaderMap::new(), upstream, Method::GET, &path, None)
-            .await?;
+    let response = poll_upstream_response(
+        state,
+        forward_anthropic_bound(state, &HeaderMap::new(), upstream, Method::GET, &path, None),
+        task.id,
+        task.task_type,
+    )
+    .await?;
     let status = StatusCode::from_u16(response.status().as_u16())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     if !status.is_success() {
@@ -162,8 +242,22 @@ async fn poll_anthropic_batch_results_usage(
     }
     let mut parser = AnthropicResultsUsageParser::default();
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        parser.observe(&chunk?);
+    loop {
+        let chunk =
+            match tokio::time::timeout(state.config.http.upstream_timeout, stream.next()).await {
+                Ok(Some(chunk)) => chunk?,
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::warn!(
+                        task_id = task.id,
+                        ?task.task_type,
+                        timeout_secs = state.config.http.upstream_timeout.as_secs(),
+                        "timed out reading anthropic batch results stream"
+                    );
+                    return Ok(None);
+                }
+            };
+        parser.observe(&chunk);
     }
     Ok(parser.finish())
 }

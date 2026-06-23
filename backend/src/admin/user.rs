@@ -70,6 +70,7 @@ pub struct CreateUserRequest {
 pub struct UpdateUserRequest {
     pub email: Option<String>,
     pub username: Option<Option<String>>,
+    pub password: Option<String>,
     pub status: Option<String>,
     pub user_group_id: Option<DbId>,
 }
@@ -381,6 +382,12 @@ pub async fn update_user(
         .map(|value| value.as_deref().map(normalize_username).transpose())
         .transpose()?
         .flatten();
+    let password = req.password.as_deref().filter(|value| !value.is_empty());
+    if let Some(password) = password {
+        validate_user_password_input(password)?;
+    }
+    let password_hash =
+        password.map(|value| hash_user_password(value, &state.config.admin_token_secret));
     let disabling = matches!(req.status.as_deref(), Some("disabled"));
     let row = sqlx::query(
         r#"
@@ -389,6 +396,8 @@ pub async fn update_user(
             status = COALESCE($3, status),
             user_group_id = COALESCE($4, user_group_id),
             username = CASE WHEN $5 THEN $6 ELSE username END,
+            password_hash = COALESCE($7, password_hash),
+            password_changed_at = CASE WHEN $7 IS NULL THEN password_changed_at ELSE now() END,
             updated_at = now()
         WHERE id = $1
         RETURNING id
@@ -400,6 +409,7 @@ pub async fn update_user(
     .bind(req.user_group_id)
     .bind(username_provided)
     .bind(username)
+    .bind(password_hash)
     .fetch_optional(&state.db.pool)
     .await
     .map_err(map_user_write_error)?

@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Write as _},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -46,6 +46,8 @@ use crate::{
     user,
 };
 
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -87,7 +89,7 @@ pub async fn run() -> anyhow::Result<()> {
             probe.bind_addr
         );
         axum::serve(listener, app)
-            .with_graceful_shutdown(runtime_shutdown_signal(bootstrap_restart_rx))
+            .with_graceful_shutdown(bootstrap_shutdown_signal(bootstrap_restart_rx))
             .await?;
         return Ok(());
     }
@@ -102,10 +104,11 @@ pub async fn run() -> anyhow::Result<()> {
             config.process_role.as_str()
         );
         shutdown_signal().await;
+        flush_shutdown_work(&state).await;
         return Ok(());
     }
 
-    let app = router(state)
+    let app = router(Arc::clone(&state))
         .layer(DefaultBodyLimit::max(config.relay.body_limit_bytes))
         .layer(cors_layer(&config)?)
         .layer(middleware::from_fn_with_state(
@@ -118,6 +121,7 @@ pub async fn run() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
         .await?;
+    flush_shutdown_work(&state).await;
     Ok(())
 }
 
@@ -158,12 +162,17 @@ async fn log_http_response(
     auth_context: auth::RequestAuthLogContext,
 ) -> Response {
     let started = Instant::now();
-    let request_line = format!("{} {}", request.method(), request.uri().path());
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let request_line = format!("{method} {path}");
 
     let response = next.run(request).await;
     let status = response.status();
     let (response, error_code, error_message) = response_error_for_log(response).await;
     let elapsed_ms = started.elapsed().as_millis();
+    if should_skip_successful_relay_access_log(&method, &path, status, error_message.is_some()) {
+        return response;
+    }
     let (auth, subject_id) = auth_context.snapshot();
     log_http_request_event(
         &request_line,
@@ -175,6 +184,29 @@ async fn log_http_response(
         error_message,
     );
     response
+}
+
+fn should_skip_successful_relay_access_log(
+    method: &Method,
+    path: &str,
+    status: StatusCode,
+    has_error: bool,
+) -> bool {
+    if *method != Method::POST || !status.is_success() || has_error {
+        return false;
+    }
+    matches!(
+        path,
+        "/v1/chat/completions"
+            | "/v1/embeddings"
+            | "/v1/moderations"
+            | "/v1/responses"
+            | "/v1/images/generations"
+            | "/v1/images/edits"
+            | "/v1/images/variations"
+            | "/v1/messages"
+            | "/anthropic/v1/messages"
+    )
 }
 
 fn log_http_request_event(
@@ -448,6 +480,10 @@ pub(crate) async fn build_state(
         .connect_timeout(config.http.upstream_connect_timeout)
         .pool_max_idle_per_host(config.http.pool_max_idle_per_host)
         .pool_idle_timeout(config.http.pool_idle_timeout)
+        .no_gzip()
+        .no_brotli()
+        .no_zstd()
+        .no_deflate()
         .tcp_nodelay(true)
         .build()?;
     let redis = if config.runtime_mode.is_distributed() {
@@ -658,7 +694,15 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
+async fn bootstrap_shutdown_signal(mut restart_rx: watch::Receiver<bool>) {
+    runtime_or_restart_shutdown_signal(&mut restart_rx).await;
+}
+
 async fn runtime_shutdown_signal(mut restart_rx: watch::Receiver<bool>) {
+    runtime_or_restart_shutdown_signal(&mut restart_rx).await;
+}
+
+async fn runtime_or_restart_shutdown_signal(restart_rx: &mut watch::Receiver<bool>) {
     let restart_requested = async {
         loop {
             if *restart_rx.borrow() {
@@ -676,6 +720,16 @@ async fn runtime_shutdown_signal(mut restart_rx: watch::Receiver<bool>) {
             tracing::info!("runtime configuration saved; gracefully shutting down for restart");
         },
     }
+}
+
+async fn flush_shutdown_work(state: &AppState) {
+    state
+        .billing_outbox
+        .flush_pending(
+            SHUTDOWN_DRAIN_TIMEOUT,
+            state.config.process_role.runs_background(),
+        )
+        .await;
 }
 
 fn load_dotenv() {
@@ -852,6 +906,28 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn anthropic_gateway_probe_returns_no_content() {
+        let state = test_state();
+        let app = Router::new().merge(relay::router()).with_state(state);
+
+        for method in [Method::HEAD, Method::GET] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/anthropic")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        }
     }
 
     #[tokio::test]

@@ -1,7 +1,4 @@
-use std::borrow::Cow;
-
 use bytes::Bytes;
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::affinity::{
@@ -24,7 +21,44 @@ pub(crate) struct RelayRequestMeta {
     pub(crate) stream: bool,
     pub(crate) background: bool,
     pub(crate) store: Option<bool>,
+    pub(crate) request_params: RelayRequestParams,
     pub(crate) channel_affinity_key: Option<ChannelAffinityKey>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RelayRequestParams {
+    pub(crate) max_tokens: Option<i64>,
+    pub(crate) temperature: Option<f64>,
+    pub(crate) top_p: Option<f64>,
+    pub(crate) reasoning_effort: Option<String>,
+    pub(crate) reasoning_max_tokens: Option<i64>,
+    pub(crate) tool_count: Option<i64>,
+    pub(crate) tool_choice: Option<String>,
+    pub(crate) response_format: Option<String>,
+    pub(crate) parallel_tool_calls: Option<bool>,
+    pub(crate) store: Option<bool>,
+    pub(crate) background: Option<bool>,
+    pub(crate) image_count: Option<i64>,
+    pub(crate) image_size: Option<String>,
+    pub(crate) image_quality: Option<String>,
+    pub(crate) image_style: Option<String>,
+}
+
+impl RelayRequestParams {
+    pub(crate) fn image(
+        image_count: i64,
+        size: Option<String>,
+        quality: Option<String>,
+        style: Option<String>,
+    ) -> Self {
+        Self {
+            image_count: Some(image_count),
+            image_size: size.map(|value| safe_log_label(&value)),
+            image_quality: quality.map(|value| safe_log_label(&value)),
+            image_style: style.map(|value| safe_log_label(&value)),
+            ..Self::default()
+        }
+    }
 }
 
 pub(crate) struct PreparedRelayBody {
@@ -33,71 +67,7 @@ pub(crate) struct PreparedRelayBody {
     pub(crate) output_tokens: i64,
 }
 
-#[derive(Deserialize)]
-struct RequestProbe<'a> {
-    #[serde(borrow)]
-    model: Option<Cow<'a, str>>,
-    stream: Option<bool>,
-    background: Option<bool>,
-    store: Option<bool>,
-    max_completion_tokens: Option<i64>,
-    max_tokens: Option<i64>,
-    max_output_tokens: Option<i64>,
-    stream_options: Option<StreamOptionsProbe>,
-}
-
-#[derive(Deserialize)]
-struct StreamOptionsProbe {
-    include_usage: Option<bool>,
-}
-
 pub(crate) fn prepare_relay_body(
-    body: Bytes,
-    kind: BodyKind,
-    default_output_tokens: i64,
-) -> AppResult<PreparedRelayBody> {
-    if matches!(kind, BodyKind::OpenaiResponses | BodyKind::Anthropic) {
-        return prepare_relay_body_from_value(body, kind, default_output_tokens);
-    }
-
-    let probe: RequestProbe<'_> = serde_json::from_slice(&body)
-        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
-    let meta = request_meta_from_probe(&probe)?;
-    let needs_output_limit = needs_output_limit(kind);
-    let (output_tokens, has_output_limit) = match output_limit_from_probe(&probe, kind) {
-        Some(tokens) => (tokens, true),
-        None if needs_output_limit => (default_output_tokens, false),
-        None => (0, true),
-    };
-    let needs_stream_usage = meta.stream
-        && matches!(kind, BodyKind::OpenaiChat | BodyKind::OpenaiResponses)
-        && !openai_stream_usage_included(&probe);
-    let changed = (needs_output_limit && !has_output_limit) || needs_stream_usage;
-    if !changed {
-        return Ok(PreparedRelayBody {
-            body,
-            meta,
-            output_tokens,
-        });
-    }
-
-    let mut value: Value = serde_json::from_slice(&body)
-        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
-    if needs_output_limit && !has_output_limit {
-        ensure_output_limit(&mut value, kind, default_output_tokens)?;
-    }
-    if needs_stream_usage {
-        ensure_openai_stream_usage(&mut value)?;
-    }
-    let body = Bytes::from(serde_json::to_vec(&value)?);
-    Ok(PreparedRelayBody {
-        body,
-        meta,
-        output_tokens,
-    })
-}
-
-fn prepare_relay_body_from_value(
     body: Bytes,
     kind: BodyKind,
     default_output_tokens: i64,
@@ -106,9 +76,11 @@ fn prepare_relay_body_from_value(
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let meta = request_meta_from_value(&value, kind)?;
     let needs_output_limit = needs_output_limit(kind);
-    let (output_tokens, has_output_limit) = output_limit_from_value(&value, kind)
-        .map(|tokens| (tokens, true))
-        .unwrap_or_else(|| (default_output_tokens, false));
+    let (output_tokens, has_output_limit) = match output_limit_from_value(&value, kind) {
+        Some(tokens) => (tokens, true),
+        None if needs_output_limit => (default_output_tokens, false),
+        None => (0, true),
+    };
     let needs_stream_usage = meta.stream
         && matches!(kind, BodyKind::OpenaiChat | BodyKind::OpenaiResponses)
         && !openai_stream_usage_included_value(&value);
@@ -132,23 +104,6 @@ fn prepare_relay_body_from_value(
         body,
         meta,
         output_tokens,
-    })
-}
-
-fn request_meta_from_probe(probe: &RequestProbe<'_>) -> AppResult<RelayRequestMeta> {
-    let model = probe
-        .model
-        .as_deref()
-        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))?;
-    if model.is_empty() {
-        return Err(AppError::BadRequest("model is required".to_string()));
-    }
-    Ok(RelayRequestMeta {
-        model: model.to_string(),
-        stream: probe.stream.unwrap_or(false),
-        background: probe.background.unwrap_or(false),
-        store: probe.store,
-        channel_affinity_key: None,
     })
 }
 
@@ -176,18 +131,130 @@ fn request_meta_from_value(value: &Value, kind: BodyKind) -> AppResult<RelayRequ
             .and_then(Value::as_bool)
             .unwrap_or(false),
         store: value.get("store").and_then(Value::as_bool),
+        request_params: request_params_from_value(value, kind),
         channel_affinity_key,
     })
 }
 
-fn output_limit_from_probe(probe: &RequestProbe<'_>, kind: BodyKind) -> Option<i64> {
-    let tokens = match kind {
-        BodyKind::OpenaiChat => probe.max_completion_tokens.or(probe.max_tokens),
-        BodyKind::OpenaiJson => None,
-        BodyKind::OpenaiResponses => probe.max_output_tokens,
-        BodyKind::Anthropic => probe.max_tokens,
-    }?;
-    (tokens > 0).then_some(tokens)
+fn request_params_from_value(value: &Value, kind: BodyKind) -> RelayRequestParams {
+    RelayRequestParams {
+        max_tokens: output_limit_from_value(value, kind),
+        temperature: value.get("temperature").and_then(Value::as_f64),
+        top_p: value.get("top_p").and_then(Value::as_f64),
+        reasoning_effort: reasoning_effort_from_value(value),
+        reasoning_max_tokens: reasoning_max_tokens_from_value(value),
+        tool_count: value
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|tools| tools.len() as i64),
+        tool_choice: value.get("tool_choice").and_then(tool_choice_summary),
+        response_format: response_format_summary(value),
+        parallel_tool_calls: value.get("parallel_tool_calls").and_then(Value::as_bool),
+        store: value.get("store").and_then(Value::as_bool),
+        background: value.get("background").and_then(Value::as_bool),
+        image_count: None,
+        image_size: None,
+        image_quality: None,
+        image_style: None,
+    }
+}
+
+fn reasoning_effort_from_value(value: &Value) -> Option<String> {
+    value
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("reasoning")
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(Value::as_str)
+        })
+        .map(safe_log_label)
+        .or_else(|| {
+            let enabled = value
+                .get("reasoning")
+                .and_then(|reasoning| reasoning.get("enabled"))
+                .and_then(Value::as_bool)
+                .or_else(|| {
+                    value
+                        .get("thinking")
+                        .and_then(|thinking| thinking.get("type"))
+                        .and_then(Value::as_str)
+                        .map(|kind| kind == "enabled")
+                })?;
+            Some(if enabled { "enabled" } else { "disabled" }.to_string())
+        })
+}
+
+fn reasoning_max_tokens_from_value(value: &Value) -> Option<i64> {
+    value
+        .get("reasoning")
+        .and_then(|reasoning| {
+            reasoning
+                .get("max_tokens")
+                .or_else(|| reasoning.get("budget_tokens"))
+        })
+        .or_else(|| {
+            value
+                .get("thinking")
+                .and_then(|thinking| thinking.get("budget_tokens"))
+        })
+        .and_then(Value::as_i64)
+        .filter(|tokens| *tokens > 0)
+}
+
+fn tool_choice_summary(value: &Value) -> Option<String> {
+    if let Some(choice) = value.as_str() {
+        return Some(safe_log_label(choice));
+    }
+    let object = value.as_object()?;
+    let kind = object.get("type").and_then(Value::as_str)?;
+    if kind == "function" {
+        let name = object
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .or_else(|| object.get("name"))
+            .and_then(Value::as_str)
+            .map(safe_log_label);
+        return Some(match name {
+            Some(name) if !name.is_empty() => format!("function:{name}"),
+            _ => "function".to_string(),
+        });
+    }
+    if kind == "tool" {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(safe_log_label);
+        return Some(match name {
+            Some(name) if !name.is_empty() => format!("tool:{name}"),
+            _ => "tool".to_string(),
+        });
+    }
+    Some(safe_log_label(kind))
+}
+
+fn response_format_summary(value: &Value) -> Option<String> {
+    value
+        .get("response_format")
+        .and_then(|format| format.get("type").or(Some(format)))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("text")
+                .and_then(|text| text.get("format"))
+                .and_then(|format| format.get("type").or(Some(format)))
+                .and_then(Value::as_str)
+        })
+        .map(safe_log_label)
+}
+
+fn safe_log_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
+        .take(80)
+        .collect()
 }
 
 fn output_limit_from_value(value: &Value, kind: BodyKind) -> Option<i64> {
@@ -199,14 +266,6 @@ fn output_limit_from_value(value: &Value, kind: BodyKind) -> Option<i64> {
 
 fn needs_output_limit(kind: BodyKind) -> bool {
     !matches!(kind, BodyKind::OpenaiJson)
-}
-
-fn openai_stream_usage_included(probe: &RequestProbe<'_>) -> bool {
-    probe
-        .stream_options
-        .as_ref()
-        .and_then(|options| options.include_usage)
-        .unwrap_or(false)
 }
 
 fn openai_stream_usage_included_value(value: &Value) -> bool {
@@ -334,6 +393,27 @@ mod tests {
 
         assert_eq!(key.rule, "openai_responses_prompt_cache_key");
         assert_eq!(key.value, "trace-1");
+    }
+
+    #[test]
+    fn extracts_safe_request_params_without_prompt_content() {
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-5","input":"do not log this","max_output_tokens":128,"temperature":0.7,"top_p":0.9,"reasoning":{"effort":"high","max_tokens":64},"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"lookup"},"response_format":{"type":"json_schema"},"parallel_tool_calls":true,"store":false}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::OpenaiResponses, 4096).unwrap();
+        let params = prepared.meta.request_params;
+
+        assert_eq!(params.max_tokens, Some(128));
+        assert_eq!(params.temperature, Some(0.7));
+        assert_eq!(params.top_p, Some(0.9));
+        assert_eq!(params.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(params.reasoning_max_tokens, Some(64));
+        assert_eq!(params.tool_count, Some(1));
+        assert_eq!(params.tool_choice.as_deref(), Some("function:lookup"));
+        assert_eq!(params.response_format.as_deref(), Some("json_schema"));
+        assert_eq!(params.parallel_tool_calls, Some(true));
+        assert_eq!(params.store, Some(false));
     }
 
     #[test]

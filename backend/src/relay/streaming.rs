@@ -19,7 +19,7 @@ use super::{
     limit::ImageSyncPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
-    usage_from_context, ChannelAffinityKey,
+    usage_from_context, ChannelAffinityKey, RelayRequestParams,
 };
 
 pub(crate) struct RelayContext {
@@ -38,6 +38,7 @@ pub(crate) struct RelayContext {
     pub(crate) relay_trace_id: Uuid,
     pub(crate) relay_attempt: i32,
     pub(crate) relay_final: bool,
+    pub(crate) request_params: RelayRequestParams,
     pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
 }
 
@@ -60,7 +61,18 @@ pub(crate) fn body(
     )
 }
 
-fn body_from_stream(
+pub(crate) fn body_from_bytes(ctx: RelayContext, status: StatusCode, bytes: Bytes) -> Body {
+    let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
+    body_from_stream(
+        ctx,
+        status,
+        Some(bytes.len() as u64),
+        usage_buffer_limit_bytes,
+        futures_util::stream::once(async move { Ok(bytes) }).boxed(),
+    )
+}
+
+pub(crate) fn body_from_stream(
     ctx: RelayContext,
     status: StatusCode,
     content_length: Option<u64>,
@@ -99,8 +111,13 @@ fn body_from_stream(
                     Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                 }
                 Some(Err(summary)) => {
-                    relay.finish_stream_error(summary.clone()).await;
-                    Some((Err(std::io::Error::other(summary)), None))
+                    if relay.should_ignore_successful_stream_error(&summary) {
+                        relay.finish_trailing_stream_error(summary).await;
+                        None
+                    } else {
+                        relay.finish_stream_error(summary.clone()).await;
+                        Some((Err(std::io::Error::other(summary)), None))
+                    }
                 }
                 None => {
                     relay.finish_stream_success().await;
@@ -120,6 +137,10 @@ struct StreamingRelay {
 }
 
 impl StreamingRelay {
+    fn should_ignore_successful_stream_error(&self, summary: &str) -> bool {
+        self.status.is_success() && self.usage.stream_complete() && is_body_decode_error(summary)
+    }
+
     async fn finish_stream_success(mut self) {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
@@ -145,6 +166,30 @@ impl StreamingRelay {
             billing,
         );
         enqueue_relay_usage(&ctx.state, usage, failure).await;
+    }
+
+    async fn finish_trailing_stream_error(self, summary: String) {
+        if let Some(ctx) = self.ctx.as_ref() {
+            tracing::debug!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                path = ctx.path,
+                base_url = %ctx.upstream.base_url,
+                status = self.status.as_u16(),
+                streamed = ctx.streamed,
+                first_response_ms = self.first_response_ms,
+                latency_ms = ctx.started.elapsed().as_millis() as i64,
+                error = %summary,
+                "ignored trailing upstream stream read error after completed response"
+            );
+        }
+        self.finish_stream_success().await;
     }
 
     async fn finish_stream_error(mut self, summary: String) {
@@ -231,32 +276,56 @@ fn should_cooldown_key_for_stream_error(status: StatusCode) -> bool {
     !status.is_success()
 }
 
+fn is_body_decode_error(summary: &str) -> bool {
+    summary.contains("error decoding response body")
+}
+
 impl Drop for StreamingRelay {
     fn drop(&mut self) {
         let Some(ctx) = self.ctx.take() else {
             return;
         };
         let status = self.status;
+        let stream_complete = self.usage.stream_complete();
         let token_usage = self.usage.finish();
         let first_response_ms = self.first_response_ms;
 
         tokio::spawn(async move {
-            tracing::warn!(
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                path = ctx.path,
-                base_url = %ctx.upstream.base_url,
-                status = status.as_u16(),
-                streamed = ctx.streamed,
-                latency_ms = ctx.started.elapsed().as_millis() as i64,
-                "downstream client closed relay stream before completion"
-            );
+            if stream_complete {
+                tracing::debug!(
+                    provider = %ctx.upstream.provider,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_name = %ctx.upstream.channel_name,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    channel_key_id = ?ctx.upstream.channel_key_id,
+                    credential_id = ?ctx.upstream.credential_id,
+                    protocol = ctx.protocol.as_str(),
+                    model = %ctx.model,
+                    path = ctx.path,
+                    base_url = %ctx.upstream.base_url,
+                    status = status.as_u16(),
+                    streamed = ctx.streamed,
+                    latency_ms = ctx.started.elapsed().as_millis() as i64,
+                    "downstream client closed relay stream after completed response"
+                );
+            } else {
+                tracing::info!(
+                    provider = %ctx.upstream.provider,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_name = %ctx.upstream.channel_name,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    channel_key_id = ?ctx.upstream.channel_key_id,
+                    credential_id = ?ctx.upstream.credential_id,
+                    protocol = ctx.protocol.as_str(),
+                    model = %ctx.model,
+                    path = ctx.path,
+                    base_url = %ctx.upstream.base_url,
+                    status = status.as_u16(),
+                    streamed = ctx.streamed,
+                    latency_ms = ctx.started.elapsed().as_millis() as i64,
+                    "downstream client closed relay stream before completion"
+                );
+            }
             let billing = if status.is_success() {
                 settle_successful_hold(&ctx, token_usage, "dropped successful stream").await
             } else {
@@ -268,10 +337,12 @@ impl Drop for StreamingRelay {
             } else {
                 key_failure_from_context(&ctx, "upstream error".to_string()).await
             };
+            let error_summary = (!stream_complete)
+                .then(|| "downstream stream closed before completion".to_string());
             let usage = usage_from_context(
                 &ctx,
                 Some(status.as_u16() as i32),
-                Some("downstream stream closed before completion".to_string()),
+                error_summary,
                 first_response_ms,
                 token_usage,
                 billing,
@@ -354,6 +425,10 @@ impl ResponseUsageParser {
             Self::Disabled => None,
         }
     }
+
+    fn stream_complete(&self) -> bool {
+        matches!(self, Self::Sse(parser) if parser.completed)
+    }
 }
 
 fn json_usage_buffer_capacity(content_length: Option<u64>, limit_bytes: usize) -> usize {
@@ -366,7 +441,8 @@ fn json_usage_buffer_capacity(content_length: Option<u64>, limit_bytes: usize) -
 struct StreamUsageParser {
     buffered: Vec<u8>,
     latest: Option<TokenUsage>,
-    disabled: bool,
+    completed: bool,
+    skipping_oversized_line: bool,
     limit_bytes: usize,
 }
 
@@ -375,22 +451,31 @@ impl StreamUsageParser {
         Self {
             buffered: Vec::new(),
             latest: None,
-            disabled: false,
+            completed: false,
+            skipping_oversized_line: false,
             limit_bytes,
         }
     }
 
     fn observe(&mut self, chunk: &[u8]) {
-        if self.disabled {
+        if self.skipping_oversized_line {
+            if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.skipping_oversized_line = false;
+                self.observe(&chunk[offset + 1..]);
+            }
             return;
         }
         if self.buffered.len().saturating_add(chunk.len()) > self.limit_bytes {
-            tracing::warn!(
+            tracing::debug!(
                 limit_bytes = self.limit_bytes,
-                "streamed relay response exceeded usage parse buffer; skipping usage parse"
+                "streamed relay response line exceeded usage parse buffer; skipping oversized line"
             );
             self.buffered.clear();
-            self.disabled = true;
+            if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.observe(&chunk[offset + 1..]);
+            } else {
+                self.skipping_oversized_line = true;
+            }
             return;
         }
 
@@ -405,9 +490,8 @@ impl StreamUsageParser {
             if matches!(line.last(), Some(b'\r')) {
                 line = &line[..line.len() - 1];
             }
-            if let Some(usage) = Self::usage_from_line(line) {
-                self.latest = Some(usage);
-            }
+            let (usage, completed) = Self::parse_line(line);
+            self.observe_parsed_line(usage, completed);
             consumed = line_end + 1;
         }
         if consumed == self.buffered.len() {
@@ -417,28 +501,78 @@ impl StreamUsageParser {
         }
     }
 
-    fn usage_from_line(line: &[u8]) -> Option<TokenUsage> {
-        let line = std::str::from_utf8(line).ok()?;
-        let data = line.strip_prefix("data:")?;
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            return None;
+    fn observe_line(&mut self, line: &[u8]) {
+        let (usage, completed) = Self::parse_line(line);
+        self.observe_parsed_line(usage, completed);
+    }
+
+    fn observe_parsed_line(&mut self, usage: Option<TokenUsage>, completed: bool) {
+        if let Some(usage) = usage {
+            self.latest = Some(usage);
         }
-        parse_usage_from_sse_data(data)
+        if completed {
+            self.completed = true;
+        }
+    }
+
+    fn parse_line(line: &[u8]) -> (Option<TokenUsage>, bool) {
+        let Ok(line) = std::str::from_utf8(line) else {
+            return (None, false);
+        };
+        if let Some(event) = line.strip_prefix("event:").map(str::trim) {
+            return (None, stream_event_is_terminal(event));
+        }
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            return (None, false);
+        };
+        if data.is_empty() {
+            return (None, false);
+        }
+        if data == "[DONE]" {
+            return (None, true);
+        }
+        (
+            parse_usage_from_sse_data(data),
+            sse_data_has_terminal_type(data),
+        )
     }
 
     fn finish(&mut self) -> Option<TokenUsage> {
-        if self.disabled {
+        if self.skipping_oversized_line {
             return self.latest;
         }
         if !self.buffered.is_empty() {
             let line = std::mem::take(&mut self.buffered);
-            if let Some(usage) = Self::usage_from_line(&line) {
-                self.latest = Some(usage);
-            }
+            self.observe_line(&line);
         }
         self.latest
     }
+}
+
+fn stream_event_is_terminal(event: &str) -> bool {
+    matches!(
+        event,
+        "message_stop" | "response.completed" | "response.failed" | "response.cancelled"
+    )
+}
+
+fn sse_data_has_terminal_type(data: &str) -> bool {
+    data.contains("message_stop") && sse_data_type_is(data, "message_stop")
+        || data.contains("response.completed") && sse_data_type_is(data, "response.completed")
+        || data.contains("response.failed") && sse_data_type_is(data, "response.failed")
+        || data.contains("response.cancelled") && sse_data_type_is(data, "response.cancelled")
+}
+
+fn sse_data_type_is(data: &str, expected: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(data)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|type_| type_.as_str())
+                .map(|type_| type_ == expected)
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -458,12 +592,17 @@ mod tests {
     }
 
     #[test]
+    fn body_decode_errors_are_identified() {
+        assert!(is_body_decode_error("error decoding response body"));
+    }
+
+    #[test]
     fn stream_usage_parser_caps_unterminated_buffer() {
         let mut parser = StreamUsageParser::new(1024);
 
         parser.observe(&vec![b'a'; 1025]);
 
-        assert!(parser.disabled);
+        assert!(parser.skipping_oversized_line);
         assert!(parser.buffered.is_empty());
         assert!(parser.finish().is_none());
     }
@@ -481,5 +620,71 @@ mod tests {
         let usage = parser.finish().expect("latest usage should be retained");
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn stream_usage_parser_recovers_after_oversized_line() {
+        let mut parser = StreamUsageParser::new(128);
+
+        parser.observe(b"data: ");
+        parser.observe(&vec![b'a'; 256]);
+        parser.observe(
+            br#"
+data: {"usage":{"input_tokens":10,"output_tokens":3}}
+"#,
+        );
+
+        let usage = parser
+            .finish()
+            .expect("usage after oversized line should be parsed");
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_done() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(b"data: [DONE]\n");
+
+        assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_responses_completed_event() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: response.completed
+data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":3}}}
+"#,
+        );
+
+        assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_responses_completed_data() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":3}}}
+"#,
+        );
+
+        assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_anthropic_message_stop() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: message_stop
+data: {"type":"message_stop"}
+"#,
+        );
+
+        assert!(parser.completed);
     }
 }

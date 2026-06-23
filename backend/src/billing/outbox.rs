@@ -10,7 +10,9 @@ use tokio::{
     sync::mpsc::{
         self,
         error::{TryRecvError, TrySendError},
+        Receiver,
     },
+    task::JoinHandle,
     time,
 };
 use uuid::Uuid;
@@ -35,8 +37,8 @@ const BILLING_OUTBOX_BACKGROUND_RETRY_MAX_DELAY: Duration = Duration::from_secs(
 pub struct BillingOutbox {
     pool: PgPool,
     health: BillingOutboxHealth,
-    sender: Option<mpsc::Sender<UsageInsert>>,
-    retry_sender: Option<mpsc::Sender<UsageInsert>>,
+    worker: WorkerSlot,
+    retry_worker: WorkerSlot,
     activity: ActivityRecorder,
     daily: UsageDailyRecorder,
 }
@@ -44,6 +46,12 @@ pub struct BillingOutbox {
 #[derive(Clone, Default)]
 struct BillingOutboxHealth {
     failed_since: Arc<RwLock<Option<DateTime<Utc>>>>,
+}
+
+#[derive(Clone, Default)]
+struct WorkerSlot {
+    sender: Arc<RwLock<Option<mpsc::Sender<UsageInsert>>>>,
+    handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,8 +77,8 @@ impl BillingOutbox {
         Self {
             pool,
             health: BillingOutboxHealth::default(),
-            sender: None,
-            retry_sender: None,
+            worker: WorkerSlot::default(),
+            retry_worker: WorkerSlot::default(),
             activity: ActivityRecorder::disabled(),
             daily: UsageDailyRecorder::disabled(),
         }
@@ -89,15 +97,18 @@ impl BillingOutbox {
         let outbox = Self {
             pool,
             health: BillingOutboxHealth::default(),
-            sender: Some(sender),
-            retry_sender: Some(retry_sender),
+            worker: WorkerSlot::default(),
+            retry_worker: WorkerSlot::default(),
             activity,
             daily,
         };
         let worker = outbox.clone();
-        tokio::spawn(async move {
-            worker.run_worker(receiver, flush_interval).await;
-        });
+        outbox.worker.set(
+            sender,
+            tokio::spawn(async move {
+                worker.run_worker(receiver, flush_interval).await;
+            }),
+        );
         if process_outbox {
             for _ in 0..BILLING_PROCESS_WORKERS {
                 let process_worker = outbox.clone();
@@ -107,9 +118,12 @@ impl BillingOutbox {
             }
         }
         let retry_worker = outbox.clone();
-        tokio::spawn(async move {
-            retry_worker.run_retry_worker(retry_receiver).await;
-        });
+        outbox.retry_worker.set(
+            retry_sender,
+            tokio::spawn(async move {
+                retry_worker.run_retry_worker(retry_receiver).await;
+            }),
+        );
         outbox
     }
 
@@ -139,7 +153,8 @@ impl BillingOutbox {
             return;
         }
 
-        let Some(sender) = &self.retry_sender else {
+        let sender = self.retry_worker.sender();
+        let Some(sender) = sender else {
             self.health.record_failure();
             tracing::error!(
                 "billing outbox retry queue is unavailable; dropping in-memory billing retry"
@@ -169,7 +184,8 @@ impl BillingOutbox {
             return;
         }
 
-        let Some(sender) = &self.sender else {
+        let sender = self.worker.sender();
+        let Some(sender) = sender else {
             self.enqueue_retry(usage);
             return;
         };
@@ -189,7 +205,32 @@ impl BillingOutbox {
         }
     }
 
-    async fn run_worker(self, mut receiver: mpsc::Receiver<UsageInsert>, flush_interval: Duration) {
+    pub async fn flush_pending(&self, timeout: Duration, process_outbox: bool) {
+        let pool = self.pool.clone();
+        let activity = self.activity.clone();
+        let daily = self.daily.clone();
+        let worker = self.worker.clone();
+        let retry_worker = self.retry_worker.clone();
+        match time::timeout(timeout, async move {
+            worker.close_and_wait().await;
+            retry_worker.close_and_wait().await;
+            if process_outbox {
+                drain_billing_outbox(&pool, &activity, &daily).await?;
+            }
+            Ok::<(), AppError>(())
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!("failed to flush billing outbox on shutdown: {err}"),
+            Err(_) => tracing::warn!(
+                timeout_ms = timeout.as_millis() as i64,
+                "timed out flushing billing outbox on shutdown"
+            ),
+        }
+    }
+
+    async fn run_worker(self, mut receiver: Receiver<UsageInsert>, flush_interval: Duration) {
         let mut interval = time::interval(flush_interval.max(Duration::from_millis(1)));
         loop {
             tokio::select! {
@@ -278,6 +319,38 @@ impl BillingOutbox {
                     }
                 }
             }
+        }
+    }
+}
+
+impl WorkerSlot {
+    fn set(&self, sender: mpsc::Sender<UsageInsert>, handle: JoinHandle<()>) {
+        *self.sender.write().expect("billing outbox sender poisoned") = Some(sender);
+        *self
+            .handle
+            .write()
+            .expect("billing outbox worker handle poisoned") = Some(handle);
+    }
+
+    fn sender(&self) -> Option<mpsc::Sender<UsageInsert>> {
+        self.sender
+            .read()
+            .expect("billing outbox sender poisoned")
+            .clone()
+    }
+
+    async fn close_and_wait(&self) {
+        self.sender
+            .write()
+            .expect("billing outbox sender poisoned")
+            .take();
+        let handle = self
+            .handle
+            .write()
+            .expect("billing outbox worker handle poisoned")
+            .take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
         }
     }
 }
@@ -446,6 +519,23 @@ async fn process_billing_outbox_batch(
     Ok(processed)
 }
 
+async fn drain_billing_outbox(
+    pool: &PgPool,
+    activity: &ActivityRecorder,
+    daily: &UsageDailyRecorder,
+) -> AppResult<u64> {
+    let mut total = 0;
+    loop {
+        let processed =
+            process_billing_outbox_batch(pool, activity, daily, BILLING_BATCH_SIZE).await?;
+        total += processed;
+        if processed < BILLING_BATCH_SIZE as u64 {
+            break;
+        }
+    }
+    Ok(total)
+}
+
 struct BillingOutboxChunkResult {
     selected: u64,
     selected_ids: Vec<DbId>,
@@ -534,7 +624,7 @@ async fn fetch_pending_billing_records(
     let rows = sqlx::query(
         "SELECT id, transaction_id, payload
          FROM billing
-         WHERE status IN ('pending', 'failed')
+         WHERE status = 'pending'
            AND NOT (id = ANY($2::BIGINT[]))
          ORDER BY attempts ASC, created_at ASC
          LIMIT $1
@@ -580,7 +670,7 @@ async fn process_billing_outbox_record(pool: &PgPool, id: DbId) -> AppResult<Opt
     let row = sqlx::query(
         "SELECT id, transaction_id, payload
          FROM billing
-         WHERE id = $1 AND status IN ('pending', 'failed')
+         WHERE id = $1 AND status = 'pending'
          FOR UPDATE",
     )
     .bind(id)
@@ -647,7 +737,7 @@ async fn mark_billing_records_processed(
          SET status = 'processed',
              processed_at = now(),
              last_error = NULL
-         WHERE id = ANY($1) AND status IN ('pending', 'failed')",
+         WHERE id = ANY($1) AND status = 'pending'",
     )
     .bind(ids)
     .execute(&mut **tx)
@@ -669,12 +759,69 @@ async fn process_billing_payload(
          SET status = 'processed',
              processed_at = now(),
              last_error = NULL
-         WHERE id = $1 AND status IN ('pending', 'failed')",
+         WHERE id = $1 AND status = 'pending'",
     )
     .bind(id)
     .execute(&mut **tx)
     .await?;
     Ok(usage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::billing::{BillingCharge, BillingMeter};
+
+    fn usage_with_billing(id: DbId) -> UsageInsert {
+        UsageInsert {
+            user_id: id,
+            project_id: id,
+            user_key_id: id,
+            channel_id: id,
+            channel_key_id: None,
+            credential_id: None,
+            relay_trace_id: None,
+            relay_attempt: 1,
+            relay_final: true,
+            provider: "openai".to_string(),
+            model: Some("gpt-4.1".to_string()),
+            status_code: Some(200),
+            streamed: false,
+            latency_ms: 1,
+            first_response_ms: None,
+            output_tokens_per_second: None,
+            error_summary: None,
+            token_usage: None,
+            billing_meter: BillingMeter::Token,
+            billable_units: 0,
+            billing: Some(BillingCharge {
+                transaction_id: Uuid::new_v4(),
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                billing_meter: BillingMeter::Token,
+                billable_units: 0,
+                cost_micro_usd: 0,
+                status: "billed".to_string(),
+                parts: Vec::new(),
+                returned_parts: Vec::new(),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn new_outbox_without_workers_drops_to_retry_without_panicking() {
+        let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
+        let outbox = BillingOutbox::new(pool);
+        outbox.enqueue_or_retry(usage_with_billing(1));
+
+        assert!(outbox
+            .worker
+            .sender
+            .read()
+            .expect("billing outbox sender poisoned")
+            .is_none());
+    }
 }
 
 async fn record_billing_failure(pool: &PgPool, id: DbId, err: &AppError) -> AppResult<()> {

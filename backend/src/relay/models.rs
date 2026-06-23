@@ -87,14 +87,7 @@ async fn available_openai_models(
     state: &AppState,
     auth: &UserAuth,
 ) -> AppResult<Vec<AvailableModel>> {
-    let mut models = available_models(state, auth, UpstreamProtocol::Openai).await?;
-    let oauth_models = available_models(state, auth, UpstreamProtocol::OpenAiOauth).await?;
-    for model in oauth_models {
-        if !models.iter().any(|item| item.id == model.id) {
-            models.push(model);
-        }
-    }
-    Ok(models)
+    available_models(state, auth, None).await
 }
 
 fn openai_model(model: AvailableModel) -> OpenAiModel {
@@ -111,15 +104,21 @@ pub(super) async fn list_anthropic_models(
     auth: UserAuth,
     Query(query): Query<ListModelsQuery>,
 ) -> AppResult<Json<AnthropicModelList>> {
-    let models = available_models(&state, &auth, UpstreamProtocol::Anthropic).await?;
+    let models = available_models(&state, &auth, None).await?;
     Ok(Json(anthropic_model_list(models, query)))
 }
 
 async fn available_models(
     state: &AppState,
     auth: &UserAuth,
-    protocol: UpstreamProtocol,
+    protocols: Option<&[UpstreamProtocol]>,
 ) -> AppResult<Vec<AvailableModel>> {
+    let protocols = protocols.map(|items| {
+        items
+            .iter()
+            .map(|protocol| protocol.as_str().to_string())
+            .collect::<Vec<_>>()
+    });
     let rows = sqlx::query(AssertSqlSafe(format!(
         r#"
         SELECT model, MIN(provider) AS owned_by
@@ -142,7 +141,7 @@ async fn available_models(
              AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
-              AND ce.protocol = $1
+              AND ($1::TEXT[] IS NULL OR ce.protocol = ANY($1))
               AND ce.enabled = TRUE
               AND ce.healthy = TRUE
               AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
@@ -183,7 +182,7 @@ async fn available_models(
                  model ASC
         "#
     )))
-    .bind(protocol.as_str())
+    .bind(protocols.as_deref())
     .bind(auth.model_limits.as_ref().map(|limits| limits.as_slice()))
     .fetch_all(&state.db.pool)
     .await?;

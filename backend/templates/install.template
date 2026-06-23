@@ -168,7 +168,7 @@ message() {
       relay_succeeded) printf '%s' "网关转发测试成功" ;;
       responses_relay_succeeded) printf '%s' "Responses API 转发测试成功" ;;
       chat_relay_succeeded) printf '%s' "Chat Completions 转发测试成功" ;;
-      responses_failed_chat_succeeded) printf '%s' "Responses API 测试失败，但 Chat Completions 测试成功。当前 Codex 配置使用 responses；如果上游只支持 chat/completions，Codex 可能无法正常调用。" ;;
+      responses_failed_chat_succeeded) printf '%s' "Responses API 测试失败，但 Chat Completions 测试成功。当前 Codex 配置使用 responses 模式，请注意兼容性。" ;;
       both_relay_failed) printf '%s' "Responses API 和 Chat Completions 测试均未通过。" ;;
       relay_rejected) printf '网关转发拒绝了 API 密钥，HTTP %s' "$1" ;;
       relay_failed) printf "测试未通过：HTTP %s。模型 %s 的上游或价格配置可能还没就绪。" "$1" "$2" ;;
@@ -277,7 +277,7 @@ message() {
     relay_succeeded) printf '%s' "Gateway relay test succeeded" ;;
     responses_relay_succeeded) printf '%s' "Responses API relay test succeeded" ;;
     chat_relay_succeeded) printf '%s' "Chat Completions relay test succeeded" ;;
-    responses_failed_chat_succeeded) printf '%s' "Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses; Codex may not work with an upstream that only supports chat/completions." ;;
+    responses_failed_chat_succeeded) printf '%s' "Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses mode — check compatibility." ;;
     both_relay_failed) printf '%s' "Both Responses API and Chat Completions tests failed." ;;
     relay_rejected) printf 'Gateway relay rejected the API key with HTTP %s' "$1" ;;
     relay_failed) printf "Test failed: HTTP %s. The upstream or price config for model %s may not be ready." "$1" "$2" ;;

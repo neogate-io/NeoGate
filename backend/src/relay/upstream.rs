@@ -26,6 +26,14 @@ const ANTHROPIC_CLI_PASSTHROUGH_HEADERS: &[&str] = &[
     "anthropic-dangerous-direct-browser-access",
 ];
 
+const CODEX_CLI_PASSTHROUGH_HEADERS: &[&str] = &[
+    "originator",
+    "session_id",
+    "user-agent",
+    "x-codex-beta-features",
+    "x-codex-turn-metadata",
+];
+
 pub(crate) async fn forward_openai(
     state: &AppState,
     upstream: &SelectedUpstream,
@@ -33,18 +41,30 @@ pub(crate) async fn forward_openai(
     body: Bytes,
     path: &str,
 ) -> AppResult<reqwest::Response> {
+    forward_openai_with_headers(state, upstream, protocol, body, path, &HeaderMap::new()).await
+}
+
+pub(crate) async fn forward_openai_with_headers(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    protocol: UpstreamProtocol,
+    body: Bytes,
+    path: &str,
+    headers: &HeaderMap,
+) -> AppResult<reqwest::Response> {
     if protocol == UpstreamProtocol::OpenAiOauth {
         return forward_openai_oauth(state, upstream, body, path).await;
     }
     ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
     send_upstream_request(state, upstream, protocol, path, || {
-        state
+        let request = state
             .http
             .post(url.clone())
             .bearer_auth(&upstream.secret)
             .header("content-type", "application/json")
-            .body(body.clone())
+            .body(body.clone());
+        apply_openai_codex_passthrough_headers(request, headers, &body)
     })
     .await
 }
@@ -83,6 +103,41 @@ fn ensure_openai_protocol(protocol: UpstreamProtocol) -> AppResult<()> {
         "{} cannot be sent with OpenAI forwarding",
         protocol.as_str()
     )))
+}
+
+fn apply_openai_codex_passthrough_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> reqwest::RequestBuilder {
+    let mut has_session_id = false;
+    for &header in CODEX_CLI_PASSTHROUGH_HEADERS {
+        let Some(value) = headers.get(header) else {
+            continue;
+        };
+        if header.eq_ignore_ascii_case("session_id") {
+            has_session_id = true;
+        }
+        request = request.header(header, value.clone());
+    }
+
+    if !has_session_id {
+        if let Some(prompt_cache_key) = prompt_cache_key_from_body(body) {
+            request = request.header("session_id", prompt_cache_key);
+        }
+    }
+
+    request
+}
+
+fn prompt_cache_key_from_body(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    value
+        .get("prompt_cache_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 async fn forward_openai_oauth(

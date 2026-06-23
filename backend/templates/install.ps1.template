@@ -514,7 +514,7 @@ function Test-CodexRelay {
   $chatResult = Invoke-NeoGateRequest -Uri "$BaseUrl/chat/completions" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $chatPayload
   if ($chatResult.Status -ge 200 -and $chatResult.Status -lt 300) {
     Success 'Chat Completions relay test succeeded'
-    Warn 'Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses; Codex may not work with an upstream that only supports chat/completions.'
+    Warn 'Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses mode — check compatibility.'
   } elseif ($chatResult.Status -eq 401 -or $chatResult.Status -eq 403) {
     Fail "Gateway relay rejected the API key with HTTP $($chatResult.Status)"
   } elseif ($chatResult.Status -eq 0) {

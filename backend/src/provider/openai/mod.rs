@@ -25,9 +25,10 @@ use crate::{
 use crate::relay::raw_upstream_response;
 use crate::relay::{
     bridge, describe_upstream_http_failure, finish_relay, finish_task_json_response,
-    forward_anthropic, forward_openai, forward_openai_bound, log_upstream_http_failure,
-    prepare_relay_body, read_upstream_error_body, record_upstream_http_failure,
-    record_upstream_transport_failure_for_failover, reserve_credit, respond_upstream_http_failure,
+    forward_anthropic, forward_openai_bound, forward_openai_with_headers,
+    log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
+    record_upstream_http_failure, record_upstream_transport_failure_for_failover, reserve_credit,
+    respond_upstream_http_failure,
     selector::{AttemptedUpstream, ModelCooldown, SelectedUpstream, UpstreamProtocol},
     should_failover_retryable_upstream_failure, BodyKind, ChannelAffinityKey, PreparedRelayBody,
     RelayBody, RelayContext,
@@ -54,19 +55,22 @@ pub(crate) struct ResponseAssetQuery {
 pub(crate) async fn openai_chat_completions(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
+    headers: HeaderMap,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    openai_chat_completion_response(state, auth, body).await
+    openai_chat_completion_response(state, auth, headers, body).await
 }
 
 pub(crate) async fn openai_chat_completion_response(
     state: Arc<AppState>,
     auth: UserAuth,
+    headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Response> {
     relay_openai(
         state,
         auth,
+        headers,
         body,
         "/v1/chat/completions",
         BodyKind::OpenaiChat,
@@ -79,7 +83,15 @@ pub(crate) async fn openai_embeddings(
     auth: UserAuth,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    relay_openai(state, auth, body, "/v1/embeddings", BodyKind::OpenaiJson).await
+    relay_openai(
+        state,
+        auth,
+        HeaderMap::new(),
+        body,
+        "/v1/embeddings",
+        BodyKind::OpenaiJson,
+    )
+    .await
 }
 
 pub(crate) async fn openai_moderations(
@@ -87,17 +99,27 @@ pub(crate) async fn openai_moderations(
     auth: UserAuth,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    relay_openai(state, auth, body, "/v1/moderations", BodyKind::OpenaiJson).await
+    relay_openai(
+        state,
+        auth,
+        HeaderMap::new(),
+        body,
+        "/v1/moderations",
+        BodyKind::OpenaiJson,
+    )
+    .await
 }
 
 pub(crate) async fn openai_responses(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
+    headers: HeaderMap,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
     relay_openai(
         state,
         auth,
+        headers,
         body,
         "/v1/responses",
         BodyKind::OpenaiResponses,
@@ -232,6 +254,7 @@ pub(crate) async fn cancel_openai_response(
 async fn relay_openai(
     state: Arc<AppState>,
     auth: UserAuth,
+    headers: HeaderMap,
     body: Bytes,
     path: &'static str,
     body_kind: BodyKind,
@@ -349,17 +372,26 @@ async fn relay_openai(
                     && ctx.upstream.responses_mode == ResponsesMode::ChatFallback =>
             {
                 let body = bridge::openai_response_to_openai_chat(body.clone())?;
-                forward_openai(
+                forward_openai_with_headers(
                     &state,
                     &ctx.upstream,
                     protocol,
                     body,
                     "/v1/chat/completions",
+                    &headers,
                 )
                 .await
             }
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
-                forward_openai(&state, &ctx.upstream, protocol, body.clone(), path).await
+                forward_openai_with_headers(
+                    &state,
+                    &ctx.upstream,
+                    protocol,
+                    body.clone(),
+                    path,
+                    &headers,
+                )
+                .await
             }
         };
 

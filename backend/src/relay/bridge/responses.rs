@@ -8,7 +8,8 @@ use crate::{
 };
 
 use super::{
-    content_value_to_text, estimate_tokens,
+    anthropic_cache_creation_tokens, anthropic_usage_input_tokens, anthropic_usage_output_tokens,
+    content_value_to_text, estimate_tokens, openai_reasoning_to_anthropic_thinking,
     stream::{finish_bridge_json, finish_bridge_stream, BridgeSseConverter},
 };
 
@@ -45,6 +46,7 @@ pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<By
     {
         object.insert("tool_choice".to_string(), tool_choice);
     }
+    openai_reasoning_to_anthropic_thinking(object);
     for key in [
         "background",
         "include",
@@ -55,7 +57,6 @@ pub(crate) fn openai_response_to_anthropic_messages(body: Bytes) -> AppResult<By
         "prompt",
         "prompt_cache_key",
         "prompt_cache_retention",
-        "reasoning",
         "service_tier",
         "store",
         "text",
@@ -352,16 +353,9 @@ fn anthropic_response_to_openai_response(body: &[u8], fallback_model: &str) -> A
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or(fallback_model);
-    let input_tokens = value
-        .get("usage")
-        .and_then(|usage| usage.get("input_tokens"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let output_tokens = value
-        .get("usage")
-        .and_then(|usage| usage.get("output_tokens"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let usage = value.get("usage");
+    let input_tokens = anthropic_usage_input_tokens(usage);
+    let output_tokens = anthropic_usage_output_tokens(usage);
     let output = anthropic_content_to_openai_response_output(value.get("content"), id);
     let status = if value.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
         "incomplete"
@@ -376,7 +370,7 @@ fn anthropic_response_to_openai_response(body: &[u8], fallback_model: &str) -> A
         "background": false,
         "model": model,
         "output": output,
-        "usage": openai_response_usage(input_tokens, output_tokens),
+        "usage": openai_response_usage(usage, input_tokens, output_tokens),
     });
     Ok(Bytes::from(serde_json::to_vec(&payload)?))
 }
@@ -395,11 +389,17 @@ fn anthropic_content_to_openai_response_output(
 
     let mut output = Vec::new();
     let mut text = String::new();
+    let mut reasoning_text = String::new();
     for item in items {
         match item.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(part) = item.get("text").and_then(Value::as_str) {
                     text.push_str(part);
+                }
+            }
+            Some("thinking") => {
+                if let Some(part) = item.get("thinking").and_then(Value::as_str) {
+                    reasoning_text.push_str(part);
                 }
             }
             Some("tool_use") => {
@@ -417,6 +417,13 @@ fn anthropic_content_to_openai_response_output(
             _ => {}
         }
     }
+    if !reasoning_text.is_empty() {
+        output.push(openai_response_reasoning_item(
+            format!("rs_{response_id}_{}", output.len()),
+            reasoning_text,
+            "completed",
+        ));
+    }
     if !text.is_empty() || output.is_empty() {
         output.push(openai_response_message_item(
             format!("msg_{response_id}_{}", output.len()),
@@ -425,6 +432,18 @@ fn anthropic_content_to_openai_response_output(
         ));
     }
     output
+}
+
+fn openai_response_reasoning_item(id: String, text: String, status: &str) -> Value {
+    json!({
+        "id": id,
+        "type": "reasoning",
+        "status": status,
+        "summary": [{
+            "type": "summary_text",
+            "text": text,
+        }],
+    })
 }
 
 fn anthropic_content_to_text(content: Option<&Value>) -> String {
@@ -464,12 +483,20 @@ fn anthropic_tool_use_to_openai_response_function_call(item: &Value) -> Option<V
     }))
 }
 
-fn openai_response_usage(input_tokens: i64, output_tokens: i64) -> Value {
+fn openai_response_usage(usage: Option<&Value>, input_tokens: i64, output_tokens: i64) -> Value {
+    let cache_read = usage
+        .and_then(|usage| usage.get("cache_read_input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let cache_create = anthropic_cache_creation_tokens(usage);
     json!({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens.saturating_add(output_tokens),
-        "input_tokens_details": { "cached_tokens": 0 },
+        "input_tokens_details": {
+            "cached_tokens": cache_read,
+            "cached_creation_tokens": cache_create,
+        },
         "output_tokens_details": { "reasoning_tokens": 0 },
     })
 }
@@ -479,17 +506,24 @@ struct AnthropicSseToOpenAiResponse {
     model: String,
     response_id: String,
     output_item_id: String,
+    message_output_index: i64,
     current_tool_call: Option<StreamingToolCall>,
     content_index: i64,
     sequence_number: i64,
     response_started: bool,
     output_started: bool,
     content_started: bool,
+    reasoning_output_index: Option<i64>,
+    reasoning_summary_started: bool,
+    reasoning_finished: bool,
     completed_output: Vec<Value>,
     stopped: bool,
+    reasoning_text: String,
     text: String,
     input_tokens: i64,
     output_tokens: i64,
+    cached_input_tokens: i64,
+    cache_creation_input_tokens: i64,
     status: &'static str,
 }
 
@@ -500,17 +534,24 @@ impl AnthropicSseToOpenAiResponse {
             model,
             response_id: "resp_anthropic_fallback".to_string(),
             output_item_id: "msg_anthropic_fallback".to_string(),
+            message_output_index: 0,
             current_tool_call: None,
             content_index: 0,
             sequence_number: 0,
             response_started: false,
             output_started: false,
             content_started: false,
+            reasoning_output_index: None,
+            reasoning_summary_started: false,
+            reasoning_finished: false,
             completed_output: Vec::new(),
             stopped: false,
+            reasoning_text: String::new(),
             text: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
             status: "completed",
         }
     }
@@ -579,6 +620,7 @@ impl AnthropicSseToOpenAiResponse {
         };
         match block.get("type").and_then(Value::as_str) {
             Some("tool_use") => self.start_tool_call(block, out),
+            Some("thinking") => self.ensure_reasoning_started(out),
             Some("text") => self.ensure_content_started(out),
             _ => {}
         }
@@ -592,6 +634,16 @@ impl AnthropicSseToOpenAiResponse {
             .and_then(Value::as_str)
         {
             self.push_tool_arguments_delta(partial_json, out);
+            return;
+        }
+        if let Some(thinking) = value
+            .get("delta")
+            .filter(|delta| delta.get("type").and_then(Value::as_str) == Some("thinking_delta"))
+            .and_then(|delta| delta.get("thinking"))
+            .and_then(Value::as_str)
+            .filter(|thinking| !thinking.is_empty())
+        {
+            self.push_reasoning_delta(thinking, out);
             return;
         }
         let Some(text) = value
@@ -614,7 +666,7 @@ impl AnthropicSseToOpenAiResponse {
                 "type": "response.output_text.delta",
                 "sequence_number": sequence_number,
                 "item_id": self.output_item_id,
-                "output_index": 0,
+                "output_index": self.message_output_index,
                 "content_index": self.content_index,
                 "delta": text,
             }),
@@ -624,6 +676,9 @@ impl AnthropicSseToOpenAiResponse {
     fn stop_content_block(&mut self, out: &mut Vec<u8>) {
         if self.current_tool_call.is_some() {
             self.finish_tool_call(out);
+        }
+        if self.reasoning_output_index.is_some() && !self.reasoning_finished {
+            self.finish_reasoning(out);
         }
     }
 
@@ -652,12 +707,34 @@ impl AnthropicSseToOpenAiResponse {
             .get("output_tokens")
             .and_then(Value::as_i64)
             .unwrap_or(self.output_tokens);
+        self.cached_input_tokens = usage
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.cached_input_tokens);
+        self.cache_creation_input_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                let details = usage.get("cache_creation")?;
+                let five_min = details
+                    .get("ephemeral_5m_input_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let one_hour = details
+                    .get("ephemeral_1h_input_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let total = five_min.saturating_add(one_hour);
+                (total > 0).then_some(total)
+            })
+            .unwrap_or(self.cache_creation_input_tokens);
     }
 
     fn ensure_content_started(&mut self, out: &mut Vec<u8>) {
         self.ensure_response_started(out);
         if !self.output_started {
             self.output_started = true;
+            self.message_output_index = self.next_output_index_for_new_item();
             let sequence_number = self.next_sequence_number();
             self.push_event(
                 out,
@@ -665,7 +742,7 @@ impl AnthropicSseToOpenAiResponse {
                 json!({
                     "type": "response.output_item.added",
                     "sequence_number": sequence_number,
-                    "output_index": 0,
+                    "output_index": self.message_output_index,
                     "item": {
                         "id": self.output_item_id,
                         "type": "message",
@@ -686,7 +763,7 @@ impl AnthropicSseToOpenAiResponse {
                     "type": "response.content_part.added",
                     "sequence_number": sequence_number,
                     "item_id": self.output_item_id,
-                    "output_index": 0,
+                    "output_index": self.message_output_index,
                     "content_index": self.content_index,
                     "part": {
                         "type": "output_text",
@@ -696,6 +773,121 @@ impl AnthropicSseToOpenAiResponse {
                 }),
             );
         }
+    }
+
+    fn ensure_reasoning_started(&mut self, out: &mut Vec<u8>) {
+        self.ensure_response_started(out);
+        if self.reasoning_output_index.is_none() {
+            if self.current_tool_call.is_some() {
+                self.finish_tool_call(out);
+            }
+            let output_index = self.next_output_index_for_new_item();
+            self.reasoning_output_index = Some(output_index);
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.output_item.added",
+                json!({
+                    "type": "response.output_item.added",
+                    "sequence_number": sequence_number,
+                    "output_index": output_index,
+                    "item": {
+                        "id": self.reasoning_item_id(),
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": [],
+                    },
+                }),
+            );
+        }
+        if !self.reasoning_summary_started {
+            self.reasoning_summary_started = true;
+            let output_index = self.reasoning_output_index.unwrap_or(0);
+            let sequence_number = self.next_sequence_number();
+            self.push_event(
+                out,
+                "response.reasoning_summary_part.added",
+                json!({
+                    "type": "response.reasoning_summary_part.added",
+                    "sequence_number": sequence_number,
+                    "item_id": self.reasoning_item_id(),
+                    "output_index": output_index,
+                    "summary_index": 0,
+                    "part": { "type": "summary_text", "text": "" },
+                }),
+            );
+        }
+    }
+
+    fn push_reasoning_delta(&mut self, thinking: &str, out: &mut Vec<u8>) {
+        self.ensure_reasoning_started(out);
+        self.reasoning_text.push_str(thinking);
+        self.output_tokens = self.output_tokens.saturating_add(estimate_tokens(thinking));
+        let output_index = self.reasoning_output_index.unwrap_or(0);
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.reasoning_summary_text.delta",
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "sequence_number": sequence_number,
+                "item_id": self.reasoning_item_id(),
+                "output_index": output_index,
+                "summary_index": 0,
+                "delta": thinking,
+            }),
+        );
+    }
+
+    fn finish_reasoning(&mut self, out: &mut Vec<u8>) {
+        if self.reasoning_finished {
+            return;
+        }
+        let Some(output_index) = self.reasoning_output_index else {
+            return;
+        };
+        self.reasoning_finished = true;
+        let item_id = self.reasoning_item_id();
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.reasoning_summary_text.done",
+            json!({
+                "type": "response.reasoning_summary_text.done",
+                "sequence_number": sequence_number,
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "text": self.reasoning_text,
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.reasoning_summary_part.done",
+            json!({
+                "type": "response.reasoning_summary_part.done",
+                "sequence_number": sequence_number,
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "part": { "type": "summary_text", "text": self.reasoning_text },
+            }),
+        );
+        let done_item =
+            openai_response_reasoning_item(item_id, self.reasoning_text.clone(), "completed");
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "sequence_number": sequence_number,
+                "output_index": output_index,
+                "item": done_item,
+            }),
+        );
+        self.completed_output.push(done_item);
     }
 
     fn ensure_response_started(&mut self, out: &mut Vec<u8>) {
@@ -740,7 +932,7 @@ impl AnthropicSseToOpenAiResponse {
             .and_then(Value::as_str)
             .unwrap_or("tool")
             .to_string();
-        let output_index = if self.output_started { 1 } else { 0 };
+        let output_index = self.next_output_index_for_new_item();
         let item_id = format!("fc_{id}");
         let sequence_number = self.next_sequence_number();
         self.push_event(
@@ -772,7 +964,7 @@ impl AnthropicSseToOpenAiResponse {
     fn push_tool_arguments_delta(&mut self, partial_json: &str, out: &mut Vec<u8>) {
         if self.current_tool_call.is_none() {
             self.current_tool_call = Some(StreamingToolCall {
-                output_index: if self.output_started { 1 } else { 0 },
+                output_index: self.next_output_index_for_new_item(),
                 item_id: "fc_toolu_anthropic_fallback".to_string(),
                 call_id: "toolu_anthropic_fallback".to_string(),
                 name: "tool".to_string(),
@@ -844,7 +1036,10 @@ impl AnthropicSseToOpenAiResponse {
         if self.current_tool_call.is_some() {
             self.finish_tool_call(out);
         }
-        if !self.output_started && !self.content_started {
+        if self.reasoning_output_index.is_some() && !self.reasoning_finished {
+            self.finish_reasoning(out);
+        }
+        if !self.output_started && !self.content_started && self.completed_output.is_empty() {
             self.ensure_content_started(out);
         }
         self.stopped = true;
@@ -857,7 +1052,7 @@ impl AnthropicSseToOpenAiResponse {
                     "type": "response.output_text.done",
                     "sequence_number": sequence_number,
                     "item_id": self.output_item_id,
-                    "output_index": 0,
+                    "output_index": self.message_output_index,
                     "content_index": self.content_index,
                     "text": self.text,
                 }),
@@ -870,7 +1065,7 @@ impl AnthropicSseToOpenAiResponse {
                     "type": "response.content_part.done",
                     "sequence_number": sequence_number,
                     "item_id": self.output_item_id,
-                    "output_index": 0,
+                    "output_index": self.message_output_index,
                     "content_index": self.content_index,
                     "part": {
                         "type": "output_text",
@@ -886,7 +1081,7 @@ impl AnthropicSseToOpenAiResponse {
                 json!({
                     "type": "response.output_item.done",
                     "sequence_number": sequence_number,
-                    "output_index": 0,
+                    "output_index": self.message_output_index,
                     "item": self.output_item_payload("completed"),
                 }),
             );
@@ -924,7 +1119,19 @@ impl AnthropicSseToOpenAiResponse {
             "background": false,
             "model": self.model,
             "output": output,
-            "usage": openai_response_usage(self.input_tokens, self.output_tokens),
+            "usage": openai_response_usage(
+                Some(&json!({
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": self.output_tokens,
+                    "cache_read_input_tokens": self.cached_input_tokens,
+                    "cache_creation_input_tokens": self.cache_creation_input_tokens,
+                })),
+                self
+                    .input_tokens
+                    .saturating_add(self.cached_input_tokens)
+                    .saturating_add(self.cache_creation_input_tokens),
+                self.output_tokens,
+            ),
         })
     }
 
@@ -940,6 +1147,24 @@ impl AnthropicSseToOpenAiResponse {
                 "annotations": [],
             }],
         })
+    }
+
+    fn reasoning_item_id(&self) -> String {
+        format!("rs_{}", self.output_item_id)
+    }
+
+    fn next_output_index_for_new_item(&self) -> i64 {
+        let mut index: i64 = 0;
+        if self.reasoning_output_index.is_some() {
+            index = index.saturating_add(1);
+        }
+        if self.output_started {
+            index = index.saturating_add(1);
+        }
+        if self.current_tool_call.is_some() {
+            index = index.saturating_add(1);
+        }
+        index
     }
 
     fn push_event(&self, out: &mut Vec<u8>, event: &str, data: Value) {
@@ -986,13 +1211,30 @@ mod response_tests {
         let value: Value = serde_json::from_slice(&converted).unwrap();
 
         assert_eq!(value["model"], "claude-sonnet-4");
-        assert_eq!(value["max_tokens"], 16);
+        assert_eq!(value["max_tokens"], 1281);
         assert_eq!(value["system"], "Be terse.");
         assert_eq!(value["messages"][0]["role"], "user");
         assert_eq!(value["messages"][0]["content"], "Reply OK");
+        assert_eq!(value["thinking"]["type"], "enabled");
+        assert_eq!(value["thinking"]["budget_tokens"], 1280);
         assert!(value.get("input").is_none());
         assert!(value.get("max_output_tokens").is_none());
         assert!(value.get("store").is_none());
+        assert!(value.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn converts_openai_response_reasoning_max_tokens_to_anthropic_thinking() {
+        let body = Bytes::from_static(
+            br#"{"model":"claude-sonnet-4","input":"Reply OK","max_output_tokens":4096,"reasoning":{"enabled":true,"max_tokens":2048}}"#,
+        );
+
+        let converted = openai_response_to_anthropic_messages(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["thinking"]["type"], "enabled");
+        assert_eq!(value["thinking"]["budget_tokens"], 2048);
+        assert_eq!(value["max_tokens"], 4096);
         assert!(value.get("reasoning").is_none());
     }
 
@@ -1069,6 +1311,19 @@ mod response_tests {
     }
 
     #[test]
+    fn converts_anthropic_thinking_response_to_openai_reasoning_output() {
+        let body = br#"{"id":"msg-1","model":"claude-sonnet-4","content":[{"type":"thinking","thinking":"Thinking."},{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":3}}"#;
+
+        let converted = anthropic_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["output"][0]["type"], "reasoning");
+        assert_eq!(value["output"][0]["summary"][0]["text"], "Thinking.");
+        assert_eq!(value["output"][1]["type"], "message");
+        assert_eq!(value["output"][1]["content"][0]["text"], "OK");
+    }
+
+    #[test]
     fn converts_anthropic_tool_use_response_to_openai_function_call() {
         let body = br#"{"id":"msg-1","model":"claude-sonnet-4","content":[{"type":"text","text":"Checking."},{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"city":"Shanghai"}}],"stop_reason":"tool_use","usage":{"input_tokens":8,"output_tokens":3}}"#;
 
@@ -1108,6 +1363,30 @@ mod response_tests {
         assert!(text.contains(r#""text":"OK""#));
         assert!(text.contains(r#""input_tokens":8"#));
         assert!(text.contains(r#""output_tokens":1"#));
+    }
+
+    #[test]
+    fn converts_anthropic_stream_thinking_to_openai_response_reasoning_events() {
+        let mut converter = AnthropicSseToOpenAiResponse::new("claude-sonnet-4".to_string());
+        let mut out = Vec::new();
+        out.extend_from_slice(&converter.push(br#"data: {"type":"message_start","message":{"id":"msg-1","model":"claude-sonnet-4","usage":{"input_tokens":8,"output_tokens":0}}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Think"}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"content_block_stop","index":0}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(br#"data: {"type":"message_stop"}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        let text = String::from_utf8(out).unwrap();
+
+        assert!(text.contains("event: response.reasoning_summary_text.delta"));
+        assert!(text.contains(r#""delta":"Think""#));
+        assert!(text.contains("event: response.reasoning_summary_text.done"));
+        assert!(text.contains(r#""type":"reasoning""#));
+        assert!(text.contains(r#""text":"Think""#));
+        assert!(text.contains("event: response.completed"));
     }
 
     #[test]

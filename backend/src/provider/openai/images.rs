@@ -21,7 +21,7 @@ use crate::{
         record_upstream_http_failure, record_upstream_transport_failure_for_failover,
         release_empty_hold, reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
         response_from_bytes, selector::AttemptedUpstream,
-        should_failover_retryable_upstream_failure, RelayContext,
+        should_failover_retryable_upstream_failure, RelayContext, RelayRequestParams,
     },
     AppState,
 };
@@ -33,6 +33,7 @@ struct ImageRequestMeta {
     model: String,
     stream: bool,
     image_count: i64,
+    request_params: RelayRequestParams,
     content_type: HeaderValue,
 }
 
@@ -116,6 +117,7 @@ pub(super) async fn relay_openai_image(
             relay_trace_id,
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
+            request_params: meta.request_params.clone(),
             _image_sync_permit: None,
         };
         let response = forward_openai_with_content_type(
@@ -510,10 +512,17 @@ fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let image_count = image_count_from_value(&value).unwrap_or(1);
     Ok(ImageRequestMeta {
         model,
         stream,
-        image_count: image_count_from_value(&value).unwrap_or(1),
+        image_count,
+        request_params: RelayRequestParams::image(
+            image_count,
+            string_field(&value, "size"),
+            string_field(&value, "quality"),
+            string_field(&value, "style"),
+        ),
         content_type,
     })
 }
@@ -527,11 +536,17 @@ fn multipart_image_request_meta(
     let mut model = None;
     let mut stream = false;
     let mut image_count = 1_i64;
+    let mut size = None;
+    let mut quality = None;
+    let mut style = None;
     for (name, value) in multipart_text_fields(body, &boundary)? {
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
             "stream" => stream = value == "true",
             "n" => image_count = parse_positive_image_count(&value).unwrap_or(1),
+            "size" if !value.is_empty() => size = Some(value),
+            "quality" if !value.is_empty() => quality = Some(value),
+            "style" if !value.is_empty() => style = Some(value),
             _ => {}
         }
     }
@@ -540,8 +555,16 @@ fn multipart_image_request_meta(
         model,
         stream,
         image_count,
+        request_params: RelayRequestParams::image(image_count, size, quality, style),
         content_type,
     })
+}
+
+fn string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn image_count_from_value(value: &Value) -> Option<i64> {

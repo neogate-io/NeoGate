@@ -10,7 +10,7 @@ pub mod selector;
 mod streaming;
 mod upstream;
 
-use std::sync::Arc;
+use std::{fmt::Write as _, sync::Arc};
 
 use axum::{
     body::Body,
@@ -46,7 +46,7 @@ pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
 pub(crate) use limit::ImageSyncLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
-pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody};
+pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody, RelayRequestParams};
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::upstream_url;
 pub(crate) use upstream::{
@@ -514,7 +514,7 @@ pub(crate) fn usage_from_context(
         (latency_ms > 0 && usage.output_tokens > 0)
             .then_some((usage.output_tokens as f64 * 1000.0) / latency_ms as f64)
     });
-    UsageInsert {
+    let usage = UsageInsert {
         user_id: ctx.auth.user_id,
         project_id: ctx.auth.project_id,
         user_key_id: ctx.auth.user_key_id,
@@ -546,6 +546,173 @@ pub(crate) fn usage_from_context(
                     .unwrap_or(0)
             }),
         billing,
+    };
+    log_relay_request_summary(ctx, &usage);
+    usage
+}
+
+fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
+    let token_usage = usage.token_usage;
+    let billing = usage.billing.as_ref();
+    let cost_micro_usd = billing.map(|billing| billing.cost_micro_usd);
+    let input_tokens = billing
+        .and_then(|billing| billing.input_tokens)
+        .or_else(|| token_usage.map(|usage| usage.input_tokens));
+    let output_tokens = billing
+        .and_then(|billing| billing.output_tokens)
+        .or_else(|| token_usage.map(|usage| usage.output_tokens));
+    let total_tokens = billing
+        .and_then(|billing| billing.total_tokens)
+        .or_else(|| token_usage.map(TokenUsage::total_tokens));
+    let cached_input_tokens = token_usage.and_then(|usage| usage.cached_input_tokens);
+    let cache_creation_input_tokens =
+        token_usage.and_then(|usage| usage.cache_creation_input_tokens);
+    let cache_creation_input_tokens_5m =
+        token_usage.and_then(|usage| usage.cache_creation_input_tokens_5m);
+    let cache_creation_input_tokens_1h =
+        token_usage.and_then(|usage| usage.cache_creation_input_tokens_1h);
+    let reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens);
+    let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
+    let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
+
+    let mut line = String::from("relay request");
+    push_field(&mut line, "relay_trace_id", ctx.relay_trace_id);
+    push_field(&mut line, "path", ctx.path);
+    push_field(&mut line, "user_id", usage.user_id);
+    push_field(&mut line, "project_id", usage.project_id);
+    push_field(&mut line, "user_key_id", usage.user_key_id);
+    push_field(&mut line, "provider", &usage.provider);
+    push_field(&mut line, "protocol", ctx.protocol.as_str());
+    push_field(
+        &mut line,
+        "model",
+        usage.model.as_deref().unwrap_or(&ctx.model),
+    );
+    push_field(&mut line, "channel_id", usage.channel_id);
+    push_field(&mut line, "channel_name", &ctx.upstream.channel_name);
+    push_field(
+        &mut line,
+        "channel_endpoint_id",
+        ctx.upstream.channel_endpoint_id,
+    );
+    push_opt(&mut line, "channel_key_id", usage.channel_key_id);
+    push_opt(&mut line, "credential_id", usage.credential_id);
+    push_field(&mut line, "upstream", &ctx.upstream.base_url);
+    push_opt(&mut line, "status", usage.status_code);
+    push_field(&mut line, "streamed", usage.streamed);
+    push_field(&mut line, "relay_attempt", usage.relay_attempt);
+    push_field(&mut line, "relay_final", usage.relay_final);
+    push_field(&mut line, "latency_ms", usage.latency_ms);
+    push_opt(&mut line, "first_response_ms", usage.first_response_ms);
+    push_opt_f64(
+        &mut line,
+        "output_tokens_per_second",
+        usage.output_tokens_per_second,
+    );
+
+    push_request_params(&mut line, &ctx.request_params);
+    push_opt(&mut line, "input_tokens", input_tokens);
+    push_opt(&mut line, "output_tokens", output_tokens);
+    push_opt(&mut line, "total_tokens", total_tokens);
+    push_opt(&mut line, "cached_input_tokens", cached_input_tokens);
+    push_opt(
+        &mut line,
+        "cache_creation_input_tokens",
+        cache_creation_input_tokens,
+    );
+    push_opt(
+        &mut line,
+        "cache_creation_input_tokens_5m",
+        cache_creation_input_tokens_5m,
+    );
+    push_opt(
+        &mut line,
+        "cache_creation_input_tokens_1h",
+        cache_creation_input_tokens_1h,
+    );
+    push_opt(
+        &mut line,
+        "reasoning_output_tokens",
+        reasoning_output_tokens,
+    );
+    push_opt(&mut line, "audio_input_tokens", audio_input_tokens);
+    push_opt(&mut line, "audio_output_tokens", audio_output_tokens);
+    if billing.is_some() || usage.billable_units > 0 {
+        push_field(&mut line, "billing_meter", usage.billing_meter.as_str());
+        push_field(&mut line, "billable_units", usage.billable_units);
+    }
+    push_opt(&mut line, "cost_micro_usd", cost_micro_usd);
+    if let Some(status) = billing.map(|billing| billing.status.as_str()) {
+        push_field(&mut line, "billing_status", status);
+    }
+    if let Some(error) = usage
+        .error_summary
+        .as_deref()
+        .filter(|error| !error.is_empty())
+    {
+        push_field(&mut line, "error", error);
+    }
+
+    tracing::info!("{line}");
+}
+
+fn push_request_params(line: &mut String, params: &RelayRequestParams) {
+    push_opt(line, "request_max_tokens", params.max_tokens);
+    push_opt_f64(line, "request_temperature", params.temperature);
+    push_opt_f64(line, "request_top_p", params.top_p);
+    push_opt_str(
+        line,
+        "request_reasoning_effort",
+        params.reasoning_effort.as_deref(),
+    );
+    push_opt(
+        line,
+        "request_reasoning_max_tokens",
+        params.reasoning_max_tokens,
+    );
+    push_opt(line, "request_tool_count", params.tool_count);
+    push_opt_str(line, "request_tool_choice", params.tool_choice.as_deref());
+    push_opt_str(
+        line,
+        "request_response_format",
+        params.response_format.as_deref(),
+    );
+    push_opt(
+        line,
+        "request_parallel_tool_calls",
+        params.parallel_tool_calls,
+    );
+    push_opt(line, "request_store", params.store);
+    push_opt(line, "request_background", params.background);
+    push_opt(line, "request_image_count", params.image_count);
+    push_opt_str(line, "request_image_size", params.image_size.as_deref());
+    push_opt_str(
+        line,
+        "request_image_quality",
+        params.image_quality.as_deref(),
+    );
+    push_opt_str(line, "request_image_style", params.image_style.as_deref());
+}
+
+fn push_field(line: &mut String, key: &str, value: impl std::fmt::Display) {
+    let _ = write!(line, " {key}={value}");
+}
+
+fn push_opt<T: std::fmt::Display>(line: &mut String, key: &str, value: Option<T>) {
+    if let Some(value) = value {
+        push_field(line, key, value);
+    }
+}
+
+fn push_opt_str(line: &mut String, key: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        push_field(line, key, value);
+    }
+}
+
+fn push_opt_f64(line: &mut String, key: &str, value: Option<f64>) {
+    if let Some(value) = value {
+        let _ = write!(line, " {key}={value:.2}");
     }
 }
 

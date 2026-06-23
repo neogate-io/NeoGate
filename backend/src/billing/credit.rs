@@ -31,7 +31,6 @@ pub(super) trait HotCreditStore: Send + Sync {
         credit_accounts: &[CreditAccountId],
         amount_micro_usd: i64,
     ) -> AppResult<Option<Vec<DebitPart>>>;
-    async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>>;
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()>;
 }
 
@@ -154,40 +153,6 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
           end
         end
         return output
-        "#,
-    )
-});
-
-static REDIS_REFUND_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
-    redis::Script::new(
-        r#"
-        local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
-        local expected = tonumber(ARGV[3])
-        if gen ~= expected then
-          return 0
-        end
-        if not redis.call('GET', KEYS[3]) then
-          local total = 0
-          local items = redis.call('LRANGE', KEYS[1], 0, -1)
-          for _, item in ipairs(items) do
-            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
-            total = total + tonumber(segment_amount)
-          end
-          redis.call('SET', KEYS[3], total)
-        end
-        local head = redis.call('LINDEX', KEYS[1], 0)
-        if head then
-          local head_allocation_id, head_amount, head_gen = string.match(head, '([^:]+):([^:]+):([^:]+)')
-          if head_allocation_id == ARGV[1] and tonumber(head_gen) == expected then
-            redis.call('LSET', KEYS[1], 0, ARGV[1] .. ':' .. tostring(tonumber(head_amount) + tonumber(ARGV[2])) .. ':' .. ARGV[3])
-          else
-            redis.call('LPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. ARGV[3])
-          end
-        else
-          redis.call('LPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. ARGV[3])
-        end
-        redis.call('INCRBY', KEYS[3], ARGV[2])
-        return 1
         "#,
     )
 });
@@ -349,29 +314,6 @@ impl HotCreditStore for MemoryHotCreditStore {
             return Ok(None);
         }
         Ok(Some(parts))
-    }
-
-    async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>> {
-        let mut returned = Vec::new();
-        for part in parts {
-            if part.amount_micro_usd <= 0 {
-                continue;
-            }
-            let mut balances = self
-                .lock_shard_for_credit_account(&part.credit_account)
-                .await;
-            let account_hot = balances.entry(part.credit_account.clone()).or_default();
-            if account_hot.generation != part.generation {
-                returned.push(part.clone());
-                continue;
-            }
-            account_hot.total_available_micro_usd += part.amount_micro_usd;
-            account_hot.segments.push_front(HotSegment {
-                allocation_id: part.allocation_id,
-                available_micro_usd: part.amount_micro_usd,
-            });
-        }
-        Ok(returned)
     }
 
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()> {
@@ -552,32 +494,6 @@ impl HotCreditStore for RedisHotCreditStore {
         Ok(Some(parts))
     }
 
-    async fn refund(&self, parts: &[DebitPart]) -> AppResult<Vec<DebitPart>> {
-        let mut returned = Vec::new();
-        let mut conn = self.manager.clone();
-        for part in parts {
-            if part.amount_micro_usd <= 0 {
-                continue;
-            }
-            let generation_key = self.generation_key(&part.credit_account);
-            let credit_account_key = self.credit_account_key(&part.credit_account);
-            let total_key = self.total_key(&part.credit_account);
-            let stored: i64 = REDIS_REFUND_SCRIPT
-                .key(credit_account_key)
-                .key(generation_key)
-                .key(total_key)
-                .arg(part.allocation_id)
-                .arg(part.amount_micro_usd)
-                .arg(part.generation)
-                .invoke_async(&mut conn)
-                .await?;
-            if stored == 0 {
-                returned.push(part.clone());
-            }
-        }
-        Ok(returned)
-    }
-
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()> {
         if allocations.is_empty() {
             return Ok(());
@@ -688,9 +604,6 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-
-        let returned = store.refund(&drained).await.unwrap();
-        assert_eq!(returned.len(), 2);
     }
 
     #[tokio::test]

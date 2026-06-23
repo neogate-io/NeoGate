@@ -114,6 +114,7 @@ pub(crate) async fn anthropic_messages(
             relay_trace_id,
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
+            request_params: meta.request_params.clone(),
             _image_sync_permit: None,
         };
         let response = match protocol {

@@ -19,7 +19,7 @@ use super::{
     limit::ImageSyncPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
-    usage_from_context, ChannelAffinityKey,
+    usage_from_context, ChannelAffinityKey, RelayRequestParams,
 };
 
 pub(crate) struct RelayContext {
@@ -38,6 +38,7 @@ pub(crate) struct RelayContext {
     pub(crate) relay_trace_id: Uuid,
     pub(crate) relay_attempt: i32,
     pub(crate) relay_final: bool,
+    pub(crate) request_params: RelayRequestParams,
     pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
 }
 

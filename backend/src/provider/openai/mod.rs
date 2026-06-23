@@ -258,6 +258,7 @@ async fn relay_openai(
             body,
             meta.model,
             output_tokens,
+            meta.request_params,
             meta.channel_affinity_key,
         )
         .await;
@@ -314,6 +315,7 @@ async fn relay_openai(
             relay_trace_id,
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
+            request_params: meta.request_params.clone(),
             _image_sync_permit: None,
         };
         let response = match protocol {

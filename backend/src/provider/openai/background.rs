@@ -19,7 +19,7 @@ use crate::{
         ensure_key_backed_async_upstream, finish_relay, forward_openai, forward_openai_bound,
         handle_upstream_http_error, release_empty_hold, reserve_credit, response_from_bytes,
         selector::{SelectedUpstream, UpstreamProtocol},
-        task_status_from_value, ChannelAffinityKey, RelayContext,
+        task_status_from_value, ChannelAffinityKey, RelayContext, RelayRequestParams,
     },
     task::{billing as task_billing, jobs, upstream as upstream_task},
     AppState,
@@ -33,6 +33,7 @@ pub(super) async fn create_background_response(
     body: Bytes,
     model: String,
     output_tokens: i64,
+    request_params: RelayRequestParams,
     channel_affinity_key: Option<ChannelAffinityKey>,
 ) -> AppResult<Response> {
     let started = Instant::now();
@@ -116,6 +117,7 @@ pub(super) async fn create_background_response(
         relay_trace_id: Uuid::new_v4(),
         relay_attempt: 1,
         relay_final: true,
+        request_params,
         _image_sync_permit: None,
     };
 

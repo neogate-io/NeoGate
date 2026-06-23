@@ -411,10 +411,10 @@ impl Billing {
 
         let mut remaining = cost_micro_usd;
         let mut consumed = Vec::new();
-        let mut refund = Vec::new();
+        let mut returned_parts = Vec::new();
         for part in hold.parts {
             if remaining <= 0 {
-                refund.push(part);
+                returned_parts.push(part);
                 continue;
             }
             let consume = part.amount_micro_usd.min(remaining);
@@ -424,21 +424,12 @@ impl Billing {
                 ..part.clone()
             });
             if part.amount_micro_usd > consume {
-                refund.push(DebitPart {
+                returned_parts.push(DebitPart {
                     amount_micro_usd: part.amount_micro_usd - consume,
                     ..part
                 });
             }
         }
-        let returned_parts = match self.hot.refund(&refund).await {
-            Ok(returned_parts) => returned_parts,
-            Err(err) => {
-                tracing::warn!(
-                    "failed to refund unused hot credit; reserved credit will be recovered later: {err}"
-                );
-                Vec::new()
-            }
-        };
 
         Ok(BillingCharge {
             transaction_id: hold.transaction_id,
@@ -987,4 +978,118 @@ async fn recover_allocations_in_db(
     }
     tx.commit().await?;
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use sqlx::PgPool;
+
+    use super::*;
+
+    fn credit_account(id: DbId) -> CreditAccountId {
+        CreditAccountId::new(id)
+    }
+
+    fn billing_accounts<'a>(
+        user_key_credit_account: &'a CreditAccountId,
+        project_credit_account: &'a CreditAccountId,
+    ) -> BillingAccounts<'a> {
+        BillingAccounts {
+            user_id: 1,
+            project_id: 1,
+            user_key_id: 1,
+            user_key_model_credit_account: None,
+            user_key_credit_account,
+            project_credit_account,
+        }
+    }
+
+    fn token_price() -> Price {
+        Price {
+            input_price_usd_micros: MICRO_USD_PER_USD,
+            output_price_usd_micros: MICRO_USD_PER_USD,
+            cache_read_price_usd_micros: None,
+            cache_write_price_usd_micros: None,
+            billing_meter: BillingMeter::Token,
+            unit_price_usd_micros: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_keeps_unused_reserved_credit_out_of_hot_store_until_recorded() {
+        let billing = Billing::new_memory(Duration::from_secs(60), 32, 100, 100);
+        let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
+        let user_key_credit_account = credit_account(10);
+        let project_credit_account = credit_account(20);
+
+        billing
+            .hot
+            .credit_allocation(user_key_credit_account.clone(), 101, 100)
+            .await
+            .unwrap();
+
+        let hold = billing
+            .reserve(
+                &pool,
+                billing_accounts(&user_key_credit_account, &project_credit_account),
+                100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            hold.parts
+                .iter()
+                .map(|part| part.amount_micro_usd)
+                .sum::<i64>(),
+            100
+        );
+
+        let charge = billing
+            .settle(
+                &pool,
+                SettleRequest {
+                    accounts: billing_accounts(&user_key_credit_account, &project_credit_account),
+                    hold,
+                    usage: Some(BillableUsage::token(TokenUsage {
+                        input_tokens: 40,
+                        output_tokens: 0,
+                        cached_input_tokens: None,
+                        cache_creation_input_tokens: None,
+                        cache_creation_input_tokens_5m: None,
+                        cache_creation_input_tokens_1h: None,
+                        reasoning_output_tokens: None,
+                        audio_input_tokens: None,
+                        audio_output_tokens: None,
+                    })),
+                    price: &token_price(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            charge
+                .parts
+                .iter()
+                .map(|part| part.amount_micro_usd)
+                .sum::<i64>(),
+            40
+        );
+        assert_eq!(
+            charge
+                .returned_parts
+                .iter()
+                .map(|part| part.amount_micro_usd)
+                .sum::<i64>(),
+            60
+        );
+        assert!(billing
+            .hot
+            .try_debit_ordered(&[user_key_credit_account], 1)
+            .await
+            .unwrap()
+            .is_none());
+    }
 }

@@ -730,10 +730,6 @@ async function toggleChannelRuntime(row: Channel, enabled: boolean) {
           protocol: endpoint.protocol,
           base_url: endpoint.base_url,
           models: endpoint.models,
-          responses_mode:
-            endpoint.protocol === 'openai' && endpoint.responses_mode_source !== 'manual'
-              ? 'auto'
-              : endpoint.responses_mode,
           enabled: endpoint.enabled
         })),
         enabled,

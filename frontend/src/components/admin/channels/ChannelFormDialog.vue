@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ArrowDown, Close, CopyDocument, Delete, Plus } from '@element-plus/icons-vue'
+import { Close, CopyDocument, Delete, Plus } from '@element-plus/icons-vue'
 import ProviderIcon from '../../common/ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { ChannelForm } from '../../../composables/useChannels'
@@ -40,9 +40,6 @@ const addingKey = ref(false)
 
 const showExistingKeyTable = computed(
   () => props.mode === 'edit' && Boolean(props.existingKeys?.length)
-)
-const showResponsesModeSetting = computed(
-  () => !(form.value.provider === 'openai' && form.value.use_credentials)
 )
 const selectedModels = computed(() =>
   form.value.models
@@ -281,31 +278,6 @@ function keyHealthLabel(key: ChannelKey) {
         </div>
       </el-form-item>
 
-      <details v-if="showResponsesModeSetting" class="channel-advanced-settings">
-        <summary class="advanced-settings-toggle">
-          <span>{{ t('advancedSettings') }}</span>
-          <el-icon class="advanced-settings-icon">
-            <ArrowDown />
-          </el-icon>
-        </summary>
-
-        <div class="advanced-settings-body">
-          <div class="advanced-settings-row">
-            <span class="advanced-settings-label">{{ t('responsesMode') }}</span>
-            <el-select
-              v-model="form.endpoints.openai.responses_mode"
-              class="responses-mode-select"
-              fit-input-width
-            >
-              <el-option :label="t('responsesModeAuto')" value="auto" />
-              <el-option :label="t('responsesModeNative')" value="native" />
-              <el-option :label="t('responsesModeChatFallback')" value="chat_fallback" />
-              <el-option :label="t('responsesModeDisabled')" value="disabled" />
-            </el-select>
-          </div>
-        </div>
-      </details>
-
       <button class="hidden-submit" type="submit" />
     </el-form>
 
@@ -378,72 +350,6 @@ function keyHealthLabel(key: ChannelKey) {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr);
-}
-
-.channel-advanced-settings {
-  display: grid;
-  gap: 8px;
-  margin-top: -4px;
-}
-
-.advanced-settings-toggle {
-  align-items: center;
-  color: #475569;
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 13px;
-  font-weight: 700;
-  gap: 6px;
-  justify-self: start;
-  line-height: 20px;
-  padding: 4px 0;
-}
-
-.advanced-settings-toggle::-webkit-details-marker {
-  display: none;
-}
-
-.advanced-settings-toggle:hover {
-  color: #3156b3;
-}
-
-.advanced-settings-icon {
-  color: #94a3b8;
-  font-size: 13px;
-  transition: transform 0.16s ease;
-}
-
-.channel-advanced-settings[open] .advanced-settings-icon {
-  transform: rotate(180deg);
-}
-
-.advanced-settings-body {
-  background: #f8fafc;
-  border: 1px solid #e3e8ef;
-  border-radius: 7px;
-  padding: 10px 12px;
-}
-
-.advanced-settings-row {
-  align-items: center;
-  display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.advanced-settings-label {
-  color: #475569;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 20px;
-}
-
-.responses-mode-select {
-  width: 218px;
-}
-
-.responses-mode-select :deep(.el-select__wrapper) {
-  width: 218px;
 }
 
 .model-summary-field {

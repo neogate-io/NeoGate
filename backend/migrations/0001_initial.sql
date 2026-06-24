@@ -187,7 +187,8 @@ VALUES
     ('baichuan', '百川智能 Baichuan', 'Baichuan AI', ARRAY['Baichuan4', 'Baichuan3-Turbo'], 'https://api.baichuan-ai.com/v1', '', '', 190),
     ('iflytek', '讯飞星火 Spark', 'iFlytek Spark', ARRAY['4.0Ultra', 'generalv3.5'], 'https://spark-api-open.xf-yun.com/v1', '', '', 200),
     ('sensenova', '商汤日日新 SenseNova', 'SenseNova', ARRAY['SenseChat-5', 'SenseNova-V6-5-Pro', 'SenseNova-V6-Pro'], 'https://api.sensenova.cn/compatible-mode/v2', '', '', 210),
-    ('siliconflow', '硅基流动 SiliconFlow', 'SiliconFlow', ARRAY['deepseek-ai/DeepSeek-V4-Flash', 'deepseek-ai/DeepSeek-V4-Pro', 'Qwen/Qwen3.6-35B-A3B'], 'https://api.siliconflow.cn/v1', '', 'https://api.siliconflow.cn', 220);
+    ('siliconflow', '硅基流动 SiliconFlow', 'SiliconFlow', ARRAY['deepseek-ai/DeepSeek-V4-Flash', 'deepseek-ai/DeepSeek-V4-Pro', 'Qwen/Qwen3.6-35B-A3B'], 'https://api.siliconflow.cn/v1', '', 'https://api.siliconflow.cn', 220),
+    ('jdcloud', '京东云 JoyAgent', 'JDCloud JoyAgent', ARRAY['deepseek-v3.2', 'deepseek-v3', 'DeepSeek-V3-0324'], 'https://agentrs.jd.com/api/saas/openai-u/v1', '', '', 230);
 
 CREATE TABLE channel (
     id BIGSERIAL PRIMARY KEY,

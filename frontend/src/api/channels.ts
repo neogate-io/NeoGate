@@ -77,7 +77,6 @@ export async function createChannel(payload: {
     protocol: EndpointProtocol
     base_url: string
     models: string[]
-    responses_mode?: 'auto' | 'native' | 'chat_fallback' | 'disabled'
     enabled: boolean
   }>
   enabled: boolean
@@ -121,7 +120,6 @@ export function updateChannel(
       protocol: EndpointProtocol
       base_url: string
       models: string[]
-      responses_mode?: 'auto' | 'native' | 'chat_fallback' | 'disabled'
       enabled: boolean
     }>
     enabled: boolean

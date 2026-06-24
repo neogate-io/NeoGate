@@ -1,6 +1,5 @@
 ALTER TABLE channel_endpoint
-    ADD COLUMN responses_mode TEXT NOT NULL DEFAULT 'native'
-        CHECK (responses_mode IN ('native', 'chat_fallback', 'disabled')),
-    ADD COLUMN responses_mode_source TEXT NOT NULL DEFAULT 'auto'
-        CHECK (responses_mode_source IN ('auto', 'manual', 'probed')),
+    ADD COLUMN responses_capability TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (responses_capability IN ('unknown', 'native', 'chat_fallback', 'disabled')),
+    ADD COLUMN responses_checked_at TIMESTAMPTZ,
     ADD COLUMN responses_probe JSONB NOT NULL DEFAULT '{}'::JSONB;

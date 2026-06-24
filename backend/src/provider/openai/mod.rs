@@ -15,9 +15,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    admin::channel::ResponsesMode,
+    admin::channel::ResponsesCapability,
     auth::UserAuth,
     error::{AppError, AppResult},
+    provider::adapters::{adapter_for_provider, AdapterResponseMode, RelayRoute},
     task::{jobs, upstream as upstream_task},
     AppState,
 };
@@ -25,10 +26,9 @@ use crate::{
 use crate::relay::raw_upstream_response;
 use crate::relay::{
     bridge, describe_upstream_http_failure, finish_relay, finish_task_json_response,
-    forward_anthropic, forward_openai_bound, forward_openai_with_headers,
-    log_upstream_http_failure, prepare_relay_body, read_upstream_error_body,
-    record_upstream_http_failure, record_upstream_transport_failure_for_failover, reserve_credit,
-    respond_upstream_http_failure,
+    forward_anthropic, forward_openai_bound, forward_prepared_openai, log_upstream_http_failure,
+    prepare_relay_body, read_upstream_error_body, record_upstream_http_failure,
+    record_upstream_transport_failure_for_failover, reserve_credit, respond_upstream_http_failure,
     selector::{
         AttemptedUpstream, ModelCooldown, SelectedUpstream, SelectionConstraints, UpstreamProtocol,
     },
@@ -74,7 +74,7 @@ pub(crate) async fn openai_chat_completion_response(
         auth,
         headers,
         body,
-        "/v1/chat/completions",
+        RelayRoute::OpenAiChatCompletions,
         BodyKind::OpenaiChat,
     )
     .await
@@ -90,7 +90,7 @@ pub(crate) async fn openai_embeddings(
         auth,
         HeaderMap::new(),
         body,
-        "/v1/embeddings",
+        RelayRoute::OpenAiEmbeddings,
         BodyKind::OpenaiJson,
     )
     .await
@@ -106,7 +106,7 @@ pub(crate) async fn openai_moderations(
         auth,
         HeaderMap::new(),
         body,
-        "/v1/moderations",
+        RelayRoute::OpenAiModerations,
         BodyKind::OpenaiJson,
     )
     .await
@@ -123,7 +123,7 @@ pub(crate) async fn openai_responses(
         auth,
         headers,
         body,
-        "/v1/responses",
+        RelayRoute::OpenAiResponses,
         BodyKind::OpenaiResponses,
     )
     .await
@@ -258,9 +258,10 @@ async fn relay_openai(
     auth: UserAuth,
     headers: HeaderMap,
     body: Bytes,
-    path: &'static str,
+    route: RelayRoute,
     body_kind: BodyKind,
 ) -> AppResult<Response> {
+    let path = route.path();
     let PreparedRelayBody {
         body,
         meta,
@@ -307,7 +308,9 @@ async fn relay_openai(
         )
         .await?;
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
-        if path == "/v1/responses" && upstream.responses_mode == ResponsesMode::Disabled {
+        if route == RelayRoute::OpenAiResponses
+            && upstream.responses_capability == ResponsesCapability::Disabled
+        {
             tracing::info!(
                 provider = %upstream.provider,
                 channel_id = upstream.channel_id,
@@ -357,6 +360,7 @@ async fn relay_openai(
             request_params: meta.request_params.clone(),
             _image_sync_permit: None,
         };
+        let mut adapter_response_mode = AdapterResponseMode::Passthrough;
         let response = match protocol {
             UpstreamProtocol::Anthropic if path == "/v1/chat/completions" => {
                 let body = bridge::openai_chat_to_anthropic_messages(body.clone())?;
@@ -369,29 +373,26 @@ async fn relay_openai(
             UpstreamProtocol::Anthropic => Err(AppError::BadRequest(format!(
                 "Anthropic fallback is not supported for {path}"
             ))),
-            UpstreamProtocol::Openai
-                if path == "/v1/responses"
-                    && ctx.upstream.responses_mode == ResponsesMode::ChatFallback =>
-            {
-                let body = bridge::openai_response_to_openai_chat(body.clone())?;
-                forward_openai_with_headers(
-                    &state,
-                    &ctx.upstream,
-                    protocol,
-                    body,
-                    "/v1/chat/completions",
-                    &headers,
-                )
-                .await
-            }
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
-                forward_openai_with_headers(
+                let adapter = adapter_for_provider(&ctx.upstream.provider);
+                let prepared = adapter.prepare_openai_request(
+                    &ctx.upstream,
+                    protocol,
+                    route,
+                    body.clone(),
+                    &headers,
+                    meta.stream,
+                )?;
+                adapter_response_mode = prepared.response_mode;
+                forward_prepared_openai(
                     &state,
                     &ctx.upstream,
                     protocol,
-                    body.clone(),
-                    path,
+                    prepared.body,
+                    prepared.url,
+                    &prepared.log_path,
                     &headers,
+                    prepared.extra_headers,
                 )
                 .await
             }
@@ -404,7 +405,13 @@ async fn relay_openai(
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
                     ctx.relay_final = true;
-                    return finish_openai_relay_success(ctx, status, upstream_response).await;
+                    return finish_openai_relay_success(
+                        ctx,
+                        status,
+                        upstream_response,
+                        adapter_response_mode,
+                    )
+                    .await;
                 }
 
                 let body = read_upstream_error_body(upstream_response).await;
@@ -530,17 +537,20 @@ async fn finish_openai_relay_success(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
+    adapter_response_mode: AdapterResponseMode,
 ) -> AppResult<Response> {
-    match (ctx.protocol, ctx.path, ctx.upstream.responses_mode) {
+    match (ctx.protocol, ctx.path, adapter_response_mode) {
         (UpstreamProtocol::Anthropic, "/v1/chat/completions", _) => {
             bridge::finish_anthropic_as_openai_chat(ctx, status, upstream_response).await
         }
         (UpstreamProtocol::Anthropic, "/v1/responses", _) => {
             bridge::finish_anthropic_as_openai_response(ctx, status, upstream_response).await
         }
-        (UpstreamProtocol::Openai, "/v1/responses", ResponsesMode::ChatFallback) => {
-            bridge::finish_openai_chat_as_openai_response(ctx, status, upstream_response).await
-        }
+        (
+            UpstreamProtocol::Openai,
+            "/v1/responses",
+            AdapterResponseMode::OpenAiChatAsOpenAiResponse,
+        ) => bridge::finish_openai_chat_as_openai_response(ctx, status, upstream_response).await,
         _ => finish_relay(ctx, Ok(upstream_response)).await,
     }
 }

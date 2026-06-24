@@ -11,6 +11,7 @@ use crate::{
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     input::trimmed_non_empty,
+    provider::adapters::{adapter_for_provider, RelayRoute},
     relay::upstream_url,
     AppState,
 };
@@ -150,6 +151,7 @@ struct ChannelDiagnosticTarget {
 
 struct EndpointTarget {
     id: DbId,
+    provider: String,
     protocol: String,
     base_url: String,
     models: Vec<String>,
@@ -574,7 +576,7 @@ async fn run_probe_step(
     model: &str,
 ) -> DiagnosticStep {
     let started = Instant::now();
-    let (path, body) = probe_request(endpoint, model);
+    let request = probe_request(endpoint, model);
     let key_label = diagnostic_key_log_label(key);
     tracing::info!(
         endpoint_id = endpoint.id,
@@ -582,12 +584,21 @@ async fn run_probe_step(
         base_url = %endpoint.base_url,
         key = %key_label,
         model = %model,
-        path = %path,
+        path = %request.log_path,
+        url = %request.url,
         "diagnostic probe request started"
     );
-    let response = upstream_request(state, endpoint, key, "POST", path, Some(body))
-        .send()
-        .await;
+    let response = upstream_request_url(
+        state,
+        endpoint,
+        key,
+        "POST",
+        &request.url,
+        request.extra_headers,
+        Some(request.body),
+    )
+    .send()
+    .await;
     match response {
         Ok(response) => {
             let status = response.status();
@@ -690,39 +701,94 @@ fn upstream_request(
     request
 }
 
-fn probe_request(endpoint: &EndpointTarget, model: &str) -> (&'static str, Value) {
+fn upstream_request_url(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    method: &str,
+    url: &str,
+    extra_headers: reqwest::header::HeaderMap,
+    body: Option<Value>,
+) -> reqwest::RequestBuilder {
+    let mut request = match method {
+        "POST" => state.http.post(url),
+        _ => state.http.get(url),
+    };
+
+    request = if endpoint.protocol == "anthropic" {
+        request
+            .header("x-api-key", &key.secret)
+            .header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
+    } else {
+        request.bearer_auth(&key.secret)
+    };
+
+    for (name, value) in &extra_headers {
+        request = request.header(name, value.clone());
+    }
+
+    if let Some(body) = body {
+        request = request
+            .header("content-type", "application/json")
+            .json(&body);
+    }
+    request
+}
+
+struct DiagnosticProbeRequest {
+    log_path: String,
+    url: String,
+    extra_headers: reqwest::header::HeaderMap,
+    body: Value,
+}
+
+fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeRequest {
     if endpoint.protocol == "anthropic" {
-        return (
-            "/v1/messages",
-            json!({
+        let path = "/v1/messages";
+        return DiagnosticProbeRequest {
+            log_path: path.to_string(),
+            url: upstream_url(&endpoint.base_url, path),
+            extra_headers: reqwest::header::HeaderMap::new(),
+            body: json!({
                 "model": model,
                 "max_tokens": 1,
                 "messages": [{ "role": "user", "content": "ping" }]
             }),
-        );
+        };
     }
 
     if endpoint.protocol == OPENAI_OAUTH_PROTOCOL {
-        return (
-            "/responses",
-            json!({
+        let path = "/responses";
+        return DiagnosticProbeRequest {
+            log_path: path.to_string(),
+            url: upstream_url(&endpoint.base_url, path),
+            extra_headers: reqwest::header::HeaderMap::new(),
+            body: json!({
                 "model": model,
                 "input": "ping",
                 "max_output_tokens": 1,
                 "store": false,
                 "stream": false
             }),
-        );
+        };
     }
 
-    (
-        "/v1/chat/completions",
-        json!({
+    let adapter = adapter_for_provider(&endpoint.provider);
+    let route = RelayRoute::OpenAiChatCompletions;
+    let mut extra_headers = reqwest::header::HeaderMap::new();
+    if endpoint.provider.eq_ignore_ascii_case("qwen") {
+        extra_headers.insert("x-dashscope-sse", "enable".parse().expect("valid header"));
+    }
+    DiagnosticProbeRequest {
+        log_path: route.path().to_string(),
+        url: adapter.resolve_url(&endpoint.base_url, route),
+        extra_headers,
+        body: json!({
             "model": model,
             "max_tokens": 1,
             "messages": [{ "role": "user", "content": "ping" }]
         }),
-    )
+    }
 }
 
 fn probe_model(endpoint: &EndpointTarget) -> Option<String> {
@@ -773,11 +839,12 @@ async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDi
 
 async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<EndpointTarget>> {
     let rows = sqlx::query(
-        "SELECT id, protocol, base_url, models, enabled
-         FROM channel_endpoint
-         WHERE channel_id = $1
+        "SELECT ce.id, c.provider, ce.protocol, ce.base_url, ce.models, ce.enabled
+         FROM channel_endpoint ce
+         JOIN channel c ON c.id = ce.channel_id
+         WHERE ce.channel_id = $1
          ORDER BY CASE protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END,
-                  created_at ASC",
+                  ce.created_at ASC",
     )
     .bind(channel_id)
     .fetch_all(&state.db.pool)
@@ -787,6 +854,7 @@ async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<End
         .iter()
         .map(|row| EndpointTarget {
             id: row.try_get("id").unwrap_or_default(),
+            provider: row.try_get("provider").unwrap_or_default(),
             protocol: row.try_get("protocol").unwrap_or_default(),
             base_url: row.try_get("base_url").unwrap_or_default(),
             models: row.try_get("models").unwrap_or_default(),

@@ -13,6 +13,8 @@ use super::selector::{SelectedUpstream, UpstreamProtocol};
 use super::streaming::RelayContext;
 
 const ANTHROPIC_CLI_PASSTHROUGH_HEADERS: &[&str] = &[
+    "anthropic-beta",
+    "anthropic-version",
     "x-stainless-arch",
     "x-stainless-lang",
     "x-stainless-os",
@@ -69,6 +71,35 @@ pub(crate) async fn forward_openai_with_headers(
     .await
 }
 
+pub(crate) async fn forward_prepared_openai(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    protocol: UpstreamProtocol,
+    body: Bytes,
+    url: String,
+    log_path: &str,
+    headers: &HeaderMap,
+    extra_headers: HeaderMap,
+) -> AppResult<reqwest::Response> {
+    if protocol == UpstreamProtocol::OpenAiOauth {
+        return forward_openai_oauth(state, upstream, body, log_path).await;
+    }
+    ensure_openai_protocol(protocol)?;
+    send_upstream_request(state, upstream, protocol, log_path, || {
+        let mut request = state
+            .http
+            .post(url.clone())
+            .bearer_auth(&upstream.secret)
+            .header("content-type", "application/json")
+            .body(body.clone());
+        for (name, value) in &extra_headers {
+            request = request.header(name, value.clone());
+        }
+        apply_openai_codex_passthrough_headers(request, headers, &body)
+    })
+    .await
+}
+
 pub(crate) async fn forward_openai_with_content_type(
     state: &AppState,
     upstream: &SelectedUpstream,
@@ -119,6 +150,12 @@ fn apply_openai_codex_passthrough_headers(
             has_session_id = true;
         }
         request = request.header(header, value.clone());
+    }
+
+    for &header in ANTHROPIC_CLI_PASSTHROUGH_HEADERS {
+        if let Some(value) = headers.get(header) {
+            request = request.header(header, value.clone());
+        }
     }
 
     if !has_session_id {

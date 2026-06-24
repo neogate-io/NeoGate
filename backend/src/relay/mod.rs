@@ -50,7 +50,8 @@ pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody, RelayR
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type,
-    forward_openai_with_headers, log_relay_upstream_failure, relay_upstream_error, upstream_url,
+    forward_openai_with_headers, forward_prepared_openai, log_relay_upstream_failure,
+    relay_upstream_error, upstream_url,
 };
 pub(crate) use upstream::{forward_anthropic_bound, forward_openai_bound};
 use upstream_task::{UpstreamTask, UpstreamTaskType};

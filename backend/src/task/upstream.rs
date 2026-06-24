@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
 use crate::{
-    admin::channel::ResponsesMode,
+    admin::channel::ResponsesCapability,
     auth::UserAuth,
     billing::{CreditAccountId, DebitHold, TokenUsage},
     error::{AppError, AppResult},
@@ -355,7 +355,8 @@ impl UpstreamTask {
             provider: self.provider.clone(),
             channel_name,
             base_url: self.upstream_base_url.clone(),
-            responses_mode: ResponsesMode::Native,
+            responses_capability: ResponsesCapability::Native,
+            responses_checked_at: None,
             secret: secrets.plaintext(channel_key_id, &secret_ciphertext)?,
             account_id: None,
         })

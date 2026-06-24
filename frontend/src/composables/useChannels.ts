@@ -43,7 +43,6 @@ type EndpointSubmit = {
   protocol: EndpointProtocol
   base_url: string
   models: string[]
-  responses_mode?: 'auto' | 'native' | 'chat_fallback' | 'disabled'
   enabled: boolean
 }
 
@@ -53,8 +52,6 @@ const wordJoiner = '\u2060'
 export type ChannelEndpointForm = {
   protocol: EndpointProtocol
   base_url: string
-  responses_mode: 'auto' | 'native' | 'chat_fallback' | 'disabled'
-  responses_mode_source?: 'auto' | 'manual' | 'probed'
   enabled: boolean
 }
 
@@ -73,19 +70,16 @@ function defaultEndpointForms(provider: ChannelProviderOption) {
     openai: {
       protocol: 'openai' as const,
       base_url: provider.defaultEndpoints.openai.baseUrl,
-      responses_mode: 'auto' as const,
       enabled: true
     },
     openai_oauth: {
       protocol: 'openai_oauth' as const,
       base_url: provider.defaultEndpoints.openai_oauth.baseUrl,
-      responses_mode: 'native' as const,
       enabled: true
     },
     anthropic: {
       protocol: 'anthropic' as const,
       base_url: provider.defaultEndpoints.anthropic.baseUrl,
-      responses_mode: 'native' as const,
       enabled: true
     }
   }
@@ -239,13 +233,6 @@ export function useChannels(t: Translate) {
     return {
       protocol,
       base_url: endpoint?.base_url ?? '',
-      responses_mode:
-        protocol === 'openai'
-          ? endpoint?.responses_mode_source === 'manual'
-            ? endpoint.responses_mode
-            : 'auto'
-          : 'native',
-      responses_mode_source: endpoint?.responses_mode_source,
       enabled: endpoint?.enabled ?? true
     }
   }
@@ -528,7 +515,6 @@ export function useChannels(t: Translate) {
           protocol: 'openai_oauth' as const,
           base_url: baseUrl,
           models,
-          responses_mode: 'native' as const,
           enabled: true
         }
       ]
@@ -561,7 +547,6 @@ export function useChannels(t: Translate) {
         protocol,
         base_url: baseUrl,
         models,
-        responses_mode: protocol === 'openai' ? endpoint.responses_mode : 'native',
         enabled: endpoint.enabled
       })
     }
@@ -655,7 +640,6 @@ export function useChannels(t: Translate) {
         protocol,
         base_url: baseUrl,
         models,
-        responses_mode: protocol === 'openai' ? form.endpoints[protocol].responses_mode : 'native',
         enabled: true
       })
     }

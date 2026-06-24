@@ -858,6 +858,25 @@ select_model() {
   success "$selected_model"
 }
 
+install_node_nodesource() {
+  local kind="$1" setup_url setup_script
+  if [[ "$kind" == "deb" ]]; then
+    setup_url="https://deb.nodesource.com/setup_lts.x"
+  else
+    setup_url="https://rpm.nodesource.com/setup_lts.x"
+  fi
+  setup_script="$TMP_DIR/nodesource-setup.sh"
+  run curl -fsSL "$setup_url" -o "$setup_script" || die "$(message connect_failed "$setup_url")"
+  run_as_root bash "$setup_script"
+  if [[ "$kind" == "deb" ]]; then
+    run_as_root apt-get install -y nodejs
+  elif have_cmd dnf; then
+    run_as_root dnf install -y nodejs
+  else
+    run_as_root yum install -y nodejs
+  fi
+}
+
 install_node() {
   if have_cmd node && have_cmd npm; then
     detail_ok "$(message node_found "$(node --version)")"
@@ -877,12 +896,9 @@ install_node() {
       ;;
     linux)
       if have_cmd apt-get; then
-        run_as_root apt-get update
-        run_as_root apt-get install -y nodejs npm
-      elif have_cmd dnf; then
-        run_as_root dnf install -y nodejs npm
-      elif have_cmd yum; then
-        run_as_root yum install -y nodejs npm
+        install_node_nodesource "deb"
+      elif have_cmd dnf || have_cmd yum; then
+        install_node_nodesource "rpm"
       elif have_cmd pacman; then
         run_as_root pacman -Sy --noconfirm nodejs npm
       else

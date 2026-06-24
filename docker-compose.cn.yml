@@ -12,7 +12,7 @@
 
 services:
   postgres:
-    image: ${DOCKER_HUB_PREFIX:-docker.1panel.live/}library/postgres:16-alpine
+    image: ${DOCKER_HUB_PREFIX:-docker.m.daocloud.io/}library/postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-neogate}
       POSTGRES_USER: ${POSTGRES_USER:-neogate}
@@ -30,7 +30,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       args:
-        DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.1panel.live/}
+        DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.m.daocloud.io/}
         CARGO_REGISTRY_MIRROR: sparse+https://rsproxy.cn/index/
         APT_MIRROR: http://mirrors.tuna.tsinghua.edu.cn/debian
     restart: unless-stopped
@@ -64,7 +64,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.1panel.live/}
+        DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.m.daocloud.io/}
         NPM_REGISTRY: https://registry.npmmirror.com
     restart: unless-stopped
     depends_on:

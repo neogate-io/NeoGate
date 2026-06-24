@@ -12,7 +12,9 @@ WORKDIR /app/frontend
 RUN corepack enable
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
-RUN if [ -n "${NPM_REGISTRY}" ]; then \
+RUN --mount=type=cache,sharing=locked,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store \
+    && if [ -n "${NPM_REGISTRY}" ]; then \
       pnpm install --frozen-lockfile --registry "${NPM_REGISTRY}"; \
     else \
       pnpm install --frozen-lockfile; \

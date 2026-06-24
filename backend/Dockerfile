@@ -24,9 +24,12 @@ COPY backend/templates ./backend/templates
 COPY scheduler/src ./scheduler/src
 COPY deploy/systemd/start-neogate.sh ./deploy/systemd/start-neogate.sh
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release -j ${CARGO_BUILD_JOBS} -p neogate -p neogate-scheduler
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
+    --mount=type=cache,sharing=locked,target=/app/neogate/target \
+    cargo build --release -j ${CARGO_BUILD_JOBS} -p neogate -p neogate-scheduler \
+    && mkdir -p /app/neogate/bin \
+    && cp target/release/neogate target/release/neogate-scheduler /app/neogate/bin/
 
 FROM ${DEBIAN_IMAGE} AS runtime
 
@@ -45,8 +48,8 @@ RUN useradd --system --create-home --home-dir /app neogate \
     && chown neogate:neogate /app/neogate /app-config /var/log/neogate
 
 WORKDIR /app/neogate
-COPY --from=builder /app/neogate/target/release/neogate /usr/local/bin/neogate
-COPY --from=builder /app/neogate/target/release/neogate-scheduler /usr/local/bin/neogate-scheduler
+COPY --from=builder /app/neogate/bin/neogate /usr/local/bin/neogate
+COPY --from=builder /app/neogate/bin/neogate-scheduler /usr/local/bin/neogate-scheduler
 COPY --from=builder /app/neogate/deploy/systemd/start-neogate.sh /usr/local/bin/start-neogate
 RUN chmod +x /usr/local/bin/start-neogate
 

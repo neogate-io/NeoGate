@@ -803,6 +803,7 @@ pub(crate) mod tests {
                     channel_affinity_enabled: true,
                     channel_affinity_ttl: Duration::from_secs(3600),
                     channel_affinity_max_entries: 100_000,
+                    responses_support_block_seconds: 12 * 3600,
                 },
                 cache: config::CacheConfig {
                     user_auth_ttl: Duration::from_secs(30),

@@ -4,14 +4,13 @@ use bytes::Bytes;
 use crate::{
     error::AppResult,
     relay::{
+        bridge,
         selector::{SelectedUpstream, UpstreamProtocol},
         upstream_url,
     },
 };
 
-use super::{
-    AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute, ResponsesPolicy,
-};
+use super::{AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute};
 
 pub(crate) static BAILIAN_ADAPTER: BailianAdapter = BailianAdapter;
 
@@ -22,10 +21,6 @@ const DASH_SCOPE_SSE_HEADER: &str = "x-dashscope-sse";
 impl ProviderAdapter for BailianAdapter {
     fn name(&self) -> &'static str {
         "bailian"
-    }
-
-    fn responses_policy(&self) -> ResponsesPolicy {
-        ResponsesPolicy::Native
     }
 
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
@@ -44,6 +39,17 @@ impl ProviderAdapter for BailianAdapter {
         _client_headers: &HeaderMap,
         streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
+        let (route, body, response_mode) = if route == RelayRoute::OpenAiResponses
+            && upstream.responses_chat_fallback
+        {
+            (
+                RelayRoute::OpenAiChatCompletions,
+                bridge::openai_response_to_openai_chat(body)?,
+                AdapterResponseMode::OpenAiChatAsOpenAiResponse,
+            )
+        } else {
+            (route, body, AdapterResponseMode::Passthrough)
+        };
         let mut extra_headers = HeaderMap::new();
         if streamed {
             extra_headers.insert(
@@ -57,7 +63,7 @@ impl ProviderAdapter for BailianAdapter {
             log_path: route.path().to_string(),
             body,
             extra_headers,
-            response_mode: AdapterResponseMode::Passthrough,
+            response_mode,
         })
     }
 }
@@ -76,9 +82,9 @@ fn bailian_responses_url(base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{admin::channel::ResponsesCapability, relay::selector::SelectedUpstream};
+    use crate::relay::selector::SelectedUpstream;
 
-    fn upstream(responses_capability: ResponsesCapability) -> SelectedUpstream {
+    fn upstream(responses_chat_fallback: bool) -> SelectedUpstream {
         SelectedUpstream {
             channel_id: 1,
             channel_endpoint_id: 2,
@@ -87,8 +93,7 @@ mod tests {
             provider: "qwen".to_string(),
             channel_name: "qwen".to_string(),
             base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
-            responses_capability,
-            responses_checked_at: None,
+            responses_chat_fallback,
             secret: "sk-test".to_string(),
             account_id: None,
         }
@@ -126,7 +131,7 @@ mod tests {
         );
         let prepared = BAILIAN_ADAPTER
             .prepare_openai_request(
-                &upstream(ResponsesCapability::ChatFallback),
+                &upstream(false),
                 UpstreamProtocol::Openai,
                 RelayRoute::OpenAiResponses,
                 body.clone(),
@@ -144,5 +149,33 @@ mod tests {
             prepared.extra_headers.get(DASH_SCOPE_SSE_HEADER).unwrap(),
             "enable"
         );
+    }
+
+    #[test]
+    fn bailian_fallback_responses_converts_to_chat_completions() {
+        let body =
+            Bytes::from_static(br#"{"model":"glm-5.2","input":"hi","max_output_tokens":16}"#);
+        let prepared = BAILIAN_ADAPTER
+            .prepare_openai_request(
+                &upstream(true),
+                UpstreamProtocol::Openai,
+                RelayRoute::OpenAiResponses,
+                body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert_eq!(
+            prepared.response_mode,
+            AdapterResponseMode::OpenAiChatAsOpenAiResponse
+        );
+        assert!(prepared.url.ends_with("/compatible-mode/v1/chat/completions"));
+        assert_eq!(value["model"], "glm-5.2");
+        assert_eq!(value["messages"][0]["role"], "user");
+        assert_eq!(value["messages"][0]["content"], "hi");
+        assert_eq!(value["max_tokens"], 16);
+        assert!(value.get("input").is_none());
     }
 }

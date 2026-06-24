@@ -15,7 +15,6 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    admin::channel::ResponsesCapability,
     auth::UserAuth,
     error::{AppError, AppResult},
     provider::adapters::{adapter_for_provider, AdapterResponseMode, RelayRoute},
@@ -23,6 +22,7 @@ use crate::{
     AppState,
 };
 
+use crate::billing::DebitHold;
 use crate::relay::raw_upstream_response;
 use crate::relay::{
     bridge, describe_upstream_http_failure, finish_relay, finish_task_json_response,
@@ -297,21 +297,36 @@ async fn relay_openai(
     let mut model_unavailable_reroutes = 0;
     let mut retryable_failovers = 0;
     let mut attempted_upstreams = Vec::new();
+    let mut reuse_upstream: Option<(UpstreamProtocol, SelectedUpstream)> = None;
+    let mut reuse_hold: Option<DebitHold> = None;
+    let mut responses_downgraded = false;
+    let mut relay_attempt_counter = 0i32;
     loop {
         let started = Instant::now();
-        let (protocol, upstream) = select_upstream_excluding(
-            &state,
-            path,
-            &meta.model,
-            channel_affinity_key.as_ref(),
-            &attempted_upstreams,
-        )
-        .await?;
-        attempted_upstreams.push(AttemptedUpstream::from(&upstream));
-        if route == RelayRoute::OpenAiResponses
-            && upstream.responses_capability == ResponsesCapability::Disabled
+        let reused = reuse_upstream.is_some();
+        let (protocol, mut upstream) = match reuse_upstream.take() {
+            Some(prev) => prev,
+            None => select_upstream_excluding(
+                &state,
+                path,
+                &meta.model,
+                channel_affinity_key.as_ref(),
+                &attempted_upstreams,
+            )
+            .await?,
+        };
+        relay_attempt_counter += 1;
+        // 路径 B：已学习到该 (endpoint, model) 不支持 /v1/responses → 覆写为 chat 降级。
+        // reuse 路径的 upstream 已是降级版（responses_chat_fallback=true），此处不重复命中。
+        if !upstream.responses_chat_fallback
+            && route == RelayRoute::OpenAiResponses
+            && matches!(protocol, UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth)
+            && state
+                .selector
+                .responses_unsupported(upstream.channel_endpoint_id, &meta.model)
+                .await
         {
-            tracing::info!(
+            tracing::debug!(
                 provider = %upstream.provider,
                 channel_id = upstream.channel_id,
                 channel_name = %upstream.channel_name,
@@ -319,9 +334,12 @@ async fn relay_openai(
                 protocol = protocol.as_str(),
                 model = %meta.model,
                 path,
-                "skipping upstream because responses API is disabled for this endpoint"
+                "downgrading responses to chat fallback (learned unsupported for this model)"
             );
-            continue;
+            upstream.responses_chat_fallback = true;
+        }
+        if !reused {
+            attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         }
         let price = state
             .billing
@@ -332,15 +350,21 @@ async fn relay_openai(
                 &auth.user_group,
             )
             .await?;
-        let hold = reserve_credit(
-            &state,
-            &auth,
-            user_key_model_credit_account.as_ref(),
-            &body,
-            output_tokens,
-            &price,
-        )
-        .await?;
+        let hold = if reused {
+            reuse_hold
+                .take()
+                .expect("reuse hold is set alongside reuse_upstream")
+        } else {
+            reserve_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                &body,
+                output_tokens,
+                &price,
+            )
+            .await?
+        };
         let mut ctx = RelayContext {
             state: Arc::clone(&state),
             auth: auth.clone(),
@@ -355,7 +379,7 @@ async fn relay_openai(
             started,
             channel_affinity_key: channel_affinity_key.clone(),
             relay_trace_id,
-            relay_attempt: attempted_upstreams.len() as i32,
+            relay_attempt: relay_attempt_counter,
             relay_final: false,
             request_params: meta.request_params.clone(),
             _image_sync_permit: None,
@@ -416,6 +440,52 @@ async fn relay_openai(
 
                 let body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &body);
+                // 路径 C：responses 路由首次收到「模型不可用」类错误 → 学习该 (endpoint, model)
+                // 不支持 responses，并就地降级为 chat 重试同一 upstream（不重新 select、不写
+                // ModelBlockKey/channel_model，避免误伤该模型的 chat 路径）。chat 重试若再失败，
+                // 落入下方 model-unavailable 逻辑自然区分「不支持 responses 形态」与「model 真不存在」。
+                if route == RelayRoute::OpenAiResponses
+                    && matches!(
+                        ctx.protocol,
+                        UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
+                    )
+                    && failure.error_type == "upstream_model_unavailable"
+                    && !responses_downgraded
+                    && !ctx
+                        .state
+                        .selector
+                        .responses_unsupported(ctx.upstream.channel_endpoint_id, &ctx.model)
+                        .await
+                {
+                    let until = chrono::Utc::now()
+                        + chrono::Duration::seconds(
+                            ctx.state.config.relay.responses_support_block_seconds,
+                        );
+                    ctx.state
+                        .selector
+                        .mark_responses_unsupported(
+                            ctx.upstream.channel_endpoint_id,
+                            &ctx.model,
+                            until,
+                        )
+                        .await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        "upstream rejected responses for this model; downgrading to chat retry"
+                    );
+                    let mut fallback = ctx.upstream.clone();
+                    fallback.responses_chat_fallback = true;
+                    reuse_upstream = Some((ctx.protocol, fallback));
+                    reuse_hold = Some(ctx.hold.clone());
+                    responses_downgraded = true;
+                    continue;
+                }
                 if should_retry_after_model_unavailable(&ctx, &failure) {
                     let blocked = mark_credential_model_unavailable(&ctx, status, &failure).await?;
                     if !blocked {

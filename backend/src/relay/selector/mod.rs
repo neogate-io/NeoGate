@@ -4,8 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::admin::channel::ResponsesCapability;
-
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tokio::sync::{Mutex, RwLock};
@@ -22,6 +20,7 @@ use super::affinity::{ChannelAffinityKey, UpstreamAffinityTarget};
 mod cache;
 mod choose;
 mod load;
+mod responses_support;
 
 use choose::{
     channel_is_available, channel_matches_model, choose_channel_for_request, choose_key,
@@ -32,6 +31,7 @@ use choose::{choose_channel, choose_channel_by_slot};
 #[cfg(test)]
 use load::build_route_indexes;
 use load::{credential_runtime_secret, load_routing_cache};
+use responses_support::ResponsesSupportCache;
 
 const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 
@@ -78,6 +78,7 @@ pub struct Selector {
     routing_cache_ttl: Duration,
     credential_runtime_secrets: RuntimeSecretCache,
     model_blocks: ModelBlockCache,
+    responses_support: ResponsesSupportCache,
 }
 
 #[derive(Clone, Default)]
@@ -125,8 +126,9 @@ pub struct SelectedUpstream {
     pub provider: String,
     pub channel_name: String,
     pub base_url: String,
-    pub responses_capability: ResponsesCapability,
-    pub responses_checked_at: Option<DateTime<Utc>>,
+    /// 运行时降级标志：为 true 时，本条 responses 请求由 adapter 改走 /v1/chat/completions
+    /// 并用 bridge 把响应转回 responses 格式。由 per-(endpoint,model) 学习写入，不从 DB 加载。
+    pub responses_chat_fallback: bool,
     pub secret: String,
     pub account_id: Option<String>,
 }
@@ -164,8 +166,6 @@ pub struct ChannelCandidate {
     pub provider: String,
     pub name: String,
     pub base_url: String,
-    pub responses_capability: ResponsesCapability,
-    pub responses_checked_at: Option<DateTime<Utc>>,
     pub models: Vec<String>,
     pub priority: i32,
     pub weight: i32,
@@ -230,6 +230,7 @@ impl Selector {
             routing_cache_ttl,
             credential_runtime_secrets: RuntimeSecretCache::default(),
             model_blocks: ModelBlockCache::default(),
+            responses_support: ResponsesSupportCache::default(),
         }
     }
 
@@ -240,6 +241,24 @@ impl Selector {
         *cache = Arc::new(next);
         self.credential_runtime_secrets.clear();
         self.model_blocks.clear_expired(Utc::now());
+        self.responses_support.clear_expired(Utc::now());
+    }
+
+    /// 该 (endpoint, model) 是否已学习为「不支持 /v1/responses」。仅在 responses 路由决策处查询。
+    pub async fn responses_unsupported(&self, endpoint_id: DbId, model: &str) -> bool {
+        self.responses_support
+            .is_unsupported(endpoint_id, model, Utc::now())
+    }
+
+    /// 标记某 (endpoint, model) 不支持 responses，到期后自愈。
+    pub async fn mark_responses_unsupported(
+        &self,
+        endpoint_id: DbId,
+        model: &str,
+        unsupported_until: DateTime<Utc>,
+    ) {
+        self.responses_support
+            .mark_unsupported(endpoint_id, model, unsupported_until);
     }
 
     pub async fn invalidate_refreshed_credential(&self, credential_id: DbId) {
@@ -496,8 +515,7 @@ impl Selector {
             provider: channel.provider.clone(),
             channel_name: channel.name.clone(),
             base_url: channel.base_url.clone(),
-            responses_capability: channel.responses_capability,
-            responses_checked_at: channel.responses_checked_at,
+            responses_chat_fallback: false,
             secret: runtime.secret,
             account_id: runtime.account_id,
         })

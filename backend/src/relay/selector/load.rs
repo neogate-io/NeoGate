@@ -4,14 +4,12 @@ use std::{
     time::Instant,
 };
 
-use std::str::FromStr;
-
 use chrono::{DateTime, Utc};
 use sqlx::{AssertSqlSafe, PgPool, Row};
 
 use crate::{
     admin::{
-        channel::{KeySelectionMode, ResponsesCapability},
+        channel::KeySelectionMode,
         credentials::openai_runtime_credential,
     },
     billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
@@ -73,7 +71,7 @@ pub(super) fn build_route_indexes(
 async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandidate>> {
     let rows = sqlx::query(AssertSqlSafe(format!(
         "SELECT c.id, ce.id AS endpoint_id, ce.protocol, c.provider, c.name,
-                ce.base_url, ce.responses_capability, ce.responses_checked_at,
+                ce.base_url,
                 COALESCE(
                     array_agg(cm.model ORDER BY cm.model ASC)
                         FILTER (WHERE cm.model IS NOT NULL),
@@ -285,8 +283,6 @@ fn channel_candidate_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelC
         provider,
         name: row.try_get("name")?,
         base_url: row.try_get("base_url")?,
-        responses_capability: responses_capability_from_row(row)?,
-        responses_checked_at: row.try_get("responses_checked_at")?,
         models: row.try_get("models")?,
         priority: row.try_get("priority")?,
         weight: row.try_get("weight")?,
@@ -303,11 +299,6 @@ fn channel_candidate_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelC
         use_credentials: row.try_get("use_credentials")?,
         polling: Arc::new(AtomicUsize::new(0)),
     })
-}
-
-fn responses_capability_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ResponsesCapability> {
-    let mode: String = row.try_get("responses_capability")?;
-    ResponsesCapability::from_str(&mode)
 }
 
 pub(super) fn credential_runtime_secret(

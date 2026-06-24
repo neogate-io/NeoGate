@@ -66,11 +66,17 @@ pub(super) fn openai_chat_response_to_openai_response(
     } else {
         "completed"
     };
+    let incomplete_details = if status == "incomplete" {
+        json!({ "reason": "max_output_tokens" })
+    } else {
+        Value::Null
+    };
     let payload = json!({
         "id": id,
         "object": "response",
         "created_at": value.get("created").and_then(Value::as_i64).unwrap_or(0),
         "status": status,
+        "incomplete_details": incomplete_details,
         "background": false,
         "model": model,
         "output": output,
@@ -583,6 +589,11 @@ impl OpenAiChatSseToOpenAiResponse {
     }
 
     fn finish_tool_calls(&mut self, out: &mut Vec<u8>) {
+        let item_status = if self.status == "incomplete" {
+            "incomplete"
+        } else {
+            "completed"
+        };
         for index in 0..self.current_tool_calls.len() {
             let Some(tool_call) = self.current_tool_calls[index].take() else {
                 continue;
@@ -590,7 +601,7 @@ impl OpenAiChatSseToOpenAiResponse {
             let done_item = json!({
                 "id": tool_call.item_id,
                 "type": "function_call",
-                "status": "completed",
+                "status": item_status,
                 "call_id": tool_call.call_id,
                 "name": tool_call.name,
                 "arguments": tool_call.arguments,
@@ -710,11 +721,17 @@ impl OpenAiChatSseToOpenAiResponse {
             }
             output.extend(self.completed_output.clone());
         }
+        let incomplete_details = if status == "incomplete" {
+            json!({ "reason": "max_output_tokens" })
+        } else {
+            Value::Null
+        };
         json!({
             "id": self.response_id,
             "object": "response",
             "created_at": 0,
             "status": status,
+            "incomplete_details": incomplete_details,
             "background": false,
             "model": self.model,
             "output": output,

@@ -2,7 +2,6 @@ use axum::http::HeaderMap;
 use bytes::Bytes;
 
 use crate::{
-    admin::channel::ResponsesCapability,
     error::AppResult,
     relay::{
         bridge,
@@ -36,7 +35,7 @@ impl ProviderAdapter for CompatibleAdapter {
         _streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
         let (route, body, response_mode) = if route == RelayRoute::OpenAiResponses
-            && upstream.responses_capability == ResponsesCapability::ChatFallback
+            && upstream.responses_chat_fallback
         {
             (
                 RelayRoute::OpenAiChatCompletions,

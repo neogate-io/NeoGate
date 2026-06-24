@@ -2,7 +2,6 @@ use axum::http::HeaderMap;
 use bytes::Bytes;
 
 use crate::{
-    admin::channel::ResponsesCapability,
     error::AppResult,
     relay::selector::{SelectedUpstream, UpstreamProtocol},
 };
@@ -39,37 +38,6 @@ pub(crate) enum AdapterResponseMode {
     OpenAiChatAsOpenAiResponse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum ResponsesPolicy {
-    Native,
-    Probe { allow_chat_fallback: bool },
-    Disabled,
-}
-
-impl ResponsesPolicy {
-    pub(crate) fn initial_capability(self) -> ResponsesCapability {
-        match self {
-            Self::Native => ResponsesCapability::Native,
-            Self::Probe { .. } => ResponsesCapability::Unknown,
-            Self::Disabled => ResponsesCapability::Disabled,
-        }
-    }
-
-    pub(crate) fn should_probe(self) -> bool {
-        matches!(self, Self::Probe { .. })
-    }
-
-    pub(crate) fn allow_chat_fallback(self) -> bool {
-        matches!(
-            self,
-            Self::Probe {
-                allow_chat_fallback: true
-            }
-        )
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedUpstreamRequest {
     pub(crate) url: String,
@@ -80,13 +48,8 @@ pub(crate) struct PreparedUpstreamRequest {
 }
 
 pub(crate) trait ProviderAdapter: Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
-
-    fn responses_policy(&self) -> ResponsesPolicy {
-        ResponsesPolicy::Probe {
-            allow_chat_fallback: true,
-        }
-    }
 
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String;
 

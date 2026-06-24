@@ -28,7 +28,21 @@ pub(crate) fn openai_response_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
     let input = object
         .remove("input")
         .ok_or_else(|| AppError::BadRequest("input is required".to_string()))?;
-    let (system, mut messages) = openai_response_input_to_chat_messages(&input)?;
+    let (mut system, mut messages) = openai_response_input_to_chat_messages(&input)?;
+    // Codex 把系统指令放在顶层 instructions 字段（不在 input 里），需回填成 system 消息，
+    // 否则上游 chat 接口收不到系统提示，多轮后行为漂移。
+    if let Some(instructions) = object
+        .remove("instructions")
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|trimmed| !trimmed.is_empty())
+                .map(str::to_string)
+        })
+    {
+        system.push(instructions);
+    }
     if !system.is_empty() {
         messages.insert(
             0,
@@ -52,10 +66,7 @@ pub(crate) fn openai_response_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
     {
         object.insert("tool_choice".to_string(), tool_choice);
     }
-    remove_fields(
-        object,
-        &["include", "instructions", "metadata", "store", "truncation"],
-    );
+    remove_fields(object, &["include", "metadata", "store", "truncation"]);
     Ok(Bytes::from(serde_json::to_vec(&value)?))
 }
 fn openai_response_input_to_chat_messages(input: &Value) -> AppResult<(Vec<String>, Vec<Value>)> {
@@ -63,15 +74,54 @@ fn openai_response_input_to_chat_messages(input: &Value) -> AppResult<(Vec<Strin
         Value::String(text) => Ok((Vec::new(), vec![json!({ "role": "user", "content": text })])),
         Value::Array(items) => {
             let mut system = Vec::new();
-            let mut messages = Vec::new();
+            let mut messages: Vec<Value> = Vec::new();
             for item in items {
                 let object = item.as_object().ok_or_else(|| {
                     AppError::BadRequest("input items must be JSON objects".to_string())
                 })?;
                 match object.get("type").and_then(Value::as_str) {
                     Some("function_call") => {
-                        if let Some(message) = openai_response_function_call_to_openai_chat(item) {
-                            messages.push(message);
+                        let Some(name) = object.get("name").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let id = object
+                            .get("call_id")
+                            .or_else(|| object.get("id"))
+                            .and_then(Value::as_str);
+                        let arguments = object
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        let tool_call = json!({
+                            "id": id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": arguments,
+                            },
+                        });
+                        // 同一 assistant 回合的并行 function_call 必须合并进同一条消息的
+                        // tool_calls 数组，否则上游 chat 接口会收到一连串空 assistant 消息。
+                        let append_to_prev = matches!(
+                            messages.last(),
+                            Some(prev) if prev.get("role").and_then(Value::as_str)
+                                == Some("assistant")
+                                && prev.get("tool_calls").is_some()
+                        );
+                        if append_to_prev {
+                            if let Some(prev) = messages.last_mut() {
+                                if let Some(tool_calls) =
+                                    prev.get_mut("tool_calls").and_then(Value::as_array_mut)
+                                {
+                                    tool_calls.push(tool_call);
+                                }
+                            }
+                        } else {
+                            messages.push(json!({
+                                "role": "assistant",
+                                "content": null,
+                                "tool_calls": [tool_call],
+                            }));
                         }
                         continue;
                     }
@@ -171,30 +221,6 @@ fn openai_response_tool_choice_to_openai_chat(value: &Value) -> Option<Value> {
         _ => None,
     }
 }
-fn openai_response_function_call_to_openai_chat(item: &Value) -> Option<Value> {
-    let name = item.get("name").and_then(Value::as_str)?;
-    let id = item
-        .get("call_id")
-        .or_else(|| item.get("id"))
-        .and_then(Value::as_str)?;
-    let arguments = item
-        .get("arguments")
-        .and_then(Value::as_str)
-        .unwrap_or("{}");
-    Some(json!({
-        "role": "assistant",
-        "content": null,
-        "tool_calls": [{
-            "id": id,
-            "type": "function",
-            "function": {
-                "name": name,
-                "arguments": arguments,
-            },
-        }],
-    }))
-}
-
 fn openai_response_function_output_to_openai_chat(item: &Value) -> Option<Value> {
     let id = item.get("call_id").and_then(Value::as_str)?;
     let content = item

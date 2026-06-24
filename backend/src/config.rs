@@ -161,6 +161,9 @@ pub struct RelayConfig {
     pub channel_affinity_enabled: bool,
     pub channel_affinity_ttl: Duration,
     pub channel_affinity_max_entries: usize,
+    /// 运行时学习到「某 endpoint 的某 model 不支持 /v1/responses」后的屏蔽时长（秒），
+    /// 到期后重新尝试原生 responses（上游将来放开后自动恢复）。默认 12 小时。
+    pub responses_support_block_seconds: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -275,6 +278,10 @@ impl Config {
                     3600,
                 )?),
                 channel_affinity_max_entries: parse_usize("CHANNEL_AFFINITY_MAX_ENTRIES", 100_000)?,
+                responses_support_block_seconds: parse_i64(
+                    "RESPONSES_SUPPORT_BLOCK_SECONDS",
+                    12 * 3600,
+                )?,
             },
             cache: CacheConfig {
                 user_auth_ttl: Duration::from_secs(parse_u64("USER_AUTH_CACHE_TTL_SECONDS", 60)?),

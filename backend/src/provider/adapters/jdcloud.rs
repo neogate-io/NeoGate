@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute, ResponsesPolicy,
+    AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute,
 };
 
 pub(crate) static JDCLOUD_ADAPTER: JdcloudAdapter = JdcloudAdapter;
@@ -22,10 +22,6 @@ pub(crate) struct JdcloudAdapter;
 impl ProviderAdapter for JdcloudAdapter {
     fn name(&self) -> &'static str {
         "jdcloud"
-    }
-
-    fn responses_policy(&self) -> ResponsesPolicy {
-        ResponsesPolicy::Native
     }
 
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
@@ -176,7 +172,7 @@ fn prompt_cache_key_from_body(body: &[u8]) -> AppResult<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{admin::channel::ResponsesCapability, relay::selector::SelectedUpstream};
+    use crate::relay::selector::SelectedUpstream;
 
     fn upstream() -> SelectedUpstream {
         SelectedUpstream {
@@ -187,8 +183,7 @@ mod tests {
             provider: "jdcloud".to_string(),
             channel_name: "jdcloud".to_string(),
             base_url: "https://agentrs.jd.com/api/saas/openai-u/v1".to_string(),
-            responses_capability: ResponsesCapability::Native,
-            responses_checked_at: None,
+            responses_chat_fallback: false,
             secret: "sk-test".to_string(),
             account_id: None,
         }

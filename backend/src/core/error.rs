@@ -378,6 +378,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_email_errors_return_structured_payload() {
+        let response = AppError::BadRequestWithCode {
+            code: "invalid_email",
+            message: "invalid email",
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "invalid_email");
+        assert_eq!(value["error"]["message"], "invalid email");
+    }
+
+    #[tokio::test]
     async fn coded_conflicts_return_structured_payload() {
         let response = AppError::ConflictWithCode {
             code: "user_email_exists",

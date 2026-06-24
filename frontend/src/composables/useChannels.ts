@@ -311,7 +311,7 @@ export function useChannels(t: Translate) {
     if (formTarget === 'edit' && !channelId) return
 
     const endpoint = modelFetchEndpoint(form)
-    const baseUrl = visibleBaseUrl(form).trim()
+    const baseUrl = endpoint.base_url.trim()
     const secret =
       formTarget === 'create'
         ? (splitSecretLines(createForm.secret)[0] ?? '')
@@ -619,9 +619,7 @@ export function useChannels(t: Translate) {
   }
 
   function setVisibleBaseUrl(form: ChannelForm, value: string) {
-    form.endpoints.openai.base_url = value
-    form.endpoints.openai_oauth.base_url = ''
-    form.endpoints.anthropic.base_url = ''
+    modelFetchEndpoint(form).base_url = value
   }
 
   function manualProviderEndpointsForSubmit(form: ChannelForm, models: string[]) {

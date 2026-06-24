@@ -64,13 +64,13 @@ impl ProviderAdapter for BailianAdapter {
 
 fn bailian_responses_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
-    if let Some(root) = base.strip_suffix("/compatible-mode/v1") {
-        return format!("{root}/api/v2/apps/protocols/compatible-mode/v1/responses");
+    if base.ends_with("/compatible-mode/v1") {
+        return format!("{base}/responses");
     }
-    if let Some(root) = base.strip_suffix("/compatible-mode") {
-        return format!("{root}/api/v2/apps/protocols/compatible-mode/v1/responses");
+    if base.ends_with("/compatible-mode") {
+        return format!("{base}/v1/responses");
     }
-    format!("{base}/api/v2/apps/protocols/compatible-mode/v1/responses")
+    upstream_url(base, RelayRoute::OpenAiResponses.path())
 }
 
 #[cfg(test)]
@@ -95,13 +95,20 @@ mod tests {
     }
 
     #[test]
-    fn bailian_responses_url_uses_app_protocol_path() {
+    fn bailian_responses_url_uses_compatible_mode_path() {
         assert_eq!(
             BAILIAN_ADAPTER.resolve_url(
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 RelayRoute::OpenAiResponses
             ),
-            "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1/responses"
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
+        );
+        assert_eq!(
+            BAILIAN_ADAPTER.resolve_url(
+                "https://dashscope.aliyuncs.com/compatible-mode",
+                RelayRoute::OpenAiResponses
+            ),
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
         );
         assert_eq!(
             BAILIAN_ADAPTER.resolve_url(
@@ -132,7 +139,7 @@ mod tests {
         assert_eq!(prepared.body, body);
         assert!(prepared
             .url
-            .ends_with("/api/v2/apps/protocols/compatible-mode/v1/responses"));
+            .ends_with("/compatible-mode/v1/responses"));
         assert_eq!(
             prepared.extra_headers.get(DASH_SCOPE_SSE_HEADER).unwrap(),
             "enable"

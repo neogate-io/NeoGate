@@ -26,6 +26,14 @@ export const newapiProviderOption: ChannelProviderOption = {
   defaultEndpoints: emptyDefaultEndpoints()
 }
 
+export const sub2apiProviderOption: ChannelProviderOption = {
+  value: 'sub2api',
+  label: 'Sub2API',
+  defaultName: '',
+  defaultModels: '',
+  defaultEndpoints: emptyDefaultEndpoints()
+}
+
 export function providerToOption(provider: ProviderRecord): ChannelProviderOption {
   if (isCustomProvider(provider.code)) {
     return customProviderOption
@@ -33,6 +41,10 @@ export function providerToOption(provider: ProviderRecord): ChannelProviderOptio
 
   if (isNewapiProvider(provider.code)) {
     return newapiProviderOption
+  }
+
+  if (isSub2apiProvider(provider.code)) {
+    return sub2apiProviderOption
   }
 
   const defaultEndpoints = emptyDefaultEndpoints()
@@ -59,14 +71,19 @@ export function isNewapiProvider(provider: ChannelProvider) {
   return provider === newapiProviderOption.value
 }
 
+export function isSub2apiProvider(provider: ChannelProvider) {
+  return provider === sub2apiProviderOption.value
+}
+
 export function isManualBaseUrlProvider(provider: ChannelProvider) {
-  return isCustomProvider(provider) || isNewapiProvider(provider)
+  return isCustomProvider(provider) || isNewapiProvider(provider) || isSub2apiProvider(provider)
 }
 
 export function withManualProvidersFirst(providers: ChannelProviderOption[]) {
   return [
     customProviderOption,
     newapiProviderOption,
+    sub2apiProviderOption,
     ...providers.filter((provider) => !isManualBaseUrlProvider(provider.value))
   ]
 }

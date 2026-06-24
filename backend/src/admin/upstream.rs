@@ -17,8 +17,9 @@ use crate::{
 
 use super::{
     credentials::runtime_secret_from_enabled_credential, ensure_custom_provider,
-    ensure_newapi_provider, invalidate_cache, provider_default_endpoints, record_provider_models,
-    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+    ensure_newapi_provider, ensure_sub2api_provider, invalidate_cache, provider_default_endpoints,
+    record_provider_models, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+    SUB2API_PROVIDER_CODE,
 };
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +54,9 @@ pub(super) async fn upstream_models(
     }
     if provider_code == NEWAPI_PROVIDER_CODE {
         ensure_newapi_provider(&state).await?;
+    }
+    if provider_code == SUB2API_PROVIDER_CODE {
+        ensure_sub2api_provider(&state).await?;
     }
 
     let defaults = provider_default_endpoints(&state, provider_code)

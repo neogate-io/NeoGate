@@ -18,9 +18,10 @@ use crate::{
 
 use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
-    ensure_custom_provider, ensure_newapi_provider, provider_default_endpoint_base_url,
-    provider_default_endpoints, provider_default_models, record_provider_models,
-    CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+    ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider,
+    provider_default_endpoint_base_url, provider_default_endpoints, provider_default_models,
+    record_provider_models, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
+    SUB2API_PROVIDER_CODE,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -260,6 +261,9 @@ pub async fn create_channel(
     }
     if provider_code == NEWAPI_PROVIDER_CODE {
         ensure_newapi_provider(state).await?;
+    }
+    if provider_code == SUB2API_PROVIDER_CODE {
+        ensure_sub2api_provider(state).await?;
     }
     ensure_provider_exists(state, &provider_code).await?;
     let endpoints = normalize_create_endpoints(state, &provider_code, &req).await?;

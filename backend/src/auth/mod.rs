@@ -493,7 +493,10 @@ fn normalize_email(email: &str) -> AppResult<String> {
         || email.starts_with('@')
         || email.ends_with('@')
     {
-        return Err(AppError::BadRequest("invalid email".to_string()));
+        return Err(AppError::BadRequestWithCode {
+            code: "invalid_email",
+            message: "invalid email",
+        });
     }
     Ok(email)
 }

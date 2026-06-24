@@ -4,8 +4,9 @@ import { Close, CopyDocument, Delete, Plus } from '@element-plus/icons-vue'
 import ProviderIcon from '../../common/ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { ChannelForm } from '../../../composables/useChannels'
-import type { ChannelKey } from '../../../types/admin'
+import type { ChannelKey, EndpointProtocol } from '../../../types/admin'
 import type { ChannelProviderOption } from '../../../utils/channel'
+import { isManualBaseUrlProvider } from '../../../utils/channel'
 import { formatCompactDateTime } from '../../../utils/format'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -22,6 +23,7 @@ const props = defineProps<{
   modelsInputPlaceholder: string
   modelsInputReadonly: boolean
   secretPlaceholder: string
+  hideCredentialFilesToggle?: boolean
   existingKeys?: ChannelKey[]
   deletingKeyId?: number | null
   copyingKeyId?: number | null
@@ -40,6 +42,27 @@ const addingKey = ref(false)
 
 const showExistingKeyTable = computed(
   () => props.mode === 'edit' && Boolean(props.existingKeys?.length)
+)
+const visibleEndpointProtocols = computed<EndpointProtocol[]>(() => {
+  if (isManualBaseUrlProvider(form.value.provider)) {
+    return ['openai', 'anthropic']
+  }
+
+  if (form.value.provider === 'openai' && form.value.use_credentials) {
+    return ['openai_oauth']
+  }
+
+  const configuredProtocols = (['openai', 'anthropic'] as EndpointProtocol[]).filter((protocol) =>
+    form.value.endpoints[protocol].base_url.trim()
+  )
+  return configuredProtocols.length > 0 ? configuredProtocols : ['openai']
+})
+const visibleEndpointRows = computed(() =>
+  visibleEndpointProtocols.value.map((protocol) => ({
+    protocol,
+    label: endpointBaseUrlLabel(protocol),
+    placeholder: protocol === 'anthropic' ? t('anthropicBaseUrlPlaceholder') : t('baseUrlPlaceholder')
+  }))
 )
 const selectedModels = computed(() =>
   form.value.models
@@ -63,6 +86,12 @@ function toggleAddingKey() {
 
 function removeSelectedModel(model: string) {
   form.value.models = selectedModels.value.filter((item) => item !== model).join(', ')
+}
+
+function endpointBaseUrlLabel(protocol: EndpointProtocol) {
+  if (protocol === 'openai') return t('openAiBaseUrl')
+  if (protocol === 'anthropic') return t('anthropicBaseUrl')
+  return t('baseUrl')
 }
 
 function maskedKey(key: ChannelKey) {
@@ -143,20 +172,15 @@ function keyHealthLabel(key: ChannelKey) {
         <el-input v-model="form.name" :placeholder="t('channelNamePlaceholder')" />
       </el-form-item>
 
-      <div
-        v-if="form.provider === 'custom' || form.provider === 'newapi'"
-        class="manual-base-url-grid"
-      >
-        <el-form-item :label="t('openAiBaseUrl')">
+      <div v-if="visibleEndpointRows.length > 1" class="base-url-grid">
+        <el-form-item
+          v-for="endpoint in visibleEndpointRows"
+          :key="endpoint.protocol"
+          :label="endpoint.label"
+        >
           <el-input
-            v-model="form.endpoints.openai.base_url"
-            :placeholder="t('baseUrlPlaceholder')"
-          />
-        </el-form-item>
-        <el-form-item :label="t('anthropicBaseUrl')">
-          <el-input
-            v-model="form.endpoints.anthropic.base_url"
-            :placeholder="t('anthropicBaseUrlPlaceholder')"
+            v-model="form.endpoints[endpoint.protocol].base_url"
+            :placeholder="endpoint.placeholder"
           />
         </el-form-item>
       </div>
@@ -165,7 +189,10 @@ function keyHealthLabel(key: ChannelKey) {
         <el-input v-model="baseUrl" class="base-url-input" :placeholder="t('baseUrlPlaceholder')" />
       </el-form-item>
 
-      <div v-if="form.provider === 'openai'" class="credential-source">
+      <div
+        v-if="form.provider === 'openai' && !hideCredentialFilesToggle"
+        class="credential-source"
+      >
         <label class="credential-source-toggle">
           <span>{{ t('useCredentialFiles') }}</span>
           <el-switch v-model="form.use_credentials" />
@@ -346,7 +373,7 @@ function keyHealthLabel(key: ChannelKey) {
   border-color: currentColor;
 }
 
-.manual-base-url-grid {
+.base-url-grid {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr);

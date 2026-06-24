@@ -22,6 +22,7 @@ import {
   upsertProviderPrice
 } from '../../api/prices'
 import { updateChannelModel, updateChannel } from '../../api/channels'
+import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelDiagnosticDialog from '../../components/admin/channels/ChannelDiagnosticDialog.vue'
 import ChannelExpandPanel from '../../components/admin/channels/ChannelExpandPanel.vue'
@@ -107,6 +108,7 @@ const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
 const providerModels = ref<ProviderModel[]>([])
 const pricingLoading = ref(true)
+const servicePolicy = ref<ServicePolicy | null>(null)
 const channelsLoaded = ref(false)
 const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
@@ -124,6 +126,7 @@ const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 const priceByModel = computed(
   () => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price]))
 )
+const isInternalServiceMode = computed(() => servicePolicy.value?.service_mode === 'internal')
 const providerModelByModel = computed(
   () => new Map(providerModels.value.map((model) => [priceKey(model.provider, model.model), model]))
 )
@@ -780,6 +783,7 @@ async function applyReferencePrices() {
 }
 
 async function submitChannel() {
+  normalizeCredentialModeForServiceMode(createForm)
   const channel = await submitChannelBase(syncCreateReferencePricesIfNeeded)
   if (!channel) return
   await loadPricingData()
@@ -789,14 +793,37 @@ async function submitChannel() {
 }
 
 async function submitEditChannel() {
+  normalizeCredentialModeForServiceMode(editForm)
   const channel = await submitEditChannelBase()
   if (!channel) return
   await loadPricingData()
 }
 
+function normalizeCredentialModeForServiceMode(form: typeof createForm) {
+  if (isInternalServiceMode.value) {
+    form.use_credentials = false
+  }
+}
+
+function openCreateChannelDialog() {
+  openCreateDialog()
+  normalizeCredentialModeForServiceMode(createForm)
+}
+
+function openEditChannelDialog(row: Channel) {
+  openEditDialog(row)
+  normalizeCredentialModeForServiceMode(editForm)
+}
+
 async function loadInitialData() {
   try {
-    await Promise.all([loadChannels(), loadPricingData()])
+    await Promise.all([
+      loadChannels(),
+      loadPricingData(),
+      getAdminServicePolicy().then((policy) => {
+        servicePolicy.value = policy
+      })
+    ])
   } finally {
     channelsLoaded.value = true
   }
@@ -844,7 +871,7 @@ onMounted(loadInitialData)
           class="admin-action-button add-channel-action"
           type="primary"
           :icon="Plus"
-          @click="openCreateDialog"
+          @click="openCreateChannelDialog"
         >
           {{ t('addChannel') }}
         </el-button>
@@ -1031,7 +1058,7 @@ onMounted(loadInitialData)
                   class="admin-action-button icon-only-action"
                   :aria-label="t('edit')"
                   :icon="Edit"
-                  @click="openEditDialog(row)"
+                  @click="openEditChannelDialog(row)"
                 />
               </el-tooltip>
               <el-dropdown trigger="click" placement="bottom-end">
@@ -1122,6 +1149,7 @@ onMounted(loadInitialData)
       :models-input-placeholder="modelsInputPlaceholder()"
       :models-input-readonly="modelsInputReadonly()"
       :secret-placeholder="t('optionalUpstreamKey')"
+      :hide-credential-files-toggle="isInternalServiceMode"
       @fetch-models="fetchCreateModels"
       @select-provider="selectCreateProvider"
       @submit="submitChannel"
@@ -1148,6 +1176,7 @@ onMounted(loadInitialData)
       :models-input-placeholder="modelsInputPlaceholder()"
       :models-input-readonly="modelsInputReadonly()"
       :secret-placeholder="t('optionalEditUpstreamKey')"
+      :hide-credential-files-toggle="isInternalServiceMode"
       :existing-keys="editingChannelKeys"
       :deleting-key-id="deletingKeyId"
       :copying-key-id="copyingKeyId"

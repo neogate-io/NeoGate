@@ -10,10 +10,13 @@ use crate::{
 
 pub const CUSTOM_PROVIDER_CODE: &str = "custom";
 pub const NEWAPI_PROVIDER_CODE: &str = "newapi";
+pub const SUB2API_PROVIDER_CODE: &str = "sub2api";
 const CUSTOM_PROVIDER_DISPLAY_NAME: &str = "自定义";
 const CUSTOM_PROVIDER_NAME: &str = "Custom";
 const NEWAPI_PROVIDER_DISPLAY_NAME: &str = "NewAPI";
 const NEWAPI_PROVIDER_NAME: &str = "NewAPI";
+const SUB2API_PROVIDER_DISPLAY_NAME: &str = "Sub2API";
+const SUB2API_PROVIDER_NAME: &str = "Sub2API";
 pub const OPENAI_OAUTH_PROTOCOL: &str = "openai_oauth";
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,6 +42,7 @@ pub struct ProviderDefaultEndpointRecord {
 pub async fn list_providers(state: &AppState) -> AppResult<Vec<ProviderRecord>> {
     ensure_custom_provider(state).await?;
     ensure_newapi_provider(state).await?;
+    ensure_sub2api_provider(state).await?;
 
     let rows = sqlx::query(
         "SELECT id, code, display_name, name, default_models,
@@ -123,6 +127,17 @@ pub async fn ensure_newapi_provider(state: &AppState) -> AppResult<()> {
         NEWAPI_PROVIDER_DISPLAY_NAME,
         NEWAPI_PROVIDER_NAME,
         1,
+    )
+    .await
+}
+
+pub async fn ensure_sub2api_provider(state: &AppState) -> AppResult<()> {
+    ensure_builtin_manual_provider(
+        state,
+        SUB2API_PROVIDER_CODE,
+        SUB2API_PROVIDER_DISPLAY_NAME,
+        SUB2API_PROVIDER_NAME,
+        2,
     )
     .await
 }

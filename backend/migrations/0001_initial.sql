@@ -172,11 +172,12 @@ INSERT INTO provider
 VALUES
     ('custom', '自定义', 'Custom', ARRAY[]::TEXT[], '', '', '', 0),
     ('newapi', 'NewAPI', 'NewAPI', ARRAY[]::TEXT[], '', '', '', 1),
+    ('sub2api', 'Sub2API', 'Sub2API', ARRAY[]::TEXT[], '', '', '', 2),
     ('openai', 'OpenAI 官方', 'OpenAI', ARRAY['gpt-4o', 'gpt-4o-mini'], 'https://api.openai.com', 'https://chatgpt.com/backend-api/codex', '', 10),
     ('anthropic', 'Anthropic 官方', 'Anthropic', ARRAY['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'], '', '', 'https://api.anthropic.com', 20),
     ('google', '谷歌 Gemini', 'Google Gemini', ARRAY['gemini-2.0-flash', 'gemini-1.5-pro'], 'https://generativelanguage.googleapis.com/v1beta/openai', '', '', 30),
     ('deepseek', '深度求索 DeepSeek', 'DeepSeek', ARRAY['deepseek-v4-flash', 'deepseek-v4-pro'], 'https://api.deepseek.com', '', 'https://api.deepseek.com/anthropic', 100),
-    ('qwen', '通义千问 Qwen', 'Qwen', ARRAY['qwen3.7-max', 'qwen3.6-plus', 'qwen3.6-flash'], 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'https://dashscope.aliyuncs.com/apps/anthropic', 110),
+    ('qwen', '阿里云百炼 Qwen', 'Qwen', ARRAY['qwen3.7-max', 'qwen3.6-plus', 'qwen3.6-flash'], 'https://dashscope.aliyuncs.com/compatible-mode/v1', '', 'https://dashscope.aliyuncs.com/apps/anthropic', 110),
     ('moonshot', '月之暗面 Kimi', 'Moonshot/Kimi', ARRAY['kimi-k2.6', 'kimi-k2.5', 'moonshot-v1-128k'], 'https://api.moonshot.ai/v1', '', 'https://api.moonshot.ai/anthropic', 120),
     ('zhipu', '智谱 GLM', 'Zhipu GLM', ARRAY['glm-4.7', 'glm-4.5-air'], 'https://open.bigmodel.cn/api/paas/v4', '', 'https://api.z.ai/api/anthropic', 130),
     ('doubao', '火山方舟 豆包', 'Volcengine Ark/Doubao', ARRAY['doubao-seed-2-0-pro-260215', 'doubao-seed-2-0-lite-260428', 'doubao-seed-2-0-mini-260428'], 'https://ark.cn-beijing.volces.com/api/v3', '', 'https://ark.cn-beijing.volces.com/api/compatible', 140),

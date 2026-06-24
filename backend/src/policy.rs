@@ -21,7 +21,7 @@ use crate::{
             UpsertProviderPriceRequest,
         },
         provider::{
-            ensure_custom_provider, ensure_newapi_provider, list_providers,
+            ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider, list_providers,
             provider_default_endpoints, record_provider_models,
         },
         setting::{
@@ -434,6 +434,9 @@ pub async fn setup_upstream_models_for_state(
     }
     if provider == "newapi" {
         ensure_newapi_provider(state).await?;
+    }
+    if provider == "sub2api" {
+        ensure_sub2api_provider(state).await?;
     }
     provider_default_endpoints(state, provider)
         .await?

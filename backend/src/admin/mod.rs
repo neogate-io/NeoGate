@@ -68,9 +68,9 @@ use self::{
         UpdateProjectRequest, UpsertProjectMemberRequest,
     },
     provider::{
-        ensure_custom_provider, ensure_newapi_provider, list_providers, provider_default_endpoints,
-        record_provider_models, ProviderRecord, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE,
-        OPENAI_OAUTH_PROTOCOL,
+        ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider, list_providers,
+        provider_default_endpoints, record_provider_models, ProviderRecord, CUSTOM_PROVIDER_CODE,
+        NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, SUB2API_PROVIDER_CODE,
     },
     setting::{
         get_site_setting, get_smtp_setting, test_smtp_setting, upsert_site_setting,

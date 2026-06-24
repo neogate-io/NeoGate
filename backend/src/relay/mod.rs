@@ -49,9 +49,8 @@ use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody, RelayRequestParams};
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::{
-    forward_anthropic, forward_openai, forward_openai_with_content_type,
-    forward_openai_with_headers, forward_prepared_openai, log_relay_upstream_failure,
-    relay_upstream_error, upstream_url,
+    forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
+    log_relay_upstream_failure, relay_upstream_error, upstream_url,
 };
 pub(crate) use upstream::{forward_anthropic_bound, forward_openai_bound};
 use upstream_task::{UpstreamTask, UpstreamTaskType};

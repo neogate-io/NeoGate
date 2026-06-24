@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     error::{AppError, AppResult},
+    provider::adapters::{adapter_for_provider, RelayRoute},
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -23,11 +24,10 @@ use crate::{
 
 use crate::relay::{
     bridge, describe_upstream_http_failure, ensure_key_backed_async_upstream, finish_relay,
-    finish_task_json_response, forward_anthropic, forward_anthropic_bound,
-    forward_openai_with_headers, log_upstream_http_failure, prepare_relay_body,
-    raw_upstream_response, read_upstream_error_body, record_upstream_http_failure,
-    record_upstream_transport_failure_for_failover, release_empty_hold, reserve_credit,
-    respond_upstream_http_failure, response_from_bytes,
+    finish_task_json_response, forward_anthropic, forward_anthropic_bound, forward_prepared_openai,
+    log_upstream_http_failure, prepare_relay_body, raw_upstream_response, read_upstream_error_body,
+    record_upstream_http_failure, record_upstream_transport_failure_for_failover,
+    release_empty_hold, reserve_credit, respond_upstream_http_failure, response_from_bytes,
     selector::{AttemptedUpstream, SelectedUpstream, SelectionConstraints, UpstreamProtocol},
     should_failover_retryable_upstream_failure, BodyKind, PreparedRelayBody, RelayBody,
     RelayContext,
@@ -126,13 +126,36 @@ pub(crate) async fn anthropic_messages(
             }
             UpstreamProtocol::Openai => {
                 let body = bridge::messages_to_openai_chat(body.clone())?;
-                forward_openai_with_headers(
+                let route = RelayRoute::OpenAiChatCompletions;
+                let adapter = adapter_for_provider(&ctx.upstream.provider);
+                tracing::info!(
+                    provider = %ctx.upstream.provider,
+                    channel_id = ctx.upstream.channel_id,
+                    channel_name = %ctx.upstream.channel_name,
+                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                    protocol = protocol.as_str(),
+                    adapter = adapter.name(),
+                    route = route.path(),
+                    streamed = meta.stream,
+                    "selected provider adapter"
+                );
+                let prepared = adapter.prepare_openai_request(
+                    &ctx.upstream,
+                    protocol,
+                    route,
+                    body,
+                    &headers,
+                    meta.stream,
+                )?;
+                forward_prepared_openai(
                     &state,
                     &ctx.upstream,
                     protocol,
-                    body,
-                    "/v1/chat/completions",
+                    prepared.body,
+                    prepared.url,
+                    &prepared.log_path,
                     &headers,
+                    prepared.extra_headers,
                 )
                 .await
             }

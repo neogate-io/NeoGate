@@ -26,7 +26,8 @@ const iconUrl: Record<string, string> = {
   baichuan: '/icons/baichuan.png',
   iflytek: '/icons/iflytek.ico',
   sensenova: '/icons/sensenova.ico',
-  siliconflow: '/icons/siliconflow.ico'
+  siliconflow: '/icons/siliconflow.ico',
+  jdcloud: '/icons/jdcloud.png'
 }
 
 const imageFailed = ref(false)

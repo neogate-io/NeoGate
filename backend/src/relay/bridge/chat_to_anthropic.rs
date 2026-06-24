@@ -421,10 +421,7 @@ fn anthropic_usage_from_openai_usage(
     let input_details = usage
         .and_then(|usage| usage.get("prompt_tokens_details"))
         .or_else(|| usage.and_then(|usage| usage.get("input_tokens_details")));
-    if let Some(cached_tokens) = input_details
-        .and_then(|details| details.get("cached_tokens"))
-        .and_then(Value::as_i64)
-    {
+    if let Some(cached_tokens) = openai_cached_input_tokens(usage, input_details, None) {
         object.insert(
             "cache_read_input_tokens".to_string(),
             Value::Number(cached_tokens.into()),
@@ -460,6 +457,7 @@ struct OpenAiChatSseToAnthropic {
     stop_reason: &'static str,
     input_tokens: i64,
     output_tokens: i64,
+    cached_input_tokens: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -484,6 +482,7 @@ impl OpenAiChatSseToAnthropic {
             stop_reason: "end_turn",
             input_tokens: 0,
             output_tokens: 0,
+            cached_input_tokens: 0,
         }
     }
 
@@ -644,14 +643,24 @@ impl OpenAiChatSseToAnthropic {
 
     fn observe_openai_usage(&mut self, value: &Value) {
         if let Some(usage) = value.get("usage") {
+            let input_details = usage
+                .get("prompt_tokens_details")
+                .or_else(|| usage.get("input_tokens_details"));
             self.input_tokens = usage
                 .get("prompt_tokens")
+                .or_else(|| usage.get("input_tokens"))
                 .and_then(Value::as_i64)
                 .unwrap_or(self.input_tokens);
             self.output_tokens = usage
                 .get("completion_tokens")
+                .or_else(|| usage.get("output_tokens"))
                 .and_then(Value::as_i64)
                 .unwrap_or(self.output_tokens);
+            self.cached_input_tokens =
+                openai_cached_input_tokens(Some(usage), input_details, Some(value))
+                    .unwrap_or(self.cached_input_tokens);
+        } else if let Some(cached_tokens) = choice_usage_cached_tokens(value) {
+            self.cached_input_tokens = cached_tokens;
         }
     }
 
@@ -812,6 +821,7 @@ impl OpenAiChatSseToAnthropic {
                 "delta": { "stop_reason": self.stop_reason, "stop_sequence": null },
                 "usage": {
                     "input_tokens": self.input_tokens,
+                    "cache_read_input_tokens": self.cached_input_tokens,
                     "output_tokens": self.output_tokens,
                 },
             }),
@@ -828,6 +838,34 @@ impl BridgeSseConverter for OpenAiChatSseToAnthropic {
     fn stopped(&self) -> bool {
         self.stopped
     }
+}
+
+fn openai_cached_input_tokens(
+    usage: Option<&Value>,
+    input_details: Option<&Value>,
+    value: Option<&Value>,
+) -> Option<i64> {
+    usage
+        .and_then(|usage| usage.get("cache_read_input_tokens"))
+        .or_else(|| input_details.and_then(|details| details.get("cached_tokens")))
+        .or_else(|| usage.and_then(|usage| usage.get("prompt_cache_hit_tokens")))
+        .or_else(|| usage.and_then(|usage| usage.get("cached_tokens")))
+        .and_then(Value::as_i64)
+        .or_else(|| value.and_then(choice_usage_cached_tokens))
+}
+
+fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
+    value
+        .get("choices")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|choice| {
+            choice
+                .get("usage")
+                .and_then(|usage| usage.get("cached_tokens"))
+                .and_then(Value::as_i64)
+        })
+        .find(|tokens| *tokens > 0)
 }
 
 fn push_anthropic_sse(out: &mut Vec<u8>, event: &str, data: Value) {
@@ -945,6 +983,29 @@ mod tests {
             first_value["messages"][1]["content"][0]["cache_control"]["type"],
             "ephemeral"
         );
+    }
+
+    #[test]
+    fn derives_prompt_cache_key_from_anthropic_cache_control_tools() {
+        let first = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[{"role":"user","content":"Fresh question"}],"tools":[{"name":"lookup","description":"Stable tool","input_schema":{"type":"object","properties":{"q":{"type":"string"}}},"cache_control":{"type":"ephemeral"}}],"max_tokens":16}"#,
+        );
+        let second = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[{"role":"user","content":"Different fresh question"}],"tools":[{"name":"lookup","description":"Stable tool","input_schema":{"type":"object","properties":{"q":{"type":"string"}}},"cache_control":{"type":"ephemeral"}}],"max_tokens":16}"#,
+        );
+
+        let first = messages_to_openai_chat(first).unwrap();
+        let second = messages_to_openai_chat(second).unwrap();
+        let first_value: Value = serde_json::from_slice(&first).unwrap();
+        let second_value: Value = serde_json::from_slice(&second).unwrap();
+
+        let prompt_cache_key = first_value["prompt_cache_key"].as_str().unwrap();
+        assert!(prompt_cache_key.starts_with("anthropic-cache-"));
+        assert_eq!(
+            second_value["prompt_cache_key"],
+            first_value["prompt_cache_key"]
+        );
+        assert_eq!(first_value["tools"][0]["function"]["name"], "lookup");
     }
 
     #[test]
@@ -1103,6 +1164,18 @@ mod tests {
     }
 
     #[test]
+    fn converts_openai_compatible_prompt_cache_hit_tokens_to_anthropic_usage() {
+        let body = br#"{"id":"chatcmpl-1","model":"GLM-5.1","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":98502,"completion_tokens":93,"total_tokens":98595,"prompt_cache_hit_tokens":96640}}"#;
+
+        let converted = chat_response_to_anthropic(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["usage"]["input_tokens"], 98_502);
+        assert_eq!(value["usage"]["output_tokens"], 93);
+        assert_eq!(value["usage"]["cache_read_input_tokens"], 96_640);
+    }
+
+    #[test]
     fn converts_anthropic_thinking_response_to_openai_reasoning_content() {
         let body = br#"{"id":"msg-1","model":"claude-sonnet-4","content":[{"type":"thinking","thinking":"Thinking."},{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":3}}"#;
 
@@ -1158,6 +1231,20 @@ mod tests {
         assert!(text.contains(r#""input_tokens":8"#));
         assert!(text.contains(r#""output_tokens":1"#));
         assert!(text.contains("event: message_stop"));
+    }
+
+    #[test]
+    fn converts_openai_compatible_stream_choice_cached_tokens_to_anthropic_usage() {
+        let mut converter = OpenAiChatSseToAnthropic::new("GLM-5.1".to_string());
+        let mut out = Vec::new();
+        out.extend_from_slice(&converter.push(br#"data: {"id":"chatcmpl-1","model":"GLM-5.1","choices":[{"delta":{"content":"OK"},"finish_reason":"stop","usage":{"cached_tokens":96640}}],"usage":{"prompt_tokens":98502,"completion_tokens":93,"total_tokens":98595}}"#));
+        out.extend_from_slice(&converter.push(b"\n\n"));
+        out.extend_from_slice(&converter.push(b"data: [DONE]\n\n"));
+        let text = String::from_utf8(out).unwrap();
+
+        assert!(text.contains(r#""input_tokens":98502"#));
+        assert!(text.contains(r#""output_tokens":93"#));
+        assert!(text.contains(r#""cache_read_input_tokens":96640"#));
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use axum::http::{header::ACCEPT, HeaderMap, HeaderValue};
 use bytes::Bytes;
+use serde_json::Value;
 
 use crate::{
-    error::AppResult,
+    error::{AppError, AppResult},
     relay::{
         selector::{SelectedUpstream, UpstreamProtocol},
         upstream_url,
@@ -43,6 +44,7 @@ impl ProviderAdapter for JdcloudAdapter {
         if streamed {
             extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
+        let body = jdcloud_session_body(body)?;
 
         Ok(PreparedUpstreamRequest {
             url: self.resolve_url(&upstream.base_url, route),
@@ -52,6 +54,48 @@ impl ProviderAdapter for JdcloudAdapter {
             response_mode: AdapterResponseMode::Passthrough,
         })
     }
+}
+
+fn jdcloud_session_body(body: Bytes) -> AppResult<Bytes> {
+    let Some(prompt_cache_key) = prompt_cache_key_from_body(&body)? else {
+        tracing::info!(
+            has_prompt_cache_key = false,
+            has_session_id = false,
+            "jdcloud session body compatibility"
+        );
+        return Ok(body);
+    };
+    let mut value: Value = serde_json::from_slice(&body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    let Some(object) = value.as_object_mut() else {
+        return Ok(body);
+    };
+    let has_session_id = object
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    tracing::info!(
+        has_prompt_cache_key = true,
+        has_session_id,
+        injected_session_id = !has_session_id,
+        "jdcloud session body compatibility"
+    );
+    if !has_session_id {
+        object.insert("session_id".to_string(), Value::String(prompt_cache_key));
+    }
+    Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
+fn prompt_cache_key_from_body(body: &[u8]) -> AppResult<Option<String>> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    Ok(value
+        .get("prompt_cache_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string))
 }
 
 #[cfg(test)]
@@ -133,5 +177,47 @@ mod tests {
             prepared.extra_headers.get(ACCEPT).unwrap(),
             "text/event-stream"
         );
+    }
+
+    #[test]
+    fn jdcloud_copies_prompt_cache_key_to_session_id_body_field() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[],"prompt_cache_key":"anthropic-cache-1"}"#,
+        );
+        let prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::OpenAiChatCompletions,
+                body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert_eq!(value["prompt_cache_key"], "anthropic-cache-1");
+        assert_eq!(value["session_id"], "anthropic-cache-1");
+    }
+
+    #[test]
+    fn jdcloud_preserves_existing_session_id_body_field() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[],"prompt_cache_key":"anthropic-cache-1","session_id":"client-session"}"#,
+        );
+        let prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::OpenAiChatCompletions,
+                body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert_eq!(value["prompt_cache_key"], "anthropic-cache-1");
+        assert_eq!(value["session_id"], "client-session");
     }
 }

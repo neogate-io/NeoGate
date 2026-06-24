@@ -239,7 +239,7 @@ impl OpenAiChatSseToOpenAiResponse {
         if let Some(model) = value.get("model").and_then(Value::as_str) {
             self.model = model.to_string();
         }
-        self.observe_usage(value.get("usage"));
+        self.observe_usage(value);
         let Some(choice) = value
             .get("choices")
             .and_then(Value::as_array)
@@ -280,8 +280,11 @@ impl OpenAiChatSseToOpenAiResponse {
         }
     }
 
-    fn observe_usage(&mut self, usage: Option<&Value>) {
-        let Some(usage) = usage else {
+    fn observe_usage(&mut self, value: &Value) {
+        let Some(usage) = value.get("usage") else {
+            if let Some(cached_tokens) = choice_usage_cached_tokens(value) {
+                self.cached_input_tokens = cached_tokens;
+            }
             return;
         };
         self.input_tokens = usage
@@ -295,7 +298,15 @@ impl OpenAiChatSseToOpenAiResponse {
         self.cached_input_tokens = usage
             .get("prompt_tokens_details")
             .and_then(|details| details.get("cached_tokens"))
+            .or_else(|| {
+                usage
+                    .get("input_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+            })
+            .or_else(|| usage.get("prompt_cache_hit_tokens"))
+            .or_else(|| usage.get("cached_tokens"))
             .and_then(Value::as_i64)
+            .or_else(|| choice_usage_cached_tokens(value))
             .unwrap_or(self.cached_input_tokens);
     }
 
@@ -761,6 +772,20 @@ impl OpenAiChatSseToOpenAiResponse {
         self.sequence_number = self.sequence_number.saturating_add(1);
         sequence_number
     }
+}
+
+fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
+    value
+        .get("choices")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|choice| {
+            choice
+                .get("usage")
+                .and_then(|usage| usage.get("cached_tokens"))
+                .and_then(Value::as_i64)
+        })
+        .find(|tokens| *tokens > 0)
 }
 
 impl BridgeSseConverter for OpenAiChatSseToOpenAiResponse {

@@ -114,10 +114,7 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
     Some(TokenUsage {
         input_tokens,
         output_tokens,
-        cached_input_tokens: usage
-            .get("cache_read_input_tokens")
-            .or_else(|| input_details.and_then(|details| details.get("cached_tokens")))
-            .and_then(Value::as_i64),
+        cached_input_tokens: cached_input_tokens(value, usage, input_details),
         cache_creation_input_tokens,
         cache_creation_input_tokens_5m: cache_creation_5m,
         cache_creation_input_tokens_1h: cache_creation_1h,
@@ -131,6 +128,30 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
             .and_then(|details| details.get("audio_tokens"))
             .and_then(Value::as_i64),
     })
+}
+
+fn cached_input_tokens(value: &Value, usage: &Value, input_details: Option<&Value>) -> Option<i64> {
+    usage
+        .get("cache_read_input_tokens")
+        .or_else(|| input_details.and_then(|details| details.get("cached_tokens")))
+        .or_else(|| usage.get("prompt_cache_hit_tokens"))
+        .or_else(|| usage.get("cached_tokens"))
+        .and_then(Value::as_i64)
+        .or_else(|| choice_usage_cached_tokens(value))
+}
+
+fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
+    value
+        .get("choices")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|choice| {
+            choice
+                .get("usage")
+                .and_then(|usage| usage.get("cached_tokens"))
+                .and_then(Value::as_i64)
+        })
+        .find(|tokens| *tokens > 0)
 }
 
 pub fn parse_usage_from_bytes(bytes: &[u8], streamed: bool) -> Option<TokenUsage> {
@@ -261,6 +282,41 @@ mod tests {
         assert_eq!(usage.reasoning_output_tokens, Some(11));
         assert_eq!(usage.audio_input_tokens, Some(7));
         assert_eq!(usage.audio_output_tokens, Some(13));
+    }
+
+    #[test]
+    fn parses_openai_compatible_prompt_cache_hit_tokens() {
+        let usage = parse_usage_from_bytes(
+            br#"{"usage":{"prompt_tokens":98502,"completion_tokens":93,"total_tokens":98595,"prompt_cache_hit_tokens":96640}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 98_502);
+        assert_eq!(usage.output_tokens, 93);
+        assert_eq!(usage.cached_input_tokens, Some(96_640));
+    }
+
+    #[test]
+    fn parses_openai_compatible_top_level_cached_tokens() {
+        let usage = parse_usage_from_bytes(
+            br#"{"usage":{"prompt_tokens":98502,"completion_tokens":93,"total_tokens":98595,"cached_tokens":96640}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.cached_input_tokens, Some(96_640));
+    }
+
+    #[test]
+    fn parses_openai_compatible_choice_usage_cached_tokens() {
+        let usage = parse_usage_from_bytes(
+            br#"{"choices":[{"usage":{"cached_tokens":96640}}],"usage":{"prompt_tokens":98502,"completion_tokens":93,"total_tokens":98595}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.cached_input_tokens, Some(96_640));
     }
 
     #[test]

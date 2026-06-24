@@ -160,16 +160,8 @@ fn apply_openai_codex_passthrough_headers(
 
     if !has_session_id {
         if let Some(prompt_cache_key) = prompt_cache_key_from_body(body) {
-            tracing::info!(
-                session_id = %prompt_cache_key,
-                "injecting session_id header from prompt_cache_key"
-            );
             request = request.header("session_id", prompt_cache_key);
-        } else {
-            tracing::info!("not injecting session_id header because prompt_cache_key is absent");
         }
-    } else {
-        tracing::info!("preserving client-provided session_id header");
     }
 
     request

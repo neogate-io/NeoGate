@@ -44,7 +44,7 @@ impl ProviderAdapter for JdcloudAdapter {
         if streamed {
             extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
-        let body = jdcloud_session_body(body, route, streamed)?;
+        let body = jdcloud_chat_cache_body(body, route)?;
 
         Ok(PreparedUpstreamRequest {
             url: self.resolve_url(&upstream.base_url, route),
@@ -56,15 +56,8 @@ impl ProviderAdapter for JdcloudAdapter {
     }
 }
 
-fn jdcloud_session_body(body: Bytes, route: RelayRoute, streamed: bool) -> AppResult<Bytes> {
+fn jdcloud_chat_cache_body(body: Bytes, route: RelayRoute) -> AppResult<Bytes> {
     let Some(prompt_cache_key) = prompt_cache_key_from_body(&body)? else {
-        tracing::info!(
-            route = route.path(),
-            streamed,
-            has_prompt_cache_key = false,
-            has_session_id = false,
-            "jdcloud session body compatibility"
-        );
         return Ok(body);
     };
     let mut value: Value = serde_json::from_slice(&body)
@@ -72,23 +65,88 @@ fn jdcloud_session_body(body: Bytes, route: RelayRoute, streamed: bool) -> AppRe
     let Some(object) = value.as_object_mut() else {
         return Ok(body);
     };
+    if route == RelayRoute::OpenAiChatCompletions {
+        reorder_system_cache_prefix(object.get_mut("messages"));
+    }
     let has_session_id = object
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
-    tracing::info!(
-        route = route.path(),
-        streamed,
-        has_prompt_cache_key = true,
-        has_session_id,
-        injected_session_id = !has_session_id,
-        "jdcloud session body compatibility"
-    );
     if !has_session_id {
         object.insert("session_id".to_string(), Value::String(prompt_cache_key));
     }
     Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
+fn reorder_system_cache_prefix(messages: Option<&mut Value>) {
+    let Some(Value::Array(messages)) = messages else {
+        return;
+    };
+    let Some(user_index) = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    else {
+        return;
+    };
+    let Some(first_message) = messages.first_mut() else {
+        return;
+    };
+    let Some(first_message) = first_message.as_object_mut() else {
+        return;
+    };
+    if first_message.get("role").and_then(Value::as_str) != Some("system") {
+        return;
+    }
+    let Some(Value::Array(content)) = first_message.get_mut("content") else {
+        return;
+    };
+    let Some(first_cache_index) = content.iter().position(has_cache_control) else {
+        return;
+    };
+    if first_cache_index == 0 {
+        return;
+    }
+
+    let leading = content.drain(..first_cache_index).collect::<Vec<_>>();
+    append_system_tail_to_user(&mut messages[user_index], leading);
+}
+
+fn append_system_tail_to_user(user_message: &mut Value, leading: Vec<Value>) {
+    let Some(user_message) = user_message.as_object_mut() else {
+        return;
+    };
+    append_content_items(
+        user_message
+            .entry("content")
+            .or_insert(Value::String(String::new())),
+        leading,
+    );
+}
+
+fn append_content_items(content: &mut Value, mut items: Vec<Value>) {
+    match content {
+        Value::Array(existing) => {
+            existing.append(&mut items);
+        }
+        Value::String(text) => {
+            let mut combined = Vec::new();
+            if !text.is_empty() {
+                combined.push(Value::String(std::mem::take(text)));
+            }
+            combined.append(&mut items);
+            *content = Value::Array(combined);
+        }
+        _ => {
+            *content = Value::Array(items);
+        }
+    }
+}
+
+fn has_cache_control(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.contains_key("cache_control"))
 }
 
 fn prompt_cache_key_from_body(body: &[u8]) -> AppResult<Option<String>> {
@@ -223,5 +281,53 @@ mod tests {
 
         assert_eq!(value["prompt_cache_key"], "anthropic-cache-1");
         assert_eq!(value["session_id"], "client-session");
+    }
+
+    #[test]
+    fn jdcloud_moves_uncached_system_prefix_to_last_user_message() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[{"role":"system","content":[{"type":"text","text":"volatile"},{"type":"text","text":"stable-a","cache_control":{"type":"ephemeral"}},{"type":"text","text":"stable-b","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":"hi"}],"prompt_cache_key":"anthropic-cache-1"}"#,
+        );
+        let prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::OpenAiChatCompletions,
+                body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+        let content = value["messages"][0]["content"].as_array().unwrap();
+
+        assert_eq!(content[0]["text"], "stable-a");
+        assert_eq!(content[1]["text"], "stable-b");
+        assert_eq!(content.len(), 2);
+        let user_content = value["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(user_content[0], "hi");
+        assert_eq!(user_content[1]["text"], "volatile");
+    }
+
+    #[test]
+    fn jdcloud_leaves_system_cache_prefix_when_already_first() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[{"role":"system","content":[{"type":"text","text":"stable","cache_control":{"type":"ephemeral"}},{"type":"text","text":"volatile"}]}],"prompt_cache_key":"anthropic-cache-1"}"#,
+        );
+        let prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::OpenAiChatCompletions,
+                body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+        let content = value["messages"][0]["content"].as_array().unwrap();
+
+        assert_eq!(content[0]["text"], "stable");
+        assert_eq!(content[1]["text"], "volatile");
     }
 }

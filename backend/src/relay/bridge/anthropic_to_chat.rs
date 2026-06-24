@@ -89,23 +89,9 @@ pub(crate) fn messages_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let cache_summary = anthropic_cache_summary(&messages, object.get("tools"));
-    let prompt_cache_key = explicit_prompt_cache_key.clone().or_else(|| {
-        cache_summary
-            .derived_key
-            .as_ref()
-            .map(|key| key.to_string())
-    });
-    tracing::info!(
-        explicit_prompt_cache_key = explicit_prompt_cache_key.is_some(),
-        derived_prompt_cache_key = cache_summary.derived_key.is_some(),
-        cache_control_blocks = cache_summary.block_count,
-        cache_control_message_blocks = cache_summary.message_block_count,
-        cache_control_tool_blocks = cache_summary.tool_block_count,
-        tool_count = cache_summary.tool_count,
-        prompt_cache_key = prompt_cache_key.as_deref().unwrap_or(""),
-        "anthropic cache key conversion"
-    );
+    let prompt_cache_key = explicit_prompt_cache_key
+        .clone()
+        .or_else(|| derive_anthropic_cache_key(&messages, object.get("tools")));
     if let Some(prompt_cache_key) = prompt_cache_key {
         object.insert(
             "prompt_cache_key".to_string(),
@@ -144,72 +130,44 @@ fn retain_openai_chat_request_fields(object: &mut Map<String, Value>) {
     object.retain(|key, _| OPENAI_CHAT_REQUEST_FIELDS.contains(&key.as_str()));
 }
 
-#[derive(Debug)]
-struct AnthropicCacheSummary {
-    derived_key: Option<String>,
-    block_count: usize,
-    message_block_count: usize,
-    tool_block_count: usize,
-    tool_count: usize,
-}
-
-fn anthropic_cache_summary(messages: &[Value], tools: Option<&Value>) -> AnthropicCacheSummary {
+fn derive_anthropic_cache_key(messages: &[Value], tools: Option<&Value>) -> Option<String> {
     let mut blocks = Vec::new();
-    let mut message_block_count = 0;
-    for message in messages {
-        message_block_count +=
-            collect_cache_controlled_content(message.get("content"), &mut blocks);
-    }
-    let (tool_block_count, tool_count) = collect_cache_controlled_tools(tools, &mut blocks);
-    let block_count = blocks.len();
-    let derived_key = if blocks.is_empty() {
-        None
-    } else {
+    collect_cache_controlled_content(messages, &mut blocks);
+    collect_cache_controlled_tools(tools, &mut blocks);
+    (!blocks.is_empty()).then(|| {
         serde_json::to_vec(&blocks).ok().map(|encoded| {
             let digest = Sha256::digest(encoded);
             format!("anthropic-cache-{}", &hex::encode(digest)[..32])
         })
-    };
-    AnthropicCacheSummary {
-        derived_key,
-        block_count,
-        message_block_count,
-        tool_block_count,
-        tool_count,
-    }
+    })?
 }
 
-fn collect_cache_controlled_content(content: Option<&Value>, blocks: &mut Vec<Value>) -> usize {
-    let Some(content) = content else {
-        return 0;
-    };
-    let Value::Array(items) = content else {
-        return 0;
-    };
-    let mut collected = 0;
-    for item in items {
-        let Some(object) = item.as_object() else {
+fn collect_cache_controlled_content(messages: &[Value], blocks: &mut Vec<Value>) {
+    for message in messages {
+        let Some(content) = message.get("content") else {
             continue;
         };
-        if !object.contains_key("cache_control") {
+        let Value::Array(items) = content else {
             continue;
+        };
+        for item in items {
+            let Some(object) = item.as_object() else {
+                continue;
+            };
+            if !object.contains_key("cache_control") {
+                continue;
+            }
+            let mut normalized = object.clone();
+            normalized.remove("cache_control");
+            blocks.push(Value::Object(normalized));
         }
-        let mut normalized = object.clone();
-        normalized.remove("cache_control");
-        blocks.push(Value::Object(normalized));
-        collected += 1;
     }
-    collected
 }
 
-fn collect_cache_controlled_tools(
-    tools: Option<&Value>,
-    blocks: &mut Vec<Value>,
-) -> (usize, usize) {
+fn collect_cache_controlled_tools(tools: Option<&Value>, blocks: &mut Vec<Value>) {
     let Some(tools) = tools.and_then(Value::as_array) else {
-        return (0, 0);
+        return;
     };
-    let mut collected = 0;
     for tool in tools {
         let Some(object) = tool.as_object() else {
             continue;
@@ -220,9 +178,7 @@ fn collect_cache_controlled_tools(
         let mut normalized = object.clone();
         normalized.remove("cache_control");
         blocks.push(Value::Object(normalized));
-        collected += 1;
     }
-    (collected, tools.len())
 }
 
 fn anthropic_tools_to_openai(value: Value) -> Option<Value> {

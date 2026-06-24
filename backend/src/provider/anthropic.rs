@@ -128,17 +128,6 @@ pub(crate) async fn anthropic_messages(
                 let body = bridge::messages_to_openai_chat(body.clone())?;
                 let route = RelayRoute::OpenAiChatCompletions;
                 let adapter = adapter_for_provider(&ctx.upstream.provider);
-                tracing::info!(
-                    provider = %ctx.upstream.provider,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_name = %ctx.upstream.channel_name,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    protocol = protocol.as_str(),
-                    adapter = adapter.name(),
-                    route = route.path(),
-                    streamed = meta.stream,
-                    "selected provider adapter"
-                );
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,

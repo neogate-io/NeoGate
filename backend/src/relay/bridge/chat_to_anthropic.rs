@@ -1009,6 +1009,26 @@ mod tests {
     }
 
     #[test]
+    fn prompt_cache_key_stays_stable_when_cache_control_blocks_match() {
+        let first = Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Volatile prefix A"},{"type":"text","text":"Stable block","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Fresh question"}],"max_tokens":16}"#,
+        );
+        let second = Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Volatile prefix B"},{"type":"text","text":"Stable block","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Fresh question"}],"max_tokens":16}"#,
+        );
+
+        let first = messages_to_openai_chat(first).unwrap();
+        let second = messages_to_openai_chat(second).unwrap();
+        let first_value: Value = serde_json::from_slice(&first).unwrap();
+        let second_value: Value = serde_json::from_slice(&second).unwrap();
+
+        assert_eq!(
+            first_value["prompt_cache_key"],
+            second_value["prompt_cache_key"]
+        );
+    }
+
+    #[test]
     fn converts_openai_chat_response_to_anthropic_message() {
         let body = br#"{"id":"chatcmpl-1","model":"GLM-5.1","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":1}}"#;
 

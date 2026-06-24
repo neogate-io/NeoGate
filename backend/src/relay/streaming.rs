@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Instant};
 use axum::{body::Body, http::StatusCode};
 use bytes::Bytes;
 use futures_util::StreamExt;
-use serde_json::Value;
 
 use crate::{
     auth::UserAuth,
@@ -420,13 +419,9 @@ impl ResponseUsageParser {
     fn finish(&mut self) -> Option<TokenUsage> {
         match self {
             Self::Sse(parser) => parser.finish(),
-            Self::Json { buffer, .. } => buffer.as_deref().and_then(|bytes| {
-                let usage = parse_usage_from_bytes(bytes, false);
-                if usage.is_some() {
-                    log_json_usage_fields(bytes, usage.as_ref());
-                }
-                usage
-            }),
+            Self::Json { buffer, .. } => buffer
+                .as_deref()
+                .and_then(|bytes| parse_usage_from_bytes(bytes, false)),
             Self::Disabled => None,
         }
     }
@@ -536,11 +531,10 @@ impl StreamUsageParser {
         if data == "[DONE]" {
             return (None, true);
         }
-        let usage = parse_usage_from_sse_data(data);
-        if usage.is_some() {
-            log_sse_usage_fields(data, usage.as_ref());
-        }
-        (usage, sse_data_has_terminal_type(data))
+        (
+            parse_usage_from_sse_data(data),
+            sse_data_has_terminal_type(data),
+        )
     }
 
     fn finish(&mut self) -> Option<TokenUsage> {
@@ -553,110 +547,6 @@ impl StreamUsageParser {
         }
         self.latest
     }
-}
-
-fn log_sse_usage_fields(data: &str, parsed: Option<&TokenUsage>) {
-    let Ok(value) = serde_json::from_str::<Value>(data) else {
-        return;
-    };
-    log_usage_fields_from_value(&value, parsed, "upstream sse usage fields");
-}
-
-fn log_json_usage_fields(bytes: &[u8], parsed: Option<&TokenUsage>) {
-    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return;
-    };
-    log_usage_fields_from_value(&value, parsed, "upstream json usage fields");
-}
-
-fn log_usage_fields_from_value(value: &Value, parsed: Option<&TokenUsage>, message: &'static str) {
-    let usage = value.get("usage").or_else(|| {
-        value
-            .get("response")
-            .and_then(|response| response.get("usage"))
-    });
-    let message_usage = value
-        .get("message")
-        .and_then(|message| message.get("usage"));
-    let choice_cached_tokens = value
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| {
-            choices.iter().find_map(|choice| {
-                choice
-                    .get("usage")
-                    .and_then(|usage| usage.get("cached_tokens"))
-                    .and_then(Value::as_i64)
-            })
-        });
-    let input_details = usage.and_then(|usage| {
-        usage
-            .get("prompt_tokens_details")
-            .or_else(|| usage.get("input_tokens_details"))
-    });
-    let output_details = usage.and_then(|usage| {
-        usage
-            .get("completion_tokens_details")
-            .or_else(|| usage.get("output_tokens_details"))
-    });
-    let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
-    let prompt_tokens = usage
-        .and_then(|usage| usage.get("prompt_tokens"))
-        .and_then(Value::as_i64);
-    let input_tokens = usage
-        .and_then(|usage| usage.get("input_tokens"))
-        .and_then(Value::as_i64)
-        .or_else(|| {
-            message_usage
-                .and_then(|usage| usage.get("input_tokens"))
-                .and_then(Value::as_i64)
-        });
-    let completion_tokens = usage
-        .and_then(|usage| usage.get("completion_tokens"))
-        .and_then(Value::as_i64);
-    let output_tokens = usage
-        .and_then(|usage| usage.get("output_tokens"))
-        .and_then(Value::as_i64)
-        .or_else(|| {
-            message_usage
-                .and_then(|usage| usage.get("output_tokens"))
-                .and_then(Value::as_i64)
-        });
-    let prompt_tokens_details_cached = input_details
-        .and_then(|details| details.get("cached_tokens"))
-        .and_then(Value::as_i64);
-    let usage_cached_tokens = usage
-        .and_then(|usage| usage.get("cached_tokens"))
-        .and_then(Value::as_i64);
-    let prompt_cache_hit_tokens = usage
-        .and_then(|usage| usage.get("prompt_cache_hit_tokens"))
-        .and_then(Value::as_i64);
-    let cache_read_input_tokens = usage
-        .or(message_usage)
-        .and_then(|usage| usage.get("cache_read_input_tokens"))
-        .and_then(Value::as_i64);
-    let reasoning_tokens = output_details
-        .and_then(|details| details.get("reasoning_tokens"))
-        .and_then(Value::as_i64);
-    let parsed_cached_tokens = parsed.and_then(|usage| usage.cached_input_tokens);
-
-    tracing::info!(
-        event_type,
-        has_usage = usage.is_some(),
-        has_message_usage = message_usage.is_some(),
-        prompt_tokens,
-        input_tokens,
-        completion_tokens,
-        output_tokens,
-        prompt_tokens_details_cached,
-        usage_cached_tokens,
-        prompt_cache_hit_tokens,
-        cache_read_input_tokens,
-        choice_usage_cached_tokens = choice_cached_tokens,
-        reasoning_tokens,
-        parsed_cached_tokens,
-        "{message}"
-    );
 }
 
 fn stream_event_is_terminal(event: &str) -> bool {

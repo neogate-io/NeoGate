@@ -1063,13 +1063,13 @@ function isValidHttpUrl(value: string) {
 }
 
 function syncPriceRows() {
-  const existing = new Map(prices.value.map((price) => [price.model, price]))
+  const existing = new Map(prices.value.map((price) => [price.model.trim().toLowerCase(), price]))
   prices.value = splitCommaList(setupForm.models).map((model) => ({
     model,
-    inputUsd: existing.get(model)?.inputUsd ?? 0,
-    outputUsd: existing.get(model)?.outputUsd ?? 0,
+    inputUsd: existing.get(model.trim().toLowerCase())?.inputUsd ?? 0,
+    outputUsd: existing.get(model.trim().toLowerCase())?.outputUsd ?? 0,
     enabled:
-      existing.get(model)?.enabled ??
+      existing.get(model.trim().toLowerCase())?.enabled ??
       Boolean(findPricingTemplate(pricingTemplates.value, setupForm.provider, model))
   }))
 }

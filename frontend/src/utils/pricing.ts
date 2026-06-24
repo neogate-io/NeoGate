@@ -1,10 +1,9 @@
 import type { PricingTemplate, ProviderPrice } from '../types/admin'
 
 const CONFIRMED_PRICE_SOURCE = 'confirmed_price'
-const MANUAL_BASE_URL_PROVIDERS = new Set(['custom', 'newapi'])
 
 export function priceKey(provider: string, model: string) {
-  return `${provider}\u0000${model}`
+  return `${provider.trim()}\u0000${model.trim().toLowerCase()}`
 }
 
 export function derivedCacheReadPrice(inputPrice: number) {
@@ -25,25 +24,17 @@ export function isProviderPriceReady(price?: ProviderPrice) {
 
 export function findPricingTemplate(templates: PricingTemplate[], provider: string, model: string) {
   const normalizedProvider = provider.trim()
-  const normalizedModel = model.trim()
+  const normalizedModel = model.trim().toLowerCase()
   const enabledTemplates = templates.filter(
-    (template) => template.enabled && template.model === normalizedModel
+    (template) =>
+      template.enabled &&
+      template.source !== CONFIRMED_PRICE_SOURCE &&
+      template.model.trim().toLowerCase() === normalizedModel
   )
-  const exact = enabledTemplates.find((template) => template.provider === normalizedProvider)
+  const exact = enabledTemplates.find((template) => template.provider.trim() === normalizedProvider)
 
-  if (exact && exact.source !== CONFIRMED_PRICE_SOURCE) {
+  if (exact) {
     return exact
   }
-  if (!MANUAL_BASE_URL_PROVIDERS.has(normalizedProvider)) {
-    return undefined
-  }
-
-  return findUniqueExternalTemplate(enabledTemplates, normalizedProvider)
-}
-
-function findUniqueExternalTemplate(templates: PricingTemplate[], provider: string) {
-  const candidates = templates.filter(
-    (template) => template.provider !== provider && template.source !== CONFIRMED_PRICE_SOURCE
-  )
-  return candidates.length === 1 ? candidates[0] : undefined
+  return enabledTemplates.find((template) => template.provider.trim() !== normalizedProvider)
 }

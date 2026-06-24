@@ -44,7 +44,7 @@ impl ProviderAdapter for JdcloudAdapter {
         if streamed {
             extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
-        let body = jdcloud_session_body(body)?;
+        let body = jdcloud_session_body(body, route, streamed)?;
 
         Ok(PreparedUpstreamRequest {
             url: self.resolve_url(&upstream.base_url, route),
@@ -56,9 +56,11 @@ impl ProviderAdapter for JdcloudAdapter {
     }
 }
 
-fn jdcloud_session_body(body: Bytes) -> AppResult<Bytes> {
+fn jdcloud_session_body(body: Bytes, route: RelayRoute, streamed: bool) -> AppResult<Bytes> {
     let Some(prompt_cache_key) = prompt_cache_key_from_body(&body)? else {
         tracing::info!(
+            route = route.path(),
+            streamed,
             has_prompt_cache_key = false,
             has_session_id = false,
             "jdcloud session body compatibility"
@@ -76,6 +78,8 @@ fn jdcloud_session_body(body: Bytes) -> AppResult<Bytes> {
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
     tracing::info!(
+        route = route.path(),
+        streamed,
         has_prompt_cache_key = true,
         has_session_id,
         injected_session_id = !has_session_id,

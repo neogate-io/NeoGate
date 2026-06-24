@@ -880,6 +880,7 @@ onMounted(loadServicePolicy)
             v-loading="membersLoading"
             class="admin-table service-table"
             :data="selectedMembers"
+            max-height="50vh"
             row-key="id"
             stripe
           >
@@ -1287,6 +1288,11 @@ onMounted(loadServicePolicy)
 
 .project-member-detail-panel {
   max-height: min(52dvh, 480px);
+}
+
+/* 对话框内成员列表需垂直滚动；覆盖 service-table-panel 对内部滚动条的禁用 */
+.project-member-detail-panel :deep(.el-scrollbar__wrap) {
+  overflow-y: auto !important;
 }
 
 .project-member-detail-panel :deep(.el-table__cell) {

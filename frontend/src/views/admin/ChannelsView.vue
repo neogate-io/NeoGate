@@ -1320,10 +1320,6 @@ onMounted(loadInitialData)
   width: min(420px, 100%);
 }
 
-.channel-table {
-  min-width: 0 !important;
-}
-
 .channel-table :deep(.el-table__body td) {
   height: 82px;
   padding: 12px 0;

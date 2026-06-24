@@ -59,12 +59,13 @@
 .admin-shell .page-header {
   align-items: start;
   align-self: start;
+  backdrop-filter: none;
   background: color-mix(in srgb, var(--admin-bg) 92%, #ffffff);
   border: 0;
   border-radius: 0;
   box-shadow: none;
   display: grid;
-  gap: 18px;
+  gap: 21px;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto;
   min-height: 0;
@@ -709,16 +710,15 @@
   color: #be123c;
 }
 
+/* Pagination — 分页条（表格内分页 .admin-table-pagination 见后） */
 .admin-pagination-bar {
   align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
-  padding: 2px 0 0;
+  min-height: 54px;
   width: 100%;
 }
 
@@ -954,11 +954,7 @@
 }
 
 .admin-settings-panel,
-.admin-settings-form,
-.inline-admin-form,
-.admin-filter-bar.el-form,
-.user-filter-bar.el-form,
-.service-table-panel {
+.admin-settings-form {
   background: var(--admin-surface);
   border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
@@ -1148,14 +1144,6 @@
   padding-top: 18px;
 }
 
-.inline-admin-form {
-  align-items: end;
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
-  padding: 16px;
-}
-
 .admin-page-toolbar {
   align-items: center;
   display: flex;
@@ -1178,92 +1166,8 @@
   width: 100%;
 }
 
-.price-editor-form.inline-admin-form {
-  grid-template-columns:
-    minmax(150px, 0.9fr) minmax(190px, 1.15fr) repeat(4, minmax(136px, 0.85fr))
-    minmax(86px, 0.55fr) auto;
-}
-
-.price-editor-form .el-input-number,
-.price-editor-form .el-select {
-  width: 100%;
-}
-
-.price-editor-form .el-tag {
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 620;
-  height: 34px;
-  justify-content: center;
-  min-width: 100%;
-}
-
-.price-save-action.el-button {
-  align-self: end;
-}
-
-.inline-admin-form .el-form-item {
-  margin-bottom: 0;
-}
-
-.admin-filter-bar.el-form {
-  align-items: end;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 16px;
-}
-
-.admin-filter-bar.el-form .el-form-item {
-  margin: 0;
-}
-
-.admin-filter-bar.el-form .el-input {
-  width: min(320px, 100%);
-}
-
 .user-management-view {
   width: 100%;
-}
-
-.user-filter-bar.el-form {
-  align-items: center;
-  box-shadow: none;
-  display: grid;
-  gap: 14px;
-  grid-template-columns: 220px 260px auto;
-  justify-content: start;
-  padding: 14px;
-}
-
-.user-filter-bar.el-form .el-form-item {
-  align-items: center;
-  display: flex;
-  min-width: 0;
-}
-
-.user-filter-bar.el-form .el-form-item__label {
-  color: var(--admin-text);
-  flex: 0 0 auto;
-  font-size: 14px;
-  font-weight: 680;
-  height: 32px;
-  line-height: 32px;
-  margin: 0 10px 0 0;
-  padding: 0;
-}
-
-.user-filter-bar.el-form .el-form-item__content {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.user-filter-bar.el-form .el-input {
-  width: 100%;
-}
-
-.user-filter-bar.el-form .el-input__wrapper {
-  border-radius: 7px;
 }
 
 .user-search-actions.el-form-item {
@@ -1281,55 +1185,16 @@
   min-width: 86px;
 }
 
-.service-table-panel {
-  min-width: 0;
-  overflow-x: auto;
-  width: 100%;
-}
-
-.service-table-panel.has-pagination {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.admin-table-pagination {
-  align-items: center;
-  background: var(--admin-surface);
-  border: 1px solid var(--admin-border);
-  border-radius: 0 0 var(--admin-radius) var(--admin-radius);
-  border-top-color: var(--admin-border-soft);
-  margin-top: -1px;
-  min-height: 56px;
-  padding: 0 14px;
-}
-
-.service-table-panel.has-pagination + .admin-table-pagination {
-  margin-top: -16px;
-}
-
-.service-table.admin-table.el-table .el-table__header-wrapper th,
-.service-table.admin-table.el-table .el-table__fixed-header-wrapper th {
-  background: #f6f9fc;
-  font-size: 12px;
-  height: 48px;
-}
-
-.service-table.admin-table.el-table .el-table__row:hover > td.el-table__cell {
-  background: #f7fbff;
-}
-
-.inline-admin-form:focus-within,
-.admin-filter-bar.el-form:focus-within {
-  border-color: var(--brand-blue-border);
-  box-shadow: var(--admin-focus-ring);
-}
-
 .channel-table.admin-table.el-table {
   min-width: 1118px;
 }
 
 .user-table.admin-table.el-table {
-  min-width: 980px;
+  min-width: 1154px;
+}
+
+.project-table.admin-table.el-table {
+  min-width: 1268px;
 }
 
 .admin-page-jump-control {
@@ -1354,15 +1219,11 @@
 }
 
 .usage-table.admin-table.el-table {
-  min-width: 1180px;
-}
-
-.price-table.admin-table.el-table {
-  min-width: 1180px;
+  min-width: 1460px;
 }
 
 .pricing-policy-table.admin-table.el-table {
-  min-width: 700px;
+  min-width: 740px;
 }
 
 /* Admin dialog chrome — shared across all management dialogs */
@@ -1686,20 +1547,6 @@
   font-weight: 680;
 }
 
-.channel-toolbar,
-.user-toolbar,
-.usage-toolbar,
-.project-toolbar,
-.admin-page-toolbar,
-.admin-filter-bar.el-form,
-.user-filter-bar.el-form,
-.inline-admin-form {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 2px 0 0;
-}
 
 .channel-toolbar,
 .user-toolbar,
@@ -1725,71 +1572,12 @@
   white-space: nowrap;
 }
 
-.service-table-panel {
-  background: var(--admin-surface);
-  border-color: var(--admin-border);
-  box-shadow: none;
-  position: relative;
-}
-
-.service-table.admin-table.el-table {
-  --el-table-border-color: var(--admin-border-soft);
-  --el-table-header-bg-color: #f7f9fc;
-  --el-table-row-hover-bg-color: #f5fbff;
-  color: var(--admin-text);
-  font-size: 13px;
-}
-
-.service-table.admin-table.el-table .el-table__inner-wrapper::before {
-  background: var(--admin-border-soft);
-}
-
-.service-table.admin-table.el-table .el-table__header-wrapper th,
-.service-table.admin-table.el-table .el-table__fixed-header-wrapper th {
-  background: #f7f9fc;
-  border-bottom: 1px solid var(--admin-border);
-  color: #526173;
-  font-size: 12px;
-  font-weight: 760;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.service-table.admin-table.el-table td.el-table__cell {
-  border-bottom-color: var(--admin-border-soft);
-  padding: 10px 0;
-}
-
-.service-table.admin-table.el-table .el-table__row {
-  transition:
-    background-color 140ms ease,
-    opacity 140ms ease;
-}
-
-.service-table.admin-table.el-table .el-table__row:hover > td.el-table__cell {
-  background: #f5fbff;
-}
-
-.service-table.admin-table.el-table .el-table__empty-block {
-  min-height: 220px;
-}
-
-.service-table.admin-table.el-table .el-table__empty-text {
-  color: var(--admin-text-muted);
-}
 
 .channel-row-is-disabled,
 .user-row-is-disabled {
   opacity: 0.72;
 }
 
-.admin-pagination-bar {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 10px 0 0;
-}
 
 .admin-page-label,
 .admin-result-count,
@@ -1915,29 +1703,6 @@
     width: 100%;
   }
 
-  .inline-admin-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .price-editor-form.inline-admin-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .price-save-action.el-button {
-    width: 100%;
-  }
-
-  .admin-filter-bar.el-form {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .admin-filter-bar.el-form .el-input {
-    width: 100%;
-  }
-
   .channel-toolbar,
   .user-toolbar,
   .usage-toolbar,
@@ -1980,9 +1745,6 @@
     width: 100%;
   }
 
-  .user-filter-bar.el-form {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
 
   .user-search-actions.el-form-item {
     grid-column: 1 / -1;
@@ -2056,39 +1818,19 @@
   }
 }
 
-.admin-shell .page-header,
 .admin-settings-panel,
-.admin-settings-form,
-.service-table-panel,
-.admin-table-pagination,
-.admin-pagination-bar {
+.admin-settings-form {
   background: var(--admin-surface);
   border-color: var(--admin-border);
   box-shadow: var(--admin-shadow);
 }
 
-.admin-shell .page-header {
-  background: color-mix(in srgb, var(--admin-bg) 92%, #ffffff);
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  display: grid;
-  gap: 21px;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  min-height: 0;
-  padding: 0 0 4px;
-  position: relative;
-}
 
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
 .project-toolbar,
-.admin-page-toolbar,
-.admin-filter-bar.el-form,
-.user-filter-bar.el-form,
-.inline-admin-form {
+.admin-page-toolbar {
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -2097,13 +1839,19 @@
   padding: 2px 0 0;
 }
 
+/* Tables — 列表容器：外观 + 横向滚动（窗口收窄时由 panel 出现水平滚动条） */
 .service-table-panel {
   background: var(--admin-surface);
   border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius-table);
   box-shadow: none;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  position: relative;
+  width: 100%;
+  scrollbar-width: auto;
+  scrollbar-color: var(--admin-border-strong) transparent;
 }
 
 /* 外层 service-table-panel 已处理横向滚动，禁用 Element Plus 表格内部滚动条 */
@@ -2115,6 +1863,32 @@
   display: none !important;
 }
 
+.service-table-panel::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.service-table-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.service-table-panel::-webkit-scrollbar-thumb {
+  background: var(--admin-border-strong);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
+
+.service-table-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--admin-text-soft);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.service-table-panel::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .service-table-panel.has-pagination {
   border-bottom: 0;
   border-bottom-left-radius: 0;
@@ -2122,6 +1896,7 @@
 }
 
 .admin-table-pagination {
+  align-items: center;
   background: var(--admin-surface);
   border: 1px solid var(--admin-border);
   border-radius: 0 0 var(--admin-radius-table) var(--admin-radius-table);
@@ -2145,9 +1920,6 @@
   padding: 10px 0 0;
 }
 
-.admin-shell .page-header {
-  backdrop-filter: none;
-}
 
 .admin-shell .el-menu-item,
 .admin-shell .el-sub-menu__title,
@@ -2232,10 +2004,16 @@
     var(--admin-focus-ring);
 }
 
+/* Tables — el-table 重置：表头/单元格/悬停/空态/固定列 */
 .service-table.admin-table.el-table {
+  --el-table-border-color: var(--admin-border-soft);
+  --el-table-header-bg-color: var(--admin-table-header-bg);
+  --el-table-row-hover-bg-color: var(--admin-table-hover-bg);
   border: 0;
   border-radius: inherit;
   box-shadow: none;
+  color: var(--admin-text);
+  font-size: 13px;
   overflow: hidden;
 }
 
@@ -2261,6 +2039,7 @@
 .service-table.admin-table.el-table td.el-table__cell {
   border-bottom: 1px solid var(--admin-border-soft);
   color: var(--admin-text);
+  padding: 10px 0;
 }
 
 .service-table.admin-table.el-table .el-table__body tr:last-child td.el-table__cell {
@@ -2269,6 +2048,20 @@
 
 .service-table.admin-table.el-table .el-table__row:hover > td.el-table__cell {
   background: var(--admin-table-hover-bg);
+}
+
+.service-table.admin-table.el-table .el-table__row {
+  transition:
+    background-color 140ms ease,
+    opacity 140ms ease;
+}
+
+.service-table.admin-table.el-table .el-table__empty-block {
+  min-height: 220px;
+}
+
+.service-table.admin-table.el-table .el-table__empty-text {
+  color: var(--admin-text-muted);
 }
 
 .service-table.admin-table.el-table .el-table-fixed-column--right {
@@ -2364,11 +2157,6 @@
   --el-button-text-color: var(--admin-danger);
 }
 
-.admin-pagination-bar,
-.admin-table-pagination {
-  box-sizing: border-box;
-  min-height: 54px;
-}
 
 .admin-pagination-bar.is-compact {
   border-top-color: var(--admin-border);
@@ -2529,26 +2317,6 @@
 
   .admin-shell > .el-aside .el-sub-menu .el-menu-item {
     padding-left: 44px !important;
-  }
-
-  .inline-admin-form {
-    grid-template-columns: 1fr;
-    padding: 14px;
-  }
-
-  .price-editor-form.inline-admin-form {
-    grid-template-columns: 1fr;
-  }
-
-  .admin-filter-bar.el-form {
-    grid-template-columns: 1fr;
-    padding: 14px;
-  }
-
-  .user-filter-bar.el-form {
-    gap: 14px;
-    grid-template-columns: 1fr;
-    padding: 0;
   }
 
   .user-search-actions.el-form-item {

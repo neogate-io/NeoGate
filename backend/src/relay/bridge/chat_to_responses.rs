@@ -175,6 +175,7 @@ pub(super) struct OpenAiChatSseToOpenAiResponse {
     reasoning_started: bool,
     reasoning_finished: bool,
     stopped: bool,
+    message_finished: bool,
     text: String,
     reasoning_text: String,
     input_tokens: i64,
@@ -199,6 +200,7 @@ impl OpenAiChatSseToOpenAiResponse {
             reasoning_started: false,
             reasoning_finished: false,
             stopped: false,
+            message_finished: false,
             text: String::new(),
             reasoning_text: String::new(),
             input_tokens: 0,
@@ -495,9 +497,11 @@ impl OpenAiChatSseToOpenAiResponse {
     }
 
     fn push_tool_call_delta(&mut self, tool_call: &Value, out: &mut Vec<u8>) {
-        if self.output_started {
-            return;
-        }
+        // 文本与工具调用可在同一 assistant 回合共存：若文本已开始，先收尾 message item，
+        // 再开 function_call item（对称于 push_content_delta 先 finish_tool_calls 的处理）。
+        // 此前这里直接 return，导致 qwen「先输出文本、再输出工具调用」的工具调用被丢弃，
+        // Codex 只收到文本、无 function_call，于是结束 agentic loop。
+        self.finish_message_item(out);
         if self.reasoning_started && !self.reasoning_finished {
             self.finish_reasoning(out);
         }
@@ -633,6 +637,56 @@ impl OpenAiChatSseToOpenAiResponse {
         }
     }
 
+    fn finish_message_item(&mut self, out: &mut Vec<u8>) {
+        if !self.output_started || self.message_finished {
+            return;
+        }
+        self.message_finished = true;
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_text.done",
+            json!({
+                "type": "response.output_text.done",
+                "sequence_number": sequence_number,
+                "item_id": self.output_item_id,
+                "output_index": self.message_output_index(),
+                "content_index": 0,
+                "text": self.text,
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.content_part.done",
+            json!({
+                "type": "response.content_part.done",
+                "sequence_number": sequence_number,
+                "item_id": self.output_item_id,
+                "output_index": self.message_output_index(),
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": self.text,
+                    "annotations": [],
+                },
+            }),
+        );
+        let sequence_number = self.next_sequence_number();
+        self.push_event(
+            out,
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "sequence_number": sequence_number,
+                "output_index": self.message_output_index(),
+                "item": self.output_item_payload("completed"),
+            }),
+        );
+        self.completed_output
+            .push(self.output_item_payload("completed"));
+    }
+
     fn finish(&mut self, out: &mut Vec<u8>) {
         if self.stopped {
             return;
@@ -647,51 +701,7 @@ impl OpenAiChatSseToOpenAiResponse {
             self.ensure_content_started(out);
         }
         self.stopped = true;
-        if self.output_started {
-            let sequence_number = self.next_sequence_number();
-            self.push_event(
-                out,
-                "response.output_text.done",
-                json!({
-                    "type": "response.output_text.done",
-                    "sequence_number": sequence_number,
-                    "item_id": self.output_item_id,
-                    "output_index": self.message_output_index(),
-                    "content_index": 0,
-                    "text": self.text,
-                }),
-            );
-            let sequence_number = self.next_sequence_number();
-            self.push_event(
-                out,
-                "response.content_part.done",
-                json!({
-                    "type": "response.content_part.done",
-                    "sequence_number": sequence_number,
-                    "item_id": self.output_item_id,
-                    "output_index": self.message_output_index(),
-                    "content_index": 0,
-                    "part": {
-                        "type": "output_text",
-                        "text": self.text,
-                        "annotations": [],
-                    },
-                }),
-            );
-            let sequence_number = self.next_sequence_number();
-            self.push_event(
-                out,
-                "response.output_item.done",
-                json!({
-                    "type": "response.output_item.done",
-                    "sequence_number": sequence_number,
-                    "output_index": self.message_output_index(),
-                    "item": self.output_item_payload("completed"),
-                }),
-            );
-            self.completed_output
-                .push(self.output_item_payload("completed"));
-        }
+        self.finish_message_item(out);
         let event_type = if self.status == "completed" {
             "response.completed"
         } else {

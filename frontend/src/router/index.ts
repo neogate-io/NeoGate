@@ -24,6 +24,12 @@ export const router = createRouter({
       meta: { messageKey: 'docs' }
     },
     {
+      path: '/payment/return',
+      name: 'paymentReturn',
+      component: () => import('../views/public/PaymentReturnView.vue'),
+      meta: { messageKey: 'paymentSettings' }
+    },
+    {
       path: '/interfaces',
       name: 'interfaces',
       component: () => import('../views/public/InterfacesView.vue'),

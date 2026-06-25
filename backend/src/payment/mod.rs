@@ -231,6 +231,12 @@ async fn notify_payment(
     let payment_config = settings::runtime_payment_config(&state).await?;
     let notification =
         gateway_for(&payment_config, provider)?.parse_notification(&headers, &body)?;
+    tracing::info!(
+        provider = provider.as_str(),
+        order_id = %notification.order_id,
+        status = ?notification.status,
+        "payment notification received"
+    );
     record_payment_event(&state, provider, &notification).await?;
     settle_payment_notification(&state, provider, notification).await?;
     Ok("success")
@@ -244,6 +250,12 @@ async fn notify_payment_query(
     let provider = PaymentProvider::from_code(&provider)?;
     let payment_config = settings::runtime_payment_config(&state).await?;
     let notification = gateway_for(&payment_config, provider)?.parse_query_notification(params)?;
+    tracing::info!(
+        provider = provider.as_str(),
+        order_id = %notification.order_id,
+        status = ?notification.status,
+        "payment notification received"
+    );
     record_payment_event(&state, provider, &notification).await?;
     settle_payment_notification(&state, provider, notification).await?;
     Ok("success")
@@ -269,6 +281,11 @@ async fn settle_payment_notification(
 
     let status: String = row.try_get("status")?;
     if status == "paid" {
+        tracing::info!(
+            provider = provider.as_str(),
+            order_id = %notification.order_id,
+            "payment notification already settled"
+        );
         tx.commit().await?;
         return Ok(());
     }

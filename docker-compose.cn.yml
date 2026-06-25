@@ -2,9 +2,11 @@
 #
 # 使用方式：
 #   docker compose -f docker-compose.cn.yml up -d --build
-#   DOCKER_HUB_PREFIX=docker.m.daocloud.io/ docker compose -f docker-compose.cn.yml up -d --build
 #
-# 所有镜像和依赖源已预配置为国内镜像，无需额外配置 .env 或 Docker daemon。
+# 默认使用 docker.m.daocloud.io 作为 Docker Hub 镜像代理，并预配置 Cargo、APT、npm
+# 国内镜像源，无需额外配置 .env 或 Docker daemon。若默认代理不可用，可临时替换：
+#   DOCKER_HUB_PREFIX=你的镜像代理/ docker compose -f docker-compose.cn.yml up -d --build
+#
 # 海外部署请使用 docker-compose.yml。
 #
 # ⚠️ 维护提醒：此文件与 docker-compose.yml 仅镜像源不同，修改 docker-compose.yml
@@ -32,7 +34,7 @@ services:
       args:
         DOCKER_HUB_PREFIX: ${DOCKER_HUB_PREFIX:-docker.m.daocloud.io/}
         CARGO_REGISTRY_MIRROR: sparse+https://rsproxy.cn/index/
-        APT_MIRROR: http://mirrors.tuna.tsinghua.edu.cn/debian
+        APT_MIRROR: http://mirrors.aliyun.com/debian
     restart: unless-stopped
     depends_on:
       postgres:

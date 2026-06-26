@@ -20,6 +20,7 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
   <a href="#-功能概览">功能概览</a> •
   <a href="#-为什么选择-neogate">为什么选择 NeoGate</a> •
   <a href="#-快速开始">快速开始</a> •
+  <a href="docs/quickstart-10-minutes.zh.md">10 分钟部署</a> •
   <a href="docs/README.md">文档</a> •
   <a href="#-生产建议">生产建议</a> •
   <a href="#-获取帮助">获取帮助</a> •
@@ -143,6 +144,8 @@ NeoGate 首次运行时需要选择内部模式或计费模式。内部模式适
 ---
 
 ## 🚀 快速开始
+
+如果你是第一次试用，建议先按这篇教程走完整闭环：[10 分钟部署 NeoGate](docs/quickstart-10-minutes.zh.md)。
 
 ### 🐳 Docker 安装
 

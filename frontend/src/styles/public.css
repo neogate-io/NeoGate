@@ -1000,6 +1000,13 @@
   margin: 0;
 }
 
+.docs-mini-heading p {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+}
+
 .docs-screenshot-steps {
   display: grid;
   gap: 18px;
@@ -1040,6 +1047,49 @@
   font-size: 14px;
   line-height: 1.55;
   margin: 0;
+}
+
+.docs-switch-flow {
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(216, 225, 236, 0.86);
+  border-radius: 8px;
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: -8px 0 0;
+  padding: 4px 16px;
+}
+
+.docs-switch-flow li {
+  align-items: start;
+  border-bottom: 1px solid rgba(216, 225, 236, 0.72);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-width: 0;
+  padding: 12px 0;
+}
+
+.docs-switch-flow li:last-child {
+  border-bottom: 0;
+}
+
+.docs-switch-flow span {
+  color: #64748b;
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
+  padding-top: 2px;
+  text-align: right;
+}
+
+.docs-switch-flow p {
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 2px 0 0;
+  min-width: 0;
 }
 
 .docs-params-card {

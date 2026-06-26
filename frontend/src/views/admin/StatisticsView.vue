@@ -4,16 +4,16 @@ import type { EChartsCoreOption } from 'echarts/core'
 import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import {
   downloadAdminUsageStatisticsCsv,
+  getAdminUsageStatisticsModels,
   getAdminUsageStatisticsOptions,
   getAdminUsageStatisticsSummary,
-  getAdminUsageStatisticsUserModels,
   getAdminUsageStatisticsUsers,
+  type ModelUsageStatistics,
   type UsageStatisticsExportScope,
   type UsageStatisticsPage,
   type UsageStatisticsQuery,
   type UsageStatisticsSort,
   type UsageStatisticsSummary,
-  type UserModelUsageStatistics,
   type UserUsageStatistics
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
@@ -92,17 +92,17 @@ const {
   emptyStatisticsPage<UserUsageStatistics>()
 )
 const {
-  data: statisticsUserModels,
+  data: statisticsModels,
   loading: statisticsModelsLoading,
-  reload: reloadStatisticsUserModels
+  reload: reloadStatisticsModels
 } = useAsyncData(
   () =>
-    getAdminUsageStatisticsUserModels({
+    getAdminUsageStatisticsModels({
       ...statisticsBaseQuery.value,
       page: statisticsModelsPage.value,
       limit: statisticsModelsPageSize.value
     }),
-  emptyStatisticsPage<UserModelUsageStatistics>()
+  emptyStatisticsPage<ModelUsageStatistics>()
 )
 const {
   data: statisticsOptions,
@@ -240,41 +240,19 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
     }
   ]
 }))
-const providerShareOption = computed<EChartsCoreOption>(() => ({
-  color: ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0f766e', '#64748b'],
-  tooltip: {
-    trigger: 'item',
-    formatter: (params: unknown) => pieTooltip(params)
-  },
-  legend: { bottom: 0, textStyle: { color: '#667085' } },
-  series: [
-    {
-      name: t('providerCostShare'),
-      type: 'pie',
-      radius: ['42%', '70%'],
-      center: ['50%', '43%'],
-      avoidLabelOverlap: true,
-      data: statisticsSummary.value.providers.map((item) => ({
-        name: item.provider,
-        value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6))
-      }))
-    }
-  ]
-}))
-
 async function reloadStatistics() {
   statisticsUsersPage.value = 1
   statisticsModelsPage.value = 1
   await Promise.all([
     reloadStatisticsSummary(),
     reloadStatisticsUsers(),
-    reloadStatisticsUserModels(),
+    reloadStatisticsModels(),
     reloadStatisticsOptions()
   ])
 }
 
 async function reloadStatisticsTables() {
-  await Promise.all([reloadStatisticsUsers(), reloadStatisticsUserModels()])
+  await Promise.all([reloadStatisticsUsers(), reloadStatisticsModels()])
 }
 
 async function handleStatisticsUserPageChange(page: number) {
@@ -284,7 +262,7 @@ async function handleStatisticsUserPageChange(page: number) {
 
 async function handleStatisticsModelPageChange(page: number) {
   statisticsModelsPage.value = page
-  await reloadStatisticsUserModels()
+  await reloadStatisticsModels()
 }
 
 async function handleStatisticsUserPageSizeChange(size: number) {
@@ -296,7 +274,7 @@ async function handleStatisticsUserPageSizeChange(size: number) {
 async function handleStatisticsModelPageSizeChange(size: number) {
   statisticsModelsPageSize.value = size
   statisticsModelsPage.value = 1
-  await reloadStatisticsUserModels()
+  await reloadStatisticsModels()
 }
 
 async function applyQuickRange(days: number) {
@@ -401,6 +379,10 @@ function billingMeterLabel(value?: string | null) {
   return t('billingMeterAll')
 }
 
+function modelStatisticsRowKey(row: ModelUsageStatistics) {
+  return `${row.provider}/${row.model}/${row.billing_meter}`
+}
+
 function successRate(success: number, total: number) {
   if (total <= 0) return '-'
   return `${((success / total) * 100).toFixed(1)}%`
@@ -422,12 +404,6 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
   ].join('<br/>')
 }
 
-function pieTooltip(params: unknown) {
-  const item = params as { marker?: string; name?: string; value?: number; percent?: number }
-  return `${item.marker ?? ''}${item.name ?? ''}: $${Number(item.value ?? 0).toFixed(6)} (${Number(
-    item.percent ?? 0
-  ).toFixed(1)}%)`
-}
 </script>
 
 <template>
@@ -540,9 +516,6 @@ function pieTooltip(params: unknown) {
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="users">{{ t('exportUserSummary') }}</el-dropdown-item>
-                    <el-dropdown-item command="user_models">{{
-                      t('exportUserModelDetails')
-                    }}</el-dropdown-item>
                     <el-dropdown-item command="daily">{{ t('exportDailyTrend') }}</el-dropdown-item>
                     <el-dropdown-item command="models">{{ t('exportModelSummary') }}</el-dropdown-item>
                   </el-dropdown-menu>
@@ -635,16 +608,6 @@ function pieTooltip(params: unknown) {
                   height="320px"
                 />
               </section>
-              <section class="statistics-panel is-wide">
-                <header>{{ t('providerCostShare') }}</header>
-                <AdminUsageChart
-                  :option="providerShareOption"
-                  :loading="statisticsSummaryLoading"
-                  :empty="statisticsSummary.providers.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="340px"
-                />
-              </section>
             </div>
 
             <section class="statistics-panel">
@@ -706,22 +669,14 @@ function pieTooltip(params: unknown) {
             </section>
 
             <section class="statistics-panel">
-              <header>{{ t('userModelDetails') }}</header>
+              <header>{{ t('modelSummary') }}</header>
               <el-table
                 v-loading="statisticsModelsLoading"
                 class="admin-table service-table statistics-table"
-                :data="statisticsUserModels.items"
-                row-key="user_model"
+                :data="statisticsModels.items"
+                :row-key="modelStatisticsRowKey"
                 stripe
               >
-                <el-table-column :label="t('usageUser')" min-width="190">
-                  <template #default="{ row }">
-                    <div class="statistics-user-cell">
-                      <strong>{{ row.user_display_name }}</strong>
-                      <span v-if="row.user_id != null">#{{ row.user_id }}</span>
-                    </div>
-                  </template>
-                </el-table-column>
                 <el-table-column :label="t('providerOrModel')" min-width="220">
                   <template #default="{ row }">
                     <div class="usage-model">
@@ -739,14 +694,14 @@ function pieTooltip(params: unknown) {
                 <el-table-column :label="t('tokens')" min-width="130" align="right">
                   <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
                 </el-table-column>
-                <el-table-column :label="t('billingUnits')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
-                </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
+                </el-table-column>
+                <el-table-column :label="t('userCount')" min-width="100" align="right">
+                  <template #default="{ row }">{{ formatNumber(row.user_count, locale) }}</template>
                 </el-table-column>
                 <template #empty>
                   <el-empty :description="t('noStatisticsData')" />
@@ -758,7 +713,7 @@ function pieTooltip(params: unknown) {
                   v-model:page-size="statisticsModelsPageSize"
                   background
                   layout="total, sizes, prev, pager, next"
-                  :total="statisticsUserModels.total"
+                  :total="statisticsModels.total"
                   :page-sizes="[20, 50, 100]"
                   @current-change="handleStatisticsModelPageChange"
                   @size-change="handleStatisticsModelPageSizeChange"
@@ -772,12 +727,29 @@ function pieTooltip(params: unknown) {
 
 <style scoped>
 .statistics-toolbar {
-  align-items: flex-end;
+  align-items: flex-start;
+  background: #ffffff;
+  border: 1px solid #dfe8f2;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+  padding: 16px;
+}
+
+.usage-statistics {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
 }
 
 .statistics-quick-ranges {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.statistics-toolbar .usage-toolbar-filters,
+.statistics-toolbar .usage-toolbar-actions {
+  row-gap: 12px;
 }
 
 .usage-model-filter {
@@ -786,7 +758,7 @@ function pieTooltip(params: unknown) {
 
 .statistics-metric-grid {
   display: grid;
-  gap: 14px;
+  gap: 16px;
   grid-template-columns: repeat(5, minmax(150px, 1fr));
 }
 
@@ -826,13 +798,13 @@ function pieTooltip(params: unknown) {
 
 .statistics-chart-grid {
   display: grid;
-  gap: 14px;
+  gap: 18px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .statistics-panel {
   min-width: 0;
-  padding: 16px;
+  padding: 18px;
 }
 
 .statistics-panel.is-wide {
@@ -875,7 +847,7 @@ function pieTooltip(params: unknown) {
 .statistics-pagination {
   display: flex;
   justify-content: flex-end;
-  padding-top: 14px;
+  padding-top: 16px;
 }
 
 
@@ -884,16 +856,48 @@ function pieTooltip(params: unknown) {
   .statistics-chart-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .statistics-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .statistics-toolbar .usage-toolbar-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 760px) {
+  .usage-statistics {
+    gap: 14px;
+  }
+
+  .statistics-toolbar,
+  .statistics-panel {
+    padding: 14px;
+  }
+
   .statistics-metric-grid,
   .statistics-chart-grid {
     grid-template-columns: 1fr;
   }
 
+  .statistics-metric-grid,
+  .statistics-chart-grid {
+    gap: 14px;
+  }
+
   .statistics-panel.is-wide {
     grid-column: auto;
+  }
+
+  .statistics-quick-ranges {
+    width: 100%;
+  }
+
+  .statistics-quick-ranges .el-button {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .statistics-pagination {

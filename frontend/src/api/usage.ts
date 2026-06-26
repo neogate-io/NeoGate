@@ -187,6 +187,12 @@ export function getAdminUsageStatisticsUserModels(query: UsageStatisticsQuery = 
   )
 }
 
+export function getAdminUsageStatisticsModels(query: UsageStatisticsQuery = {}) {
+  return adminRequest<UsageStatisticsPage<ModelUsageStatistics>>(
+    `/api/admin/usage/statistics/models?${usageStatisticsParams(query)}`
+  )
+}
+
 export function getAdminUsageStatisticsOptions(query: UsageStatisticsQuery = {}) {
   return adminRequest<UsageStatisticsOptions>(
     `/api/admin/usage/statistics/options?${usageStatisticsParams(query)}`

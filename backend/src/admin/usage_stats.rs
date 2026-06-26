@@ -29,6 +29,7 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/api/admin/usage/statistics/summary", get(summary))
         .route("/api/admin/usage/statistics/users", get(users))
         .route("/api/admin/usage/statistics/user-models", get(user_models))
+        .route("/api/admin/usage/statistics/models", get(models))
         .route("/api/admin/usage/statistics/options", get(options))
         .route("/api/admin/usage/statistics/export.csv", get(export_csv))
 }
@@ -245,6 +246,20 @@ async fn user_models(
     let sort = SortMode::from_param(params.sort.as_deref());
     Ok(Json(
         user_model_stats(&state.db.pool, &filter, page, limit, sort).await?,
+    ))
+}
+
+async fn models(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Query(params): Query<UsageStatsParams>,
+) -> AppResult<Json<UsageStatsPage<ModelUsageStats>>> {
+    let filter = UsageStatsFilter::from_params(&params)?;
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = bounded_limit(params.limit, 20, 100);
+    let sort = SortMode::from_param(params.sort.as_deref());
+    Ok(Json(
+        model_stats_page(&state.db.pool, &filter, page, limit, sort).await?,
     ))
 }
 
@@ -668,6 +683,44 @@ async fn model_stats(
     limit: i64,
     sort: SortMode,
 ) -> AppResult<Vec<ModelUsageStats>> {
+    Ok(model_stats_page(pool, filter, 1, limit, sort).await?.items)
+}
+
+async fn model_stats_page(
+    pool: &PgPool,
+    filter: &UsageStatsFilter,
+    page: i64,
+    limit: i64,
+    sort: SortMode,
+) -> AppResult<UsageStatsPage<ModelUsageStats>> {
+    let total = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM (
+          SELECT ud.provider, ud.model, ud.billing_meter
+          FROM usage_daily ud
+          LEFT JOIN "user" u ON u.id = ud.user_id
+          WHERE ud.day >= $1
+            AND ud.day <= $2
+            AND ($3::BIGINT IS NULL OR ud.user_id = $3)
+            AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
+            AND ($5::TEXT IS NULL OR ud.provider = $5)
+            AND ($6::TEXT IS NULL OR ud.model = $6)
+            AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          GROUP BY ud.provider, ud.model, ud.billing_meter
+        ) grouped
+        "#,
+    )
+    .bind(filter.start)
+    .bind(filter.end)
+    .bind(filter.user_id)
+    .bind(filter.user_query_pattern.as_deref())
+    .bind(filter.provider.as_deref())
+    .bind(filter.model.as_deref())
+    .bind(filter.billing_meter.as_deref())
+    .fetch_one(pool)
+    .await?;
+
     let sql = format!(
         r#"
         SELECT
@@ -695,10 +748,12 @@ async fn model_stats(
           AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
         GROUP BY ud.provider, ud.model, ud.billing_meter
         ORDER BY {}
-        LIMIT $8
+        OFFSET $8
+        LIMIT $9
         "#,
         sort.model_order_by()
     );
+    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -707,14 +762,20 @@ async fn model_stats(
         .bind(filter.provider.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
+        .bind(offset)
         .bind(limit)
         .fetch_all(pool)
         .await?;
 
-    rows.iter()
-        .map(model_stats_from_row)
-        .collect::<Result<_, sqlx::Error>>()
-        .map_err(AppError::from)
+    Ok(UsageStatsPage {
+        items: rows
+            .iter()
+            .map(model_stats_from_row)
+            .collect::<Result<_, sqlx::Error>>()?,
+        total,
+        page,
+        limit,
+    })
 }
 
 async fn provider_stats(

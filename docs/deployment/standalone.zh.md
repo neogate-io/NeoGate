@@ -7,7 +7,15 @@
 Docker Compose 是推荐的单机部署方式，不需要在宿主机单独安装 Rust、Node.js 或 pnpm。
 
 ```bash
-docker compose up -d --build
+docker compose up -d
+```
+
+上面的命令会拉取预构建镜像，不需要在服务器上编译 Rust 后端或前端资源。
+
+如果你需要从当前源码本地构建镜像，可以改用：
+
+```bash
+docker compose -f docker-compose.build.yml up -d --build
 ```
 
 它会启动：
@@ -59,7 +67,14 @@ docker compose down
 重新构建并启动：
 
 ```bash
-docker compose up -d --build
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+拉取预构建镜像并启动：
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 重启 backend 容器：

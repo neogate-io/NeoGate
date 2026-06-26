@@ -149,21 +149,28 @@ Docker 安装是最快的部署方式，不需要在宿主机单独安装 Rust�
 单机部署适合试用、内部部署和中小规模场景。Compose 会同时启动前端 Nginx、后端和 PostgreSQL，不需要额外准备 PostgreSQL 或 Redis。
 
 ```bash
+# 使用预构建镜像，无需在服务器上编译
+docker compose up -d
+```
+
+如果希望从源码本地构建镜像，或需要使用中国大陆镜像源构建，可以使用：
+
+```bash
 # 海外（Docker Hub 可直接访问）
-docker compose up -d --build
+docker compose -f docker-compose.build.yml up -d --build
 
 # 中国大陆（使用国内镜像源）
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
 > [!TIP]
-> 2G 内存服务器上如遇到前端和后端同时编译导致内存不足，请改用分步构建：先执行 `docker compose build backend`，再执行 `docker compose build web`，最后执行 `docker compose up -d --no-build`。
+> 从源码构建时，2G 内存服务器上如遇到前端和后端同时编译导致内存不足，请改用分步构建：先执行 `docker compose -f docker-compose.build.yml build backend`，再执行 `docker compose -f docker-compose.build.yml build web`，最后执行 `docker compose -f docker-compose.build.yml up -d --no-build`。
 
 启动后访问 `http://服务器IP:8080`，首次运行向导会引导你完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
 
 #### 绑定域名和宿主机 Nginx
 
-使用 `docker compose up -d --build` 安装时，Compose 默认会把服务暴露到宿主机 `8080` 端口。宿主机 Nginx 可直接反向代理到 `http://127.0.0.1:8080`：
+使用 Docker Compose 安装时，Compose 默认会把服务暴露到宿主机 `8080` 端口。宿主机 Nginx 可直接反向代理到 `http://127.0.0.1:8080`：
 
 ```bash
 sudo cp deploy/nginx/docker-compose.conf.example /etc/nginx/conf.d/neogate.conf
@@ -203,6 +210,17 @@ docker compose exec backend neogate admin reset-password --username admin
 ```
 
 如果管理员用户名不是 `admin`，请替换 `--username`。
+
+#### 发布预构建镜像
+
+项目维护者推送版本标签后，GitHub Actions 会构建并发布 GHCR 镜像：
+
+```bash
+git tag v0.3.2
+git push origin v0.3.2
+```
+
+发布完成后，用户可以通过 `docker compose up -d` 直接安装。默认镜像地址为 `ghcr.io/neogate-io/neogate-backend` 和 `ghcr.io/neogate-io/neogate-web`。
 
 ### 🧑‍💻 源码本地运行
 

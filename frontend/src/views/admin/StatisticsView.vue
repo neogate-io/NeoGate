@@ -25,6 +25,7 @@ import {
   microUsdToUsd,
   toDateKey
 } from '../../utils/format'
+import ProviderIcon from '../../components/common/ProviderIcon.vue'
 
 const { locale, t } = useLocale()
 const AdminUsageChart = defineAsyncComponent(
@@ -123,6 +124,15 @@ const filteredModelOptions = computed(() =>
     (item) => !statisticsFilters.provider || item.provider === statisticsFilters.provider
   )
 )
+const activeQuickRange = computed(() => {
+  for (const days of [7, 30, 90]) {
+    const [start, end] = defaultStatisticsRange(days)
+    if (statisticsFilters.dateRange?.[0] === start && statisticsFilters.dateRange?.[1] === end) {
+      return days
+    }
+  }
+  return null
+})
 const dailyChartRows = computed(() => filledDailyRows(statisticsSummary.value))
 const costTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#2563eb'],
@@ -202,7 +212,10 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
         name: t('cost'),
         type: 'bar',
         barMaxWidth: 16,
-        data: rows.map((item) => Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)))
+        data: rows.map((item) => ({
+          value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)),
+          userQuery: item.user_id != null ? String(item.user_id) : item.user_display_name
+        }))
       }
     ]
   }
@@ -230,9 +243,11 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
       name: t('cost'),
       type: 'bar',
       barMaxWidth: 22,
-      data: statisticsSummary.value.top_models.map((item) =>
-        Number(microUsdToUsd(item.cost_micro_usd).toFixed(6))
-      )
+      data: statisticsSummary.value.top_models.map((item) => ({
+        value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)),
+        provider: item.provider,
+        model: item.model
+      }))
     }
   ]
 }))
@@ -274,6 +289,15 @@ async function applyQuickRange(days: number) {
   await reloadStatistics()
 }
 
+async function resetStatisticsFilters() {
+  statisticsFilters.dateRange = defaultStatisticsRange(30)
+  statisticsFilters.userQuery = ''
+  statisticsFilters.provider = ''
+  statisticsFilters.model = ''
+  statisticsFilters.billingMeter = ''
+  await reloadStatistics()
+}
+
 async function handleProviderChange() {
   statisticsFilters.model = ''
   await reloadStatistics()
@@ -291,6 +315,31 @@ async function exportStatistics(scope: string | number | object) {
   } finally {
     statisticsExporting.value = false
   }
+}
+
+async function handleTopUserChartClick(params: unknown) {
+  const item = params as { data?: { userQuery?: string }; name?: string }
+  const userQuery = item.data?.userQuery ?? item.name
+  if (!userQuery) return
+  statisticsFilters.userQuery = userQuery
+  await reloadStatistics()
+}
+
+async function handleTopModelChartClick(params: unknown) {
+  const item = params as { data?: { provider?: string; model?: string }; name?: string }
+  const provider = item.data?.provider
+  const model = item.data?.model
+  if (provider) {
+    statisticsFilters.provider = provider
+    statisticsFilters.model = model ?? ''
+    await reloadStatistics()
+    return
+  }
+  if (!item.name) return
+  const [fallbackProvider, ...modelParts] = item.name.split('/')
+  statisticsFilters.provider = fallbackProvider
+  statisticsFilters.model = modelParts.join('/')
+  await reloadStatistics()
 }
 
 function defaultStatisticsRange(days: number) {
@@ -387,13 +436,22 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
     first?.axisValue ?? '',
     ...items.map((item) => {
       const current = item as { marker?: string; seriesName?: string; value?: number }
+      const numericValue = chartNumericValue(current.value)
       const value =
         mode === 'cost'
-          ? `$${Number(current.value ?? 0).toFixed(6)}`
-          : formatNumber(Number(current.value ?? 0), locale.value)
+          ? `$${numericValue.toFixed(6)}`
+          : formatNumber(numericValue, locale.value)
       return `${current.marker ?? ''}${current.seriesName ?? label}: ${value}`
     })
   ].join('<br/>')
+}
+
+function chartNumericValue(value: unknown) {
+  if (typeof value === 'number') return value
+  if (value && typeof value === 'object' && 'value' in value) {
+    return Number((value as { value?: unknown }).value ?? 0)
+  }
+  return Number(value ?? 0)
 }
 
 </script>
@@ -477,6 +535,9 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
               >
                 {{ t('search') }}
               </el-button>
+              <el-button class="admin-action-button statistics-reset-button" @click="resetStatisticsFilters">
+                {{ t('reset') }}
+              </el-button>
             </div>
             <div class="usage-toolbar-actions">
               <el-dropdown trigger="click" @command="exportStatistics">
@@ -498,9 +559,21 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
               </el-dropdown>
             </div>
             <div class="statistics-quick-ranges">
-              <el-button @click="applyQuickRange(7)">{{ t('quickRange7') }}</el-button>
-              <el-button @click="applyQuickRange(30)">{{ t('quickRange30') }}</el-button>
-              <el-button @click="applyQuickRange(90)">{{ t('quickRange90') }}</el-button>
+              <el-button :class="{ 'is-active': activeQuickRange === 7 }" @click="applyQuickRange(7)">
+                {{ t('quickRange7') }}
+              </el-button>
+              <el-button
+                :class="{ 'is-active': activeQuickRange === 30 }"
+                @click="applyQuickRange(30)"
+              >
+                {{ t('quickRange30') }}
+              </el-button>
+              <el-button
+                :class="{ 'is-active': activeQuickRange === 90 }"
+                @click="applyQuickRange(90)"
+              >
+                {{ t('quickRange90') }}
+              </el-button>
             </div>
           </el-form>
 
@@ -568,6 +641,7 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
                   :empty="statisticsSummary.top_users.length === 0"
                   :empty-text="t('noStatisticsData')"
                   height="320px"
+                  @chart-click="handleTopUserChartClick"
                 />
               </section>
               <section class="statistics-panel">
@@ -578,12 +652,24 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
                   :empty="statisticsSummary.top_models.length === 0"
                   :empty-text="t('noStatisticsData')"
                   height="320px"
+                  @chart-click="handleTopModelChartClick"
                 />
               </section>
             </div>
 
             <section class="statistics-panel">
-              <header>{{ t('userSummary') }}</header>
+              <header class="statistics-panel-header">
+                <span>{{ t('userSummary') }}</span>
+                <small>{{ t('defaultSortByCost') }}</small>
+                <el-button
+                  class="icon-only-action statistics-panel-action"
+                  :aria-label="t('exportUserSummary')"
+                  :icon="Download"
+                  :loading="statisticsExporting"
+                  :disabled="statisticsEmpty"
+                  @click="exportStatistics('users')"
+                />
+              </header>
               <el-table
                 v-loading="statisticsUsersLoading"
                 class="admin-table service-table statistics-table"
@@ -641,7 +727,18 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
             </section>
 
             <section class="statistics-panel">
-              <header>{{ t('modelSummary') }}</header>
+              <header class="statistics-panel-header">
+                <span>{{ t('modelSummary') }}</span>
+                <small>{{ t('defaultSortByCost') }}</small>
+                <el-button
+                  class="icon-only-action statistics-panel-action"
+                  :aria-label="t('exportModelSummary')"
+                  :icon="Download"
+                  :loading="statisticsExporting"
+                  :disabled="statisticsEmpty"
+                  @click="exportStatistics('models')"
+                />
+              </header>
               <el-table
                 v-loading="statisticsModelsLoading"
                 class="admin-table service-table statistics-table"
@@ -652,6 +749,7 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
                 <el-table-column :label="t('providerOrModel')" min-width="220">
                   <template #default="{ row }">
                     <div class="usage-model">
+                      <ProviderIcon :provider="row.provider" />
                       <span class="usage-provider">{{ row.provider }}</span>
                       <span>{{ row.model || '-' }}</span>
                     </div>
@@ -717,6 +815,7 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
 }
 
 .statistics-quick-ranges {
+  align-items: center;
   display: flex;
   gap: 4px;
   grid-column: 1 / -1;
@@ -736,6 +835,16 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
   height: 30px;
   min-height: 30px;
   padding: 0 8px;
+}
+
+.statistics-quick-ranges .el-button.is-active {
+  --el-button-bg-color: #eef7ff;
+  --el-button-border-color: #b7d8f3;
+  --el-button-text-color: #168bd3;
+}
+
+.statistics-reset-button.el-button {
+  color: #667085;
 }
 
 .statistics-toolbar .usage-toolbar-filters,
@@ -847,8 +956,41 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
   margin-bottom: 12px;
 }
 
+.statistics-panel-header {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.statistics-panel-header small {
+  color: #98a2b3;
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.statistics-panel-action.el-button {
+  height: 30px;
+  min-height: 30px;
+  width: 30px;
+}
+
 .statistics-table {
   width: 100%;
+}
+
+.usage-model {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.usage-model > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .statistics-user-cell {
@@ -937,6 +1079,7 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
   }
 
   .statistics-quick-ranges {
+    flex-wrap: wrap;
     width: 100%;
   }
 

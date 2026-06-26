@@ -36,6 +36,9 @@ const props = withDefaults(
     height: '300px'
   }
 )
+const emit = defineEmits<{
+  chartClick: [params: unknown]
+}>()
 
 const chartEl = ref<HTMLDivElement | null>(null)
 let chart: EChartsType | null = null
@@ -44,6 +47,7 @@ let resizeObserver: ResizeObserver | null = null
 function ensureChart() {
   if (!chartEl.value || chart || props.empty) return
   chart = init(chartEl.value, undefined, { renderer: 'canvas' })
+  chart.on('click', (params) => emit('chartClick', params))
   chart.setOption(props.option, true)
   chart.showLoading('default', { showSpinner: true, text: '' })
   if (!props.loading) chart.hideLoading()

@@ -6,11 +6,12 @@ NeoGate is a self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropi
 
 | Topic | Description |
 | --- | --- |
+| [10-Minute Quickstart](quickstart-10-minutes.md) / [中文](quickstart-10-minutes.zh.md) | A practical first-run guide for evaluating NeoGate with Docker Compose. |
 | [Standalone Deployment](deployment/standalone.md) / [中文](deployment/standalone.zh.md) | Standalone Docker Compose and source deployment notes. |
 | [Cluster Deployment](deployment/cluster.md) / [中文](deployment/cluster.zh.md) | Production cluster setup, environment variables, health checks, and troubleshooting. |
 | [Project Model](design/project-model.md) | Project, member, API key, and usage attribution design. |
 | [Billing Outbox](design/billing-outbox.md) | Reliable metering and billing event processing design. |
-| [Release Notes v0.3.1](releases/v0.3.1.md) | Latest release highlights, upgrade notes, and version metadata. |
+| [Release Notes v0.3.2](releases/v0.3.2.md) | Latest release highlights, upgrade notes, and version metadata. |
 
 ## Search Terms
 

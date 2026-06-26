@@ -34,17 +34,16 @@ impl ProviderAdapter for CompatibleAdapter {
         _client_headers: &HeaderMap,
         _streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
-        let (route, body, response_mode) = if route == RelayRoute::OpenAiResponses
-            && upstream.responses_chat_fallback
-        {
-            (
-                RelayRoute::OpenAiChatCompletions,
-                bridge::openai_response_to_openai_chat(body)?,
-                AdapterResponseMode::OpenAiChatAsOpenAiResponse,
-            )
-        } else {
-            (route, body, AdapterResponseMode::Passthrough)
-        };
+        let (route, body, response_mode) =
+            if route == RelayRoute::OpenAiResponses && upstream.responses_chat_fallback {
+                (
+                    RelayRoute::OpenAiChatCompletions,
+                    bridge::openai_response_to_openai_chat(body)?,
+                    AdapterResponseMode::OpenAiChatAsOpenAiResponse,
+                )
+            } else {
+                (route, body, AdapterResponseMode::Passthrough)
+            };
 
         Ok(PreparedUpstreamRequest {
             url: self.resolve_url(&upstream.base_url, route),

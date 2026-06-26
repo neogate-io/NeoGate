@@ -11,9 +11,7 @@ use crate::{
     },
 };
 
-use super::{
-    AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute,
-};
+use super::{AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute};
 
 pub(crate) static JDCLOUD_ADAPTER: JdcloudAdapter = JdcloudAdapter;
 

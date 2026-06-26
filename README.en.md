@@ -20,6 +20,7 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
   <a href="#-key-features">Key Features</a> •
   <a href="#-why-neogate">Why NeoGate</a> •
   <a href="#-quick-start">Quick Start</a> •
+  <a href="docs/quickstart-10-minutes.md">10-Minute Quickstart</a> •
   <a href="docs/README.md">Docs</a> •
   <a href="#-production-checklist">Production Checklist</a> •
   <a href="#-help">Help</a> •
@@ -140,6 +141,8 @@ NeoGate asks you to choose internal mode or billing mode during first-run setup.
 
 ## 🚀 Quick Start
 
+If this is your first evaluation, start with the practical guide: [10-Minute NeoGate Quickstart](docs/quickstart-10-minutes.md).
+
 ### 🐳 Docker Installation
 
 Docker installation is the fastest path and does not require Rust, Node.js, or pnpm on the host. For multi-replica and horizontally scalable production environments, see the [cluster deployment guide](docs/deployment/cluster.md).
@@ -149,18 +152,28 @@ Docker installation is the fastest path and does not require Rust, Node.js, or p
 Standalone deployment is suitable for trials, internal deployments, and smaller environments. Compose starts frontend Nginx, the backend, and PostgreSQL together, so you do not need to prepare PostgreSQL or Redis separately.
 
 ```bash
+# Use prebuilt images without compiling on the server
+docker compose up -d
+```
+
+If you want to build images locally from source, or need the Mainland China mirror configuration, use:
+
+```bash
 # Overseas (Docker Hub directly accessible)
-docker compose up -d --build
+docker compose -f docker-compose.build.yml up -d --build
 
 # Mainland China (uses domestic mirrors)
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
+> [!TIP]
+> When building from source on a 2 GB memory server, if the frontend and backend builds run out of memory when compiled together, build them in steps: run `docker compose -f docker-compose.build.yml build backend`, then `docker compose -f docker-compose.build.yml build web`, and finally `docker compose -f docker-compose.build.yml up -d --no-build`.
+
 After startup, open `http://SERVER_IP:8080`. The first-run wizard will guide you through the admin account, service mode, initial upstream, prices, SMTP, and payment settings.
 
 #### Domain and Host Nginx
 
-When installed with `docker compose up -d --build`, Compose exposes the service on host port `8080` by default. Host Nginx can reverse proxy directly to `http://127.0.0.1:8080`:
+When installed with Docker Compose, Compose exposes the service on host port `8080` by default. Host Nginx can reverse proxy directly to `http://127.0.0.1:8080`:
 
 ```bash
 sudo cp deploy/nginx/docker-compose.conf.example /etc/nginx/conf.d/neogate.conf

@@ -24,7 +24,12 @@ pub(crate) struct ResponsesSupportKey {
 }
 
 impl ResponsesSupportCache {
-    pub(crate) fn is_unsupported(&self, endpoint_id: DbId, model: &str, now: DateTime<Utc>) -> bool {
+    pub(crate) fn is_unsupported(
+        &self,
+        endpoint_id: DbId,
+        model: &str,
+        now: DateTime<Utc>,
+    ) -> bool {
         let key = ResponsesSupportKey {
             endpoint_id,
             model: model.to_string(),

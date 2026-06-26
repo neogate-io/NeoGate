@@ -20,6 +20,7 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
   <a href="#-功能概览">功能概览</a> •
   <a href="#-为什么选择-neogate">为什么选择 NeoGate</a> •
   <a href="#-快速开始">快速开始</a> •
+  <a href="docs/quickstart-10-minutes.zh.md">10 分钟部署</a> •
   <a href="docs/README.md">文档</a> •
   <a href="#-生产建议">生产建议</a> •
   <a href="#-获取帮助">获取帮助</a> •
@@ -37,6 +38,10 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 通过「应用管理」，NeoGate 可以把大模型能力发布到企业微信、Webhook 和网页组件等入口，让员工、业务系统或外部应用直接使用 AI 能力。NeoGate 适用于企业内部 AI 网关、多项目多团队统一管理、多应用接入，以及面向客户或开发者的计费运营场景。
 
 仓库地址：[neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
+
+<p align="center">
+  <img src="docs/assets/admin-dashboard.png" alt="NeoGate 管理后台截图" width="920">
+</p>
 
 > [!IMPORTANT]
 > NeoGate 适用于合法、授权的 AI API 网关、企业级鉴权、多模型管理、用量统计、成本归集和私有化部署场景。使用者应合法获取上游 API key、账号、模型服务和接口权限，并遵守上游服务条款及所在地法律法规。
@@ -140,6 +145,8 @@ NeoGate 首次运行时需要选择内部模式或计费模式。内部模式适
 
 ## 🚀 快速开始
 
+如果你是第一次试用，建议先按这篇教程走完整闭环：[10 分钟部署 NeoGate](docs/quickstart-10-minutes.zh.md)。
+
 ### 🐳 Docker 安装
 
 Docker 安装是最快的部署方式，不需要在宿主机单独安装 Rust、Node.js 或 pnpm。需要多副本和横向扩展的生产环境，请查看：[集群部署文档](docs/deployment/cluster.zh.md)。
@@ -210,17 +217,6 @@ docker compose exec backend neogate admin reset-password --username admin
 ```
 
 如果管理员用户名不是 `admin`，请替换 `--username`。
-
-#### 发布预构建镜像
-
-项目维护者推送版本标签后，GitHub Actions 会构建并发布 GHCR 镜像：
-
-```bash
-git tag v0.3.2
-git push origin v0.3.2
-```
-
-发布完成后，用户可以通过 `docker compose up -d` 直接安装。默认镜像地址为 `ghcr.io/neogate-io/neogate-backend` 和 `ghcr.io/neogate-io/neogate-web`。
 
 ### 🧑‍💻 源码本地运行
 

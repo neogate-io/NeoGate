@@ -8,10 +8,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{AssertSqlSafe, PgPool, Row};
 
 use crate::{
-    admin::{
-        channel::KeySelectionMode,
-        credentials::openai_runtime_credential,
-    },
+    admin::{channel::KeySelectionMode, credentials::openai_runtime_credential},
     billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
     error::{AppError, AppResult},
     id::DbId,

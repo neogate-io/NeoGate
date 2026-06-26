@@ -3,6 +3,7 @@ import { computed, ref, watch, type Component } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import {
   Connection,
+  DataAnalysis,
   FolderOpened,
   Key,
   Menu,
@@ -40,6 +41,7 @@ const navGroups = computed(() => {
     operationItems.push({ path: '/admin/keys', key: 'userManagement', icon: User })
   }
   operationItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
+  operationItems.push({ path: '/admin/statistics', key: 'usageStatistics', icon: DataAnalysis })
   const groups: AdminNavGroup[] = [
     {
       key: 'adminNavOperations',

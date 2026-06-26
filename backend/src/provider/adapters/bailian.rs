@@ -39,17 +39,16 @@ impl ProviderAdapter for BailianAdapter {
         _client_headers: &HeaderMap,
         streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
-        let (route, body, response_mode) = if route == RelayRoute::OpenAiResponses
-            && upstream.responses_chat_fallback
-        {
-            (
-                RelayRoute::OpenAiChatCompletions,
-                bridge::openai_response_to_openai_chat(body)?,
-                AdapterResponseMode::OpenAiChatAsOpenAiResponse,
-            )
-        } else {
-            (route, body, AdapterResponseMode::Passthrough)
-        };
+        let (route, body, response_mode) =
+            if route == RelayRoute::OpenAiResponses && upstream.responses_chat_fallback {
+                (
+                    RelayRoute::OpenAiChatCompletions,
+                    bridge::openai_response_to_openai_chat(body)?,
+                    AdapterResponseMode::OpenAiChatAsOpenAiResponse,
+                )
+            } else {
+                (route, body, AdapterResponseMode::Passthrough)
+            };
         let mut extra_headers = HeaderMap::new();
         if streamed {
             extra_headers.insert(
@@ -142,9 +141,7 @@ mod tests {
 
         assert_eq!(prepared.response_mode, AdapterResponseMode::Passthrough);
         assert_eq!(prepared.body, body);
-        assert!(prepared
-            .url
-            .ends_with("/compatible-mode/v1/responses"));
+        assert!(prepared.url.ends_with("/compatible-mode/v1/responses"));
         assert_eq!(
             prepared.extra_headers.get(DASH_SCOPE_SSE_HEADER).unwrap(),
             "enable"
@@ -171,7 +168,9 @@ mod tests {
             prepared.response_mode,
             AdapterResponseMode::OpenAiChatAsOpenAiResponse
         );
-        assert!(prepared.url.ends_with("/compatible-mode/v1/chat/completions"));
+        assert!(prepared
+            .url
+            .ends_with("/compatible-mode/v1/chat/completions"));
         assert_eq!(value["model"], "glm-5.2");
         assert_eq!(value["messages"][0]["role"], "user");
         assert_eq!(value["messages"][0]["content"], "hi");

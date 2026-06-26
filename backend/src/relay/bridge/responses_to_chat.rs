@@ -31,16 +31,13 @@ pub(crate) fn openai_response_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
     let (mut system, mut messages) = openai_response_input_to_chat_messages(&input)?;
     // Codex 把系统指令放在顶层 instructions 字段（不在 input 里），需回填成 system 消息，
     // 否则上游 chat 接口收不到系统提示，多轮后行为漂移。
-    if let Some(instructions) = object
-        .remove("instructions")
-        .and_then(|value| {
-            value
-                .as_str()
-                .map(str::trim)
-                .filter(|trimmed| !trimmed.is_empty())
-                .map(str::to_string)
-        })
-    {
+    if let Some(instructions) = object.remove("instructions").and_then(|value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|trimmed| !trimmed.is_empty())
+            .map(str::to_string)
+    }) {
         system.push(instructions);
     }
     if !system.is_empty() {

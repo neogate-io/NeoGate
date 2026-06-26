@@ -51,8 +51,7 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,sharing=locked,target=/app/neogate/target \
     cargo-build-release -p neogate -p neogate-scheduler \
-    && rm -f target/release/neogate target/release/neogate.d \
-      target/release/neogate-scheduler target/release/neogate-scheduler.d \
+    && cargo clean --release -p neogate -p neogate-scheduler \
     && rm -rf backend/src scheduler/src
 
 COPY backend/migrations ./backend/migrations

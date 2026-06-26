@@ -393,6 +393,14 @@ function channelRowClassName({ row }: { row: Channel }) {
 function toggleChannelRowExpansion(row: Channel) {
   channelTableRef.value?.toggleRowExpansion(row)
 }
+function handleChannelExpandChange(row: Channel, expandedRows: Channel[]) {
+  if (!expandedRows.includes(row)) return
+  for (const expandedRow of expandedRows) {
+    if (expandedRow.id !== row.id) {
+      channelTableRef.value?.toggleRowExpansion(expandedRow, false)
+    }
+  }
+}
 
 function channelCredentialSummary(row: Channel) {
   const keys = channelKeys.value.filter((key) => key.channel_id === row.id)
@@ -900,6 +908,7 @@ onMounted(loadInitialData)
         :row-class-name="channelRowClassName"
         row-key="id"
         stripe
+        @expand-change="handleChannelExpandChange"
       >
         <el-table-column type="expand" width="44">
           <template #default="{ row }">

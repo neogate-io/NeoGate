@@ -83,6 +83,16 @@ function formatFullTime(value: string) {
 function statusLabel(statusCode?: number | null) {
   return statusCode && statusCode >= 400 ? String(statusCode) : t('success')
 }
+function handleUsageToggle(event: Event) {
+  const target = event.target as HTMLDetailsElement
+  if (!target.open) return
+  target
+    .closest('.usage-list')
+    ?.querySelectorAll('details[open]')
+    .forEach((el) => {
+      if (el !== target) (el as HTMLDetailsElement).open = false
+    })
+}
 
 async function handleDateRangeChange() {
   await resetAndReload()
@@ -164,7 +174,12 @@ async function exportUsage() {
           <span>{{ t('cost') }}</span>
           <span>{{ t('actions') }}</span>
         </div>
-        <details v-for="row in usagePage.items" :key="row.id" class="usage-row">
+        <details
+          v-for="row in usagePage.items"
+          :key="row.id"
+          class="usage-row"
+          @toggle="handleUsageToggle"
+        >
           <summary>
             <span class="usage-time">{{ formatFullTime(row.created_at) }}</span>
             <span class="usage-model-cell">

@@ -142,12 +142,12 @@ pub async fn create_user_payment_order(
     let order_id = Uuid::new_v4();
     let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
     let credit_account = default_project_credit_account(state, auth.user_id).await?;
-    let notify_url = notify_url(&payment_config, provider)?;
+    let notify_url = notify_url(state.config.public_base_url.as_deref(), provider)?;
     let gateway_req = GatewayCreateRequest {
         order_id,
         payable_amount_minor,
         pay_type: req.pay_type.clone(),
-        subject: "NeoGate credit recharge".to_string(),
+        subject: "账户充值".to_string(),
         notify_url,
         return_url: req.return_url.clone(),
     };
@@ -421,13 +421,10 @@ fn gateway_for(
     }
 }
 
-fn notify_url(
-    payment_config: &crate::config::PaymentConfig,
-    provider: PaymentProvider,
-) -> AppResult<String> {
-    let Some(base_url) = payment_config.return_base_url.as_deref() else {
+fn notify_url(public_base_url: Option<&str>, provider: PaymentProvider) -> AppResult<String> {
+    let Some(base_url) = public_base_url else {
         return Err(AppError::BadRequest(
-            "payment return base URL is required to create payment orders".to_string(),
+            "PUBLIC_BASE_URL is required to create payment orders".to_string(),
         ));
     };
     Ok(format!(

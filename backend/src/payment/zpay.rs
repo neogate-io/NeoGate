@@ -216,7 +216,7 @@ mod tests {
     fn signed_notify_params() -> HashMap<String, String> {
         let mut params = HashMap::from([
             ("money".to_string(), "1.20".to_string()),
-            ("name".to_string(), "NeoGate credit recharge".to_string()),
+            ("name".to_string(), "账户充值".to_string()),
             (
                 "out_trade_no".to_string(),
                 "67e5504410b1426f9247bb680e5fe0c8".to_string(),

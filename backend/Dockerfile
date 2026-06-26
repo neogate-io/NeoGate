@@ -18,6 +18,19 @@ RUN if [ -n "${CARGO_REGISTRY_MIRROR}" ]; then \
 COPY Cargo.toml Cargo.lock ./
 COPY backend/Cargo.toml ./backend/Cargo.toml
 COPY scheduler/Cargo.toml ./scheduler/Cargo.toml
+
+# 先用最小占位源码预编译依赖，避免每次业务代码改动都从头编译整个依赖图。
+RUN mkdir -p backend/src scheduler/src \
+    && printf 'fn main() {}\n' > backend/src/main.rs \
+    && printf '\n' > backend/src/lib.rs \
+    && printf 'fn main() {}\n' > scheduler/src/main.rs
+
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
+    --mount=type=cache,sharing=locked,target=/app/neogate/target \
+    cargo build --release -j ${CARGO_BUILD_JOBS} -p neogate -p neogate-scheduler \
+    && rm -rf backend/src scheduler/src
+
 COPY backend/migrations ./backend/migrations
 COPY backend/src ./backend/src
 COPY backend/templates ./backend/templates

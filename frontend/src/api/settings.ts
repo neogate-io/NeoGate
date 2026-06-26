@@ -69,7 +69,6 @@ export function getPaymentSetting() {
 
 export function savePaymentSetting(input: {
   payment_enabled: boolean
-  return_base_url?: string | null
   zpay_api_url: string
   zpay_merchant_id?: string | null
   zpay_secret_key?: string | null

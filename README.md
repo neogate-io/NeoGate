@@ -40,7 +40,7 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 仓库地址：[neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 <p align="center">
-  <img src="docs/assets/admin-dashboard.png" alt="NeoGate 管理后台截图" width="920">
+  <img src="docs/assets/admin-upstream-channels.png" alt="NeoGate 上游服务管理截图" width="920">
 </p>
 
 > [!IMPORTANT]
@@ -98,6 +98,22 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
     </tr>
   </tbody>
 </table>
+
+---
+
+## 🖼️ 界面预览
+
+<p align="center">
+  <img src="docs/assets/admin-usage-statistics.png" alt="NeoGate 消费统计截图" width="920">
+</p>
+
+<p align="center">
+  <img src="docs/assets/admin-usage-records.png" alt="NeoGate 使用明细截图" width="920">
+</p>
+
+<p align="center">
+  <img src="docs/assets/admin-channel-diagnostics.png" alt="NeoGate 通道诊断截图" width="920">
+</p>
 
 ---
 

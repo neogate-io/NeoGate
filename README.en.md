@@ -39,6 +39,10 @@ With App Management, NeoGate can publish model capabilities to WeCom, webhook, a
 
 Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
+<p align="center">
+  <img src="docs/assets/admin-upstream-channels.png" alt="NeoGate upstream channel management screenshot" width="920">
+</p>
+
 > [!IMPORTANT]
 > NeoGate is intended for lawful and authorized AI API gateway, enterprise authentication, multi-model management, usage analytics, cost attribution, and private deployment scenarios. Users should lawfully obtain upstream API keys, accounts, model services, and API permissions, and comply with upstream terms of service and applicable laws and regulations.
 
@@ -94,6 +98,22 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
     </tr>
   </tbody>
 </table>
+
+---
+
+## 🖼️ Screenshots
+
+<p align="center">
+  <img src="docs/assets/admin-usage-statistics.png" alt="NeoGate usage statistics screenshot" width="920">
+</p>
+
+<p align="center">
+  <img src="docs/assets/admin-usage-records.png" alt="NeoGate usage records screenshot" width="920">
+</p>
+
+<p align="center">
+  <img src="docs/assets/admin-channel-diagnostics.png" alt="NeoGate channel diagnostics screenshot" width="920">
+</p>
 
 ---
 

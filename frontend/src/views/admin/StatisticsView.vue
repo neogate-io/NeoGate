@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, reactive, ref } from 'vue'
 import type { EChartsCoreOption } from 'echarts/core'
-import { Download, Refresh, Search } from '@element-plus/icons-vue'
+import { Download, Search } from '@element-plus/icons-vue'
 import {
   downloadAdminUsageStatisticsCsv,
   getAdminUsageStatisticsModels,
@@ -12,7 +12,6 @@ import {
   type UsageStatisticsExportScope,
   type UsageStatisticsPage,
   type UsageStatisticsQuery,
-  type UsageStatisticsSort,
   type UsageStatisticsSummary,
   type UserUsageStatistics
 } from '../../api/usage'
@@ -38,17 +37,14 @@ type StatisticsFilters = {
   provider: string
   model: string
   billingMeter: '' | 'token' | 'image'
-  sort: UsageStatisticsSort
 }
-
 
 const statisticsFilters = reactive<StatisticsFilters>({
   dateRange: defaultStatisticsRange(30),
   userQuery: '',
   provider: '',
   model: '',
-  billingMeter: '',
-  sort: 'cost_desc'
+  billingMeter: ''
 })
 const statisticsUsersPage = ref(1)
 const statisticsUsersPageSize = ref(20)
@@ -65,7 +61,7 @@ const statisticsBaseQuery = computed<UsageStatisticsQuery>(() => {
     provider: statisticsFilters.provider || undefined,
     model: statisticsFilters.model || undefined,
     billing_meter: statisticsFilters.billingMeter || undefined,
-    sort: statisticsFilters.sort
+    sort: 'cost_desc'
   }
 })
 
@@ -249,10 +245,6 @@ async function reloadStatistics() {
     reloadStatisticsModels(),
     reloadStatisticsOptions()
   ])
-}
-
-async function reloadStatisticsTables() {
-  await Promise.all([reloadStatisticsUsers(), reloadStatisticsModels()])
 }
 
 async function handleStatisticsUserPageChange(page: number) {
@@ -476,18 +468,6 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
                   <el-option :label="t('billingMeterImageGeneration')" value="image" />
                 </el-select>
               </label>
-              <label class="admin-filter-field">
-                <span>{{ t('sort') }}</span>
-                <el-select
-                  v-model="statisticsFilters.sort"
-                  class="usage-status-filter"
-                  @change="reloadStatisticsTables"
-                >
-                  <el-option :label="t('sortByCost')" value="cost_desc" />
-                  <el-option :label="t('sortByTokens')" value="tokens_desc" />
-                  <el-option :label="t('sortByRequests')" value="requests_desc" />
-                </el-select>
-              </label>
               <el-button
                 class="admin-action-button"
                 type="primary"
@@ -499,11 +479,6 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
               </el-button>
             </div>
             <div class="usage-toolbar-actions">
-              <div class="statistics-quick-ranges">
-                <el-button @click="applyQuickRange(7)">{{ t('quickRange7') }}</el-button>
-                <el-button @click="applyQuickRange(30)">{{ t('quickRange30') }}</el-button>
-                <el-button @click="applyQuickRange(90)">{{ t('quickRange90') }}</el-button>
-              </div>
               <el-dropdown trigger="click" @command="exportStatistics">
                 <el-button
                   class="admin-action-button"
@@ -521,14 +496,11 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
-              <el-button
-                class="admin-action-button"
-                :icon="Refresh"
-                :loading="statisticsLoading"
-                @click="reloadStatistics"
-              >
-                {{ t('refresh') }}
-              </el-button>
+            </div>
+            <div class="statistics-quick-ranges">
+              <el-button @click="applyQuickRange(7)">{{ t('quickRange7') }}</el-button>
+              <el-button @click="applyQuickRange(30)">{{ t('quickRange30') }}</el-button>
+              <el-button @click="applyQuickRange(90)">{{ t('quickRange90') }}</el-button>
             </div>
           </el-form>
 
@@ -727,12 +699,15 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
 
 <style scoped>
 .statistics-toolbar {
-  align-items: flex-start;
+  align-items: center;
   background: #ffffff;
   border: 1px solid #dfe8f2;
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
-  padding: 16px;
+  display: grid;
+  gap: 10px 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 14px 16px;
 }
 
 .usage-statistics {
@@ -743,17 +718,71 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
 
 .statistics-quick-ranges {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
+  grid-column: 1 / -1;
+  padding-top: 2px;
+}
+
+.statistics-quick-ranges .el-button {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: #f2f6fb;
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: #475467;
+  --el-button-text-color: #667085;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 620;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
 }
 
 .statistics-toolbar .usage-toolbar-filters,
 .statistics-toolbar .usage-toolbar-actions {
-  row-gap: 12px;
+  row-gap: 10px;
+}
+
+.statistics-toolbar .usage-toolbar-filters {
+  flex-wrap: nowrap;
+}
+
+.statistics-toolbar .usage-toolbar-actions {
+  align-self: start;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
 }
 
 .usage-model-filter {
-  width: 220px;
+  width: 180px;
+}
+
+.statistics-toolbar .admin-filter-field {
+  flex: 0 1 auto;
+  gap: 6px;
+}
+
+.statistics-toolbar .admin-filter-field > span {
+  color: #667085;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.statistics-toolbar .usage-date-range.el-date-editor.el-input__wrapper {
+  flex-basis: 250px;
+  width: 250px;
+}
+
+.statistics-toolbar .usage-search-input.el-input {
+  flex-basis: 190px;
+  width: 190px;
+}
+
+.statistics-toolbar .usage-status-filter.el-select {
+  flex-basis: 118px;
+  width: 118px;
 }
 
 .statistics-metric-grid {
@@ -859,7 +888,11 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
 
   .statistics-toolbar {
     align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .statistics-toolbar .usage-toolbar-filters {
+    flex-wrap: wrap;
   }
 
   .statistics-toolbar .usage-toolbar-actions {
@@ -875,6 +908,18 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
   .statistics-toolbar,
   .statistics-panel {
     padding: 14px;
+  }
+
+  .statistics-toolbar .usage-toolbar-filters,
+  .statistics-toolbar .usage-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .statistics-toolbar .admin-filter-field {
+    align-items: stretch;
+    display: grid;
+    gap: 5px;
   }
 
   .statistics-metric-grid,
@@ -897,6 +942,7 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
 
   .statistics-quick-ranges .el-button {
     flex: 1 1 0;
+    height: 32px;
     min-width: 0;
   }
 

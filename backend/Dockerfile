@@ -5,7 +5,7 @@ ARG DEBIAN_IMAGE=${DOCKER_HUB_PREFIX}library/debian:bookworm-slim
 FROM ${RUST_IMAGE} AS builder
 
 ARG CARGO_REGISTRY_MIRROR=
-ARG CARGO_BUILD_JOBS=1
+ARG CARGO_BUILD_JOBS=auto
 
 WORKDIR /app/neogate
 
@@ -14,6 +14,28 @@ RUN if [ -n "${CARGO_REGISTRY_MIRROR}" ]; then \
       mkdir -p /usr/local/cargo \
       && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' "${CARGO_REGISTRY_MIRROR}" > /usr/local/cargo/config.toml; \
     fi
+
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'set -eu' \
+      'if [ "${CARGO_BUILD_JOBS}" = "auto" ]; then' \
+      '  mem_kb="$(awk '\''/MemTotal/ {print $2}'\'' /proc/meminfo)"' \
+      '  cpu_count="$(nproc)"' \
+      '  if [ "${mem_kb}" -lt 3145728 ]; then' \
+      '    jobs=1' \
+      '  elif [ "${mem_kb}" -lt 6291456 ]; then' \
+      '    jobs=2' \
+      '  else' \
+      '    mem_jobs="$((mem_kb / 3145728))"' \
+      '    if [ "${mem_jobs}" -lt "${cpu_count}" ]; then jobs="${mem_jobs}"; else jobs="${cpu_count}"; fi' \
+      '  fi' \
+      'else' \
+      '  jobs="${CARGO_BUILD_JOBS}"' \
+      'fi' \
+      'echo "Using cargo build jobs: ${jobs}"' \
+      'exec cargo build --release -j "${jobs}" "$@"' \
+      > /usr/local/bin/cargo-build-release \
+    && chmod +x /usr/local/bin/cargo-build-release
 
 COPY Cargo.toml Cargo.lock ./
 COPY backend/Cargo.toml ./backend/Cargo.toml
@@ -28,7 +50,9 @@ RUN mkdir -p backend/src scheduler/src \
 RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,sharing=locked,target=/app/neogate/target \
-    cargo build --release -j ${CARGO_BUILD_JOBS} -p neogate -p neogate-scheduler \
+    cargo-build-release -p neogate -p neogate-scheduler \
+    && rm -f target/release/neogate target/release/neogate.d \
+      target/release/neogate-scheduler target/release/neogate-scheduler.d \
     && rm -rf backend/src scheduler/src
 
 COPY backend/migrations ./backend/migrations
@@ -40,7 +64,7 @@ COPY deploy/systemd/start-neogate.sh ./deploy/systemd/start-neogate.sh
 RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,sharing=locked,target=/app/neogate/target \
-    cargo build --release -j ${CARGO_BUILD_JOBS} -p neogate -p neogate-scheduler \
+    cargo-build-release -p neogate -p neogate-scheduler \
     && mkdir -p /app/neogate/bin \
     && cp target/release/neogate target/release/neogate-scheduler /app/neogate/bin/
 

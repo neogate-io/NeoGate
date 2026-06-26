@@ -143,15 +143,34 @@ pub async fn create_user_payment_order(
     let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
     let credit_account = default_project_credit_account(state, auth.user_id).await?;
     let notify_url = notify_url(&payment_config, provider)?;
+    tracing::info!(
+        order_id = %order_id,
+        user_id = %auth.user_id,
+        provider = %provider.as_str(),
+        notify_url = %notify_url,
+        "payment notify url generated"
+    );
     let gateway_req = GatewayCreateRequest {
         order_id,
         payable_amount_minor,
         pay_type: req.pay_type.clone(),
         subject: "NeoGate credit recharge".to_string(),
-        notify_url,
+        notify_url: notify_url.clone(),
         return_url: req.return_url.clone(),
     };
     let gateway_res = gateway_for(&payment_config, provider)?.create_checkout(gateway_req)?;
+    let checkout_notify_url_matches = gateway_res
+        .checkout_url
+        .as_deref()
+        .is_some_and(|checkout_url| checkout_notify_url_matches(checkout_url, &notify_url));
+    tracing::info!(
+        order_id = %order_id,
+        user_id = %auth.user_id,
+        provider = %provider.as_str(),
+        notify_url = %notify_url,
+        checkout_notify_url_matches = checkout_notify_url_matches,
+        "payment notify url passed to gateway checkout"
+    );
 
     sqlx::query(
         "INSERT INTO payment
@@ -418,6 +437,19 @@ fn notify_url(
         base_url.trim_end_matches('/'),
         provider.as_str()
     ))
+}
+
+fn checkout_notify_url_matches(checkout_url: &str, notify_url: &str) -> bool {
+    let Some((_, query)) = checkout_url.split_once('?') else {
+        return false;
+    };
+    serde_urlencoded::from_str::<Vec<(String, String)>>(query)
+        .map(|pairs| {
+            pairs
+                .iter()
+                .any(|(key, value)| key == "notify_url" && value == notify_url)
+        })
+        .unwrap_or(false)
 }
 
 fn micro_usd_to_cny_minor_units(amount_micro_usd: i64) -> i64 {

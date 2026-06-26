@@ -1,97 +1,79 @@
-param(
-  [string]$BaseUrl = $env:NEOGATE_BASE_URL,
-  [string]$Model = $env:NEOGATE_MODEL,
-  [string]$CodexModel = $env:NEOGATE_CODEX_MODEL,
-  [string]$ClaudeModel = $env:NEOGATE_CLAUDE_MODEL,
-  [string]$Client = $env:NEOGATE_CLIENT,
-  [string]$ApiKey = $env:NEOGATE_API_KEY,
-  [switch]$Yes,
-  [switch]$SkipInstall,
-  [switch]$SkipRelayTest,
-  [switch]$DryRun,
-  [switch]$Help
-)
-
-$ErrorActionPreference = 'Stop'
-
-try {
-  Add-Type -AssemblyName System.Net.Http
-} catch {
-  Write-Host "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)" -ForegroundColor Red
-  throw "System.Net.Http is required by the NeoGate installer. $($_.Exception.Message)"
+function Read-JsonField([string]$Path, [string]$Field) {
+  if (-not (Test-Path $Path)) { return $null }
+  try {
+    $obj = Get-Content $Path -Raw | ConvertFrom-Json
+    if ($obj.$Field) { return [string]$obj.$Field }
+  } catch {
+    return $null
+  }
+  return $null
 }
 
-$AppName = 'NeoGate'
-$ProviderId = 'neogate'
-$ProviderName = 'NeoGate'
-$DefaultBaseUrl = '__NEOGATE_DEFAULT_BASE_URL__'
-$DefaultCodexModel = 'gpt-5.5'
-$DefaultClaudeModel = 'claude-sonnet-4-5'
-$CodexModelExplicit = $PSBoundParameters.ContainsKey('CodexModel') -or $PSBoundParameters.ContainsKey('Model') -or [bool]$env:NEOGATE_CODEX_MODEL -or [bool]$env:NEOGATE_MODEL
-$ClaudeModelExplicit = $PSBoundParameters.ContainsKey('ClaudeModel') -or [bool]$env:NEOGATE_CLAUDE_MODEL
-
-if (-not $BaseUrl) { $BaseUrl = $DefaultBaseUrl }
-if (-not $CodexModel) { $CodexModel = $(if ($Model) { $Model } else { $DefaultCodexModel }) }
-if (-not $ClaudeModel) { $ClaudeModel = $DefaultClaudeModel }
-if (-not $Yes -and $env:NEOGATE_ASSUME_YES -eq '1') { $Yes = $true }
-if (-not $SkipInstall -and $env:NEOGATE_SKIP_INSTALL -eq '1') { $SkipInstall = $true }
-if (-not $SkipRelayTest -and $env:NEOGATE_SKIP_RELAY_TEST -eq '1') { $SkipRelayTest = $true }
-
-function Show-Usage {
-  Write-Host @"
-NeoGate Windows installer
-Usage:
-  irm __NEOGATE_INSTALL_ORIGIN__/install.ps1 | iex
-
-Options:
-  -BaseUrl URL          NeoGate OpenAI-compatible base URL. Default: __NEOGATE_DEFAULT_BASE_URL__
-  -Model MODEL         Codex model name. Default: gpt-5.5
-  -CodexModel MODEL    Codex model name.
-  -ClaudeModel MODEL   Claude Code model name. Default: claude-sonnet-4-5
-  -Client CLIENT       codex or claude
-  -Yes                 Continue without confirmation prompts after API key verification
-  -SkipInstall         Do not install missing Node.js or client CLI
-  -SkipRelayTest       Skip the final gateway relay test
-  -DryRun              Print planned config changes without writing files
-
-Environment variables:
-  NEOGATE_API_KEY, NEOGATE_BASE_URL, NEOGATE_MODEL, NEOGATE_CODEX_MODEL,
-  NEOGATE_CLAUDE_MODEL, NEOGATE_CLIENT, NEOGATE_ASSUME_YES=1,
-  NEOGATE_SKIP_INSTALL=1, NEOGATE_SKIP_RELAY_TEST=1, CODEX_HOME, CLAUDE_HOME
-"@
+function Read-JsonEnvField([string]$Path, [string]$Field) {
+  if (-not (Test-Path $Path)) { return $null }
+  try {
+    $obj = Get-Content $Path -Raw | ConvertFrom-Json
+    if ($obj.env -and $obj.env.$Field) { return [string]$obj.env.$Field }
+  } catch {
+    return $null
+  }
+  return $null
 }
 
-if ($Help) {
-  Show-Usage
-  return
-}
+# Reads existing Codex ~/.codex/auth.json + config.toml and Claude ~/.claude/settings.json
+# to prefill $ApiKey (client-agnostic) and remember previously-used models. Also infers
+# $Client when exactly one side is configured and -Client was not given.
+function Load-ExistingCredentials {
+  $script:LoadedCodexKey = $null
+  $script:LoadedClaudeKey = $null
+  $script:LoadedCodexModel = $null
+  $script:LoadedClaudeModel = $null
+  $script:HasExistingConfig = $false
 
-function Step([string]$Text) {
-  $script:InstallStep += 1
-  Write-Host ''
-  Write-Host "[$script:InstallStep/$script:InstallTotalSteps] $Text" -ForegroundColor Blue
-}
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+  $claudeHome = if ($env:CLAUDE_HOME) { $env:CLAUDE_HOME } else { Join-Path $env:USERPROFILE '.claude' }
+  $codexAuth = Join-Path $codexHome 'auth.json'
+  $codexConfig = Join-Path $codexHome 'config.toml'
+  $claudeConfig = Join-Path $claudeHome 'settings.json'
 
-function Detail([string]$Text) {
-  Write-Host "  $Text"
-}
+  if (-not $ApiKey -and (Test-Path $codexAuth)) {
+    $script:LoadedCodexKey = Read-JsonField $codexAuth 'OPENAI_API_KEY'
+  }
+  if (-not $ApiKey -and (Test-Path $claudeConfig)) {
+    $script:LoadedClaudeKey = Read-JsonEnvField $claudeConfig 'ANTHROPIC_AUTH_TOKEN'
+  }
 
-function Success([string]$Text) {
-  Write-Host "OK $Text" -ForegroundColor Green
-}
+  if (-not $ApiKey) {
+    if ($LoadedCodexKey) {
+      $script:ApiKey = $LoadedCodexKey
+    } elseif ($LoadedClaudeKey) {
+      $script:ApiKey = $LoadedClaudeKey
+    }
+    if ($ApiKey) { Detail (Get-Message key_loaded) }
+  }
 
-function Warn([string]$Text) {
-  Write-Warning $Text
-}
+  if (Test-Path $codexConfig) {
+    $modelLine = Get-Content $codexConfig | Where-Object { $_ -match '^\s*model\s*=\s*"([^"]*)"' } | Select-Object -First 1
+    if ($modelLine -and $modelLine -match '"([^"]*)"') { $script:LoadedCodexModel = $Matches[1] }
+  }
 
-function Fail([string]$Text) {
-  throw $Text
-}
+  if (Test-Path $claudeConfig) {
+    $script:LoadedClaudeModel = Read-JsonField $claudeConfig 'model'
+  }
 
-function Confirm-DefaultYes([string]$Prompt) {
-  if ($Yes) { return $true }
-  $answer = Read-Host "$Prompt [Y/n]"
-  return $answer -eq '' -or $answer -match '^(y|yes)$'
+  # Infer client only when not explicitly chosen and exactly one side is configured.
+  if (-not $Client) {
+    $codexPresent = [bool]($LoadedCodexKey) -or [bool]($LoadedCodexModel)
+    $claudePresent = [bool]($LoadedClaudeKey) -or [bool]($LoadedClaudeModel)
+    if ($codexPresent -or $claudePresent) { $script:HasExistingConfig = $true }
+    if ($codexPresent -and -not $claudePresent) {
+      $script:Client = 'codex'
+      Success (Get-Message client_inferred 'Codex CLI')
+    } elseif ($claudePresent -and -not $codexPresent) {
+      $script:Client = 'claude'
+      Success (Get-Message client_inferred 'Claude Code')
+    }
+  }
 }
 
 function Normalize-BaseUrl {
@@ -107,7 +89,7 @@ function Normalize-BaseUrl {
 }
 
 function Read-SecretText([string]$Prompt) {
-  $secure = Read-Host "$Prompt (input hidden)" -AsSecureString
+  $secure = Read-Host "$Prompt $(Get-Message ps1_input_hidden)" -AsSecureString
   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
   try {
     return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
@@ -162,6 +144,23 @@ function Assert-Command([string]$Name) {
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Get-ResponseErrorMessage([string]$Body) {
+  # Extract the human-readable error message from a JSON response body.
+  # Supports both flat {"error": "..."} and nested {"error": {"message": "..."}}.
+  if (-not $Body) { return '' }
+  try {
+    $json = $Body | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    return ''
+  }
+  if ($null -ne $json.error) {
+    if ($json.error -is [string]) { return $json.error }
+    if ($json.error.message) { return $json.error.message }
+  }
+  if ($json.message) { return $json.message }
+  return ''
+}
+
 function Update-SessionPath {
   $paths = @(
     [Environment]::GetEnvironmentVariable('Path', 'Machine'),
@@ -187,29 +186,29 @@ function Run-Command {
 function Verify-ApiKey {
   $result = Invoke-NeoGateRequest -Uri "$ApiRoot/api/user-key/verify" -Headers @{ authorization = "Bearer $ApiKey" }
   switch ($result.Status) {
-    200 { Success 'API key verified'; return $true }
-    401 { Warn "API key was rejected by $ApiRoot"; return $false }
-    403 { Warn "API key was rejected by $ApiRoot"; return $false }
-    404 { Fail 'Verification endpoint was not found. Make sure NeoGate is up to date and BaseUrl is correct.' }
-    0 { Fail "Could not connect to $ApiRoot. $($result.Body)" }
-    default { Fail "API key verification failed with HTTP $($result.Status). $($result.Body)" }
+    200 { Success (Get-Message key_verified); return $true }
+    401 { Warn (Get-Message key_rejected); $msg = Get-ResponseErrorMessage $result.Body; if ($msg) { Detail $msg }; return $false }
+    403 { Warn (Get-Message key_rejected); $msg = Get-ResponseErrorMessage $result.Body; if ($msg) { Detail $msg }; return $false }
+    404 { Fail (Get-Message verify_not_found) }
+    0 { Fail "$(Get-Message connect_failed $ApiRoot). $($result.Body)" }
+    default { Fail "$(Get-Message verify_failed $result.Status). $($result.Body)" }
   }
 }
 
 function Read-AndVerifyApiKey {
   while ($true) {
     if (-not $ApiKey) {
-      $script:ApiKey = Read-SecretText 'Enter API key'
+      $script:ApiKey = Read-SecretText (Get-Message api_key_prompt)
     }
     if (-not $ApiKey) {
-      Warn 'API key cannot be empty'
+      Warn (Get-Message empty_api_key)
       $script:ApiKey = $null
       continue
     }
     if (Verify-ApiKey) {
       return
     }
-    Warn 'Please enter the API key again.'
+    Warn (Get-Message reenter_api_key)
     $script:ApiKey = $null
   }
 }
@@ -218,7 +217,7 @@ function Normalize-Client([string]$Value) {
   switch -Regex ($Value.ToLowerInvariant()) {
     '^(1|codex)$' { return 'codex' }
     '^(2|claude|claude-code)$' { return 'claude' }
-    default { Fail "Unsupported client: $Value. Choose codex or claude." }
+    default { Fail (Get-Message invalid_client $Value) }
   }
 }
 
@@ -228,9 +227,9 @@ function Select-Client {
     return
   }
 
-  Write-Host '1. Codex CLI'
-  Write-Host '2. Claude Code'
-  $answer = Read-Host 'Choose client [1-2]'
+  Write-Host (Get-Message choose_client_codex)
+  Write-Host (Get-Message choose_client_claude)
+  $answer = Read-Host (Get-Message choose_client_prompt)
   $script:Client = Normalize-Client $answer
 }
 
@@ -272,14 +271,14 @@ function Get-Models {
     200 {
       $json = $result.Body | ConvertFrom-Json
       $models = @($json.data | ForEach-Object { $_.id } | Where-Object { $_ })
-      if ($models.Count -eq 0) { Fail 'No models are available. Ask an admin to configure an available upstream channel and price.' }
+      if ($models.Count -eq 0) { Fail (Get-Message models_empty) }
       return $models
     }
-    401 { Fail "Model list endpoint rejected the API key with HTTP $($result.Status)" }
-    403 { Fail "Model list endpoint rejected the API key with HTTP $($result.Status)" }
-    404 { Fail 'Model list endpoint was not found. Make sure NeoGate is up to date and BaseUrl is correct.' }
-    0 { Fail "Could not connect to $(Selected-BaseUrl)" }
-    default { Fail "Failed to fetch model list with HTTP $($result.Status). $($result.Body)" }
+    401 { Fail (Get-Message models_rejected $result.Status) }
+    403 { Fail (Get-Message models_rejected $result.Status) }
+    404 { Fail (Get-Message models_not_found) }
+    0 { Fail (Get-Message connect_failed (Selected-BaseUrl)) }
+    default { Fail "$(Get-Message models_failed $result.Status). $($result.Body)" }
   }
 }
 
@@ -289,19 +288,27 @@ function Select-Model {
   $explicit = if ($Client -eq 'claude') { $ClaudeModelExplicit } else { $CodexModelExplicit }
 
   if ($explicit) {
-    if ($models -notcontains $current) { Fail "Unsupported model selection: $current" }
+    if ($models -notcontains $current) { Fail (Get-Message invalid_model $current) }
     return
   }
 
-  Write-Host 'Choose the default model (press Enter for 1):'
+  $loadedModel = if ($Client -eq 'claude') { $LoadedClaudeModel } else { $LoadedCodexModel }
+  $defaultIndex = 1
+
+  Write-Host (Get-Message choose_model_title)
   for ($i = 0; $i -lt $models.Count; $i++) {
-    Write-Host "$($i + 1). $($models[$i])"
+    $label = "$($i + 1). $($models[$i])"
+    if ($loadedModel -and $models[$i] -eq $loadedModel) {
+      $defaultIndex = $i + 1
+      $label += (Get-Message model_current_label)
+    }
+    Write-Host $label
   }
-  $answer = Read-Host 'Enter number [1]'
-  if (-not $answer) { $answer = '1' }
+  $answer = Read-Host "$(Get-Message choose_model_prompt) [$defaultIndex]"
+  if (-not $answer) { $answer = "$defaultIndex" }
   $index = 0
   if (-not [int]::TryParse($answer, [ref]$index) -or $index -lt 1 -or $index -gt $models.Count) {
-    Fail "Unsupported model selection: $answer"
+    Fail (Get-Message invalid_model $answer)
   }
   if ($Client -eq 'claude') {
     $script:ClaudeModel = $models[$index - 1]
@@ -313,52 +320,52 @@ function Select-Model {
 
 function Install-Node {
   if ((Assert-Command 'node') -and (Assert-Command 'npm')) {
-    Detail "Node.js $(& node --version)"
-    Detail "npm $(& npm --version)"
+    Detail (Get-Message node_found $(& node --version))
+    Detail (Get-Message npm_found $(& npm --version))
     return
   }
 
-  if ($SkipInstall) { Fail 'Node.js/npm is missing and installation is disabled.' }
-  if (-not (Confirm-DefaultYes 'Node.js/npm is missing. Install it now?')) { Fail 'Node.js/npm is required.' }
+  if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
+  if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
   if (Assert-Command 'winget') {
     Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements')
   } elseif (Assert-Command 'choco') {
     Run-Command 'choco' @('install', 'nodejs-lts', '-y')
   } else {
-    Fail 'Could not find winget or choco. Install Node.js LTS, then re-run this script.'
+    Fail (Get-Message node_pkg_missing_win)
   }
   Update-SessionPath
-  if (-not (Assert-Command 'node')) { Fail 'Node.js installation did not put node on PATH. Open a new terminal, then re-run this script.' }
-  if (-not (Assert-Command 'npm')) { Fail 'Node.js installation did not put npm on PATH. Open a new terminal, then re-run this script.' }
-  Detail "Node.js $(& node --version)"
-  Detail "npm $(& npm --version)"
+  if (-not (Assert-Command 'node')) { Fail (Get-Message node_path_missing) }
+  if (-not (Assert-Command 'npm')) { Fail (Get-Message npm_path_missing) }
+  Detail (Get-Message node_found $(& node --version))
+  Detail (Get-Message npm_found $(& npm --version))
 }
 
 function Install-CodexCli {
   if (Assert-Command 'codex') {
-    Detail "Codex CLI $(& codex --version 2>$null)"
+    Detail (Get-Message codex_found $(& codex --version 2>$null))
     return
   }
-  if ($SkipInstall) { Fail 'Codex CLI is missing and installation is disabled.' }
-  if (-not (Confirm-DefaultYes 'Codex CLI is missing. Install @openai/codex with npm now?')) { Fail 'Codex CLI is required.' }
+  if ($SkipInstall) { Fail (Get-Message codex_missing_disabled) }
+  if (-not (Confirm-DefaultYes (Get-Message codex_missing_prompt))) { Fail (Get-Message codex_required) }
   Run-Command 'npm' @('install', '-g', '@openai/codex')
   Update-SessionPath
-  if (-not (Assert-Command 'codex')) { Fail 'Codex CLI was installed but is not on PATH. Open a new terminal, then re-run this script.' }
-  Detail "Codex CLI $(& codex --version 2>$null)"
+  if (-not (Assert-Command 'codex')) { Fail (Get-Message codex_path_missing) }
+  Detail (Get-Message codex_found $(& codex --version 2>$null))
 }
 
 function Install-ClaudeCode {
   if (Assert-Command 'claude') {
-    Detail "Claude Code $(& claude --version 2>$null)"
+    Detail (Get-Message claude_found $(& claude --version 2>$null))
     return
   }
-  if ($SkipInstall) { Fail 'Claude Code is missing and installation is disabled.' }
-  if (-not (Confirm-DefaultYes 'Claude Code is missing. Install @anthropic-ai/claude-code with npm now?')) { Fail 'Claude Code is required.' }
+  if ($SkipInstall) { Fail (Get-Message claude_missing_disabled) }
+  if (-not (Confirm-DefaultYes (Get-Message claude_missing_prompt))) { Fail (Get-Message claude_required) }
   Run-Command 'npm' @('install', '-g', '@anthropic-ai/claude-code')
   Update-SessionPath
-  if (-not (Assert-Command 'claude')) { Fail 'Claude Code was installed but is not on PATH. Open a new terminal, then re-run this script.' }
-  Detail "Claude Code $(& claude --version 2>$null)"
+  if (-not (Assert-Command 'claude')) { Fail (Get-Message claude_path_missing) }
+  Detail (Get-Message claude_found $(& claude --version 2>$null))
 }
 
 function Write-JsonFile {
@@ -444,7 +451,7 @@ function Write-CodexConfig {
   $auth.OPENAI_API_KEY = $ApiKey
   $auth.auth_mode = 'apikey'
   Write-JsonFile -Path $authFile -Value $auth
-  Success 'Config updated'
+  Success (Get-Message config_updated)
 }
 
 function Write-ClaudeConfig {
@@ -484,25 +491,25 @@ function Write-ClaudeConfig {
   $settings.model = $ClaudeModel
 
   Write-JsonFile -Path $configFile -Value $settings
-  Success 'Config updated'
+  Success (Get-Message claude_config_updated)
 }
 
 function Test-CodexRelay {
   if ($SkipRelayTest) {
-    Warn 'Skipping final relay test'
+    Warn (Get-Message relay_skipped)
     return
   }
   $responsesPayload = @{ model = $CodexModel; input = 'Reply with OK only.'; max_output_tokens = 16 } | ConvertTo-Json -Compress
   $result = Invoke-NeoGateRequest -Uri "$BaseUrl/responses" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $responsesPayload
   if ($result.Status -ge 200 -and $result.Status -lt 300) {
-    Success 'Responses API relay test succeeded'
+    Success (Get-Message responses_relay_succeeded)
     return
   } elseif ($result.Status -eq 401 -or $result.Status -eq 403) {
-    Fail "Gateway relay rejected the API key with HTTP $($result.Status)"
+    Fail (Get-Message relay_rejected $result.Status)
   } elseif ($result.Status -eq 0) {
-    Fail "Could not connect to $BaseUrl"
+    Fail (Get-Message connect_failed $BaseUrl)
   } else {
-    Warn "Responses API test failed: HTTP $($result.Status). The upstream or price config for model $CodexModel may not be ready."
+    Warn (Get-Message relay_failed $result.Status $CodexModel)
     if ($result.Body) { Detail $result.Body }
   }
 
@@ -513,22 +520,22 @@ function Test-CodexRelay {
   } | ConvertTo-Json -Depth 10 -Compress
   $chatResult = Invoke-NeoGateRequest -Uri "$BaseUrl/chat/completions" -Method POST -Headers @{ authorization = "Bearer $ApiKey" } -Body $chatPayload
   if ($chatResult.Status -ge 200 -and $chatResult.Status -lt 300) {
-    Success 'Chat Completions relay test succeeded'
-    Warn 'Responses API test failed, but Chat Completions succeeded. The current Codex config uses responses mode — check compatibility.'
+    Success (Get-Message chat_relay_succeeded)
+    Warn (Get-Message responses_failed_chat_succeeded)
   } elseif ($chatResult.Status -eq 401 -or $chatResult.Status -eq 403) {
-    Fail "Gateway relay rejected the API key with HTTP $($chatResult.Status)"
+    Fail (Get-Message relay_rejected $chatResult.Status)
   } elseif ($chatResult.Status -eq 0) {
-    Fail "Could not connect to $BaseUrl"
+    Fail (Get-Message connect_failed $BaseUrl)
   } else {
-    Warn "Chat Completions test failed: HTTP $($chatResult.Status). The upstream or price config for model $CodexModel may not be ready."
+    Warn (Get-Message relay_failed $chatResult.Status $CodexModel)
     if ($chatResult.Body) { Detail $chatResult.Body }
-    Warn 'Both Responses API and Chat Completions tests failed.'
+    Warn (Get-Message both_relay_failed)
   }
 }
 
 function Test-ClaudeRelay {
   if ($SkipRelayTest) {
-    Warn 'Skipping final relay test'
+    Warn (Get-Message relay_skipped)
     return
   }
   $payload = @{
@@ -541,48 +548,64 @@ function Test-ClaudeRelay {
     'anthropic-version' = '2023-06-01'
   } -Body $payload
   if ($result.Status -ge 200 -and $result.Status -lt 300) {
-    Success 'Gateway relay test succeeded'
+    Success (Get-Message relay_succeeded)
   } elseif ($result.Status -eq 401 -or $result.Status -eq 403) {
-    Fail "Gateway relay rejected the API key with HTTP $($result.Status)"
+    Fail (Get-Message relay_rejected $result.Status)
   } elseif ($result.Status -eq 0) {
-    Fail "Could not connect to $AnthropicBaseUrl"
+    Fail (Get-Message connect_failed $AnthropicBaseUrl)
   } else {
-    Warn "Test failed: HTTP $($result.Status). The upstream or price config for model $ClaudeModel may not be ready."
+    Warn (Get-Message relay_failed $result.Status $ClaudeModel)
     if ($result.Body) { Detail $result.Body }
   }
 }
 
-$InstallStep = 0
-$InstallTotalSteps = 6
+function Choose-SwitchModel {
+  Write-Host (Get-Message switch_option)
+  Write-Host (Get-Message reinstall_option)
+  $answer = Read-Host (Get-Message switch_or_reinstall_prompt)
+  # Default (empty) and "1" => switch model; "2" => reinstall.
+  return $answer -ne '2'
+}
 
-try {
-  if ($BaseUrl -eq '__NEOGATE_' + 'DEFAULT_BASE_URL__') {
-    Fail 'install script was not dynamically generated. Use the install command from the NeoGate page.'
-  }
-
-  Normalize-BaseUrl
-
-  Write-Host "$AppName Windows installer"
-
-  Step 'Verify API key'
-  Read-AndVerifyApiKey
-
-  Step 'Choose client'
+function Invoke-SwitchModelFlow {
+  Step (Get-Message step_choose_client)
   Select-Client
   Success (Selected-ClientName)
 
-  Step 'Choose default model'
+  Step (Get-Message switch_model)
+  Select-Model
+
+  Step (Get-Message step_write_config)
+  if ($Client -eq 'claude') {
+    Write-ClaudeConfig
+    Step (Get-Message step_test_gateway)
+    Test-ClaudeRelay
+  } else {
+    Write-CodexConfig
+    Step (Get-Message step_test_gateway)
+    Test-CodexRelay
+  }
+
+  Success (Get-Message model_switched (Selected-Model))
+}
+
+function Invoke-FullFlow {
+  Step (Get-Message step_choose_client)
+  Select-Client
+  Success (Selected-ClientName)
+
+  Step (Get-Message step_choose_model)
   Select-Model
 
   Write-Host ''
-  Write-Host 'Config summary'
-  Write-Host "Client     $(Selected-ClientName)"
-  Write-Host "Base URL   $(Selected-BaseUrl)"
-  Write-Host "Model      $(Selected-Model)"
-  Write-Host "Config     $(Selected-ConfigFile)"
+  Write-Host (Get-Message config_summary)
+  Write-Host "$(Get-Message summary_client_label)     $(Selected-ClientName)"
+  Write-Host "$(Get-Message summary_base_url_label)   $(Selected-BaseUrl)"
+  Write-Host "$(Get-Message summary_model_label)      $(Selected-Model)"
+  Write-Host "$(Get-Message summary_config_file_label)     $(Selected-ConfigFile)"
 
-  Step 'Check dependencies'
-  if (Confirm-DefaultYes 'Check dependencies?') {
+  Step (Get-Message step_check_tools)
+  if (Confirm-DefaultYes (Get-Message install_tools_prompt)) {
     Install-Node
     if ($Client -eq 'claude') {
       Install-ClaudeCode
@@ -590,29 +613,23 @@ try {
       Install-CodexCli
     }
   } else {
-    Warn 'Skipped dependency check/install'
+    Warn (Get-Message install_tools_skipped)
   }
 
-  Step 'Write config'
-  if (Confirm-DefaultYes 'Write config?') {
+  Step (Get-Message step_write_config)
+  if (Confirm-DefaultYes (Get-Message update_config_prompt)) {
     if ($Client -eq 'claude') {
       Write-ClaudeConfig
-      Step 'Test gateway'
+      Step (Get-Message step_test_gateway)
       Test-ClaudeRelay
-      Success 'Claude Code configured'
+      Success (Get-Message claude_configured)
     } else {
       Write-CodexConfig
-      Step 'Test gateway'
+      Step (Get-Message step_test_gateway)
       Test-CodexRelay
-      Success 'Codex CLI configured'
+      Success (Get-Message configured)
     }
   } else {
-    Warn 'Skipped config update'
+    Warn (Get-Message config_skipped)
   }
-} catch {
-  $message = $_.Exception.Message
-  if (-not $message) { $message = "$_" }
-  Write-Host $message -ForegroundColor Red
-  $global:LASTEXITCODE = 1
-  return
 }

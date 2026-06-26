@@ -96,7 +96,7 @@ function orderStatusLabel(status: string) {
 }
 
 function paymentReturnUrl() {
-  return `${window.location.origin}/home/recharge`
+  return `${window.location.origin}/payment/return`
 }
 
 async function openRechargeHistory() {

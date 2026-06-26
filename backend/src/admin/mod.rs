@@ -952,6 +952,7 @@ struct UsageRecord {
     id: DbId,
     user_id: Option<DbId>,
     user_email: Option<String>,
+    user_username: Option<String>,
     user_key_id: Option<DbId>,
     channel_id: Option<DbId>,
     channel_key_id: Option<DbId>,
@@ -959,6 +960,8 @@ struct UsageRecord {
     relay_trace_id: Option<Uuid>,
     relay_attempt: i32,
     relay_final: bool,
+    relay_path: Option<String>,
+    relay_path_index: Option<i32>,
     provider: String,
     model: Option<String>,
     status_code: Option<i32>,
@@ -1008,6 +1011,7 @@ async fn usage(
     let query_pattern = query_pattern.as_deref();
     let rows = sqlx::query(
         r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
+                u.username AS user_username,
                 usage_record.user_key_id, usage_record.channel_id, usage_record.channel_key_id,
                 usage_record.credential_id, usage_record.relay_trace_id,
                 usage_record.relay_attempt, usage_record.relay_final,
@@ -1020,9 +1024,24 @@ async fn usage(
                 usage_record.reason_out_tokens, usage_record.audio_in_tokens,
                 usage_record.audio_out_tokens, usage_record.billing_meter,
                 usage_record.billable_units, usage_record.cost_micro_usd,
-                usage_record.billing_status, usage_record.error_summary, usage_record.created_at
+                usage_record.billing_status, usage_record.error_summary, usage_record.created_at,
+                rp.relay_path, rp.relay_path_index
          FROM usage AS usage_record
          LEFT JOIN "user" u ON u.id = usage_record.user_id
+         LEFT JOIN LATERAL (
+           SELECT
+             string_agg('#' || sibling.channel_id::text, ' → '
+                        ORDER BY sibling.relay_attempt ASC, sibling.id ASC) AS relay_path,
+             (
+               SELECT count(*)::int
+               FROM usage prev
+               WHERE prev.relay_trace_id = usage_record.relay_trace_id
+                 AND (prev.relay_attempt, prev.id)
+                     < (usage_record.relay_attempt, usage_record.id)
+             ) AS relay_path_index
+           FROM usage sibling
+           WHERE sibling.relay_trace_id = usage_record.relay_trace_id
+         ) rp ON usage_record.relay_trace_id IS NOT NULL
          WHERE ($1::timestamptz IS NULL OR usage_record.created_at >= $1)
            AND ($2::timestamptz IS NULL OR usage_record.created_at <= $2)
            AND (
@@ -1095,6 +1114,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         id: row.try_get("id")?,
         user_id: row.try_get("user_id")?,
         user_email: row.try_get("user_email")?,
+        user_username: row.try_get("user_username")?,
         user_key_id: row.try_get("user_key_id")?,
         channel_id: row.try_get("channel_id")?,
         channel_key_id: row.try_get("channel_key_id")?,
@@ -1102,6 +1122,8 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         relay_trace_id: row.try_get("relay_trace_id")?,
         relay_attempt: row.try_get("relay_attempt")?,
         relay_final: row.try_get("relay_final")?,
+        relay_path: row.try_get("relay_path")?,
+        relay_path_index: row.try_get("relay_path_index")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         status_code: row.try_get("status_code")?,

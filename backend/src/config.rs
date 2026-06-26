@@ -507,7 +507,6 @@ impl RuntimeProbe {
 #[derive(Clone, Debug)]
 pub struct PaymentConfig {
     pub enabled_providers: Vec<PaymentProvider>,
-    pub return_base_url: Option<String>,
     pub zpay: ZpayConfig,
 }
 
@@ -529,7 +528,6 @@ impl Default for PaymentConfig {
     fn default() -> Self {
         Self {
             enabled_providers: Vec::new(),
-            return_base_url: None,
             zpay: ZpayConfig {
                 api_url: Some("https://zpayz.cn/submit.php".to_string()),
                 merchant_id: None,

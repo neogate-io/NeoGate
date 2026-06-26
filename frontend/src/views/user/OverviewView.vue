@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, type Ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { Calendar, DataLine, Document, Key, Monitor, Wallet } from '@element-plus/icons-vue'
 import { RouterLink } from 'vue-router'
 import { getUserOverview } from '../../api/overview'
@@ -12,7 +12,8 @@ const { t } = useLocale()
 const {
   data: overview,
   loading,
-  loaded: overviewLoaded
+  loaded: overviewLoaded,
+  reload: reloadOverview
 } = useAsyncData(() => getUserOverview(), null)
 const servicePolicy = inject<Ref<ServicePolicy | null>>('servicePolicy')!
 const hoveredChartIndex = ref<number | null>(null)
@@ -156,6 +157,14 @@ const previousMonthSamePeriodCost = computed(() => {
   return total
 })
 
+let balanceRefreshTimer: number | null = null
+
+function refreshOverviewIfVisible() {
+  if (document.visibilityState === 'visible') {
+    void reloadOverview()
+  }
+}
+
 function formatPercent(value: number) {
   const sign = value > 0 ? '+' : ''
   return `${sign}${value.toFixed(0)}%`
@@ -190,6 +199,21 @@ function formatFullChartDate(value: string) {
 function getCostForDate(date: Date) {
   return dailyCostMap.value.get(toDateKey(date)) ?? 0
 }
+
+onMounted(() => {
+  balanceRefreshTimer = window.setInterval(refreshOverviewIfVisible, 10000)
+  window.addEventListener('focus', refreshOverviewIfVisible)
+  document.addEventListener('visibilitychange', refreshOverviewIfVisible)
+})
+
+onBeforeUnmount(() => {
+  if (balanceRefreshTimer != null) {
+    window.clearInterval(balanceRefreshTimer)
+    balanceRefreshTimer = null
+  }
+  window.removeEventListener('focus', refreshOverviewIfVisible)
+  document.removeEventListener('visibilitychange', refreshOverviewIfVisible)
+})
 </script>
 
 <template>

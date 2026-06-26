@@ -739,7 +739,7 @@ async fn flush_shutdown_work(state: &AppState) {
         .await;
 }
 
-fn load_dotenv() {
+pub(crate) fn load_dotenv() {
     if let Ok(path) = std::env::var("NEOGATE_ENV_FILE") {
         dotenvy::from_path(path).ok();
     }

@@ -16,7 +16,6 @@ const activeProvider = ref('zpay')
 
 const form = reactive({
   paymentEnabled: false,
-  returnBaseUrl: '',
   zpayApiUrl: 'https://zpayz.cn/submit.php',
   zpayMerchantId: '',
   zpaySecretKey: '',
@@ -34,7 +33,6 @@ const zpayConfigured = computed(
 
 function applySetting(setting: Awaited<ReturnType<typeof getPaymentSetting>>) {
   form.paymentEnabled = setting.payment_enabled
-  form.returnBaseUrl = setting.return_base_url ?? ''
   form.zpayApiUrl = setting.zpay_api_url || 'https://zpayz.cn/submit.php'
   form.zpayMerchantId = setting.zpay_merchant_id ?? ''
   form.zpaySecretKey = ''
@@ -68,7 +66,6 @@ async function save() {
 function paymentPayload() {
   return {
     payment_enabled: form.paymentEnabled,
-    return_base_url: form.returnBaseUrl || null,
     zpay_api_url: form.zpayApiUrl,
     zpay_merchant_id: form.zpayMerchantId || null,
     zpay_secret_key: form.zpaySecretKey || null,

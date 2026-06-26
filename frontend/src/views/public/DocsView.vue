@@ -112,6 +112,16 @@ const content = computed(() => {
           '自动配置完成的终端截图'
         ]
       ],
+      switchModelTitle: '2.3 切换模型',
+      switchModelIntro:
+        '如果本机已经配置过 NeoGate，再次运行安装命令会自动读取上次的 API Key 和客户端，并提示你是切换模型还是重新安装。选择切换模型时，只需重新选择模型，脚本会写入新模型并做一次转发测试，无需重装依赖。',
+      switchModelStepsTitle: '切换步骤',
+      switchModelSteps: [
+        '再次运行与首次配置相同的安装命令（Linux/macOS/WSL 用 curl，Windows 用 PowerShell）。',
+        '脚本检测到已有配置后会显示菜单：1. 切换模型（默认，回车即可）；2. 重新安装。',
+        '回车进入切换流程：确认客户端，从可用模型列表中选择新模型（默认高亮上次使用的模型）。',
+        '脚本写入新模型配置并执行一次网关转发测试，通过即完成切换。'
+      ],
       manualConfigIntro:
         '手动配置不依赖安装脚本。先安装目标客户端，再把 NeoGate 的 Base URL、API Key 和模型名写入对应配置文件。',
       endpointIntro:
@@ -237,6 +247,16 @@ const content = computed(() => {
         '/assets/auto-config-complete.svg',
         'Terminal screenshot showing automatic configuration completed'
       ]
+    ],
+    switchModelTitle: '2.3 Switch Model',
+    switchModelIntro:
+      'If your machine is already configured for NeoGate, running the install command again reuses the previous API key and client, then asks whether to switch model or reinstall. Choosing switch model only reselects a model, writes it back, and runs a relay test — no dependency reinstall needed.',
+    switchModelStepsTitle: 'Switch steps',
+    switchModelSteps: [
+      'Run the same install command you used for the first-time setup (curl on Linux/macOS/WSL, PowerShell on Windows).',
+      'When the script detects an existing config it shows a menu: 1. Switch model (default, just press Enter); 2. Reinstall.',
+      'Press Enter to enter the switch flow: confirm the client, then pick a new model from the available list (the previously used model is highlighted as the default).',
+      'The script writes the new model config and runs a gateway relay test; passing the test completes the switch.'
     ],
     manualConfigIntro:
       'Manual configuration does not use the install script. Install the target client first, then write the NeoGate Base URL, API key, and model name into the matching config file.',
@@ -413,6 +433,21 @@ const content = computed(() => {
                   <p>{{ text }}</p>
                 </div>
                 <img :src="image" :alt="alt" loading="lazy" />
+              </article>
+            </div>
+            <div class="docs-mini-heading">
+              <h3>{{ content.switchModelTitle }}</h3>
+              <p>{{ content.switchModelIntro }}</p>
+            </div>
+            <div class="docs-screenshot-steps">
+              <article
+                v-for="(step, index) in content.switchModelSteps"
+                :key="step"
+                class="docs-screenshot-step"
+              >
+                <div>
+                  <h3>{{ index + 1 }}) {{ step }}</h3>
+                </div>
               </article>
             </div>
           </section>

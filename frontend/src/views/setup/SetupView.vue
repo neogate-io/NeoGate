@@ -692,9 +692,8 @@ async function submitSetup() {
         smtp: shouldConfigureSmtp.value && smtpForm.enabled ? smtpPayload() : null,
         payment:
           shouldConfigurePayment.value
-            ? {
+              ? {
                 payment_enabled: true,
-                return_base_url: status.value?.public_base_url || bootstrapForm.publicBaseUrl,
                 zpay_api_url: paymentForm.apiUrl,
                 zpay_merchant_id: paymentForm.merchantId || null,
                 zpay_secret_key: paymentForm.secretKey || null,

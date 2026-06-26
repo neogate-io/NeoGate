@@ -14,7 +14,6 @@ pub const PAYMENT_SETTING_KEY: &str = "payment";
 pub struct PaymentSettingRecord {
     pub configured: bool,
     pub payment_enabled: bool,
-    pub return_base_url: Option<String>,
     pub zpay_api_url: String,
     pub zpay_merchant_id: Option<String>,
     pub zpay_secret_key_set: bool,
@@ -26,7 +25,6 @@ pub struct PaymentSettingRecord {
 #[derive(Debug, Deserialize)]
 pub struct UpsertPaymentSettingRequest {
     pub payment_enabled: bool,
-    pub return_base_url: Option<String>,
     pub zpay_api_url: String,
     pub zpay_merchant_id: Option<String>,
     pub zpay_secret_key: Option<String>,
@@ -39,7 +37,6 @@ pub struct UpsertPaymentSettingRequest {
 #[derive(Debug, Deserialize, Serialize)]
 struct StoredPaymentSetting {
     payment_enabled: bool,
-    return_base_url: Option<String>,
     zpay_api_url: Option<String>,
     zpay_merchant_id: Option<String>,
     zpay_secret_key_ciphertext: Option<String>,
@@ -53,8 +50,7 @@ pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRe
         .fetch_optional(&state.db.pool)
         .await?
     else {
-        let mut config = PaymentConfig::default_for_site(&state.config.site_name);
-        config.return_base_url = state.config.public_base_url.clone();
+        let config = PaymentConfig::default_for_site(&state.config.site_name);
         return Ok(record_from_config(&config, false, None));
     };
 
@@ -65,7 +61,6 @@ pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRe
         setting,
         true,
         Some(updated_at),
-        state.config.public_base_url.clone(),
     ))
 }
 
@@ -74,8 +69,6 @@ pub async fn upsert_payment_setting(
     req: UpsertPaymentSettingRequest,
 ) -> AppResult<PaymentSettingRecord> {
     let existing = existing_payment_setting(state).await?;
-    let return_base_url =
-        optional_trimmed(req.return_base_url).or_else(|| state.config.public_base_url.clone());
     let zpay_api_url = optional_trimmed(Some(req.zpay_api_url))
         .unwrap_or_else(|| default_zpay_api_url().to_string());
     let zpay_merchant_id = optional_trimmed(req.zpay_merchant_id);
@@ -96,7 +89,7 @@ pub async fn upsert_payment_setting(
 
     if req.payment_enabled {
         validate_enabled_payment(
-            return_base_url.as_deref(),
+            state.config.public_base_url.as_deref(),
             Some(zpay_api_url.as_str()),
             zpay_merchant_id.as_deref(),
             zpay_secret_key_ciphertext.as_deref(),
@@ -105,7 +98,6 @@ pub async fn upsert_payment_setting(
 
     let setting = StoredPaymentSetting {
         payment_enabled: req.payment_enabled,
-        return_base_url,
         zpay_api_url: Some(zpay_api_url),
         zpay_merchant_id,
         zpay_secret_key_ciphertext,
@@ -134,7 +126,6 @@ pub async fn upsert_payment_setting(
         setting,
         true,
         Some(updated_at),
-        state.config.public_base_url.clone(),
     ))
 }
 
@@ -155,9 +146,6 @@ pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig
         } else {
             Vec::new()
         },
-        return_base_url: setting
-            .return_base_url
-            .or_else(|| state.config.public_base_url.clone()),
         zpay: ZpayConfig {
             api_url: setting.zpay_api_url,
             merchant_id: setting.zpay_merchant_id,
@@ -188,7 +176,6 @@ fn record_from_config(
     PaymentSettingRecord {
         configured,
         payment_enabled: config.provider_enabled(PaymentProvider::Zpay),
-        return_base_url: config.return_base_url.clone(),
         zpay_api_url: config
             .zpay
             .api_url
@@ -206,12 +193,10 @@ fn record_from_stored(
     setting: StoredPaymentSetting,
     configured: bool,
     updated_at: Option<DateTime<Utc>>,
-    fallback_return_base_url: Option<String>,
 ) -> PaymentSettingRecord {
     PaymentSettingRecord {
         configured,
         payment_enabled: setting.payment_enabled,
-        return_base_url: setting.return_base_url.or(fallback_return_base_url),
         zpay_api_url: setting
             .zpay_api_url
             .unwrap_or_else(|| default_zpay_api_url().to_string()),
@@ -224,14 +209,14 @@ fn record_from_stored(
 }
 
 fn validate_enabled_payment(
-    return_base_url: Option<&str>,
+    public_base_url: Option<&str>,
     zpay_api_url: Option<&str>,
     zpay_merchant_id: Option<&str>,
     zpay_secret_key_ciphertext: Option<&str>,
 ) -> AppResult<()> {
-    if return_base_url.is_none() {
+    if public_base_url.is_none() {
         return Err(AppError::BadRequest(
-            "payment return base URL is required".to_string(),
+            "PUBLIC_BASE_URL is required".to_string(),
         ));
     }
     if zpay_api_url.is_none() {

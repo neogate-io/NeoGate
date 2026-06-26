@@ -96,19 +96,19 @@ const content = computed(() => {
         [
           '1) 复制并运行安装命令',
           '从首页或本页复制对应系统的安装命令，在终端中执行。',
-          '/assets/auto-config-run-command.svg',
+          '/assets/auto-config-run-command.png',
           '运行 NeoGate 安装命令的终端截图'
         ],
         [
           '2) 按提示确认配置',
           '输入 NeoGate API Key 并通过验证后，选择 Codex CLI 或 Claude Code，再从可用模型列表中选择模型。',
-          '/assets/auto-config-answer-prompts.svg',
+          '/assets/auto-config-answer-prompts.png',
           '验证 API Key 并选择客户端和模型的终端截图'
         ],
         [
           '3) 写入并测试',
           '确认配置摘要后，按提示检查依赖、写入配置并完成一次网关转发测试；成功后重新运行 codex 或 claude 试用。',
-          '/assets/auto-config-complete.svg',
+          '/assets/auto-config-complete.png',
           '自动配置完成的终端截图'
         ]
       ],
@@ -232,19 +232,19 @@ const content = computed(() => {
       [
         '1) Copy and run the install command',
         'Copy the command for your operating system from the home page or this page, then run it in a terminal.',
-        '/assets/auto-config-run-command.svg',
+        '/assets/auto-config-run-command.png',
         'Terminal screenshot running the NeoGate install command'
       ],
       [
         '2) Confirm the config',
         'Enter the NeoGate API key, pass verification, select Codex CLI or Claude Code, then choose a model from the available list.',
-        '/assets/auto-config-answer-prompts.svg',
+        '/assets/auto-config-answer-prompts.png',
         'Terminal screenshot verifying API key and selecting client and model'
       ],
       [
         '3) Write and test',
         'After confirming the summary, follow the prompts to check dependencies, write config, and run one gateway relay test. Then run codex or claude again to try it.',
-        '/assets/auto-config-complete.svg',
+        '/assets/auto-config-complete.png',
         'Terminal screenshot showing automatic configuration completed'
       ]
     ],

@@ -156,6 +156,9 @@ docker compose up -d --build
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
+> [!TIP]
+> 2G 内存服务器上如遇到前端和后端同时编译导致内存不足，请改用分步构建：先执行 `docker compose build backend`，再执行 `docker compose build web`，最后执行 `docker compose up -d --no-build`。
+
 启动后访问 `http://服务器IP:8080`，首次运行向导会引导你完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
 
 #### 绑定域名和宿主机 Nginx

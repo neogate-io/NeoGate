@@ -80,18 +80,33 @@ function formatFullTime(value: string) {
   })
 }
 
+function formatClockTime(value: string) {
+  return formatDateTime(value, locale.value, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
 function statusLabel(statusCode?: number | null) {
   return statusCode && statusCode >= 400 ? String(statusCode) : t('success')
 }
-function handleUsageToggle(event: Event) {
-  const target = event.target as HTMLDetailsElement
-  if (!target.open) return
-  target
+
+function closeOtherUsageRows(current: HTMLDetailsElement) {
+  current
     .closest('.usage-list')
     ?.querySelectorAll('details[open]')
     .forEach((el) => {
-      if (el !== target) (el as HTMLDetailsElement).open = false
+      if (el !== current) (el as HTMLDetailsElement).open = false
     })
+}
+
+function toggleUsageDetails(event: MouseEvent) {
+  const details = (event.currentTarget as HTMLElement).closest('details')
+  if (!(details instanceof HTMLDetailsElement)) return
+  const nextOpen = !details.open
+  if (nextOpen) closeOtherUsageRows(details)
+  details.open = nextOpen
 }
 
 async function handleDateRangeChange() {
@@ -178,9 +193,8 @@ async function exportUsage() {
           v-for="row in usagePage.items"
           :key="row.id"
           class="usage-row"
-          @toggle="handleUsageToggle"
         >
-          <summary>
+          <summary @click.prevent>
             <span class="usage-time">{{ formatFullTime(row.created_at) }}</span>
             <span class="usage-model-cell">
               <span class="usage-model-pill">
@@ -208,81 +222,108 @@ async function exportUsage() {
               >
             </span>
             <span class="usage-cost">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
-            <span class="usage-details-label">{{ t('viewDetails') }}</span>
+            <button class="usage-details-label" type="button" @click="toggleUsageDetails">
+              {{ t('viewDetails') }}
+            </button>
           </summary>
-          <dl class="usage-detail-grid">
-            <div>
-              <dt>{{ t('provider') }}</dt>
-              <dd>{{ row.provider }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('time') }}</dt>
-              <dd>{{ formatFullTime(row.created_at) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('model') }}</dt>
-              <dd>{{ row.model || '-' }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('responseMode') }}</dt>
-              <dd>{{ row.streamed ? t('streamLabel') : t('nonStreamLabel') }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('totalTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.total_tokens, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('inputTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.input_tokens, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('outputTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.output_tokens, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('cacheReadTokensDetail') }}</dt>
-              <dd>{{ formatNumber(row.cache_in_tokens, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('cacheWriteTokensDetail') }}</dt>
-              <dd>{{ formatNumber(cacheWriteTokens(row), locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('totalLatencyDetail') }}</dt>
-              <dd>{{ formatDurationMs(row.latency_ms) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('firstResponseLatencyDetail') }}</dt>
-              <dd>{{ formatDurationMs(row.first_response_ms) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('status') }}</dt>
-              <dd>
-                <span
-                  class="usage-status"
-                  :class="{ 'is-error': row.status_code && row.status_code >= 400 }"
-                >
-                  {{ statusLabel(row.status_code) }}
-                </span>
-              </dd>
-            </div>
-            <div>
-              <dt>{{ t('throughput') }}</dt>
-              <dd>{{ formatTokenRate(row.output_tokens_per_second, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('cost') }}</dt>
-              <dd>{{ formatMicroUsd(row.cost_micro_usd, 6) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('billingStatus') }}</dt>
-              <dd>{{ row.billing_status || '-' }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('errorSummary') }}</dt>
-              <dd>{{ row.error_summary || '-' }}</dd>
-            </div>
-          </dl>
+          <div class="usage-detail-panel">
+            <section class="usage-detail-section">
+              <h4>调用信息</h4>
+              <dl class="usage-detail-list">
+                <div>
+                  <dt>{{ t('provider') }}</dt>
+                  <dd>{{ row.provider }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('model') }}</dt>
+                  <dd>{{ row.model || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('time') }}</dt>
+                  <dd>{{ formatClockTime(row.created_at) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('responseMode') }}</dt>
+                  <dd>{{ row.streamed ? t('streamLabel') : t('nonStreamLabel') }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('status') }}</dt>
+                  <dd>
+                    <span
+                      class="usage-status"
+                      :class="{ 'is-error': row.status_code && row.status_code >= 400 }"
+                    >
+                      {{ statusLabel(row.status_code) }}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+            </section>
+            <section class="usage-detail-section">
+              <h4>用量</h4>
+              <dl class="usage-detail-list">
+                <div>
+                  <dt>{{ t('totalTokensDetail') }}</dt>
+                  <dd>{{ formatNumber(row.total_tokens, locale) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('inputTokensDetail') }}</dt>
+                  <dd>{{ formatNumber(row.input_tokens, locale) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('outputTokensDetail') }}</dt>
+                  <dd>{{ formatNumber(row.output_tokens, locale) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('cacheReadTokensDetail') }}</dt>
+                  <dd>{{ formatNumber(row.cache_in_tokens, locale) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('cacheWriteTokensDetail') }}</dt>
+                  <dd>{{ formatNumber(cacheWriteTokens(row), locale) }}</dd>
+                </div>
+              </dl>
+            </section>
+            <section class="usage-detail-section">
+              <h4>性能</h4>
+              <dl class="usage-detail-list">
+                <div>
+                  <dt>{{ t('totalLatencyDetail') }}</dt>
+                  <dd>{{ formatDurationMs(row.latency_ms) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('firstResponseLatencyDetail') }}</dt>
+                  <dd>{{ formatDurationMs(row.first_response_ms) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('throughput') }}</dt>
+                  <dd>{{ formatTokenRate(row.output_tokens_per_second, locale) }}</dd>
+                </div>
+              </dl>
+            </section>
+            <section class="usage-detail-section">
+              <h4>计费</h4>
+              <dl class="usage-detail-list">
+                <div>
+                  <dt>{{ t('cost') }}</dt>
+                  <dd>{{ formatMicroUsd(row.cost_micro_usd, 6) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('billingStatus') }}</dt>
+                  <dd><span class="usage-detail-tag">{{ row.billing_status || '-' }}</span></dd>
+                </div>
+              </dl>
+            </section>
+            <section v-if="row.error_summary" class="usage-detail-section">
+              <h4>错误说明</h4>
+              <dl class="usage-detail-list">
+                <div class="usage-detail-wide">
+                  <dt>{{ t('errorSummary') }}</dt>
+                  <dd class="is-error">{{ row.error_summary }}</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
         </details>
         <div
           v-if="loading && usagePage.items.length === 0"
@@ -416,7 +457,7 @@ async function exportUsage() {
   color: #697586;
   display: grid;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 650;
   gap: 12px;
   grid-template-columns: 164px minmax(150px, 210px) 168px 156px 104px 82px;
   min-height: 48px;
@@ -496,7 +537,6 @@ async function exportUsage() {
 
 .usage-row summary {
   align-items: center;
-  cursor: pointer;
   display: grid;
   gap: 12px;
   grid-template-columns: 164px minmax(150px, 210px) 168px 156px 104px 82px;
@@ -526,14 +566,14 @@ async function exportUsage() {
 .usage-cost,
 .usage-status {
   color: #111827;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 400;
 }
 
 .usage-time {
   color: #475467;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 400;
   white-space: nowrap;
 }
@@ -560,22 +600,33 @@ async function exportUsage() {
 
 .usage-model-pill {
   align-items: center;
-  background: #ffffff;
-  border: 1px solid #e1e6ee;
-  border-radius: 8px;
-  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
   display: inline-flex;
-  gap: 8px;
+  gap: 2px;
   justify-self: start;
   max-width: 100%;
-  min-height: 36px;
-  padding: 0 12px;
+  min-height: 30px;
+}
+
+.usage-model-pill :deep(.provider-icon) {
+  height: 28px;
+  min-width: 28px;
+  width: 28px;
+}
+
+.usage-model-pill :deep(.provider-icon.has-image img) {
+  height: 24px;
+  width: 24px;
+}
+
+.usage-model-pill :deep(.provider-icon-symbol) {
+  height: 20px;
+  width: 20px;
 }
 
 .usage-model-pill > span {
   color: #111827;
-  font-size: 14px;
-  font-weight: 400;
+  font-size: 13.5px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -583,8 +634,8 @@ async function exportUsage() {
 
 .usage-token-stack > span {
   color: #111827;
-  font-size: 14px;
-  font-weight: 400;
+  font-size: 13.5px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -606,7 +657,7 @@ async function exportUsage() {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
 .usage-latency-pills b {
@@ -619,36 +670,31 @@ async function exportUsage() {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   font-weight: 400;
-  min-height: 24px;
-  padding: 0 7px;
-}
-
-.usage-latency-pills b:first-child::before {
-  background: #20c997;
-  border-radius: 999px;
-  content: '';
-  height: 6px;
-  margin-right: 6px;
-  width: 6px;
+  min-height: 21px;
+  padding: 0 6px;
 }
 
 .usage-cost {
   color: #111827;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 400;
   text-align: left;
 }
 
 .usage-status {
+  align-items: center;
   background: #ecfdf3;
   border: 1px solid #bbf7d0;
-  border-radius: 999px;
+  border-radius: 7px;
   color: #047857;
+  display: inline-flex;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 500;
   justify-self: start;
-  padding: 4px 10px;
+  line-height: 1;
+  min-height: 21px;
+  padding: 0 8px;
 }
 
 .usage-status.is-error {
@@ -658,40 +704,109 @@ async function exportUsage() {
 }
 
 .usage-details-label {
+  appearance: none;
+  background: transparent;
+  border: 0;
   color: var(--user-primary, #168bd3);
-  font-size: 12px;
-  font-weight: 400;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 0;
   text-align: left;
   white-space: nowrap;
 }
 
-.usage-detail-grid {
+.usage-details-label:focus-visible {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(22, 139, 211, 0.16);
+  outline: none;
+}
+
+.usage-detail-panel {
   background: #ffffff;
   border-top: 1px solid #f4f7fb;
   display: grid;
-  gap: 14px 18px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: 0;
-  padding: 18px 22px 20px;
+  gap: 11px;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 14px 22px 16px 56px;
 }
 
-.usage-detail-grid div {
+.usage-detail-section {
   display: grid;
-  gap: 5px;
+  gap: 9px;
+  min-width: 0;
 }
 
-.usage-detail-grid dt {
+.usage-detail-section + .usage-detail-section {
+  border-top: 1px solid #f4f7fb;
+  padding-top: 11px;
+}
+
+.usage-detail-section h4 {
+  color: #475467;
+  font-size: 12px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.usage-detail-list {
+  display: grid;
+  gap: 7px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(156px, max-content));
+  margin: 0;
+  min-width: 0;
+}
+
+.usage-detail-list div {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.usage-detail-list dt {
+  flex: 0 0 auto;
   color: #8a95a5;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
-.usage-detail-grid dd {
+.usage-detail-list dd {
   color: #111827;
-  font-size: 12.5px;
+  flex: 1 1 auto;
+  font-size: 13px;
   font-weight: 400;
   margin: 0;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.usage-detail-list .usage-detail-wide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.usage-detail-list dd.is-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 7px;
+  color: #b42318;
+  padding: 8px 10px;
+}
+
+.usage-detail-tag {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbe3ee;
+  border-radius: 7px;
+  color: #475467;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  min-height: 21px;
+  padding: 0 8px;
 }
 
 @media (max-width: 820px) {
@@ -699,7 +814,16 @@ async function exportUsage() {
     display: none;
   }
 
-  .usage-detail-grid {
+  .usage-detail-panel {
+    padding: 14px 16px;
+  }
+
+  .usage-detail-section {
+    gap: 9px;
+  }
+
+  .usage-detail-list {
+    gap: 8px;
     grid-template-columns: 1fr;
   }
 

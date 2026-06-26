@@ -40,6 +40,7 @@ pub fn router() -> Router<Arc<AppState>> {
 #[derive(Debug, Clone, Serialize)]
 pub struct PaymentOrderRecord {
     pub id: Uuid,
+    pub order_no: i64,
     pub user_id: DbId,
     pub provider: String,
     pub provider_order_id: Option<String>,
@@ -71,7 +72,7 @@ pub struct CreatePaymentOrderResponse {
 
 #[derive(Debug, Clone)]
 struct GatewayCreateRequest {
-    order_id: Uuid,
+    order_no: i64,
     payable_amount_minor: i64,
     pay_type: Option<String>,
     subject: String,
@@ -87,7 +88,7 @@ struct GatewayCreateResponse {
 
 #[derive(Debug)]
 struct GatewayNotification {
-    order_id: Uuid,
+    order_no: i64,
     provider_order_id: Option<String>,
     payable_amount_minor: Option<i64>,
     status: PaymentStatus,
@@ -140,18 +141,20 @@ pub async fn create_user_payment_order(
     }
 
     let order_id = Uuid::new_v4();
+    let order_no = next_payment_order_no(state).await?;
     let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
     let credit_account = default_project_credit_account(state, auth.user_id).await?;
     let notify_url = notify_url(state.config.public_base_url.as_deref(), provider)?;
     tracing::info!(
         order_id = %order_id,
+        order_no = order_no,
         user_id = %auth.user_id,
         provider = %provider.as_str(),
         notify_url = %notify_url,
         "payment notify url generated"
     );
     let gateway_req = GatewayCreateRequest {
-        order_id,
+        order_no,
         payable_amount_minor,
         pay_type: req.pay_type.clone(),
         subject: "账户充值".to_string(),
@@ -165,6 +168,7 @@ pub async fn create_user_payment_order(
         .is_some_and(|checkout_url| checkout_notify_url_matches(checkout_url, &notify_url));
     tracing::info!(
         order_id = %order_id,
+        order_no = order_no,
         user_id = %auth.user_id,
         provider = %provider.as_str(),
         notify_url = %notify_url,
@@ -174,11 +178,12 @@ pub async fn create_user_payment_order(
 
     sqlx::query(
         "INSERT INTO payment
-         (id, user_id, credit_account_id, provider, provider_order_id, status, currency,
+         (id, order_no, user_id, credit_account_id, provider, provider_order_id, status, currency,
           amount_micro_usd, payable_amount_minor, checkout_url, return_url)
-         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)",
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)",
     )
     .bind(order_id)
+    .bind(order_no)
     .bind(auth.user_id)
     .bind(credit_account.id)
     .bind(provider.as_str())
@@ -221,12 +226,19 @@ async fn default_project_credit_account(
     Ok(crate::billing::CreditAccountId::new(row.try_get("id")?))
 }
 
+async fn next_payment_order_no(state: &AppState) -> AppResult<i64> {
+    let order_no = sqlx::query_scalar("SELECT nextval('payment_order_no_seq')")
+        .fetch_one(&state.db.pool)
+        .await?;
+    Ok(order_no)
+}
+
 pub async fn list_user_payment_orders(
     state: &AppState,
     auth: UserSessionAuth,
 ) -> AppResult<Vec<PaymentOrderRecord>> {
     let rows = sqlx::query(
-        "SELECT id, user_id, provider, provider_order_id, status, currency,
+        "SELECT id, order_no, user_id, provider, provider_order_id, status, currency,
                 amount_micro_usd, payable_amount_minor, checkout_url, return_url,
                 paid_at, created_at, updated_at
          FROM payment
@@ -252,7 +264,7 @@ async fn notify_payment(
         gateway_for(&payment_config, provider)?.parse_notification(&headers, &body)?;
     tracing::info!(
         provider = provider.as_str(),
-        order_id = %notification.order_id,
+        order_no = notification.order_no,
         status = ?notification.status,
         "payment notification received"
     );
@@ -271,7 +283,7 @@ async fn notify_payment_query(
     let notification = gateway_for(&payment_config, provider)?.parse_query_notification(params)?;
     tracing::info!(
         provider = provider.as_str(),
-        order_id = %notification.order_id,
+        order_no = notification.order_no,
         status = ?notification.status,
         "payment notification received"
     );
@@ -289,10 +301,10 @@ async fn settle_payment_notification(
     let row = sqlx::query(
         "SELECT id, credit_account_id, amount_micro_usd, payable_amount_minor, status
          FROM payment
-         WHERE id = $1 AND provider = $2
+         WHERE order_no = $1 AND provider = $2
          FOR UPDATE",
     )
-    .bind(notification.order_id)
+    .bind(notification.order_no)
     .bind(provider.as_str())
     .fetch_optional(&mut *tx)
     .await?
@@ -302,7 +314,7 @@ async fn settle_payment_notification(
     if status == "paid" {
         tracing::info!(
             provider = provider.as_str(),
-            order_id = %notification.order_id,
+            order_no = notification.order_no,
             "payment notification already settled"
         );
         tx.commit().await?;
@@ -333,7 +345,7 @@ async fn settle_payment_notification(
              updated_at = now()
          WHERE id = $1",
     )
-    .bind(notification.order_id)
+    .bind(row.try_get::<Uuid, _>("id")?)
     .bind(notification.provider_order_id.as_deref())
     .bind(next_status)
     .bind(&notification.payload)
@@ -355,7 +367,7 @@ async fn settle_payment_notification(
         .bind(credit_account_id)
         .bind(amount_micro_usd)
         .bind(balance_after)
-        .bind(notification.order_id)
+        .bind(row.try_get::<Uuid, _>("id")?)
         .bind(json!({
             "source": "payment_gateway",
             "provider": provider.as_str(),
@@ -374,11 +386,20 @@ async fn record_payment_event(
     provider: PaymentProvider,
     notification: &GatewayNotification,
 ) -> AppResult<()> {
+    let payment_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM payment WHERE order_no = $1 AND provider = $2",
+    )
+    .bind(notification.order_no)
+    .bind(provider.as_str())
+    .fetch_optional(&state.db.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
     sqlx::query(
         "INSERT INTO payment_event (payment_id, provider, event_type, payload)
          VALUES ($1, $2, $3, $4)",
     )
-    .bind(notification.order_id)
+    .bind(payment_id)
     .bind(provider.as_str())
     .bind(match notification.status {
         PaymentStatus::Paid => "paid",
@@ -397,7 +418,7 @@ async fn get_user_payment_order(
     id: Uuid,
 ) -> AppResult<PaymentOrderRecord> {
     let row = sqlx::query(
-        "SELECT id, user_id, provider, provider_order_id, status, currency,
+        "SELECT id, order_no, user_id, provider, provider_order_id, status, currency,
                 amount_micro_usd, payable_amount_minor, checkout_url, return_url,
                 paid_at, created_at, updated_at
          FROM payment
@@ -414,6 +435,7 @@ async fn get_user_payment_order(
 fn payment_order_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PaymentOrderRecord> {
     Ok(PaymentOrderRecord {
         id: row.try_get("id")?,
+        order_no: row.try_get("order_no")?,
         user_id: row.try_get("user_id")?,
         provider: row.try_get("provider")?,
         provider_order_id: row.try_get("provider_order_id")?,

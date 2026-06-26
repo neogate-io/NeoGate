@@ -191,6 +191,16 @@ docker compose logs -f backend
 
 Finally, open `http://SERVER_IP:8080` in a browser. If the first-run wizard or login page loads, the frontend, backend, and reverse proxy path are usually working.
 
+#### Admin Password Recovery
+
+If an administrator forgets the password or the account is locked, reset it inside the backend container:
+
+```bash
+docker compose exec backend neogate admin reset-password --username admin
+```
+
+If the admin username is not `admin`, replace `--username`.
+
 ### 🧑‍💻 Local Source Run
 
 Running from source is suitable for development, debugging, and custom deployment. You can use the development flow to try the full setup, or use release builds with Nginx and systemd for self-managed deployments. For production environments, Docker Compose or the cluster deployment path is still recommended first.
@@ -375,7 +385,7 @@ Required before going live:
   <tbody>
     <tr>
       <td>👤 Admin account</td>
-      <td>Create the admin account in the first-run wizard and avoid weak passwords.</td>
+      <td>Create the admin account in the first-run wizard and avoid weak passwords; if the password is lost, use <code>neogate admin reset-password</code> on the server to recover access.</td>
     </tr>
     <tr>
       <td>🔐 System secrets</td>

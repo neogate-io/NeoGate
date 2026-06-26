@@ -191,6 +191,16 @@ docker compose logs -f backend
 
 最后在浏览器访问 `http://服务器IP:8080`。如果可以打开首次运行向导或登录页面，通常表示前端、后端和反向代理链路已经正常。
 
+#### 管理员密码恢复
+
+如果管理员忘记密码或账号被锁定，可以在后端容器中重置：
+
+```bash
+docker compose exec backend neogate admin reset-password --username admin
+```
+
+如果管理员用户名不是 `admin`，请替换 `--username`。
+
 ### 🧑‍💻 源码本地运行
 
 源码运行适合二次开发、调试和自定义部署。你可以使用开发部署体验完整流程，也可以使用 release 构建配合 Nginx、systemd 等工具自行托管。生产环境仍建议优先使用 Docker Compose 或集群部署方案。
@@ -377,7 +387,7 @@ sudo systemctl reload nginx
   <tbody>
     <tr>
       <td>👤 管理员账号</td>
-      <td>在首次运行向导中创建管理员账号，不要使用弱密码。</td>
+      <td>在首次运行向导中创建管理员账号，不要使用弱密码；如忘记密码，可使用 <code>neogate admin reset-password</code> 在服务器侧重置。</td>
     </tr>
     <tr>
       <td>🔐 系统密钥</td>

@@ -1,25 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ArrowRight, Check, Wallet } from '@element-plus/icons-vue'
-import { useAuthStore } from '../../stores/auth'
-import { useLocale } from '../../composables/useLocale'
+import { ref } from 'vue'
+import { Check } from '@element-plus/icons-vue'
 
-const { t } = useLocale()
-const router = useRouter()
-const auth = useAuthStore()
-const redirecting = ref(false)
+const closeHintVisible = ref(false)
 
-onMounted(async () => {
-  if (!auth.isAuthed) return
-
-  redirecting.value = true
-  const ok = await auth.verifySession()
-  if (ok) {
-    await router.replace('/home/recharge')
-  }
-  redirecting.value = false
-})
+function finishPayment() {
+  window.close()
+  window.setTimeout(() => {
+    closeHintVisible.value = true
+  }, 300)
+}
 </script>
 
 <template>
@@ -28,14 +18,11 @@ onMounted(async () => {
       <div class="payment-return-icon">
         <el-icon><Check /></el-icon>
       </div>
-      <h1>{{ t('paymentSettings') }}</h1>
+      <h1>支付已完成</h1>
       <p>支付已经完成。余额会在后台回调确认后更新。</p>
-      <p v-if="redirecting">正在返回充值页。</p>
+      <p v-if="closeHintVisible">如无法自动关闭，请手动关闭此页面。</p>
       <div class="payment-return-actions">
-        <el-button :icon="Wallet" type="primary" @click="router.push('/home/recharge')">
-          前往充值页
-        </el-button>
-        <el-button :icon="ArrowRight" @click="router.push('/login')">前往登录</el-button>
+        <el-button type="primary" @click="finishPayment">完成</el-button>
       </div>
     </section>
   </main>

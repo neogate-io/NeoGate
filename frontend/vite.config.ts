@@ -1,54 +1,11 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { readFileSync } from 'node:fs'
 
-const installTemplatePath = new URL('../backend/templates/install.template', import.meta.url)
-const installPs1TemplatePath = new URL('../backend/templates/install.ps1.template', import.meta.url)
 const localBackendOrigin = 'http://127.0.0.1:8080'
 const apiProxy = {
   target: localBackendOrigin,
   timeout: 10 * 60 * 1000,
   proxyTimeout: 10 * 60 * 1000
-}
-
-function requestOrigin(headers: Record<string, string | string[] | undefined>) {
-  const forwarded = parseForwarded(firstHeader(headers.forwarded))
-  const forwardedProto = forwarded.proto || firstHeader(headers['x-forwarded-proto'])
-  const forwardedHost = forwarded.host || firstHeader(headers['x-forwarded-host'])
-  const host = forwardedHost || firstHeader(headers.host) || 'localhost:5173'
-  const proto = forwardedProto || 'http'
-  return `${proto}://${host}`
-}
-
-function firstHeader(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value
-}
-
-function parseForwarded(value: string | undefined) {
-  const first = value?.split(',')[0]
-  if (!first) {
-    return {}
-  }
-
-  return Object.fromEntries(
-    first
-      .split(';')
-      .map((part) => part.trim().split('='))
-      .filter(([key, headerValue]) => key && headerValue)
-      .map(([key, headerValue]) => [key.toLowerCase(), headerValue.replace(/^"|"$/g, '')])
-  ) as { host?: string; proto?: string }
-}
-
-function renderInstallScript(installOrigin: string) {
-  return readFileSync(installTemplatePath, 'utf8')
-    .replaceAll('__NEOGATE_DEFAULT_BASE_URL__', `${installOrigin}/v1`)
-    .replaceAll('__NEOGATE_INSTALL_ORIGIN__', installOrigin)
-}
-
-function renderInstallPs1Script(installOrigin: string) {
-  return readFileSync(installPs1TemplatePath, 'utf8')
-    .replaceAll('__NEOGATE_DEFAULT_BASE_URL__', `${installOrigin}/v1`)
-    .replaceAll('__NEOGATE_INSTALL_ORIGIN__', installOrigin)
 }
 
 function isIgnorablePureAnnotationWarning(log: { code?: string; id?: string; message: string }) {
@@ -60,46 +17,8 @@ function isIgnorablePureAnnotationWarning(log: { code?: string; id?: string; mes
   )
 }
 
-function installMiddleware(
-  req: { url?: string; headers: Record<string, string | string[] | undefined> },
-  res: {
-    statusCode: number
-    setHeader(name: string, value: string): void
-    end(body: string): void
-  },
-  next: () => void
-) {
-  const path = (req.url || '').split('?')[0]
-  if (path !== '/install' && path !== '/install.ps1') {
-    next()
-    return
-  }
-
-  const origin = requestOrigin(req.headers)
-  const script = path === '/install.ps1' ? renderInstallPs1Script(origin) : renderInstallScript(origin)
-  res.statusCode = 200
-  res.setHeader(
-    'content-type',
-    path === '/install.ps1' ? 'text/plain; charset=utf-8' : 'text/x-shellscript; charset=utf-8'
-  )
-  res.setHeader('cache-control', 'no-store')
-  res.end(script)
-}
-
 export default defineConfig({
-  plugins: [
-    {
-      name: 'neogate-install-script',
-      enforce: 'pre',
-      configureServer(server) {
-        server.middlewares.use((req, res, next) => installMiddleware(req, res, next))
-      },
-      configurePreviewServer(server) {
-        server.middlewares.use((req, res, next) => installMiddleware(req, res, next))
-      }
-    },
-    vue()
-  ],
+  plugins: [vue()],
   build: {
     rollupOptions: {
       onLog(level, log, defaultHandler) {
@@ -161,7 +80,9 @@ export default defineConfig({
     proxy: {
       '/api': apiProxy,
       '/v1': apiProxy,
-      '/anthropic': apiProxy
+      '/anthropic': apiProxy,
+      '/install': apiProxy,
+      '/install.ps1': apiProxy
     }
   }
 })

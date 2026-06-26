@@ -911,7 +911,8 @@ onMounted(loadInitialData)
             />
           </template>
         </el-table-column>
-        <el-table-column prop="name" :label="t('name')" min-width="120">
+        <el-table-column prop="id" label="ID" width="36" align="right" header-align="right" />
+        <el-table-column prop="name" :label="t('name')" min-width="160" header-align="center">
           <template #default="{ row }">
             <button
               type="button"
@@ -927,7 +928,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('modelPrices')" min-width="170">
+        <el-table-column :label="t('modelPrices')" min-width="220">
           <template #default="{ row }">
             <div class="channel-price-summary">
               <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
@@ -1223,7 +1224,7 @@ onMounted(loadInitialData)
 .channel-name-cell {
   align-items: center;
   display: inline-flex;
-  gap: 11px;
+  gap: 2px;
   max-width: 100%;
   min-width: 0;
   vertical-align: middle;
@@ -1231,8 +1232,19 @@ onMounted(loadInitialData)
 
 .channel-name-cell :deep(.provider-icon) {
   border-radius: 8px;
+  flex: 0 0 auto;
+  height: 40px;
+  width: auto;
+}
+
+.channel-name-cell :deep(.provider-icon.has-image img) {
   height: 30px;
   width: 30px;
+}
+
+.channel-name-cell :deep(.provider-icon .provider-icon-symbol) {
+  height: 22px;
+  width: 22px;
 }
 
 .channel-name-stack {

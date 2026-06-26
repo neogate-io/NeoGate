@@ -110,9 +110,9 @@ function usageStatusTooltip(statusCode?: number | null) {
   return statusCode == null ? '' : `HTTP ${statusCode}`
 }
 
-function relayTraceLabel(row: UsageRecord) {
-  if (!row.relay_trace_id) return '-'
-  return `#${row.relay_attempt}`
+function relayPathSegments(row: UsageRecord): string[] {
+  if (!row.relay_path) return []
+  return row.relay_path.split(' → ')
 }
 
 function relayTraceTone(row: UsageRecord) {
@@ -120,17 +120,14 @@ function relayTraceTone(row: UsageRecord) {
   return row.relay_final ? 'success' : 'warning'
 }
 
-function relayTraceText(row: UsageRecord) {
-  if (!row.relay_trace_id) return ''
-  return row.relay_final ? t('relayAttemptFinal') : t('relayAttemptRetry')
+function relayChannelLabel(row: UsageRecord) {
+  if (row.channel_id == null) return '-'
+  return `#${row.channel_id}`
 }
 
-function relayTraceTooltip(row: UsageRecord) {
-  if (!row.relay_trace_id) return ''
-  return `${t('relayTrace')} ${row.relay_trace_id} · #${row.relay_attempt}`
-}
 
 function usageUserDisplay(row: UsageRecord) {
+  if (row.user_username) return row.user_username
   if (row.user_email) return row.user_email
   if (row.user_id != null) return `#${row.user_id}`
   return '-'
@@ -227,14 +224,14 @@ async function handleSearch() {
             <span class="usage-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('usageUser')" min-width="220">
+        <el-table-column :label="t('usageUser')" min-width="160">
           <template #default="{ row }">
-            <span class="usage-user-cell" :class="{ 'is-empty': !row.user_email && !row.user_id }">
+            <span class="usage-user-cell" :class="{ 'is-empty': !row.user_username && !row.user_email && !row.user_id }">
               {{ usageUserDisplay(row) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('model')" min-width="190">
+        <el-table-column :label="t('model')" min-width="120">
           <template #default="{ row }">
             <div class="usage-model">
               <span class="usage-provider">{{ row.provider }}</span>
@@ -290,12 +287,12 @@ async function handleSearch() {
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('cost')" min-width="130" align="right" header-align="right">
+        <el-table-column :label="t('cost')" min-width="104" align="right" header-align="right">
           <template #default="{ row }">
             <span class="usage-cost-cell">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('status')" min-width="120" align="center" header-align="center">
+        <el-table-column :label="t('status')" min-width="110" align="center" header-align="center">
           <template #default="{ row }">
             <el-tooltip
               :content="usageStatusTooltip(row.status_code)"
@@ -314,24 +311,54 @@ async function handleSearch() {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('relayTrace')" min-width="120" align="center" header-align="center">
+        <el-table-column :label="t('relayTrace')" min-width="130" align="left" header-align="left">
           <template #default="{ row }">
-            <el-tooltip
-              :content="relayTraceTooltip(row)"
-              :disabled="!row.relay_trace_id"
-              placement="top"
-              :show-after="600"
-            >
-              <span class="usage-trace-pill" :class="`is-${relayTraceTone(row)}`">
-                <span class="usage-mono">{{ relayTraceLabel(row) }}</span>
-                <span v-if="row.relay_trace_id" class="usage-trace-text">{{
-                  relayTraceText(row)
-                }}</span>
+            <el-tooltip :disabled="!row.relay_trace_id" placement="top" :show-after="400" popper-class="usage-trace-tip-popper">
+              <template #content>
+                <div class="usage-trace-tip">
+                  <div class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('relayTipPath') }}</span>
+                    <span class="usage-trace-tip-value is-mono">{{ row.relay_path || relayChannelLabel(row) }}</span>
+                  </div>
+                  <div class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('relayTipChannel') }}</span>
+                    <span class="usage-trace-tip-value is-mono">{{ relayChannelLabel(row) }}</span>
+                  </div>
+                  <div v-if="row.status_code != null" class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('relayTipStatus') }}</span>
+                    <span class="usage-trace-tip-value is-mono">{{ row.status_code }}</span>
+                  </div>
+                  <div class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('relayTipLatency') }}</span>
+                    <span class="usage-trace-tip-value is-mono">{{ formatDurationMs(row.latency_ms) }}</span>
+                  </div>
+                  <div v-if="row.error_summary" class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('relayTipError') }}</span>
+                    <span class="usage-trace-tip-value is-error">{{ row.error_summary }}</span>
+                  </div>
+                  <div class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('status') }}</span>
+                    <span
+                      class="usage-trace-tip-value"
+                      :class="`is-${relayTraceTone(row)}`"
+                    >{{ row.relay_final ? t('relayTooltipFinal') : t('relayTooltipRetry') }}</span>
+                  </div>
+                </div>
+              </template>
+              <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
+                <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
+                  <span v-if="i > 0" class="usage-trace-sep">→</span>
+                  <span
+                    class="usage-trace-seg"
+                    :class="{ 'is-current': i === row.relay_path_index }"
+                  >{{ seg }}</span>
+                </template>
+                <span v-if="!row.relay_trace_id" class="usage-muted">-</span>
               </span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="error_summary" :label="t('error')" min-width="180">
+        <el-table-column prop="error_summary" :label="t('error')" min-width="260">
           <template #default="{ row }">
             <el-tooltip
               v-if="row.error_summary"
@@ -477,7 +504,7 @@ async function handleSearch() {
 
 .usage-model > span:last-child {
   color: #1d2129;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 680;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -499,13 +526,13 @@ async function handleSearch() {
   color: var(--admin-success);
   display: inline-flex;
   font-feature-settings: 'tnum';
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
-  font-weight: 560;
-  height: 24px;
+  font-weight: 540;
+  height: 20px;
   justify-content: center;
-  min-width: 58px;
-  padding: 0 10px;
+  min-width: 46px;
+  padding: 0 7px;
   transition: none;
   white-space: nowrap;
 }
@@ -514,7 +541,7 @@ async function handleSearch() {
   color: #1d2939;
   font-feature-settings: 'tnum';
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 400;
 }
@@ -553,45 +580,117 @@ async function handleSearch() {
   display: block;
   font-size: 13px;
   font-weight: 560;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
-.usage-trace-pill {
+.usage-trace-path {
   align-items: center;
-  border: 1px solid #d0d5dd;
-  border-radius: 999px;
-  color: #667085;
+  border-radius: 6px;
+  color: #98a2b3;
   display: inline-flex;
-  gap: 6px;
-  height: 26px;
-  justify-content: center;
-  max-width: 112px;
-  padding: 0 9px;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-content: flex-start;
+  line-height: 1.4;
   white-space: nowrap;
 }
 
-.usage-trace-pill.is-success {
-  background: #ecfdf3;
-  border-color: #abefc6;
+.usage-trace-path.is-success {
+  color: #47997a;
+}
+
+.usage-trace-path.is-warning {
+  color: #9a7a3a;
+}
+
+.usage-trace-sep {
+  color: #c8ced8;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.usage-trace-seg {
+  font-feature-settings: 'tnum';
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 460;
+}
+
+.usage-trace-seg.is-current {
+  background: #eef2ff;
+  border-radius: 4px;
+  color: #1d2939;
+  font-weight: 620;
+  padding: 0 4px;
+}
+
+.usage-trace-path.is-success .usage-trace-seg.is-current {
+  background: #e3f6ec;
   color: #067647;
 }
 
-.usage-trace-pill.is-warning {
-  background: #fffaeb;
-  border-color: #fedf89;
+.usage-trace-path.is-warning .usage-trace-seg.is-current {
+  background: #fdf3e0;
   color: #b54708;
-}
-
-.usage-trace-text {
-  font-size: 12px;
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .usage-empty-state {
   padding: 30px 0 34px;
+}
+</style>
+
+<style>
+.usage-trace-tip-popper {
+  max-width: 420px;
+  padding: 4px 2px;
+}
+
+.usage-trace-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 240px;
+}
+
+.usage-trace-tip-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  line-height: 1.45;
+}
+
+.usage-trace-tip-label {
+  color: #98a2b3;
+  flex: 0 0 64px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.usage-trace-tip-value {
+  color: #f2f4f7;
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.usage-trace-tip-value.is-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-weight: 500;
+}
+
+.usage-trace-tip-value.is-error {
+  color: #fda4af;
+}
+
+.usage-trace-tip-value.is-success {
+  color: #6ee7a8;
+}
+
+.usage-trace-tip-value.is-warning {
+  color: #fcd34d;
 }
 </style>

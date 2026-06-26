@@ -13,8 +13,20 @@ use crate::{
     AppState,
 };
 
-const INSTALL_TEMPLATE: &str = include_str!("../../templates/install.template");
-const INSTALL_PS1_TEMPLATE: &str = include_str!("../../templates/install.ps1.template");
+const INSTALL_TEMPLATE: &str = concat!(
+    include_str!("../../templates/install/header.sh"),
+    "\n",
+    include_str!("../../templates/install/actions.sh"),
+    "\n",
+    include_str!("../../templates/install/main.sh"),
+);
+const INSTALL_PS1_TEMPLATE: &str = concat!(
+    include_str!("../../templates/install_ps1/header.ps1"),
+    "\n",
+    include_str!("../../templates/install_ps1/actions.ps1"),
+    "\n",
+    include_str!("../../templates/install_ps1/main.ps1"),
+);
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -263,6 +275,19 @@ mod tests {
         assert!(!script.contains("Enter emailed API key"));
         assert!(!script.contains("__NEOGATE_DEFAULT_BASE_URL__"));
         assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
+        assert!(script.contains("load_existing_credentials"));
+        assert!(script.contains("LOADED_CODEX_KEY"));
+        assert!(script.contains("client_inferred"));
+        assert!(script.contains("model_current_label"));
+        assert!(script.contains(r#"key_loaded) printf '%s' "Reusing API key from previous config""#));
+        assert!(script.contains(r#"key_loaded) printf '%s' "已从本地配置读取 API 密钥""#));
+        assert!(script.contains("HAS_EXISTING_CONFIG"));
+        assert!(script.contains("choose_switch_model"));
+        assert!(script.contains("run_switch_model_flow"));
+        assert!(script.contains("run_full_flow"));
+        assert!(script.contains(r#"switch_option) printf '1. 切换模型' ;"#));
+        assert!(script.contains(r#"reinstall_option) printf '2. 重新安装' ;"#));
+        assert!(script.contains("model_switched"));
     }
 
     #[test]
@@ -276,6 +301,23 @@ mod tests {
             .any(|line| line.trim_start().starts_with("exit")));
         assert!(!script.contains("__NEOGATE_DEFAULT_BASE_URL__"));
         assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
+        assert!(script.contains("api_key_prompt = 'Enter API key: '"));
+        assert!(script.contains("api_key_prompt = '请输入 API 密钥：'"));
+        assert!(script.contains("function Get-Message([string]$Key"));
+        assert!(script.contains("function Detect-Locale"));
+        assert!(script.contains("function Load-ExistingCredentials"));
+        assert!(script.contains("Load-ExistingCredentials"));
+        assert!(script.contains("key_loaded = 'Reusing API key from previous config'"));
+        assert!(script.contains("key_loaded = '已从本地配置读取 API 密钥'"));
+        assert!(script.contains("model_current_label"));
+        assert!(script.contains("client_inferred"));
+        assert!(script.contains("HasExistingConfig"));
+        assert!(script.contains("function Choose-SwitchModel"));
+        assert!(script.contains("function Invoke-SwitchModelFlow"));
+        assert!(script.contains("function Invoke-FullFlow"));
+        assert!(script.contains("switch_option = '1. 切换模型'"));
+        assert!(script.contains("reinstall_option = '2. 重新安装'"));
+        assert!(script.contains("model_switched"));
     }
 
     #[tokio::test]

@@ -2,6 +2,10 @@ import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { readError } from '../utils/errors'
 
+type ReloadOptions = {
+  silent?: boolean
+}
+
 export function useAsyncData<T>(loader: () => Promise<T>, initialValue: T) {
   const data = ref(initialValue) as Ref<T>
   const loading = ref(true)
@@ -10,10 +14,11 @@ export function useAsyncData<T>(loader: () => Promise<T>, initialValue: T) {
   let requestId = 0
   let disposed = false
 
-  async function reload() {
+  async function reload(options: ReloadOptions = {}) {
     const currentRequest = requestId + 1
     requestId = currentRequest
-    loading.value = true
+    const silent = options.silent === true
+    if (!silent) loading.value = true
     error.value = ''
 
     try {
@@ -27,7 +32,7 @@ export function useAsyncData<T>(loader: () => Promise<T>, initialValue: T) {
     } finally {
       if (!disposed && currentRequest === requestId) {
         loaded.value = true
-        loading.value = false
+        if (!silent) loading.value = false
       }
     }
   }

@@ -79,48 +79,48 @@ const content = computed(() => {
         ],
         [
           '确认客户端',
-          '确认要配置 Claude Code 还是 Codex；自动配置一次选择一个客户端，后续步骤会用到对应客户端和模型名。'
+          '确认要配置 Claude Code 还是 Codex；安装器一次配置一个客户端，并会按客户端显示可用模型。'
         ]
       ],
       installShellTitle: 'Linux / macOS / WSL 自动配置',
       installShellText:
-        '在 bash、zsh 或 WSL 终端中运行下面的命令。脚本会提示输入 NeoGate API Key、选择要配置的客户端和模型，并可检查或安装 Node.js、Codex、Claude Code 等依赖。',
+        '在 bash、zsh 或 WSL 终端中运行下面的命令。脚本会先验证 NeoGate API Key，再选择客户端和模型，并询问是否检查 Node.js、Codex、Claude Code 等依赖。',
       installWindowsTitle: 'Windows PowerShell 自动配置',
       installWindowsText:
         '在 Windows PowerShell 中运行 install.ps1；如果在 WSL 里使用，请运行上面的 shell 命令。',
       autoConfigIntro:
-        '自动配置会从当前 NeoGate 服务获取安装脚本。按终端提示完成选择后，脚本会把 Base URL、API Key 和模型名写入本机工具配置。',
+        '自动配置会从当前 NeoGate 服务获取安装脚本。脚本验证密钥后会读取可用模型、展示配置摘要，并在你确认后把 Base URL、API Key 和模型名写入本机工具配置。',
       autoConfigCommandTitle: '2.1 安装命令',
       autoConfigStepsTitle: '2.2 配置步骤',
       autoConfigSteps: [
         [
           '1) 复制并运行安装命令',
           '从首页或本页复制对应系统的安装命令，在终端中执行。',
-          '/assets/auto-config-run-command.svg',
+          '/assets/auto-config-run-command.png',
           '运行 NeoGate 安装命令的终端截图'
         ],
         [
-          '2) 按提示填写配置',
-          '输入 NeoGate API Key，选择要配置的客户端和模型。需要时脚本会检查或安装依赖。',
-          '/assets/auto-config-answer-prompts.svg',
-          '填写 API Key、客户端和模型的终端截图'
+          '2) 按提示确认配置',
+          '输入 NeoGate API Key 并通过验证后，选择 Codex CLI 或 Claude Code，再从可用模型列表中选择模型。',
+          '/assets/auto-config-answer-prompts.png',
+          '验证 API Key 并选择客户端和模型的终端截图'
         ],
         [
-          '3) 完成后验证客户端',
-          '看到配置写入成功后，重新运行 codex 或 claude，发送一条测试消息确认可用。',
-          '/assets/auto-config-complete.svg',
+          '3) 写入并测试',
+          '确认配置摘要后，按提示检查依赖、写入配置并完成一次网关转发测试；成功后重新运行 codex 或 claude 试用。',
+          '/assets/auto-config-complete.png',
           '自动配置完成的终端截图'
         ]
       ],
       switchModelTitle: '2.3 切换模型',
       switchModelIntro:
-        '如果本机已经配置过 NeoGate，再次运行安装命令会自动读取上次的 API Key 和客户端，并提示你是切换模型还是重新安装。选择切换模型时，只需重新选择模型，脚本会写入新模型并做一次转发测试，无需重装依赖。',
+        '如果本机已经配置过 NeoGate，再次运行安装命令会尝试读取上次的 API Key、模型和客户端，并提示你切换模型还是重新安装。选择切换模型时，只会重新选择模型、写入配置并做一次转发测试，无需重装依赖。',
       switchModelStepsTitle: '切换步骤',
       switchModelSteps: [
         '再次运行与首次配置相同的安装命令（Linux/macOS/WSL 用 curl，Windows 用 PowerShell）。',
         '脚本检测到已有配置后会显示菜单：1. 切换模型（默认，回车即可）；2. 重新安装。',
-        '回车进入切换流程：确认客户端，从可用模型列表中选择新模型（默认高亮上次使用的模型）。',
-        '脚本写入新模型配置并执行一次网关转发测试，通过即完成切换。'
+        '回车进入切换流程：确认或自动推断客户端，从可用模型列表中选择新模型（默认高亮上次使用的模型）。',
+        '脚本写入新模型配置并执行一次网关转发测试，通过即完成切换；如果要完整重装，选择 2。'
       ],
       manualConfigIntro:
         '手动配置不依赖安装脚本。先安装目标客户端，再把 NeoGate 的 Base URL、API Key 和模型名写入对应配置文件。',
@@ -215,48 +215,48 @@ const content = computed(() => {
       ],
       [
         'Confirm client',
-        'Decide whether to configure Claude Code or Codex. Automatic configuration configures one client at a time, and the next steps use the matching client and model name.'
+        'Decide whether to configure Claude Code or Codex. The installer configures one client at a time and lists models for that client.'
       ]
     ],
     installShellTitle: 'Linux / macOS / WSL automatic config',
     installShellText:
-      'Run this command in bash, zsh, or a WSL terminal. The script prompts for the NeoGate API key, target client, and model, and can check or install dependencies such as Node.js, Codex, and Claude Code.',
+      'Run this command in bash, zsh, or a WSL terminal. The script verifies the NeoGate API key first, then asks for the client and model, and can check dependencies such as Node.js, Codex, and Claude Code.',
     installWindowsTitle: 'Windows PowerShell automatic config',
     installWindowsText:
       'Run install.ps1 in Windows PowerShell. If you are using WSL, use the shell command above.',
     autoConfigIntro:
-      'Automatic configuration downloads the install script from this NeoGate service. After you answer the terminal prompts, the script writes the Base URL, API key, and model name into local tool configuration.',
+      'Automatic configuration downloads the install script from this NeoGate service. After verifying the key, the script loads available models, shows a config summary, and writes the Base URL, API key, and model name after you confirm.',
     autoConfigCommandTitle: '2.1 Install Commands',
     autoConfigStepsTitle: '2.2 Steps',
     autoConfigSteps: [
       [
         '1) Copy and run the install command',
         'Copy the command for your operating system from the home page or this page, then run it in a terminal.',
-        '/assets/auto-config-run-command.svg',
+        '/assets/auto-config-run-command.png',
         'Terminal screenshot running the NeoGate install command'
       ],
       [
-        '2) Answer the prompts',
-        'Enter the NeoGate API key, select the client and model, and let the script check or install dependencies if needed.',
-        '/assets/auto-config-answer-prompts.svg',
-        'Terminal screenshot entering API key, client, and model'
+        '2) Confirm the config',
+        'Enter the NeoGate API key, pass verification, select Codex CLI or Claude Code, then choose a model from the available list.',
+        '/assets/auto-config-answer-prompts.png',
+        'Terminal screenshot verifying API key and selecting client and model'
       ],
       [
-        '3) Verify the client',
-        'After the script reports successful writes, run codex or claude again and send one test message.',
-        '/assets/auto-config-complete.svg',
+        '3) Write and test',
+        'After confirming the summary, follow the prompts to check dependencies, write config, and run one gateway relay test. Then run codex or claude again to try it.',
+        '/assets/auto-config-complete.png',
         'Terminal screenshot showing automatic configuration completed'
       ]
     ],
     switchModelTitle: '2.3 Switch Model',
     switchModelIntro:
-      'If your machine is already configured for NeoGate, running the install command again reuses the previous API key and client, then asks whether to switch model or reinstall. Choosing switch model only reselects a model, writes it back, and runs a relay test — no dependency reinstall needed.',
+      'If your machine is already configured for NeoGate, running the install command again tries to reuse the previous API key, model, and client, then asks whether to switch model or reinstall. Switching only reselects a model, writes it back, and runs a relay test, with no dependency reinstall needed.',
     switchModelStepsTitle: 'Switch steps',
     switchModelSteps: [
       'Run the same install command you used for the first-time setup (curl on Linux/macOS/WSL, PowerShell on Windows).',
       'When the script detects an existing config it shows a menu: 1. Switch model (default, just press Enter); 2. Reinstall.',
-      'Press Enter to enter the switch flow: confirm the client, then pick a new model from the available list (the previously used model is highlighted as the default).',
-      'The script writes the new model config and runs a gateway relay test; passing the test completes the switch.'
+      'Press Enter to enter the switch flow: confirm or infer the client, then pick a new model from the available list (the previously used model is highlighted as the default).',
+      'The script writes the new model config and runs a gateway relay test; passing the test completes the switch. Choose 2 for a full reinstall.'
     ],
     manualConfigIntro:
       'Manual configuration does not use the install script. Install the target client first, then write the NeoGate Base URL, API key, and model name into the matching config file.',
@@ -439,17 +439,12 @@ const content = computed(() => {
               <h3>{{ content.switchModelTitle }}</h3>
               <p>{{ content.switchModelIntro }}</p>
             </div>
-            <div class="docs-screenshot-steps">
-              <article
-                v-for="(step, index) in content.switchModelSteps"
-                :key="step"
-                class="docs-screenshot-step"
-              >
-                <div>
-                  <h3>{{ index + 1 }}) {{ step }}</h3>
-                </div>
-              </article>
-            </div>
+            <ol class="docs-switch-flow">
+              <li v-for="(step, index) in content.switchModelSteps" :key="step">
+                <span>{{ index + 1 }}.</span>
+                <p>{{ step }}</p>
+              </li>
+            </ol>
           </section>
 
           <section id="software-config" class="docs-section">

@@ -2,8 +2,6 @@ use std::collections::HashMap;
 
 use axum::{body::Bytes, http::HeaderMap};
 use md5::{Digest, Md5};
-use uuid::Uuid;
-
 use crate::{
     config::ZpayConfig,
     error::{AppError, AppResult},
@@ -45,7 +43,7 @@ impl PaymentGateway for ZpayGateway {
             .as_deref()
             .ok_or_else(|| AppError::BadRequest("ZPAY merchant ID is required".to_string()))?;
         let money = format!("{:.2}", req.payable_amount_minor as f64 / 100.0);
-        let out_trade_no = req.order_id.simple().to_string();
+        let out_trade_no = req.order_no.to_string();
         let Some(return_url) = req.return_url else {
             return Err(AppError::BadRequest(
                 "return_url is required for ZPAY checkout".to_string(),
@@ -108,7 +106,8 @@ fn parse_signed_notification(
     let raw_order_id = params
         .get("out_trade_no")
         .ok_or_else(|| AppError::BadRequest("missing out_trade_no".to_string()))?;
-    let order_id = Uuid::parse_str(raw_order_id)
+    let order_no = raw_order_id
+        .parse::<i64>()
         .map_err(|_| AppError::BadRequest("invalid out_trade_no".to_string()))?;
     let provider_order_id = params
         .get("trade_no")
@@ -119,7 +118,7 @@ fn parse_signed_notification(
         .and_then(|value| parse_money_minor(value));
     let status = zpay_trade_status(params.get("trade_status"))?;
     Ok(GatewayNotification {
-        order_id,
+        order_no,
         provider_order_id,
         payable_amount_minor,
         status,
@@ -219,7 +218,7 @@ mod tests {
             ("name".to_string(), "账户充值".to_string()),
             (
                 "out_trade_no".to_string(),
-                "67e5504410b1426f9247bb680e5fe0c8".to_string(),
+                "10000001".to_string(),
             ),
             ("pid".to_string(), "1001".to_string()),
             ("trade_no".to_string(), "20260621123456789".to_string()),
@@ -258,10 +257,7 @@ mod tests {
         let notification =
             parse_signed_notification(signed_notify_params(), "secret", Some("1001")).unwrap();
 
-        assert_eq!(
-            notification.order_id.to_string(),
-            "67e55044-10b1-426f-9247-bb680e5fe0c8"
-        );
+        assert_eq!(notification.order_no, 10000001);
         assert_eq!(
             notification.provider_order_id.as_deref(),
             Some("20260621123456789")

@@ -1,4 +1,4 @@
-# NeoGate Docker Compose — 中国大陆镜像版
+# NeoGate Docker Compose — 中国大陆源码构建镜像版
 #
 # 使用方式：
 #   docker compose -f docker-compose.cn.yml up -d --build
@@ -7,10 +7,12 @@
 # 国内镜像源，无需额外配置 .env 或 Docker daemon。若默认代理不可用，可临时替换：
 #   DOCKER_HUB_PREFIX=你的镜像代理/ docker compose -f docker-compose.cn.yml up -d --build
 #
-# 海外部署请使用 docker-compose.yml。
+# 海外源码构建请使用 docker-compose.build.yml。
+# 普通用户免编译安装请使用默认 docker-compose.yml。
 #
-# ⚠️ 维护提醒：此文件与 docker-compose.yml 仅镜像源不同，修改 docker-compose.yml
-# 时请同步更新此文件（镜像源部分保留国内配置，其余保持一致）。
+# ⚠️ 维护提醒：此文件与 docker-compose.build.yml 仅镜像源不同，修改
+# docker-compose.build.yml 时请同步更新此文件（镜像源部分保留国内配置，
+# 其余保持一致）。
 
 services:
   postgres:

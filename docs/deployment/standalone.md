@@ -7,7 +7,15 @@ Standalone deployment is suitable for evaluation, personal projects, small teams
 Docker Compose is the recommended standalone deployment path. It does not require Rust, Node.js, or pnpm on the host.
 
 ```bash
-docker compose up -d --build
+docker compose up -d
+```
+
+This command pulls prebuilt images, so the server does not need to compile the Rust backend or frontend assets.
+
+If you need to build images from the current source tree, use:
+
+```bash
+docker compose -f docker-compose.build.yml up -d --build
 ```
 
 It starts:
@@ -59,7 +67,14 @@ docker compose down
 Rebuild and start:
 
 ```bash
-docker compose up -d --build
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+Pull prebuilt images and start:
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 Restart the backend container:

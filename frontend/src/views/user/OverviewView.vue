@@ -161,7 +161,7 @@ let balanceRefreshTimer: number | null = null
 
 function refreshOverviewIfVisible() {
   if (document.visibilityState === 'visible') {
-    void reloadOverview()
+    void reloadOverview({ silent: true })
   }
 }
 

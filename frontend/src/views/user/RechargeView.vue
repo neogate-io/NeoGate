@@ -284,6 +284,9 @@ async function submitRecharge() {
           :data="orders"
           stripe
         >
+          <el-table-column label="订单号" min-width="130">
+            <template #default="{ row }">{{ row.order_no }}</template>
+          </el-table-column>
           <el-table-column :label="t('time')" min-width="170">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
@@ -313,6 +316,10 @@ async function submitRecharge() {
         </div>
         <div v-else v-loading="loading" class="recharge-order-cards">
           <article v-for="row in orders" :key="row.id" class="recharge-order-card">
+            <div>
+              <span>订单号</span>
+              <strong>{{ row.order_no }}</strong>
+            </div>
             <div>
               <span>{{ t('time') }}</span>
               <strong>{{ formatTime(row.created_at) }}</strong>

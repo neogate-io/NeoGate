@@ -8,18 +8,16 @@ DEFAULT_BASE_URL="__NEOGATE_DEFAULT_BASE_URL__"
 DEFAULT_CODEX_MODEL="gpt-5.5"
 DEFAULT_CLAUDE_MODEL="claude-sonnet-4-5"
 
-BASE_URL="${NEOGATE_BASE_URL:-$DEFAULT_BASE_URL}"
-CODEX_MODEL="${NEOGATE_CODEX_MODEL:-${NEOGATE_MODEL:-$DEFAULT_CODEX_MODEL}}"
-CLAUDE_MODEL="${NEOGATE_CLAUDE_MODEL:-$DEFAULT_CLAUDE_MODEL}"
+BASE_URL="$DEFAULT_BASE_URL"
+CODEX_MODEL="$DEFAULT_CODEX_MODEL"
+CLAUDE_MODEL="$DEFAULT_CLAUDE_MODEL"
 CODEX_MODEL_EXPLICIT=0
 CLAUDE_MODEL_EXPLICIT=0
-[[ -n "${NEOGATE_CODEX_MODEL:-}" || -n "${NEOGATE_MODEL:-}" ]] && CODEX_MODEL_EXPLICIT=1
-[[ -n "${NEOGATE_CLAUDE_MODEL:-}" ]] && CLAUDE_MODEL_EXPLICIT=1
 API_KEY="${NEOGATE_API_KEY:-}"
 CLIENT="${NEOGATE_CLIENT:-}"
 ASSUME_YES="${NEOGATE_ASSUME_YES:-0}"
-SKIP_INSTALL="${NEOGATE_SKIP_INSTALL:-0}"
-SKIP_RELAY_TEST="${NEOGATE_SKIP_RELAY_TEST:-0}"
+SKIP_INSTALL=0
+SKIP_RELAY_TEST=0
 DRY_RUN=0
 TMP_DIR=""
 INSTALL_LOCALE="${NEOGATE_LOCALE:-}"
@@ -107,15 +105,13 @@ message() {
 
   if [[ "$INSTALL_LANG" == "zh" ]]; then
     case "$key" in
-      base_url_required) printf '%s' "--base-url 需要一个 URL" ;;
-      model_required) printf '%s' "--model 需要一个值" ;;
       client_required) printf '%s' "--client 需要 codex 或 claude" ;;
       unknown_option) printf '未知选项：%s' "$1" ;;
       invalid_client) printf '不支持的客户端：%s。请选择 codex 或 claude。' "$1" ;;
       cmd_required) printf '%s 是必需命令' "$1" ;;
       no_tty_api_key) printf '%s' "没有可交互的 TTY。非交互安装请设置 NEOGATE_API_KEY。" ;;
       no_tty_client) printf '%s' "没有可交互的 TTY。非交互安装请设置 NEOGATE_CLIENT=codex 或 NEOGATE_CLIENT=claude。" ;;
-      no_tty_model) printf '%s' "没有可交互的 TTY。非交互安装请设置对应的 NEOGATE_CODEX_MODEL 或 NEOGATE_CLAUDE_MODEL。" ;;
+      no_tty_model) printf '%s' "没有可交互的 TTY，无法选择模型。请在交互式终端中重新运行。" ;;
       read_api_key_failed) printf '%s' "读取 API 密钥失败" ;;
       empty_api_key) printf '%s' "API 密钥不能为空" ;;
       read_client_failed) printf '%s' "读取客户端选择失败" ;;
@@ -224,15 +220,13 @@ message() {
   fi
 
   case "$key" in
-    base_url_required) printf '%s' "--base-url requires a URL" ;;
-    model_required) printf '%s' "--model requires a value" ;;
     client_required) printf '%s' "--client requires codex or claude" ;;
     unknown_option) printf 'Unknown option: %s' "$1" ;;
     invalid_client) printf 'Unsupported client: %s. Choose codex or claude.' "$1" ;;
     cmd_required) printf '%s is required' "$1" ;;
     no_tty_api_key) printf '%s' "No interactive TTY found. Set NEOGATE_API_KEY for non-interactive installs." ;;
     no_tty_client) printf '%s' "No interactive TTY found. Set NEOGATE_CLIENT=codex or NEOGATE_CLIENT=claude for non-interactive installs." ;;
-    no_tty_model) printf '%s' "No interactive TTY found. Set the matching NEOGATE_CODEX_MODEL or NEOGATE_CLAUDE_MODEL for non-interactive installs." ;;
+    no_tty_model) printf '%s' "No interactive TTY found, so the installer cannot choose a model. Re-run in an interactive terminal." ;;
     read_api_key_failed) printf '%s' "Failed to read API key" ;;
     empty_api_key) printf '%s' "API key cannot be empty" ;;
     read_client_failed) printf '%s' "Failed to read client selection" ;;
@@ -348,27 +342,15 @@ NeoGate 安装器
   curl -fsSL __NEOGATE_INSTALL_ORIGIN__/install | bash
 
 选项：
-  --base-url URL       NeoGate OpenAI 兼容基础 URL。默认：__NEOGATE_DEFAULT_BASE_URL__
-  --model MODEL        Codex 模型名。默认：gpt-5.5
-  --claude-model MODEL Claude Code 模型名。默认：claude-sonnet-4-5
   --client CLIENT      跳过菜单，直接配置 codex 或 claude
   --yes                API 密钥验证后不再询问确认，直接继续
-  --skip-install       缺少 Node.js 或目标 CLI 时不自动安装
-  --skip-relay-test    跳过最终转发测试
-  --dry-run            打印计划写入的配置，不实际写入
   -h, --help           显示此帮助
 
 环境变量：
   NEOGATE_API_KEY           邮件中获取的 NeoGate API 密钥，适合非交互 shell
-  NEOGATE_BASE_URL          等同于 --base-url
-  NEOGATE_MODEL             等同于 --model
-  NEOGATE_CODEX_MODEL       Codex CLI 模型名
-  NEOGATE_CLAUDE_MODEL      Claude Code 模型名
   NEOGATE_CLIENT            跳过菜单，直接配置 codex 或 claude
   NEOGATE_LOCALE            强制安装器语言，可设为 zh-CN 或 en-US
   NEOGATE_ASSUME_YES=1      等同于 --yes
-  NEOGATE_SKIP_INSTALL=1    等同于 --skip-install
-  NEOGATE_SKIP_RELAY_TEST=1 等同于 --skip-relay-test
   CODEX_HOME                 Codex 配置目录。默认：~/.codex
   CLAUDE_HOME                Claude Code 配置目录。默认：~/.claude
 USAGE
@@ -382,27 +364,15 @@ Usage:
   curl -fsSL __NEOGATE_INSTALL_ORIGIN__/install | bash
 
 Options:
-  --base-url URL       NeoGate OpenAI-compatible base URL. Default: __NEOGATE_DEFAULT_BASE_URL__
-  --model MODEL        Codex model name. Default: gpt-5.5
-  --claude-model MODEL Claude Code model name. Default: claude-sonnet-4-5
   --client CLIENT      Skip the menu and configure codex or claude
   --yes                Continue without confirmation prompts after API key verification
-  --skip-install       Do not install missing Node.js or the selected CLI
-  --skip-relay-test    Skip the final relay test
-  --dry-run            Print planned config changes without writing config
   -h, --help           Show this help
 
 Environment:
   NEOGATE_API_KEY           NeoGate API key from your email, useful for non-interactive shells
-  NEOGATE_BASE_URL          Same as --base-url
-  NEOGATE_MODEL             Same as --model
-  NEOGATE_CODEX_MODEL       Codex CLI model name
-  NEOGATE_CLAUDE_MODEL      Claude Code model name
   NEOGATE_CLIENT            Skip the menu and configure codex or claude
   NEOGATE_LOCALE            Force installer language, such as zh-CN or en-US
   NEOGATE_ASSUME_YES=1      Same as --yes
-  NEOGATE_SKIP_INSTALL=1    Same as --skip-install
-  NEOGATE_SKIP_RELAY_TEST=1 Same as --skip-relay-test
   CODEX_HOME                 Codex config directory. Default: ~/.codex
   CLAUDE_HOME                Claude Code config directory. Default: ~/.claude
 USAGE
@@ -411,23 +381,6 @@ USAGE
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --base-url)
-        [[ $# -ge 2 ]] || die "$(message base_url_required)"
-        BASE_URL="$2"
-        shift 2
-        ;;
-      --model)
-        [[ $# -ge 2 ]] || die "$(message model_required)"
-        CODEX_MODEL="$2"
-        CODEX_MODEL_EXPLICIT=1
-        shift 2
-        ;;
-      --claude-model)
-        [[ $# -ge 2 ]] || die "$(message model_required)"
-        CLAUDE_MODEL="$2"
-        CLAUDE_MODEL_EXPLICIT=1
-        shift 2
-        ;;
       --client)
         [[ $# -ge 2 ]] || die "$(message client_required)"
         CLIENT="$2"
@@ -435,18 +388,6 @@ parse_args() {
         ;;
       --yes|-y)
         ASSUME_YES=1
-        shift
-        ;;
-      --skip-install)
-        SKIP_INSTALL=1
-        shift
-        ;;
-      --skip-relay-test)
-        SKIP_RELAY_TEST=1
-        shift
-        ;;
-      --dry-run)
-        DRY_RUN=1
         shift
         ;;
       -h|--help)

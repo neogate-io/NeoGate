@@ -1,14 +1,6 @@
 param(
-  [string]$BaseUrl = $env:NEOGATE_BASE_URL,
-  [string]$Model = $env:NEOGATE_MODEL,
-  [string]$CodexModel = $env:NEOGATE_CODEX_MODEL,
-  [string]$ClaudeModel = $env:NEOGATE_CLAUDE_MODEL,
   [string]$Client = $env:NEOGATE_CLIENT,
-  [string]$ApiKey = $env:NEOGATE_API_KEY,
   [switch]$Yes,
-  [switch]$SkipInstall,
-  [switch]$SkipRelayTest,
-  [switch]$DryRun,
   [switch]$Help
 )
 
@@ -27,15 +19,16 @@ $ProviderName = 'NeoGate'
 $DefaultBaseUrl = '__NEOGATE_DEFAULT_BASE_URL__'
 $DefaultCodexModel = 'gpt-5.5'
 $DefaultClaudeModel = 'claude-sonnet-4-5'
-$CodexModelExplicit = $PSBoundParameters.ContainsKey('CodexModel') -or $PSBoundParameters.ContainsKey('Model') -or [bool]$env:NEOGATE_CODEX_MODEL -or [bool]$env:NEOGATE_MODEL
-$ClaudeModelExplicit = $PSBoundParameters.ContainsKey('ClaudeModel') -or [bool]$env:NEOGATE_CLAUDE_MODEL
-
-if (-not $BaseUrl) { $BaseUrl = $DefaultBaseUrl }
-if (-not $CodexModel) { $CodexModel = $(if ($Model) { $Model } else { $DefaultCodexModel }) }
-if (-not $ClaudeModel) { $ClaudeModel = $DefaultClaudeModel }
+$BaseUrl = $DefaultBaseUrl
+$CodexModel = $DefaultCodexModel
+$ClaudeModel = $DefaultClaudeModel
+$CodexModelExplicit = $false
+$ClaudeModelExplicit = $false
+$ApiKey = $env:NEOGATE_API_KEY
+$SkipInstall = $false
+$SkipRelayTest = $false
+$DryRun = $false
 if (-not $Yes -and $env:NEOGATE_ASSUME_YES -eq '1') { $Yes = $true }
-if (-not $SkipInstall -and $env:NEOGATE_SKIP_INSTALL -eq '1') { $SkipInstall = $true }
-if (-not $SkipRelayTest -and $env:NEOGATE_SKIP_RELAY_TEST -eq '1') { $SkipRelayTest = $true }
 
 function Detect-Locale {
   $candidates = @($env:NEOGATE_LOCALE, $env:LC_ALL, $env:LC_MESSAGES, $env:LANGUAGE, $env:LANG, [CultureInfo]::CurrentUICulture.Name, (Get-Culture).Name)
@@ -60,15 +53,13 @@ function Detect-Locale {
 $InstallLang = 'en'
 
 $MsgEn = @{
-  base_url_required = '--base-url requires a URL'
-  model_required = '--model requires a value'
   client_required = '--client requires codex or claude'
   unknown_option = 'Unknown option: {0}'
   invalid_client = 'Unsupported client: {0}. Choose codex or claude.'
   cmd_required = '{0} is required'
   no_tty_api_key = 'No interactive TTY found. Set NEOGATE_API_KEY for non-interactive installs.'
   no_tty_client = 'No interactive TTY found. Set NEOGATE_CLIENT=codex or NEOGATE_CLIENT=claude for non-interactive installs.'
-  no_tty_model = 'No interactive TTY found. Set the matching NEOGATE_CODEX_MODEL or NEOGATE_CLAUDE_MODEL for non-interactive installs.'
+  no_tty_model = 'No interactive TTY found, so the installer cannot choose a model. Re-run in an interactive terminal.'
   read_api_key_failed = 'Failed to read API key'
   empty_api_key = 'API key cannot be empty'
   read_client_failed = 'Failed to read client selection'
@@ -178,15 +169,13 @@ $MsgEn = @{
 }
 
 $MsgZh = @{
-  base_url_required = '--base-url 需要一个 URL'
-  model_required = '--model 需要一个值'
   client_required = '--client 需要 codex 或 claude'
   unknown_option = '未知选项：{0}'
   invalid_client = '不支持的客户端：{0}。请选择 codex 或 claude。'
   cmd_required = '{0} 是必需命令'
   no_tty_api_key = '没有可交互的 TTY。非交互安装请设置 NEOGATE_API_KEY。'
   no_tty_client = '没有可交互的 TTY。非交互安装请设置 NEOGATE_CLIENT=codex 或 NEOGATE_CLIENT=claude。'
-  no_tty_model = '没有可交互的 TTY。非交互安装请设置对应的 NEOGATE_CODEX_MODEL 或 NEOGATE_CLAUDE_MODEL。'
+  no_tty_model = '没有可交互的 TTY，无法选择模型。请在交互式终端中重新运行。'
   read_api_key_failed = '读取 API 密钥失败'
   empty_api_key = 'API 密钥不能为空'
   read_client_failed = '读取客户端选择失败'
@@ -313,20 +302,11 @@ NeoGate Windows 安装器
   irm __NEOGATE_INSTALL_ORIGIN__/install.ps1 | iex
 
 选项：
-  -BaseUrl URL          NeoGate OpenAI 兼容基础 URL。默认：__NEOGATE_DEFAULT_BASE_URL__
-  -Model MODEL         Codex 模型名。默认：gpt-5.5
-  -CodexModel MODEL    Codex 模型名。
-  -ClaudeModel MODEL   Claude Code 模型名。默认：claude-sonnet-4-5
   -Client CLIENT       codex 或 claude
   -Yes                 API 密钥验证后不再询问确认，直接继续
-  -SkipInstall         缺少 Node.js 或目标 CLI 时不自动安装
-  -SkipRelayTest       跳过最终网关转发测试
-  -DryRun              打印计划写入的配置，不实际写入
 
 环境变量：
-  NEOGATE_API_KEY, NEOGATE_BASE_URL, NEOGATE_MODEL, NEOGATE_CODEX_MODEL,
-  NEOGATE_CLAUDE_MODEL, NEOGATE_CLIENT, NEOGATE_ASSUME_YES=1,
-  NEOGATE_SKIP_INSTALL=1, NEOGATE_SKIP_RELAY_TEST=1, CODEX_HOME, CLAUDE_HOME
+  NEOGATE_API_KEY, NEOGATE_CLIENT, NEOGATE_ASSUME_YES=1, CODEX_HOME, CLAUDE_HOME
 "@
     return
   }
@@ -337,20 +317,11 @@ Usage:
   irm __NEOGATE_INSTALL_ORIGIN__/install.ps1 | iex
 
 Options:
-  -BaseUrl URL          NeoGate OpenAI-compatible base URL. Default: __NEOGATE_DEFAULT_BASE_URL__
-  -Model MODEL         Codex model name. Default: gpt-5.5
-  -CodexModel MODEL    Codex model name.
-  -ClaudeModel MODEL   Claude Code model name. Default: claude-sonnet-4-5
   -Client CLIENT       codex or claude
   -Yes                 Continue without confirmation prompts after API key verification
-  -SkipInstall         Do not install missing Node.js or client CLI
-  -SkipRelayTest       Skip the final gateway relay test
-  -DryRun              Print planned config changes without writing files
 
 Environment variables:
-  NEOGATE_API_KEY, NEOGATE_BASE_URL, NEOGATE_MODEL, NEOGATE_CODEX_MODEL,
-  NEOGATE_CLAUDE_MODEL, NEOGATE_CLIENT, NEOGATE_ASSUME_YES=1,
-  NEOGATE_SKIP_INSTALL=1, NEOGATE_SKIP_RELAY_TEST=1, CODEX_HOME, CLAUDE_HOME
+  NEOGATE_API_KEY, NEOGATE_CLIENT, NEOGATE_ASSUME_YES=1, CODEX_HOME, CLAUDE_HOME
 "@
 }
 

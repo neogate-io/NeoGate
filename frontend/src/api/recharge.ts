@@ -2,6 +2,7 @@ import { userRequest } from './request'
 
 export type PaymentOrder = {
   id: string
+  order_no: number
   user_id: number
   provider: string
   provider_order_id?: string | null

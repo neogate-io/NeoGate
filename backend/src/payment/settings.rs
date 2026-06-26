@@ -57,11 +57,7 @@ pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRe
     let value: serde_json::Value = row.try_get("value")?;
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let setting: StoredPaymentSetting = serde_json::from_value(value)?;
-    Ok(record_from_stored(
-        setting,
-        true,
-        Some(updated_at),
-    ))
+    Ok(record_from_stored(setting, true, Some(updated_at)))
 }
 
 pub async fn upsert_payment_setting(
@@ -122,11 +118,7 @@ pub async fn upsert_payment_setting(
     let value: serde_json::Value = row.try_get("value")?;
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let setting: StoredPaymentSetting = serde_json::from_value(value)?;
-    Ok(record_from_stored(
-        setting,
-        true,
-        Some(updated_at),
-    ))
+    Ok(record_from_stored(setting, true, Some(updated_at)))
 }
 
 pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig> {

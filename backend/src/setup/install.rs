@@ -279,7 +279,9 @@ mod tests {
         assert!(script.contains("LOADED_CODEX_KEY"));
         assert!(script.contains("client_inferred"));
         assert!(script.contains("model_current_label"));
-        assert!(script.contains(r#"key_loaded) printf '%s' "Reusing API key from previous config""#));
+        assert!(
+            script.contains(r#"key_loaded) printf '%s' "Reusing API key from previous config""#)
+        );
         assert!(script.contains(r#"key_loaded) printf '%s' "已从本地配置读取 API 密钥""#));
         assert!(script.contains("HAS_EXISTING_CONFIG"));
         assert!(script.contains("choose_switch_model"));

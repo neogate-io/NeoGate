@@ -386,14 +386,13 @@ async fn record_payment_event(
     provider: PaymentProvider,
     notification: &GatewayNotification,
 ) -> AppResult<()> {
-    let payment_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM payment WHERE order_no = $1 AND provider = $2",
-    )
-    .bind(notification.order_no)
-    .bind(provider.as_str())
-    .fetch_optional(&state.db.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let payment_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM payment WHERE order_no = $1 AND provider = $2")
+            .bind(notification.order_no)
+            .bind(provider.as_str())
+            .fetch_optional(&state.db.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     sqlx::query(
         "INSERT INTO payment_event (payment_id, provider, event_type, payload)

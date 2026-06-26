@@ -8,6 +8,7 @@ pub(crate) mod project;
 pub(crate) mod provider;
 pub(crate) mod setting;
 mod upstream;
+mod usage_stats;
 mod user;
 pub(crate) mod version;
 
@@ -98,6 +99,7 @@ pub use user::public_router;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .merge(apps::router())
+        .merge(usage_stats::router())
         .route("/api/admin/users", get(users).post(create_user_handler))
         .route("/api/admin/user-groups", get(user_groups))
         .route(

@@ -38,6 +38,10 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 仓库地址：[neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
+<p align="center">
+  <img src="docs/assets/admin-dashboard.png" alt="NeoGate 管理后台截图" width="920">
+</p>
+
 > [!IMPORTANT]
 > NeoGate 适用于合法、授权的 AI API 网关、企业级鉴权、多模型管理、用量统计、成本归集和私有化部署场景。使用者应合法获取上游 API key、账号、模型服务和接口权限，并遵守上游服务条款及所在地法律法规。
 
@@ -210,17 +214,6 @@ docker compose exec backend neogate admin reset-password --username admin
 ```
 
 如果管理员用户名不是 `admin`，请替换 `--username`。
-
-#### 发布预构建镜像
-
-项目维护者推送版本标签后，GitHub Actions 会构建并发布 GHCR 镜像：
-
-```bash
-git tag v0.3.2
-git push origin v0.3.2
-```
-
-发布完成后，用户可以通过 `docker compose up -d` 直接安装。默认镜像地址为 `ghcr.io/neogate-io/neogate-backend` 和 `ghcr.io/neogate-io/neogate-web`。
 
 ### 🧑‍💻 源码本地运行
 

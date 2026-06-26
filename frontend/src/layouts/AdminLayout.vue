@@ -40,6 +40,7 @@ const navGroups = computed(() => {
     operationItems.push({ path: '/admin/keys', key: 'userManagement', icon: User })
   }
   operationItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
+  operationItems.push({ path: '/admin/statistics', key: 'usageStatistics', icon: Monitor })
   const groups: AdminNavGroup[] = [
     {
       key: 'adminNavOperations',

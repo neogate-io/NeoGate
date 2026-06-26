@@ -21,8 +21,8 @@ use crate::{
             UpsertProviderPriceRequest,
         },
         provider::{
-            ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider, list_providers,
-            provider_default_endpoints, record_provider_models,
+            ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider,
+            list_providers, provider_default_endpoints, record_provider_models,
         },
         setting::{
             test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,

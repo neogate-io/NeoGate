@@ -12,3 +12,10 @@ ALTER TABLE payment
     ALTER COLUMN order_no SET NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_order_no ON payment(order_no);
+
+CREATE INDEX IF NOT EXISTS idx_usage_daily_user_provider_model_day
+    ON usage_daily(user_id, provider, model, day DESC);
+
+CREATE INDEX IF NOT EXISTS idx_usage_daily_model_day
+    ON usage_daily(model, day DESC)
+    WHERE model <> '';

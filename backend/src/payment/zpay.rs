@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use axum::{body::Bytes, http::HeaderMap};
-use md5::{Digest, Md5};
 use crate::{
     config::ZpayConfig,
     error::{AppError, AppResult},
 };
+use axum::{body::Bytes, http::HeaderMap};
+use md5::{Digest, Md5};
 
 use super::{
     form_or_json_payload, payload_json, GatewayCreateRequest, GatewayCreateResponse,
@@ -216,10 +216,7 @@ mod tests {
         let mut params = HashMap::from([
             ("money".to_string(), "1.20".to_string()),
             ("name".to_string(), "账户充值".to_string()),
-            (
-                "out_trade_no".to_string(),
-                "10000001".to_string(),
-            ),
+            ("out_trade_no".to_string(), "10000001".to_string()),
             ("pid".to_string(), "1001".to_string()),
             ("trade_no".to_string(), "20260621123456789".to_string()),
             ("trade_status".to_string(), "TRADE_SUCCESS".to_string()),

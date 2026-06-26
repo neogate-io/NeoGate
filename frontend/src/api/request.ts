@@ -14,6 +14,28 @@ export async function userRequest<T>(path: string, init?: RequestInit) {
   return authedRequest<T>(path, init)
 }
 
+export async function adminFileRequest(path: string, init?: RequestInit) {
+  const auth = useAuthStore()
+  const headers = new Headers(init?.headers)
+  if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
+
+  try {
+    const response = await fetch(path, { ...init, headers })
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      const error = readApiErrorPayload(data)
+      throw new ApiError(error?.message ?? response.statusText, response.status, error?.code)
+    }
+    return {
+      blob: await response.blob(),
+      filename: filenameFromContentDisposition(response.headers.get('content-disposition'))
+    }
+  } catch (err) {
+    handleAuthFailure(err)
+    throw err
+  }
+}
+
 async function authedRequest<T>(path: string, init?: RequestInit) {
   const auth = useAuthStore()
 
@@ -88,4 +110,9 @@ function handleAuthFailure(err: unknown) {
 
 function isPasswordChangeRequiredError(err: ApiError) {
   return err.code === 'password_change_required'
+}
+
+function filenameFromContentDisposition(value: string | null) {
+  const match = value?.match(/filename="?([^";]+)"?/i)
+  return match?.[1] ?? null
 }

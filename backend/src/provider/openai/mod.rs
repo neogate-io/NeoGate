@@ -306,21 +306,26 @@ async fn relay_openai(
         let reused = reuse_upstream.is_some();
         let (protocol, mut upstream) = match reuse_upstream.take() {
             Some(prev) => prev,
-            None => select_upstream_excluding(
-                &state,
-                path,
-                &meta.model,
-                channel_affinity_key.as_ref(),
-                &attempted_upstreams,
-            )
-            .await?,
+            None => {
+                select_upstream_excluding(
+                    &state,
+                    path,
+                    &meta.model,
+                    channel_affinity_key.as_ref(),
+                    &attempted_upstreams,
+                )
+                .await?
+            }
         };
         relay_attempt_counter += 1;
         // 路径 B：已学习到该 (endpoint, model) 不支持 /v1/responses → 覆写为 chat 降级。
         // reuse 路径的 upstream 已是降级版（responses_chat_fallback=true），此处不重复命中。
         if !upstream.responses_chat_fallback
             && route == RelayRoute::OpenAiResponses
-            && matches!(protocol, UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth)
+            && matches!(
+                protocol,
+                UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
+            )
             && state
                 .selector
                 .responses_unsupported(upstream.channel_endpoint_id, &meta.model)

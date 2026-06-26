@@ -10,7 +10,7 @@ NeoGate is a self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropi
 | [Cluster Deployment](deployment/cluster.md) / [中文](deployment/cluster.zh.md) | Production cluster setup, environment variables, health checks, and troubleshooting. |
 | [Project Model](design/project-model.md) | Project, member, API key, and usage attribution design. |
 | [Billing Outbox](design/billing-outbox.md) | Reliable metering and billing event processing design. |
-| [Release Notes v0.3.1](releases/v0.3.1.md) | Latest release highlights, upgrade notes, and version metadata. |
+| [Release Notes v0.3.2](releases/v0.3.2.md) | Latest release highlights, upgrade notes, and version metadata. |
 
 ## Search Terms
 

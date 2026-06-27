@@ -1,32 +1,14 @@
 # 10 分钟部署 NeoGate
 
-这篇教程面向第一次试用 NeoGate 的用户。目标是在一台已安装 Docker 的服务器或本机上，快速跑起一个私有大模型 API 网关，并完成一次真实调用。
+这是一份最短路径教程，适合第一次用 Docker Compose 试用 NeoGate。更完整的部署说明请看[单机部署](deployment/standalone.zh.md)和[集群部署](deployment/cluster.zh.md)。
 
-完成后你会得到：
-
-- 一个可访问的 NeoGate 控制台。
-- 一个已配置的上游通道。
-- 一个项目或用户 API Key。
-- 一次通过 `/v1/chat/completions` 的测试请求。
-- 一条可在后台查看的用量记录。
-
-## 适合场景
-
-本教程适合：
-
-- 个人或小团队评估 NeoGate。
-- 公司内部先搭一个统一 AI API 入口。
-- 在正式部署前快速验证上游 provider、模型和接口兼容性。
-
-如果你需要多副本、外部 PostgreSQL、Redis 和生产级横向扩展，请参考[集群部署](deployment/cluster.zh.md)。
-
-## 准备工作
+## 准备
 
 你需要：
 
 - 一台可以运行 Docker 和 Docker Compose 的机器。
-- 一个可用的上游模型 API Key，例如 OpenAI-compatible 或 Anthropic-compatible 服务。
-- 服务器防火墙允许访问 NeoGate 暴露的端口，默认是 `8080`。
+- 一个可用的上游模型 API Key。
+- 服务器防火墙或安全组放行 `8080` 端口。
 
 确认 Docker 可用：
 
@@ -43,33 +25,50 @@ docker compose version
 docker compose up -d
 ```
 
-这个命令会启动：
+这个命令会启动 PostgreSQL、后端和前端 Nginx。
 
-- `postgres`：PostgreSQL 数据库。
-- `backend`：NeoGate 后端 API、worker 和 scheduler。
-- `web`：前端页面和 Nginx 反向代理。
-
-查看运行状态：
+检查容器状态：
 
 ```bash
 docker compose ps
 ```
 
-正常情况下，三个服务应处于 `running` 或 `healthy` 状态。
+正常情况下应看到 `postgres`、`backend`、`web` 处于 `running` 或 `healthy` 状态。
 
-如果需要查看日志：
+查看日志：
 
 ```bash
 docker compose logs -f
 ```
 
-只看后端日志：
+只查看后端日志：
 
 ```bash
 docker compose logs -f backend
 ```
 
-## 2. 打开首次运行向导
+## 2. 可选：绑定域名和宿主机 Nginx
+
+Docker Compose 默认把 NeoGate 暴露到宿主机 `8080` 端口。直接通过 `http://服务器IP:8080` 访问时，可以跳过这一步。
+
+如果你希望绑定域名，可以让宿主机 Nginx 反向代理到：
+
+```text
+http://127.0.0.1:8080
+```
+
+仓库提供了示例配置：
+
+```bash
+sudo cp deploy/nginx/docker-compose.conf.example /etc/nginx/conf.d/neogate.conf
+sudo vim /etc/nginx/conf.d/neogate.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+修改配置时，重点确认域名、证书路径和反代目标地址。
+
+## 3. 完成首次运行向导
 
 浏览器访问：
 
@@ -83,7 +82,7 @@ http://服务器IP:8080
 http://127.0.0.1:8080
 ```
 
-首次启动时，NeoGate 会进入初始化向导。按页面提示完成：
+首次启动会进入初始化向导。按页面提示完成：
 
 - 管理员账号。
 - 服务模式。
@@ -91,53 +90,50 @@ http://127.0.0.1:8080
 - 初始上游 provider、API Key、模型和价格。
 - 可选 SMTP 和支付设置。
 
-如果只是内部试用，建议先选择内部模式。内部模式不会要求用户必须有可用余额才能调用，更适合公司内部网关、个人测试和小团队试用。
+如果只是内部试用，建议先选择内部模式。内部模式默认不要求用户或项目有可用余额即可调用。
 
-## 3. 配置上游通道
+## 4. 检查上游通道
 
 进入后台后，打开：
 
 ```text
-管理后台 -> 上游通道
+管理后台 -> 上游服务
 ```
 
 确认至少有一个启用的通道，并检查：
 
-- Provider 是否正确。
-- Base URL 是否对应你的上游服务。
+- Base URL 是否正确。
 - API Key 是否可用。
-- 模型列表包含你准备调用的模型。
-- 通道诊断可以成功访问上游。
+- 模型列表是否包含准备调用的模型。
+- 通道诊断是否通过。
 
-如果你使用的是 OpenAI-compatible 服务，通常需要配置 OpenAI 协议端点和对应模型名。
+如果诊断失败，优先检查 API Key、模型名、Base URL、服务器网络和 provider 协议兼容性。
 
-如果你使用的是 Anthropic-compatible 服务，确认 Anthropic 协议端点启用，并使用对应的模型名。
+## 5. 创建或复制 API Key
 
-## 4. 创建项目和 API Key
-
-内部模式下，推荐通过项目来承载业务或团队：
+内部模式下，推荐通过项目来管理团队或业务应用：
 
 ```text
 管理后台 -> 项目管理
 ```
 
-创建一个项目，例如：
+你可以创建一个项目，例如：
 
 ```text
 Internal AI Gateway
 ```
 
-然后为项目成员创建或查看 API Key。也可以在用户端进入：
+然后为项目成员创建或查看 API Key。也可以进入：
 
 ```text
 用户中心 -> API Key
 ```
 
-复制一个可用的 API Key。后续请求会用这个 Key 调用 NeoGate，而不是直接暴露上游 provider 的 Key。
+复制一个可用的 NeoGate API Key。业务系统后续使用这个 Key 调用 NeoGate，而不是直接使用上游 provider 的 Key。
 
-## 5. 发送测试请求
+## 6. 发送测试请求
 
-把下面命令中的 `YOUR_NEOGATE_API_KEY` 和 `MODEL_NAME` 替换成你的 NeoGate API Key 和模型名：
+把 `YOUR_NEOGATE_API_KEY` 和 `MODEL_NAME` 替换成你的 NeoGate API Key 和模型名：
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
@@ -154,84 +150,39 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-如果 NeoGate 部署在远程服务器，把地址替换成：
+如果 NeoGate 部署在远程服务器，把地址改成：
 
 ```text
 http://服务器IP:8080/v1/chat/completions
 ```
 
-成功时，你会收到 OpenAI-compatible 格式的响应。
+成功时会收到 OpenAI-compatible 格式的响应。
 
-## 6. 查看用量
+## 7. 可选：自动配置本机工具
 
-调用完成后，进入：
+如果你想让本机的 Codex 或 Claude Code 直接走 NeoGate，可以使用 NeoGate 提供的自动配置脚本。
 
-```text
-管理后台 -> 用量记录
-```
-
-你应该能看到刚才的请求记录，包括：
-
-- 用户或项目。
-- API Key。
-- Provider 和模型。
-- Token 用量。
-- 成本。
-- 状态码和错误信息。
-- 上游路由链路。
-
-也可以进入：
-
-```text
-管理后台 -> 用量统计
-```
-
-查看按日期、模型、通道等维度汇总的用量和成本。
-
-## 常见问题
-
-### 页面打不开
-
-先检查容器状态：
+Linux / macOS / WSL：
 
 ```bash
-docker compose ps
+curl -fsSL http://服务器IP:8080/install | bash
 ```
 
-再查看日志：
+Windows PowerShell：
 
-```bash
-docker compose logs -f backend
-docker compose logs -f web
+```powershell
+irm http://服务器IP:8080/install.ps1 | iex
 ```
 
-确认服务器防火墙、安全组或本机端口没有阻止 `8080`。
+如果已经绑定域名，把 `http://服务器IP:8080` 替换成你的 NeoGate 访问地址。
 
-### 上游调用失败
+脚本会按提示完成：
 
-进入 `管理后台 -> 上游通道`，打开通道诊断，重点检查：
+- 验证 NeoGate API Key。
+- 选择要配置的客户端，例如 Codex CLI 或 Claude Code。
+- 从可用模型列表中选择模型。
+- 展示配置摘要。
+- 写入 Base URL、API Key 和模型名。
+- 执行一次网关转发测试。
 
-- Base URL 是否正确。
-- API Key 是否有效。
-- 模型名是否和上游一致。
-- 上游服务是否支持当前协议。
-- 服务器是否能访问上游网络。
-
-### 返回余额不足
-
-如果你选择了计费模式，用户或项目需要有可用额度才能调用。试用阶段可以：
-
-- 改用内部模式。
-- 在后台为项目或用户调整额度。
-- 配置充值套餐和支付通道后再测试计费流程。
-
-### 流式请求或图片请求超时
-
-长耗时请求需要确认反向代理和上游超时设置。Docker Compose 默认配置已经包含常用的流式和长请求设置。如果你自行接入宿主机 Nginx，请参考[单机部署文档](deployment/standalone.zh.md)中的 Nginx 配置建议。
-
-## 下一步
-
-完成这篇教程后，可以继续：
-
-- 阅读[单机部署](deployment/standalone.zh.md)，了解常用运维命令。
-- 阅读[集群部署](deployment/cluster.zh.md)，准备多副本生产环境。
+如果本机已经配置过 NeoGate，再次运行同一条命令会尝试读取上次的 API Key、模型和客户端，并提示你切换模型或重新安装。

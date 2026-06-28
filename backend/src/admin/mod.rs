@@ -978,6 +978,7 @@ struct UsageRecord {
     user_username: Option<String>,
     user_key_id: Option<DbId>,
     channel_id: Option<DbId>,
+    channel_name: Option<String>,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
     relay_trace_id: Option<Uuid>,
@@ -1103,7 +1104,8 @@ async fn usage_rows(
     let rows = sqlx::query(
         r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
                 u.username AS user_username,
-                usage_record.user_key_id, usage_record.channel_id, usage_record.channel_key_id,
+                usage_record.user_key_id, usage_record.channel_id,
+                current_channel.name AS channel_name, usage_record.channel_key_id,
                 usage_record.credential_id, usage_record.relay_trace_id,
                 usage_record.relay_attempt, usage_record.relay_final,
                 usage_record.provider, usage_record.model,
@@ -1119,6 +1121,7 @@ async fn usage_rows(
                 rp.relay_path, rp.relay_path_index
          FROM usage AS usage_record
          LEFT JOIN "user" u ON u.id = usage_record.user_id
+         LEFT JOIN channel current_channel ON current_channel.id = usage_record.channel_id
          LEFT JOIN LATERAL (
            SELECT
              string_agg('#' || sibling.channel_id::text, ' → '
@@ -1142,6 +1145,7 @@ async fn usage_rows(
              OR usage_record.relay_trace_id::text ILIKE $3
              OR usage_record.user_id::text ILIKE $3
              OR u.email::text ILIKE $3
+             OR current_channel.name ILIKE $3
            )
            AND (
              $4::text IS NULL
@@ -1173,6 +1177,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         user_username: row.try_get("user_username")?,
         user_key_id: row.try_get("user_key_id")?,
         channel_id: row.try_get("channel_id")?,
+        channel_name: row.try_get("channel_name")?,
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
         relay_trace_id: row.try_get("relay_trace_id")?,

@@ -123,7 +123,10 @@ function usageStatusTooltip(statusCode?: number | null) {
 }
 
 function relayPathSegments(row: UsageRecord): string[] {
-  if (!row.relay_path) return []
+  if (!row.relay_path) {
+    const label = relayChannelLabel(row)
+    return label === '-' ? [] : [label]
+  }
   return row.relay_path.split(' → ')
 }
 
@@ -264,10 +267,7 @@ async function exportUsage() {
         </el-table-column>
         <el-table-column :label="t('model')" min-width="120">
           <template #default="{ row }">
-            <div class="usage-model">
-              <span class="usage-provider">{{ row.provider }}</span>
-              <span>{{ row.model || '-' }}</span>
-            </div>
+            <span class="usage-model-name">{{ row.model || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('latencyColumnHint')" min-width="170">
@@ -355,6 +355,10 @@ async function exportUsage() {
                     <span class="usage-trace-tip-label">{{ t('relayTipChannel') }}</span>
                     <span class="usage-trace-tip-value is-mono">{{ relayChannelLabel(row) }}</span>
                   </div>
+                  <div v-if="row.channel_name" class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('channelName') }}</span>
+                    <span class="usage-trace-tip-value">{{ row.channel_name }}</span>
+                  </div>
                   <div v-if="row.status_code != null" class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('relayTipStatus') }}</span>
                     <span class="usage-trace-tip-value is-mono">{{ row.status_code }}</span>
@@ -376,16 +380,22 @@ async function exportUsage() {
                   </div>
                 </div>
               </template>
-              <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
-                <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
-                  <span v-if="i > 0" class="usage-trace-sep">→</span>
+              <div class="usage-trace-cell">
+                <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
+                  <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
+                    <span v-if="i > 0" class="usage-trace-sep">→</span>
+                    <span
+                      class="usage-trace-seg"
+                      :class="{ 'is-current': i === row.relay_path_index }"
+                    >{{ seg }}</span>
+                  </template>
                   <span
-                    class="usage-trace-seg"
-                    :class="{ 'is-current': i === row.relay_path_index }"
-                  >{{ seg }}</span>
-                </template>
-                <span v-if="!row.relay_trace_id" class="usage-muted">-</span>
-              </span>
+                    v-if="!row.relay_trace_id && relayPathSegments(row).length === 0"
+                    class="usage-muted"
+                  >-</span>
+                </span>
+                <span v-if="row.channel_name" class="usage-trace-name">{{ row.channel_name }}</span>
+              </div>
             </el-tooltip>
           </template>
         </el-table-column>
@@ -519,7 +529,6 @@ async function exportUsage() {
   width: 78px;
 }
 
-.usage-model,
 .usage-stack {
   display: flex;
   flex-direction: column;
@@ -533,8 +542,9 @@ async function exportUsage() {
   font-weight: 560;
 }
 
-.usage-model > span:last-child {
+.usage-model-name {
   color: #1d2129;
+  display: block;
   font-size: 13px;
   font-weight: 680;
   overflow: hidden;
@@ -617,6 +627,14 @@ async function exportUsage() {
   white-space: normal;
 }
 
+.usage-trace-cell {
+  align-items: flex-start;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 100%;
+}
+
 .usage-trace-path {
   align-items: center;
   border-radius: 6px;
@@ -626,6 +644,18 @@ async function exportUsage() {
   gap: 2px;
   justify-content: flex-start;
   line-height: 1.4;
+  white-space: nowrap;
+}
+
+.usage-trace-name {
+  color: #667085;
+  display: block;
+  font-size: 11px;
+  font-weight: 520;
+  line-height: 1.25;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

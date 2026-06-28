@@ -26,10 +26,9 @@ import {
   customProviderOption,
   findProviderOption,
   isManualBaseUrlProvider,
-  newapiProviderOption,
   providerToOption,
   splitCommaList,
-  withManualProvidersFirst,
+  withCustomProviderLast,
   type ChannelProviderOption
 } from '../utils/channel'
 import { isNoModelsReturnedError, readError, readModelFetchError } from '../utils/errors'
@@ -163,7 +162,7 @@ export function useChannels(t: Translate) {
   })
 
   const providerOptions = computed(() => {
-    return withManualProvidersFirst(providers.value)
+    return withCustomProviderLast(providers.value)
   })
 
   const keyCounts = computed(() => {
@@ -191,10 +190,7 @@ export function useChannels(t: Translate) {
   watch(selectedFetchedModels, syncSelectedModelsToInput, { deep: true })
 
   function openCreateDialog() {
-    const provider =
-      findProviderOption(customProviderOption.value, providerOptions.value) ??
-      findProviderOption(newapiProviderOption.value, providerOptions.value) ??
-      providerOptions.value[0]
+    const provider = providerOptions.value[0]
     Object.assign(createForm, defaultCreateForm(provider))
     resetFetchedModels()
     createDialogOpen.value = true

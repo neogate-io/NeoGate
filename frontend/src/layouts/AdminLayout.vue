@@ -32,13 +32,14 @@ type SettingNavItem = { path: string; key: MessageKey }
 type AdminNavGroup = { key: MessageKey; items: AdminNavItem[] }
 
 const navGroups = computed(() => {
+  const serviceMode = servicePolicy.value?.service_mode
   const operationItems: AdminNavItem[] = [
     { path: '/admin/channels', key: 'upstreamChannels', icon: Connection }
   ]
-  if (servicePolicy.value?.service_mode === 'internal') {
+  if (serviceMode === 'internal') {
     operationItems.push({ path: '/admin/apps', key: 'apps', icon: Promotion })
   }
-  if (servicePolicy.value?.service_mode !== 'internal') {
+  if (serviceMode === 'paid') {
     operationItems.push({ path: '/admin/credentials', key: 'credentialManagement', icon: Key })
     operationItems.push({ path: '/admin/keys', key: 'userManagement', icon: User })
   }
@@ -50,7 +51,7 @@ const navGroups = computed(() => {
       items: operationItems
     }
   ]
-  if (servicePolicy.value?.service_mode !== 'paid') {
+  if (serviceMode === 'internal') {
     groups.push({
       key: 'adminNavAccounts',
       items: [

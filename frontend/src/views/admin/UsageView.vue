@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
   CircleCheckFilled,
+  Download,
   Refresh,
   Search,
   WarningFilled
 } from '@element-plus/icons-vue'
-import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/usage'
+import {
+  downloadAdminUsageCsv,
+  getAdminUsage,
+  type AdminUsageQuery,
+  type AdminUsageStatus,
+  type UsagePage
+} from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
@@ -16,6 +23,7 @@ import { useLocale } from '../../composables/useLocale'
 import type { UsageRecord } from '../../types/admin'
 import {
   cacheWriteTokens,
+  downloadBlob,
   formatDateTime,
   formatDurationMs,
   formatMicroUsd,
@@ -38,6 +46,7 @@ const filters = reactive<UsageFilters>({
   query: '',
   status: 'all'
 })
+const exporting = ref(false)
 const {
   currentPage,
   pageSize,
@@ -54,6 +63,12 @@ const usageQueryRange = computed(() => {
     end: end ? new Date(`${end}T23:59:59.999`).toISOString() : undefined
   }
 })
+const usageBaseQuery = computed<AdminUsageQuery>(() => ({
+  start: usageQueryRange.value.start,
+  end: usageQueryRange.value.end,
+  query: filters.query.trim() || undefined,
+  status: filters.status
+}))
 
 const {
   data: usagePage,
@@ -63,12 +78,9 @@ const {
 } = useAsyncData(
   () =>
     getAdminUsage({
+      ...usageBaseQuery.value,
       page: currentPage.value,
       limit: pageSize.value,
-      start: usageQueryRange.value.start,
-      end: usageQueryRange.value.end,
-      query: filters.query.trim() || undefined,
-      status: filters.status,
       cursor: currentCursor.value
     }),
   { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE } satisfies UsagePage
@@ -136,6 +148,16 @@ function usageUserDisplay(row: UsageRecord) {
 async function handleSearch() {
   await resetUsageAndReload()
 }
+
+async function exportUsage() {
+  exporting.value = true
+  try {
+    const result = await downloadAdminUsageCsv(usageBaseQuery.value)
+    downloadBlob(result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`, result.blob)
+  } finally {
+    exporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -183,6 +205,15 @@ async function handleSearch() {
         </el-button>
       </div>
       <div class="usage-toolbar-actions">
+        <el-button
+          class="admin-action-button"
+          :icon="Download"
+          :loading="exporting"
+          :disabled="usagePage.items.length === 0"
+          @click="exportUsage"
+        >
+          {{ t('exportDetails') }}
+        </el-button>
         <el-button class="admin-action-button" :icon="Refresh" :loading="loading" @click="reload">
           {{ t('refresh') }}
         </el-button>

@@ -25,6 +25,7 @@ const messages = {
 } satisfies Record<Locale, Record<string, string>>
 
 export type MessageKey = keyof (typeof messages)[Locale]
+export type TranslateParams = Record<string, unknown>
 
 export function isLocale(value: string | null): value is Locale {
   return locales.some((locale) => locale.code === value)
@@ -34,6 +35,12 @@ export function isMessageKey(value: unknown): value is MessageKey {
   return typeof value === 'string' && value in messages[defaultLocale]
 }
 
-export function translate(locale: Locale, key: MessageKey) {
-  return messages[locale][key]
+export function translate(locale: Locale, key: MessageKey, params?: TranslateParams) {
+  const message = messages[locale][key]
+  if (!params) return message
+
+  return message.replace(/\{(\w+)\}/g, (placeholder, name) => {
+    const value = params[name]
+    return value == null ? placeholder : String(value)
+  })
 }

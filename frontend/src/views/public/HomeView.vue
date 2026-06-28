@@ -11,11 +11,14 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useInstallScript } from '../../composables/useInstallScript'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { useSiteBrand } from '../../composables/useSiteBrand'
 import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
 const { locale, t } = useLocale()
+const { siteName } = useSiteBrand()
 const { installScript, copyInstallScript } = useInstallScript(t)
 const { data: servicePolicy } = useAsyncData<ServicePolicy | null>(() => getSetupStatus(), null)
+const homeTitle = computed(() => t('tagline', { siteName: siteName.value }))
 const apiKeyDialogOpen = ref(false)
 const emailInput = ref<InputInstance>()
 const homeEmail = ref('')
@@ -112,7 +115,7 @@ function resetHomeApiKey() {
 
     <section class="home-view">
       <div class="home-intro">
-        <h1>{{ t('tagline') }}</h1>
+        <h1>{{ homeTitle }}</h1>
       </div>
 
       <div v-if="publicKeyClaimEnabled" class="home-actions">

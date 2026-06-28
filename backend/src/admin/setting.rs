@@ -133,7 +133,9 @@ pub async fn upsert_site_setting(
     })
 }
 
-async fn existing_site_brand_setting(state: &AppState) -> AppResult<Option<StoredSiteBrandSetting>> {
+async fn existing_site_brand_setting(
+    state: &AppState,
+) -> AppResult<Option<StoredSiteBrandSetting>> {
     let Some(row) = sqlx::query("SELECT value FROM setting WHERE key = $1")
         .bind(SITE_BRAND_SETTING_KEY)
         .fetch_optional(&state.db.pool)

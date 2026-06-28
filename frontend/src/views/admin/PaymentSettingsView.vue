@@ -5,9 +5,11 @@ import { ElMessage } from 'element-plus'
 import { getPaymentSetting, savePaymentSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { useSiteBrand } from '../../composables/useSiteBrand'
 import { readError } from '../../utils/errors'
 
 const { t } = useLocale()
+const { siteName } = useSiteBrand()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -20,7 +22,7 @@ const form = reactive({
   zpayMerchantId: '',
   zpaySecretKey: '',
   zpayDefaultPayType: 'wxpay',
-  zpaySiteName: 'NeoGate'
+  zpaySiteName: ''
 })
 
 const zpayConfigured = computed(
@@ -37,7 +39,7 @@ function applySetting(setting: Awaited<ReturnType<typeof getPaymentSetting>>) {
   form.zpayMerchantId = setting.zpay_merchant_id ?? ''
   form.zpaySecretKey = ''
   form.zpayDefaultPayType = setting.zpay_default_pay_type || 'wxpay'
-  form.zpaySiteName = setting.zpay_site_name || 'NeoGate'
+  form.zpaySiteName = setting.zpay_site_name || siteName.value
   secretKeySet.value = setting.zpay_secret_key_set
 }
 

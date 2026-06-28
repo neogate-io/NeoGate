@@ -1,5 +1,12 @@
 import { ref, watchEffect } from 'vue'
-import { defaultLocale, isLocale, translate, type Locale, type MessageKey } from '../i18n'
+import {
+  defaultLocale,
+  isLocale,
+  translate,
+  type Locale,
+  type MessageKey,
+  type TranslateParams
+} from '../i18n'
 
 const localeStorageKey = 'neogate_locale'
 const storedLocale =
@@ -7,8 +14,8 @@ const storedLocale =
 const locale = ref<Locale>(isLocale(storedLocale) ? storedLocale : defaultLocale)
 
 export function useLocale() {
-  function t(key: MessageKey) {
-    return translate(locale.value, key)
+  function t(key: MessageKey, params?: TranslateParams) {
+    return translate(locale.value, key, params)
   }
 
   function toggleLocale() {

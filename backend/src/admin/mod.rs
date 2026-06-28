@@ -15,8 +15,11 @@ pub(crate) mod version;
 use std::{convert::Infallible, sync::Arc};
 
 use axum::{
+    body::Body,
     extract::{Multipart, Path, Query, State},
+    http::{header, HeaderMap, HeaderValue},
     response::sse::{Event, KeepAlive, Sse},
+    response::{IntoResponse, Response},
     routing::{get, patch, post},
     Json, Router,
 };
@@ -94,6 +97,7 @@ use crate::payment::settings::{
 };
 
 const ADMIN_RUNTIME_RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+const USAGE_EXPORT_LIMIT: i64 = 100_000;
 
 pub(crate) use upstream::fetch_upstream_models;
 
@@ -248,6 +252,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(reveal_channel_key_secret_handler),
         )
         .route("/api/admin/usage", get(usage))
+        .route("/api/admin/usage/export.csv", get(export_usage_csv))
         .route("/api/admin/health", get(health))
 }
 
@@ -1012,8 +1017,76 @@ async fn usage(
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
     let limit = bounded_limit(params.limit, 20, 500);
-    let start = params.start;
-    let end = params.end;
+    let cursor = parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?;
+    let rows = usage_rows(&state, &params, limit + 1, cursor).await?;
+    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
+    Ok(Json(UsagePage {
+        items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
+        total: rows.len() as i64,
+        page,
+        limit,
+        next_cursor,
+        has_more,
+    }))
+}
+
+async fn export_usage_csv(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Query(params): Query<ListUsageParams>,
+) -> AppResult<Response> {
+    let rows = usage_rows(&state, &params, USAGE_EXPORT_LIMIT + 1, None).await?;
+    if rows.len() > USAGE_EXPORT_LIMIT as usize {
+        return Err(AppError::BadRequestWithCode {
+            code: "export_limit_exceeded",
+            message: "export result exceeds 100000 rows; narrow the filters",
+        });
+    }
+
+    let records = rows
+        .iter()
+        .map(usage_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    csv_response(
+        &usage_export_filename(params.start, params.end),
+        usage_csv_rows(records),
+    )
+}
+
+async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppResult<Json<Value>> {
+    let db_ok = sqlx::query("SELECT 1")
+        .execute(&state.db.pool)
+        .await
+        .is_ok();
+    let row = sqlx::query(
+        r#"
+        SELECT
+            (SELECT count(*) FROM "user") AS users,
+            (SELECT count(*) FROM user_key) AS user_keys,
+            (SELECT count(*) FROM channel) AS channels,
+            (SELECT count(*) FROM channel_key) AS channel_keys,
+            (SELECT count(*) FROM usage) AS usage
+        "#,
+    )
+    .fetch_one(&state.db.pool)
+    .await?;
+
+    Ok(Json(json!({
+        "database": db_ok,
+        "users": row.try_get::<i64, _>("users")?,
+        "user_keys": row.try_get::<i64, _>("user_keys")?,
+        "channels": row.try_get::<i64, _>("channels")?,
+        "channel_keys": row.try_get::<i64, _>("channel_keys")?,
+        "usage": row.try_get::<i64, _>("usage")?
+    })))
+}
+
+async fn usage_rows(
+    state: &AppState,
+    params: &ListUsageParams,
+    limit: i64,
+    cursor: Option<(DateTime<Utc>, DbId)>,
+) -> AppResult<Vec<sqlx::postgres::PgRow>> {
     let query =
         trimmed_non_empty(params.query.as_deref().or(params.model.as_deref())).map(str::to_string);
     let status = match params.status.as_deref() {
@@ -1021,12 +1094,12 @@ async fn usage(
         Some("failed") => Some("failed"),
         _ => None,
     };
-    let (cursor_created_at, cursor_id) =
-        parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
-            .map(|cursor| (Some(cursor.0), Some(cursor.1)))
-            .unwrap_or((None, None));
+    let (cursor_created_at, cursor_id) = cursor
+        .map(|(created_at, id)| (Some(created_at), Some(id)))
+        .unwrap_or((None, None));
     let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
     let query_pattern = query_pattern.as_deref();
+
     let rows = sqlx::query(
         r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
                 u.username AS user_username,
@@ -1079,52 +1152,17 @@ async fn usage(
          ORDER BY usage_record.created_at DESC, usage_record.id DESC
          LIMIT $7"#,
     )
-    .bind(start)
-    .bind(end)
+    .bind(params.start)
+    .bind(params.end)
     .bind(query_pattern)
     .bind(status)
     .bind(cursor_created_at)
     .bind(cursor_id)
-    .bind(limit + 1)
+    .bind(limit)
     .fetch_all(&state.db.pool)
     .await?;
-    let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
-    Ok(Json(UsagePage {
-        items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
-        total: rows.len() as i64,
-        page,
-        limit,
-        next_cursor,
-        has_more,
-    }))
-}
 
-async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppResult<Json<Value>> {
-    let db_ok = sqlx::query("SELECT 1")
-        .execute(&state.db.pool)
-        .await
-        .is_ok();
-    let row = sqlx::query(
-        r#"
-        SELECT
-            (SELECT count(*) FROM "user") AS users,
-            (SELECT count(*) FROM user_key) AS user_keys,
-            (SELECT count(*) FROM channel) AS channels,
-            (SELECT count(*) FROM channel_key) AS channel_keys,
-            (SELECT count(*) FROM usage) AS usage
-        "#,
-    )
-    .fetch_one(&state.db.pool)
-    .await?;
-
-    Ok(Json(json!({
-        "database": db_ok,
-        "users": row.try_get::<i64, _>("users")?,
-        "user_keys": row.try_get::<i64, _>("user_keys")?,
-        "channels": row.try_get::<i64, _>("channels")?,
-        "channel_keys": row.try_get::<i64, _>("channel_keys")?,
-        "usage": row.try_get::<i64, _>("usage")?
-    })))
+    Ok(rows)
 }
 
 fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Error> {
@@ -1166,4 +1204,152 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         error_summary: row.try_get("error_summary")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
+    let mut rows = vec![vec![
+        "id".into(),
+        "created_at".into(),
+        "user_id".into(),
+        "user_email".into(),
+        "user_username".into(),
+        "user_key_id".into(),
+        "channel_id".into(),
+        "channel_key_id".into(),
+        "credential_id".into(),
+        "relay_trace_id".into(),
+        "relay_attempt".into(),
+        "relay_final".into(),
+        "relay_path".into(),
+        "provider".into(),
+        "model".into(),
+        "status_code".into(),
+        "streamed".into(),
+        "latency_ms".into(),
+        "first_response_ms".into(),
+        "output_tokens_per_second".into(),
+        "input_tokens".into(),
+        "output_tokens".into(),
+        "total_tokens".into(),
+        "cache_in_tokens".into(),
+        "cache_create_in_tokens".into(),
+        "cache_create_5m_in_tokens".into(),
+        "cache_create_1h_in_tokens".into(),
+        "reason_out_tokens".into(),
+        "audio_in_tokens".into(),
+        "audio_out_tokens".into(),
+        "billing_meter".into(),
+        "billable_units".into(),
+        "cost_micro_usd".into(),
+        "billing_status".into(),
+        "error_summary".into(),
+    ]];
+
+    rows.extend(records.into_iter().map(|record| {
+        vec![
+            record.id.to_string(),
+            record.created_at.to_rfc3339(),
+            optional_id(record.user_id),
+            record.user_email.unwrap_or_default(),
+            record.user_username.unwrap_or_default(),
+            optional_id(record.user_key_id),
+            optional_id(record.channel_id),
+            optional_id(record.channel_key_id),
+            optional_id(record.credential_id),
+            record
+                .relay_trace_id
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            record.relay_attempt.to_string(),
+            record.relay_final.to_string(),
+            record.relay_path.unwrap_or_default(),
+            record.provider,
+            record.model.unwrap_or_default(),
+            optional_i32(record.status_code),
+            record.streamed.to_string(),
+            record.latency_ms.to_string(),
+            optional_i64(record.first_response_ms),
+            optional_f64(record.output_tokens_per_second),
+            optional_i64(record.input_tokens),
+            optional_i64(record.output_tokens),
+            optional_i64(record.total_tokens),
+            optional_i64(record.cache_in_tokens),
+            optional_i64(record.cache_create_in_tokens),
+            optional_i64(record.cache_create_5m_in_tokens),
+            optional_i64(record.cache_create_1h_in_tokens),
+            optional_i64(record.reason_out_tokens),
+            optional_i64(record.audio_in_tokens),
+            optional_i64(record.audio_out_tokens),
+            record.billing_meter,
+            record.billable_units.to_string(),
+            optional_i64(record.cost_micro_usd),
+            record.billing_status,
+            record.error_summary.unwrap_or_default(),
+        ]
+    }));
+
+    rows
+}
+
+fn usage_export_filename(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> String {
+    let start = start
+        .map(|value| value.format("%Y%m%d%H%M%S").to_string())
+        .unwrap_or_else(|| "all".to_string());
+    let end = end
+        .map(|value| value.format("%Y%m%d%H%M%S").to_string())
+        .unwrap_or_else(|| "all".to_string());
+    format!("usage-details-{start}-{end}.csv")
+}
+
+fn optional_id(value: Option<DbId>) -> String {
+    value.map(|id| id.to_string()).unwrap_or_default()
+}
+
+fn optional_i32(value: Option<i32>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn optional_i64(value: Option<i64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn optional_f64(value: Option<f64>) -> String {
+    value.map(|value| format!("{value:.2}")).unwrap_or_default()
+}
+
+fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> AppResult<Response> {
+    let mut body = String::from('\u{FEFF}');
+    body.push_str(
+        &rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| escape_csv(value))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    body.push('\n');
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|_| AppError::BadRequest("invalid export filename".to_string()))?,
+    );
+    Ok((headers, Body::from(body)).into_response())
+}
+
+fn escape_csv(value: &str) -> String {
+    if value.contains('"') || value.contains(',') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
 }

@@ -28,7 +28,8 @@ watchEffect(() => {
   const appTitle = siteName.value || t('appTitle')
   const pageTitle = isMessageKey(messageKey) ? t(messageKey) : appTitle
 
-  document.title = messageKey === 'home' ? t('tagline') : `${pageTitle} - ${appTitle}`
+  document.title =
+    messageKey === 'home' ? t('tagline', { siteName: appTitle }) : `${pageTitle} - ${appTitle}`
   document.documentElement.lang = locale.value
 })
 </script>

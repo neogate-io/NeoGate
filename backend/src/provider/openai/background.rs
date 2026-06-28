@@ -96,6 +96,7 @@ pub(super) async fn create_background_response(
             "image_format=url or both is only supported for NeoGate async image tasks".to_string(),
         ));
     }
+    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
     let response = forward_openai(
         &state,
         &upstream,
@@ -121,7 +122,7 @@ pub(super) async fn create_background_response(
         relay_attempt: 1,
         relay_final: true,
         request_params,
-        _image_sync_permit: None,
+        request_permit: request_permit.take(),
     };
 
     let upstream_response = match response {

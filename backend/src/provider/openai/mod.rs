@@ -290,6 +290,7 @@ async fn relay_openai(
         )
         .await;
     }
+    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
     let relay_trace_id = Uuid::new_v4();
@@ -387,7 +388,7 @@ async fn relay_openai(
             relay_attempt: relay_attempt_counter,
             relay_final: false,
             request_params: meta.request_params.clone(),
-            _image_sync_permit: None,
+            request_permit: None,
         };
         let mut adapter_response_mode = AdapterResponseMode::Passthrough;
         let response = match protocol {
@@ -433,7 +434,7 @@ async fn relay_openai(
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
-                    ctx.relay_final = true;
+                    ctx.mark_final_with_permit(&mut request_permit);
                     return finish_openai_relay_success(
                         ctx,
                         status,
@@ -506,7 +507,7 @@ async fn relay_openai(
                             path = ctx.path,
                             "skipping upstream model cooldown because this model has no alternate channel"
                         );
-                        ctx.relay_final = true;
+                        ctx.mark_final_with_permit(&mut request_permit);
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     if model_unavailable_reroutes >= MODEL_UNAVAILABLE_MAX_REROUTES {
@@ -523,7 +524,7 @@ async fn relay_openai(
                             max_reroutes = MODEL_UNAVAILABLE_MAX_REROUTES,
                             "upstream model unavailable reroute limit reached"
                         );
-                        ctx.relay_final = true;
+                        ctx.mark_final_with_permit(&mut request_permit);
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     model_unavailable_reroutes += 1;
@@ -582,7 +583,7 @@ async fn relay_openai(
                     continue;
                 }
 
-                ctx.relay_final = true;
+                ctx.mark_final_with_permit(&mut request_permit);
                 return respond_upstream_http_failure(ctx, status, failure).await;
             }
             Err(err) => {
@@ -601,7 +602,7 @@ async fn relay_openai(
                     record_upstream_transport_failure_for_failover(&ctx, summary).await;
                     continue;
                 }
-                ctx.relay_final = true;
+                ctx.mark_final_with_permit(&mut request_permit);
                 return finish_relay(ctx, Err(err)).await;
             }
         }

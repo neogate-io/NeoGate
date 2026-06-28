@@ -60,6 +60,7 @@ pub(crate) async fn anthropic_messages(
         state.billing.default_output_tokens(),
     )?;
     auth.ensure_model_allowed(&meta.model)?;
+    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
     let relay_trace_id = Uuid::new_v4();
@@ -118,7 +119,7 @@ pub(crate) async fn anthropic_messages(
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
             request_params: meta.request_params.clone(),
-            _image_sync_permit: None,
+            request_permit: None,
         };
         let response = match protocol {
             UpstreamProtocol::Anthropic => {
@@ -158,7 +159,7 @@ pub(crate) async fn anthropic_messages(
                 let status = StatusCode::from_u16(upstream_response.status().as_u16())
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
-                    ctx.relay_final = true;
+                    ctx.mark_final_with_permit(&mut request_permit);
                     if protocol == UpstreamProtocol::Openai {
                         return bridge::finish_chat_as_anthropic(ctx, status, upstream_response)
                             .await;
@@ -197,7 +198,7 @@ pub(crate) async fn anthropic_messages(
                     continue;
                 }
 
-                ctx.relay_final = true;
+                ctx.mark_final_with_permit(&mut request_permit);
                 return respond_upstream_http_failure(ctx, status, failure).await;
             }
             Err(err) => {
@@ -216,7 +217,7 @@ pub(crate) async fn anthropic_messages(
                     record_upstream_transport_failure_for_failover(&ctx, summary).await;
                     continue;
                 }
-                ctx.relay_final = true;
+                ctx.mark_final_with_permit(&mut request_permit);
                 return finish_relay(ctx, Err(err)).await;
             }
         }
@@ -250,6 +251,7 @@ pub(crate) async fn create_anthropic_message_batch(
     let model = batch_model(&body)?;
     let request_count = batch_request_count(&body)?;
     auth.ensure_model_allowed(&model)?;
+    let _request_permit = state.user_request_limiter.try_acquire(auth.user_id).await?;
     let user_key_model_credit_account = auth.model_credit_account(&model).cloned();
     let upstream = state
         .selector

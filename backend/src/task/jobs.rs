@@ -315,6 +315,8 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
         return Ok(());
     }
 
+    let _request_permit = state.user_request_limiter.try_acquire(task.user_id).await?;
+
     if !update_metadata(
         &state.db.pool,
         task.id,

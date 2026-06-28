@@ -156,8 +156,8 @@ pub struct RelayConfig {
     pub body_limit_bytes: usize,
     pub usage_buffer_limit_bytes: usize,
     pub credential_upload_limit_bytes: usize,
-    pub image_sync_global_limit: usize,
-    pub image_sync_key_limit: usize,
+    pub user_concurrent_request_limit: usize,
+    pub global_concurrent_request_limit: usize,
     pub channel_affinity_enabled: bool,
     pub channel_affinity_ttl: Duration,
     pub channel_affinity_max_entries: usize,
@@ -270,8 +270,8 @@ impl Config {
                     "CREDENTIAL_UPLOAD_LIMIT_BYTES",
                     DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                 )?,
-                image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8)?,
-                image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2)?,
+                user_concurrent_request_limit: parse_usize("USER_CONCURRENT_REQUEST_LIMIT", 10)?,
+                global_concurrent_request_limit: parse_usize("GLOBAL_CONCURRENT_REQUEST_LIMIT", 0)?,
                 channel_affinity_enabled: parse_bool("CHANNEL_AFFINITY_ENABLED", true)?,
                 channel_affinity_ttl: Duration::from_secs(parse_u64(
                     "CHANNEL_AFFINITY_TTL_SECONDS",
@@ -398,11 +398,8 @@ impl Config {
         if self.response_assets.retention.is_zero() {
             anyhow::bail!("NEOGATE_RESPONSE_RETENTION_SECONDS must be positive");
         }
-        if self.relay.image_sync_global_limit == 0 {
-            anyhow::bail!("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT must be positive");
-        }
-        if self.relay.image_sync_key_limit == 0 {
-            anyhow::bail!("NEOGATE_IMAGE_SYNC_KEY_LIMIT must be positive");
+        if self.relay.user_concurrent_request_limit == 0 {
+            anyhow::bail!("USER_CONCURRENT_REQUEST_LIMIT must be positive");
         }
         if self.relay.channel_affinity_ttl.is_zero() {
             anyhow::bail!("CHANNEL_AFFINITY_TTL_SECONDS must be positive");

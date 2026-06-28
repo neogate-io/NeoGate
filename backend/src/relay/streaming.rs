@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use super::{
     enqueue_relay_usage, key_failure_from_context,
-    limit::ImageSyncPermit,
+    limit::UserRequestPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
     usage_from_context, ChannelAffinityKey, RelayRequestParams,
@@ -39,7 +39,17 @@ pub(crate) struct RelayContext {
     pub(crate) relay_attempt: i32,
     pub(crate) relay_final: bool,
     pub(crate) request_params: RelayRequestParams,
-    pub(crate) _image_sync_permit: Option<ImageSyncPermit>,
+    pub(crate) request_permit: Option<UserRequestPermit>,
+}
+
+impl RelayContext {
+    pub(crate) fn mark_final_with_permit(
+        &mut self,
+        request_permit: &mut Option<UserRequestPermit>,
+    ) {
+        self.relay_final = true;
+        self.request_permit = request_permit.take();
+    }
 }
 
 pub(crate) fn body(

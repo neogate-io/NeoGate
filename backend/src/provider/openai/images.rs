@@ -47,12 +47,7 @@ pub(super) async fn relay_openai_image(
     let meta = image_request_meta(path, &headers, &body)?;
     auth.ensure_model_allowed(&meta.model)?;
     let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
-    let mut image_sync_permit = Some(
-        state
-            .image_sync_limiter
-            .try_acquire(auth.user_key_id)
-            .await?,
-    );
+    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
     let estimated_image_units = meta.image_count.max(1);
     let relay_trace_id = Uuid::new_v4();
     let mut retryable_failovers = 0;
@@ -118,7 +113,7 @@ pub(super) async fn relay_openai_image(
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
             request_params: meta.request_params.clone(),
-            _image_sync_permit: None,
+            request_permit: None,
         };
         let response = forward_openai_with_content_type(
             &state,
@@ -136,8 +131,7 @@ pub(super) async fn relay_openai_image(
                 let status = StatusCode::from_u16(upstream_response.status().as_u16())
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
-                    ctx.relay_final = true;
-                    ctx._image_sync_permit = image_sync_permit.take();
+                    ctx.mark_final_with_permit(&mut request_permit);
                     if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
                         return finish_newapi_image_stream(
                             ctx,
@@ -194,8 +188,7 @@ pub(super) async fn relay_openai_image(
                     continue;
                 }
 
-                ctx.relay_final = true;
-                ctx._image_sync_permit = image_sync_permit.take();
+                ctx.mark_final_with_permit(&mut request_permit);
                 return respond_upstream_http_failure(ctx, status, failure).await;
             }
             Err(err) => {
@@ -214,8 +207,7 @@ pub(super) async fn relay_openai_image(
                     record_upstream_transport_failure_for_failover(&ctx, summary).await;
                     continue;
                 }
-                ctx.relay_final = true;
-                ctx._image_sync_permit = image_sync_permit.take();
+                ctx.mark_final_with_permit(&mut request_permit);
                 return finish_relay(ctx, Err(err)).await;
             }
         }

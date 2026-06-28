@@ -44,7 +44,7 @@ pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
-pub(crate) use limit::ImageSyncLimiter;
+pub(crate) use limit::UserRequestLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody, RelayRequestParams};
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};

@@ -298,6 +298,14 @@ fn error_response(status: StatusCode, code: &'static str, message: String) -> Re
     response
         .headers_mut()
         .insert("x-neogate-error-code", HeaderValue::from_static(code));
+    if code == "rate_limited" {
+        response
+            .headers_mut()
+            .insert("x-neogate-retryable", HeaderValue::from_static("true"));
+        response
+            .headers_mut()
+            .insert("retry-after", HeaderValue::from_static("1"));
+    }
     response
 }
 
@@ -417,6 +425,24 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"]["code"], "upstream_unavailable");
         assert_eq!(value["error"]["message"], "no available anthropic channel");
+    }
+
+    #[tokio::test]
+    async fn rate_limited_errors_return_retryable_headers() {
+        let response = AppError::RateLimited("User concurrent request limit reached".to_string())
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()["x-neogate-error-code"], "rate_limited");
+        assert_eq!(response.headers()["x-neogate-retryable"], "true");
+        assert_eq!(response.headers()["retry-after"], "1");
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "rate_limited");
+        assert_eq!(
+            value["error"]["message"],
+            "User concurrent request limit reached"
+        );
     }
 
     #[tokio::test]

@@ -77,8 +77,8 @@ pub async fn upsert_payment_setting(
     let zpay_merchant_id = optional_trimmed(req.zpay_merchant_id);
     let zpay_default_pay_type =
         optional_trimmed(Some(req.zpay_default_pay_type)).unwrap_or_else(|| "wxpay".to_string());
-    let zpay_site_name =
-        optional_trimmed(Some(req.zpay_site_name)).unwrap_or_else(|| state.config.site_name.clone());
+    let zpay_site_name = optional_trimmed(Some(req.zpay_site_name))
+        .unwrap_or_else(|| state.config.site_name.clone());
 
     let zpay_secret_key_ciphertext = if req.clear_zpay_secret_key {
         None
@@ -167,7 +167,9 @@ async fn payment_default_site_name(state: &AppState) -> AppResult<String> {
 
     let value: serde_json::Value = row.try_get("value")?;
     let setting: StoredSiteBrandSetting = serde_json::from_value(value)?;
-    Ok(setting.site_name.unwrap_or_else(|| state.config.site_name.clone()))
+    Ok(setting
+        .site_name
+        .unwrap_or_else(|| state.config.site_name.clone()))
 }
 
 async fn existing_payment_setting(state: &AppState) -> AppResult<Option<StoredPaymentSetting>> {

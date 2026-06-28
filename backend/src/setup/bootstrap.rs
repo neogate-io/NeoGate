@@ -514,7 +514,8 @@ async fn complete_setup(
     let service_mode = req.service_mode;
     let runtime_app = prepared_runtime_app(&state).await?;
     let record = policy::complete_setup_for_state(runtime_app.state.clone(), req).await?;
-    let result = save_prepared_runtime_config(&runtime_app.runtime_config, Some(service_mode)).await?;
+    let result =
+        save_prepared_runtime_config(&runtime_app.runtime_config, Some(service_mode)).await?;
     state.restart_required.store(true, Ordering::SeqCst);
     schedule_bootstrap_restart(state.restart_tx.clone());
     tracing::info!(

@@ -19,8 +19,10 @@ import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
 import { useAsyncData } from '../composables/useAsyncData'
+import { useSiteBrand } from '../composables/useSiteBrand'
 
 const { t } = useLocale()
+const { siteName, logoUrl } = useSiteBrand()
 const route = useRoute()
 const logout = useLogout(t)
 const { data: servicePolicy } = useAsyncData(() => getAdminServicePolicy(), null)
@@ -109,9 +111,10 @@ watch(
   <el-container class="app-shell light-sidebar-shell admin-shell">
     <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
-        <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
-          <img class="shell-logo-image" src="/logos/logo.svg" :alt="t('appName')" />
-        </RouterLink>
+        <a class="shell-logo-link" href="/" target="_blank" rel="noopener noreferrer" :aria-label="t('home')">
+          <img v-if="logoUrl" class="shell-logo-image" :src="logoUrl" :alt="siteName" />
+          <span class="shell-logo-name">{{ siteName }}</span>
+        </a>
       </h1>
       <el-menu
         :key="settingsOpen ? 'settings-open' : 'settings-closed'"

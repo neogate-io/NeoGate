@@ -1,10 +1,15 @@
 import type { PaymentSetting, SmtpSetting, VersionCheckResult } from '../types/admin'
-import { adminRequest } from './request'
+import { adminRequest, publicRequest } from './request'
 
 export type SiteSetting = {
   site_name: string
   public_base_url?: string | null
+  logo_url?: string | null
   env_write_supported: boolean
+}
+
+export function getPublicSiteSetting() {
+  return publicRequest<SiteSetting>('/api/public/site')
 }
 
 export function getSiteSetting() {
@@ -14,6 +19,7 @@ export function getSiteSetting() {
 export function saveSiteSetting(input: {
   site_name: string
   public_base_url: string
+  logo_url?: string | null
 }) {
   return adminRequest<{
     ok: boolean

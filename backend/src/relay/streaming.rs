@@ -144,6 +144,25 @@ impl StreamingRelay {
     async fn finish_stream_success(mut self) {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
+        let stream_complete = self.usage.stream_complete();
+        if streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete) {
+            tracing::warn!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                path = ctx.path,
+                base_url = %ctx.upstream.base_url,
+                status = self.status.as_u16(),
+                first_response_ms = self.first_response_ms,
+                latency_ms = ctx.started.elapsed().as_millis() as i64,
+                "upstream stream ended before terminal SSE event"
+            );
+        }
         let billing = if self.status.is_success() {
             record_channel_affinity(&ctx);
             settle_successful_hold(&ctx, token_usage, "streamed relay").await
@@ -151,7 +170,13 @@ impl StreamingRelay {
             release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream error").await;
             None
         };
-        let error_summary = (!self.status.is_success()).then(|| "upstream error".to_string());
+        let error_summary = if !self.status.is_success() {
+            Some("upstream error".to_string())
+        } else if streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete) {
+            Some("upstream stream ended before terminal SSE event".to_string())
+        } else {
+            None
+        };
         let failure = if self.status.is_success() {
             None
         } else {
@@ -274,6 +299,10 @@ async fn settle_successful_hold(
 
 fn should_cooldown_key_for_stream_error(status: StatusCode) -> bool {
     !status.is_success()
+}
+
+fn streamed_success_missing_terminal(status: StatusCode, streamed: bool, complete: bool) -> bool {
+    status.is_success() && streamed && !complete
 }
 
 fn is_body_decode_error(summary: &str) -> bool {
@@ -588,6 +617,25 @@ mod tests {
     fn upstream_error_stream_body_errors_cool_down_key() {
         assert!(should_cooldown_key_for_stream_error(
             StatusCode::TOO_MANY_REQUESTS
+        ));
+    }
+
+    #[test]
+    fn streamed_success_without_terminal_is_not_complete() {
+        assert!(streamed_success_missing_terminal(
+            StatusCode::OK,
+            true,
+            false
+        ));
+        assert!(!streamed_success_missing_terminal(
+            StatusCode::OK,
+            true,
+            true
+        ));
+        assert!(!streamed_success_missing_terminal(
+            StatusCode::OK,
+            false,
+            false
         ));
     }
 

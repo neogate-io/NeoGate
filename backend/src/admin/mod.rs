@@ -93,8 +93,13 @@ use crate::payment::settings::{
     get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
 };
 
+const ADMIN_RUNTIME_RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub(crate) use upstream::fetch_upstream_models;
-pub use user::public_router;
+
+pub fn public_router() -> Router<Arc<AppState>> {
+    user::public_router().route("/api/public/site", get(public_site_setting))
+}
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -567,8 +572,11 @@ async fn upsert_payment_setting_handler(
     Ok(Json(upsert_payment_setting(&state, req).await?))
 }
 
-async fn site_setting(_admin: AdminAuth) -> AppResult<Json<SiteSettingRecord>> {
-    Ok(Json(get_site_setting()?))
+async fn site_setting(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<SiteSettingRecord>> {
+    Ok(Json(get_site_setting(&state).await?))
 }
 
 async fn upsert_site_setting_handler(
@@ -576,14 +584,22 @@ async fn upsert_site_setting_handler(
     _admin: AdminAuth,
     Json(req): Json<UpsertSiteSettingRequest>,
 ) -> AppResult<Json<UpsertSiteSettingResponse>> {
-    let result = upsert_site_setting(req).await?;
-    schedule_admin_runtime_restart(state.runtime_restart_tx.clone());
+    let result = upsert_site_setting(&state, req).await?;
+    if result.restart_required {
+        schedule_admin_runtime_restart(state.runtime_restart_tx.clone());
+    }
     Ok(Json(result))
+}
+
+async fn public_site_setting(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<SiteSettingRecord>> {
+    Ok(Json(get_site_setting(&state).await?))
 }
 
 fn schedule_admin_runtime_restart(restart_tx: tokio::sync::watch::Sender<bool>) {
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(ADMIN_RUNTIME_RESTART_DELAY).await;
         let _ = restart_tx.send(true);
     });
 }

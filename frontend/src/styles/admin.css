@@ -146,8 +146,22 @@
 .admin-shell > .el-aside .shell-logo {
   border-bottom: 1px solid var(--admin-border-soft);
   height: 58px;
+  justify-content: center;
   margin-bottom: 18px;
   padding-bottom: 18px;
+}
+
+.admin-shell > .el-aside .shell-logo-link {
+  color: var(--admin-text);
+  justify-content: center;
+}
+
+.admin-shell > .el-aside .shell-logo-link:hover {
+  opacity: 1;
+}
+
+.admin-shell > .el-aside .shell-logo-name {
+  color: var(--admin-text);
 }
 
 .admin-shell > .el-aside .el-menu {

@@ -8,14 +8,18 @@ use crate::{
     email::{smtp_test_error, EmailConfig, EmailService, SMTP_SETTING_KEY},
     error::{AppError, AppResult},
     input::trimmed_non_empty_owned,
-    setup::bootstrap::save_site_config,
+    setup::bootstrap::{save_public_base_url_config, validate_public_base_url},
     AppState,
 };
+
+const SITE_BRAND_SETTING_KEY: &str = "site_brand";
+const DEFAULT_LOGO_URL: &str = "/logos/logo.svg";
 
 #[derive(Debug, Serialize)]
 pub struct SiteSettingRecord {
     pub site_name: String,
     pub public_base_url: Option<String>,
+    pub logo_url: Option<String>,
     pub env_write_supported: bool,
 }
 
@@ -23,6 +27,7 @@ pub struct SiteSettingRecord {
 pub struct UpsertSiteSettingRequest {
     pub site_name: String,
     pub public_base_url: String,
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,25 +82,103 @@ struct StoredSmtpSetting {
     subject_prefix: Option<String>,
 }
 
-pub fn get_site_setting() -> AppResult<SiteSettingRecord> {
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredSiteBrandSetting {
+    site_name: Option<String>,
+    logo_url: Option<String>,
+}
+
+pub async fn get_site_setting(state: &AppState) -> AppResult<SiteSettingRecord> {
     let probe = RuntimeProbe::from_env()?;
     let env_write_supported = !probe.runtime_mode.is_distributed();
+    let brand = existing_site_brand_setting(state).await?;
+    let site_name = brand
+        .as_ref()
+        .and_then(|setting| setting.site_name.clone())
+        .or(probe.site_name)
+        .unwrap_or_else(|| "NeoGate".to_string());
+    let logo_url = brand
+        .map(|setting| setting.logo_url)
+        .unwrap_or_else(|| Some(DEFAULT_LOGO_URL.to_string()));
     Ok(SiteSettingRecord {
-        site_name: probe.site_name.unwrap_or_else(|| "NeoGate".to_string()),
+        site_name,
         public_base_url: probe.public_base_url,
+        logo_url,
         env_write_supported,
     })
 }
 
 pub async fn upsert_site_setting(
+    state: &AppState,
     req: UpsertSiteSettingRequest,
 ) -> AppResult<UpsertSiteSettingResponse> {
-    save_site_config(req.site_name, req.public_base_url).await?;
+    let probe = RuntimeProbe::from_env()?;
+    let site_name = required_trimmed(req.site_name, "SITE_NAME is required")?;
+    let public_base_url = required_trimmed(req.public_base_url, "PUBLIC_BASE_URL is required")?
+        .trim_end_matches('/')
+        .to_string();
+    validate_public_base_url(&public_base_url)?;
+    let logo_url = normalize_logo_url(req.logo_url)?;
+    upsert_site_brand_setting(state, site_name, logo_url).await?;
+
+    let env_changed = probe.public_base_url.as_deref() != Some(public_base_url.as_str());
+    if env_changed {
+        save_public_base_url_config(public_base_url).await?;
+    }
+
     Ok(UpsertSiteSettingResponse {
         ok: true,
-        restart_required: true,
-        setting: get_site_setting()?,
+        restart_required: env_changed,
+        setting: get_site_setting(state).await?,
     })
+}
+
+async fn existing_site_brand_setting(state: &AppState) -> AppResult<Option<StoredSiteBrandSetting>> {
+    let Some(row) = sqlx::query("SELECT value FROM setting WHERE key = $1")
+        .bind(SITE_BRAND_SETTING_KEY)
+        .fetch_optional(&state.db.pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = row.try_get("value")?;
+    Ok(Some(serde_json::from_value(value)?))
+}
+
+async fn upsert_site_brand_setting(
+    state: &AppState,
+    site_name: String,
+    logo_url: Option<String>,
+) -> AppResult<()> {
+    let value = serde_json::to_value(StoredSiteBrandSetting {
+        site_name: Some(site_name),
+        logo_url,
+    })?;
+    sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        "#,
+    )
+    .bind(SITE_BRAND_SETTING_KEY)
+    .bind(value)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+fn normalize_logo_url(value: Option<String>) -> AppResult<Option<String>> {
+    let Some(value) = optional_trimmed(value) else {
+        return Ok(None);
+    };
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return Ok(Some(value));
+    }
+    Err(AppError::BadRequest(
+        "logo URL must be a complete http(s) URL".to_string(),
+    ))
 }
 
 pub async fn get_smtp_setting(state: &AppState) -> AppResult<SmtpSettingRecord> {

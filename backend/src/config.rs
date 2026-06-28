@@ -474,12 +474,7 @@ impl RuntimeProbe {
     }
 
     pub fn site_configured(&self) -> bool {
-        self.site_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some()
-            && self.public_base_url.is_some()
+        self.public_base_url.is_some()
     }
 
     pub fn secrets_configured(&self) -> bool {

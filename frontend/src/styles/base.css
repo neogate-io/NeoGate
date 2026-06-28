@@ -146,25 +146,39 @@ body {
 }
 
 .shell-logo-image {
+  flex: 0 0 auto;
   display: block;
   height: auto;
-  max-height: 52px;
-  max-width: 100%;
+  max-height: 36px;
   object-fit: contain;
-  width: 142px;
+  width: 36px;
 }
 
 .shell-logo-link {
   align-items: center;
   display: inline-flex;
-  justify-content: center;
+  gap: 6px;
+  justify-content: flex-start;
   min-width: 0;
   text-decoration: none;
   transition: opacity 0.15s ease;
+  width: 100%;
 }
 
 .shell-logo-link:hover {
   opacity: 0.78;
+}
+
+.shell-logo-name {
+  color: currentColor;
+  display: block;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-shell > .el-aside .el-menu {
@@ -225,17 +239,18 @@ body {
 .light-sidebar-shell > .el-aside {
   background: var(--shell-sidebar-bg);
   border-right-color: var(--shell-sidebar-border);
-  color: var(--shell-sidebar-text);
+  color: var(--shell-sidebar-text, var(--admin-text, #111827));
   padding: var(--shell-sidebar-padding);
 }
 
 .light-sidebar-shell > .el-aside .shell-logo {
-  justify-content: center;
+  justify-content: flex-start;
   margin-bottom: 20px;
 }
 
 .light-sidebar-shell > .el-aside .shell-logo-image {
-  width: var(--shell-sidebar-logo-width);
+  max-height: 34px;
+  width: 34px;
 }
 
 .light-sidebar-shell > .el-aside .el-menu {

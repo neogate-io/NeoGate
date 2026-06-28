@@ -64,7 +64,7 @@ export const publicMessages = {
     databaseUrlFormatInvalid: '数据库连接地址格式不正确。请检查填写内容。',
     databaseNetworkError: '无法连接到数据库网络地址。请检查主机、端口和网络连通性。',
     databaseTlsError: '数据库 SSL/TLS 握手失败。请检查 SSL 模式和证书配置。',
-    siteNameLabel: '站点名称（SITE_NAME）',
+    siteNameLabel: '站点名称',
     publicBaseUrlLabel: '公网访问地址（PUBLIC_BASE_URL）',
     siteNameRequired: '请输入站点名称。',
     publicBaseUrlRequired: '请输入公网访问地址。',
@@ -478,7 +478,7 @@ export const publicMessages = {
       'Could not reach the database network address. Check the host, port, and network connectivity.',
     databaseTlsError:
       'The database SSL/TLS handshake failed. Check the SSL mode and certificate settings.',
-    siteNameLabel: 'Site name (SITE_NAME)',
+    siteNameLabel: 'Site name',
     publicBaseUrlLabel: 'Public URL (PUBLIC_BASE_URL)',
     siteNameRequired: 'Enter the site name.',
     publicBaseUrlRequired: 'Enter the public URL.',

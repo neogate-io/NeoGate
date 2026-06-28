@@ -16,6 +16,7 @@ import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } fro
 import { checkLatestVersion, getSiteSetting, saveSiteSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { setSiteBrand } from '../../composables/useSiteBrand'
 import type { ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
@@ -29,6 +30,7 @@ const servicePolicy = ref<ServicePolicy | null>(null)
 const siteSettingSaving = ref(false)
 const siteForm = ref({
   siteName: '',
+  logoUrl: '',
   publicBaseUrl: '',
   envWriteSupported: false
 })
@@ -163,6 +165,7 @@ function readReferenceSyncError(err: unknown) {
 function applySiteSetting(setting: Awaited<ReturnType<typeof getSiteSetting>>) {
   siteForm.value = {
     siteName: setting.site_name || 'NeoGate',
+    logoUrl: setting.logo_url ?? '',
     publicBaseUrl: setting.public_base_url ?? '',
     envWriteSupported: setting.env_write_supported
   }
@@ -187,6 +190,7 @@ async function load() {
 
 async function saveSiteConfig() {
   const siteName = siteForm.value.siteName.trim()
+  const logoUrl = siteForm.value.logoUrl.trim()
   const publicBaseUrl = siteForm.value.publicBaseUrl.trim()
   if (!siteName) {
     ElMessage.error(t('siteNameRequired'))
@@ -196,7 +200,6 @@ async function saveSiteConfig() {
     ElMessage.error(t('publicBaseUrlRequired'))
     return
   }
-
   try {
     const url = new URL(publicBaseUrl)
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
@@ -204,14 +207,25 @@ async function saveSiteConfig() {
     ElMessage.error(t('publicBaseUrlInvalid'))
     return
   }
+  if (logoUrl) {
+    try {
+      const url = new URL(logoUrl)
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
+    } catch {
+      ElMessage.error(t('siteLogoUrlInvalid'))
+      return
+    }
+  }
 
   await withLoading(siteSettingSaving, async () => {
     try {
       const result = await saveSiteSetting({
         site_name: siteName,
-        public_base_url: publicBaseUrl
+        public_base_url: publicBaseUrl,
+        logo_url: logoUrl || null
       })
       applySiteSetting(result.setting)
+      setSiteBrand(result.setting)
       servicePolicy.value = await getAdminServicePolicy(true).catch(() => servicePolicy.value)
       ElMessage.success(
         result.restart_required ? t('siteSettingsSavedRestartRequired') : t('siteSettingsSaved')
@@ -294,8 +308,15 @@ onMounted(load)
           <el-form-item :label="t('siteNameLabel')">
             <el-input
               v-model="siteForm.siteName"
-              :disabled="!siteForm.envWriteSupported || siteSettingSaving"
+              :disabled="siteSettingSaving"
               :placeholder="t('siteNamePlaceholder')"
+            />
+          </el-form-item>
+          <el-form-item :label="t('siteLogoUrlLabel')">
+            <el-input
+              v-model="siteForm.logoUrl"
+              :disabled="siteSettingSaving"
+              :placeholder="t('siteLogoUrlPlaceholder')"
             />
           </el-form-item>
           <el-form-item :label="t('publicBaseUrlLabel')">
@@ -310,7 +331,6 @@ onMounted(load)
           <el-button
             class="admin-action-button"
             type="primary"
-            :disabled="!siteForm.envWriteSupported"
             :loading="siteSettingSaving"
             @click="saveSiteConfig"
           >
@@ -590,7 +610,7 @@ onMounted(load)
 .site-settings-inline-form {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
 }
 
 .site-settings-inline-form :deep(.el-form-item) {

@@ -13,6 +13,7 @@ struct EndpointTarget {
     provider: String,
     protocol: String,
     base_url: String,
+    models: Vec<String>,
     use_credentials: bool,
 }
 
@@ -46,9 +47,15 @@ pub(crate) async fn run(context: &AppContext) -> Result<()> {
                     .or_insert_with(|| ChannelModelSync {
                         provider: endpoint.provider.clone(),
                         models: Vec::new(),
+                        configured_models: Vec::new(),
                     })
                     .models
                     .extend(models);
+                channel_models
+                    .get_mut(&endpoint.channel_id)
+                    .expect("channel sync entry is inserted above")
+                    .configured_models
+                    .extend(endpoint.models.clone());
                 tracing::info!(
                     channel_id = endpoint.channel_id,
                     provider = %endpoint.provider,
@@ -71,14 +78,23 @@ pub(crate) async fn run(context: &AppContext) -> Result<()> {
 
     for (channel_id, sync) in channel_models {
         let models = normalized_models(&sync.models);
-        let changed = sync_channel_models(context, channel_id, &sync.provider, &models).await?;
+        let configured_models = normalized_models(&sync.configured_models);
+        let changed = sync_channel_models(
+            context,
+            channel_id,
+            &sync.provider,
+            &configured_models,
+            &models,
+        )
+        .await?;
         if changed {
             context.cache_invalidator.invalidate_routing().await;
         }
         tracing::info!(
             channel_id,
             provider = %sync.provider,
-            count = models.len(),
+            upstream_count = models.len(),
+            configured_count = configured_models.len(),
             "synced upstream models"
         );
     }
@@ -89,12 +105,13 @@ pub(crate) async fn run(context: &AppContext) -> Result<()> {
 struct ChannelModelSync {
     provider: String,
     models: Vec<String>,
+    configured_models: Vec<String>,
 }
 
 async fn syncable_endpoints(context: &AppContext) -> Result<Vec<EndpointTarget>> {
     let rows = sqlx::query(
         "SELECT c.id AS channel_id, c.provider, c.use_credentials,
-                ce.protocol, ce.base_url
+                ce.protocol, ce.base_url, ce.models
          FROM channel c
          JOIN channel_endpoint ce ON ce.channel_id = c.id
          WHERE c.enabled = TRUE
@@ -114,6 +131,7 @@ async fn syncable_endpoints(context: &AppContext) -> Result<Vec<EndpointTarget>>
                 use_credentials: row.try_get("use_credentials")?,
                 protocol: row.try_get("protocol")?,
                 base_url: row.try_get("base_url")?,
+                models: row.try_get("models")?,
             })
         })
         .collect()
@@ -240,11 +258,18 @@ async fn sync_channel_models(
     context: &AppContext,
     channel_id: DbId,
     provider: &str,
+    configured_models: &[String],
     models: &[String],
 ) -> Result<bool> {
-    let models = normalized_models(models);
+    let upstream_models = normalized_models(models);
+    let upstream_model_set: std::collections::HashSet<&str> =
+        upstream_models.iter().map(String::as_str).collect();
+    let configured_models = normalized_models(configured_models);
     let mut changed = false;
-    for model in &models {
+    for model in configured_models
+        .iter()
+        .filter(|model| upstream_model_set.contains(model.as_str()))
+    {
         let result = sqlx::query(
             "INSERT INTO channel_model
              (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
@@ -279,11 +304,29 @@ async fn sync_channel_models(
              missing_since = COALESCE(missing_since, now()),
              updated_at = now()
          WHERE channel_id = $1
+           AND model = ANY($2)
            AND status = 'available'
-           AND NOT (model = ANY($2))",
+           AND NOT (model = ANY($3))",
     )
     .bind(channel_id)
-    .bind(&models)
+    .bind(&configured_models)
+    .bind(&upstream_models)
+    .execute(&context.db)
+    .await?;
+    changed |= result.rows_affected() > 0;
+
+    let result = sqlx::query(
+        "DELETE FROM channel_model cm
+         WHERE cm.channel_id = $1
+           AND NOT EXISTS (
+               SELECT 1
+               FROM channel_endpoint ce
+               CROSS JOIN unnest(ce.models) AS endpoint_model(model)
+               WHERE ce.channel_id = cm.channel_id
+                 AND btrim(endpoint_model.model) = cm.model
+           )",
+    )
+    .bind(channel_id)
     .execute(&context.db)
     .await?;
     changed |= result.rows_affected() > 0;

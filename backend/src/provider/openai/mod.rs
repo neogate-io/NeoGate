@@ -12,6 +12,7 @@ use axum::{
 };
 use bytes::Bytes;
 use serde::Deserialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
@@ -48,6 +49,14 @@ const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 3] = [
     UpstreamProtocol::Openai,
     UpstreamProtocol::Anthropic,
 ];
+
+fn project_model_request_context(
+    body: &Bytes,
+) -> Option<crate::project::models::ProjectModelRequestContext> {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .map(|value| crate::project::models::ProjectModelRequestContext::from_value(&value))
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponseAssetQuery {
@@ -267,9 +276,14 @@ async fn relay_openai(
         meta,
         output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
-    let resolved =
-        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
-            .await?;
+    let routing_context = project_model_request_context(&body);
+    let resolved = crate::project::models::resolve_project_model_with_context(
+        &state.db.pool,
+        auth.project_id,
+        &meta.model,
+        routing_context,
+    )
+    .await?;
     let upstream_body = if resolved.target_model == meta.model {
         body.clone()
     } else {

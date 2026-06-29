@@ -178,6 +178,7 @@ async fn finalize_loaded(
             provider: upstream.provider.clone(),
             model: Some(model.to_string()),
             upstream_model: Some(upstream_model.to_string()),
+            routing_phase: "relay".to_string(),
             status_code: Some(200),
             streamed: false,
             latency_ms: 0,

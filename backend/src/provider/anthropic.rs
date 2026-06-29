@@ -45,6 +45,14 @@ pub(crate) struct AnthropicBatchListQuery {
 const ANTHROPIC_MESSAGE_PROTOCOLS: [UpstreamProtocol; 2] =
     [UpstreamProtocol::Anthropic, UpstreamProtocol::Openai];
 
+fn project_model_request_context(
+    body: &Bytes,
+) -> Option<crate::project::models::ProjectModelRequestContext> {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .map(|value| crate::project::models::ProjectModelRequestContext::from_value(&value))
+}
+
 pub(crate) async fn anthropic_messages(
     State(state): State<Arc<AppState>>,
     auth: UserAuth,
@@ -60,9 +68,14 @@ pub(crate) async fn anthropic_messages(
         BodyKind::Anthropic,
         state.billing.default_output_tokens(),
     )?;
-    let resolved =
-        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
-            .await?;
+    let routing_context = project_model_request_context(&body);
+    let resolved = crate::project::models::resolve_project_model_with_context(
+        &state.db.pool,
+        auth.project_id,
+        &meta.model,
+        routing_context,
+    )
+    .await?;
     let upstream_body = if resolved.target_model == meta.model {
         body.clone()
     } else {

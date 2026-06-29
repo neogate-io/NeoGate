@@ -109,8 +109,35 @@ export type ProjectModel = {
   target_model: string
   target_channel_id?: number | null
   target_channel_name?: string | null
+  route_mode: 'direct' | 'smart'
+  routing_config: ProjectModelRoutingConfig
+  candidates: ProjectModelCandidate[]
   enabled: boolean
   description: string
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectModelRoutingConfig = {
+  smart_model_name: string
+  default_tier: ProjectModelCandidateTier
+  low_confidence_threshold: number
+  classifier_enabled: boolean
+  classifier_model?: string | null
+}
+
+export type ProjectModelCandidateTier = 'simple' | 'standard' | 'advanced'
+
+export type ProjectModelCandidate = {
+  id: number
+  project_model_id: number
+  target_model: string
+  target_channel_id?: number | null
+  target_channel_name?: string | null
+  tier: ProjectModelCandidateTier
+  priority: number
+  weight: number
+  enabled: boolean
   created_at: string
   updated_at: string
 }

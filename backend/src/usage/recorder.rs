@@ -318,7 +318,7 @@ async fn flush_unbilled_usage(
         "INSERT INTO usage
          (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
           relay_trace_id, relay_attempt, relay_final,
-          provider, model, upstream_model, status_code,
+          provider, model, upstream_model, routing_phase, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -341,6 +341,7 @@ async fn flush_unbilled_usage(
             .push_bind(&item.provider)
             .push_bind(item.model.as_deref())
             .push_bind(item.upstream_model.as_deref())
+            .push_bind(&item.routing_phase)
             .push_bind(item.status_code)
             .push_bind(item.streamed)
             .push_bind(item.latency_ms)
@@ -388,7 +389,7 @@ async fn insert_usage(
         "INSERT INTO usage
          (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
           relay_trace_id, relay_attempt, relay_final,
-          provider, model, upstream_model, status_code,
+          provider, model, upstream_model, routing_phase, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -398,7 +399,7 @@ async fn insert_usage(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-                 $31, $32, $33)
+                 $31, $32, $33, $34)
          RETURNING id",
     )
     .bind(item.user_id)
@@ -413,6 +414,7 @@ async fn insert_usage(
     .bind(&item.provider)
     .bind(item.model.as_deref())
     .bind(item.upstream_model.as_deref())
+    .bind(&item.routing_phase)
     .bind(item.status_code)
     .bind(item.streamed)
     .bind(item.latency_ms)
@@ -544,6 +546,7 @@ pub(super) mod tests {
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
+            routing_phase: "relay".to_string(),
             status_code: Some(200),
             streamed: false,
             latency_ms: 123,
@@ -581,6 +584,7 @@ pub(super) mod tests {
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
+            routing_phase: "relay".to_string(),
             status_code: Some(200),
             streamed: false,
             latency_ms: 123,

@@ -3,6 +3,8 @@ import type {
   Project,
   ProjectMember,
   ProjectModel,
+  ProjectModelCandidateTier,
+  ProjectModelRoutingConfig,
   ProjectStatus
 } from '../types/admin'
 import { adminRequest } from './request'
@@ -115,6 +117,16 @@ export function createProjectModel(
     model: string
     target_model: string
     target_channel_id?: number | null
+    route_mode?: 'direct' | 'smart'
+    routing_config?: ProjectModelRoutingConfig
+    candidates?: Array<{
+      target_model: string
+      target_channel_id?: number | null
+      tier: ProjectModelCandidateTier
+      priority?: number
+      weight?: number
+      enabled?: boolean
+    }>
     enabled?: boolean
     description?: string
   }
@@ -132,6 +144,15 @@ export function updateProjectModel(
     model?: string
     target_model?: string
     target_channel_id?: number | null
+    routing_config?: ProjectModelRoutingConfig
+    candidates?: Array<{
+      target_model: string
+      target_channel_id?: number | null
+      tier: ProjectModelCandidateTier
+      priority?: number
+      weight?: number
+      enabled?: boolean
+    }>
     enabled?: boolean
     description?: string
   }

@@ -29,6 +29,7 @@ import {
   getProjectMembers,
   getProjects,
   type ProjectPage,
+  updateProjectModel,
   updateProject
 } from '../../api/projects'
 import { getChannels } from '../../api/channels'
@@ -46,6 +47,7 @@ import type {
   Project,
   ProjectMember,
   ProjectModel,
+  ProjectModelCandidateTier,
   ProjectStatus,
   User
 } from '../../types/admin'
@@ -89,6 +91,16 @@ type ProjectModelForm = {
   targetModel: string
   targetChannelId: number | null
 }
+type ProjectModelCandidateForm = {
+  targetModel: string
+  targetChannelId: number | null
+  targetChannelName?: string | null
+  createdAt?: string | null
+  tier: ProjectModelCandidateTier
+  priority: number
+  weight: number
+  enabled: boolean
+}
 
 const DEFAULT_PAGE_SIZE = 50
 const DEFAULT_RECHARGE_USD = 0
@@ -113,10 +125,12 @@ const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
 const membersDialogVisible = ref(false)
 const modelsDialogVisible = ref(false)
+const projectModelActiveTab = ref<'models' | 'smart'>('models')
 const membersLoading = ref(false)
 const projectModelsLoading = ref(false)
 const memberSaving = ref(false)
 const projectModelSaving = ref(false)
+const smartRouteSaving = ref(false)
 const deletingProjectModelName = ref<string | null>(null)
 const memberUserOptions = ref<User[]>([])
 const memberUserSearchLoading = ref(false)
@@ -126,6 +140,7 @@ const togglingProjectIds = useReactiveSet<number>()
 const selectedProject = ref<Project | null>(null)
 const selectedMembers = ref<ProjectMember[]>([])
 const selectedProjectModels = ref<ProjectModel[]>([])
+const editingSmartRoute = ref<ProjectModel | null>(null)
 const channelOptions = ref<Channel[]>([])
 const ownerOptions = ref<User[]>([])
 const ownerSearchLoading = ref(false)
@@ -145,6 +160,16 @@ const projectModelForm = reactive<ProjectModelForm>({
   targetModel: '',
   targetChannelId: null
 })
+const smartCandidateForm = reactive<ProjectModelCandidateForm>({
+  targetModel: '',
+  targetChannelId: null,
+  targetChannelName: null,
+  tier: 'standard',
+  priority: 0,
+  weight: 1,
+  enabled: true
+})
+const smartRouteCandidates = ref<ProjectModelCandidateForm[]>([])
 const {
   currentPage,
   pageSize,
@@ -182,6 +207,12 @@ const channelModelOptions = computed(() => {
   }
   return options.sort((a, b) => a.localeCompare(b))
 })
+const directProjectModels = computed(() =>
+  selectedProjectModels.value.filter((model) => model.route_mode !== 'smart')
+)
+const smartProjectModel = computed(
+  () => selectedProjectModels.value.find((model) => model.route_mode === 'smart') || null
+)
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
 )
@@ -332,8 +363,10 @@ async function openMembersDialog(row: Project) {
 async function openModelsDialog(row: Project) {
   selectedProject.value = row
   modelsDialogVisible.value = true
+  projectModelActiveTab.value = 'models'
   selectedProjectModels.value = []
   resetProjectModelForm()
+  resetSmartModelForm()
   await withLoading(projectModelsLoading, async () => {
     try {
       await Promise.all([loadSelectedProjectModels(), loadProjectModelOptions()])
@@ -351,6 +384,7 @@ async function loadSelectedProjectMembers() {
 async function loadSelectedProjectModels() {
   if (!selectedProject.value) return
   selectedProjectModels.value = await getProjectModels(selectedProject.value.id)
+  hydrateSmartModelForm()
 }
 
 async function loadProjectModelOptions() {
@@ -365,8 +399,187 @@ function resetProjectModelForm() {
   })
 }
 
+function resetSmartModelForm() {
+  editingSmartRoute.value = null
+  resetSmartCandidateForm()
+  smartRouteCandidates.value = []
+}
+
+function resetSmartCandidateForm() {
+  Object.assign(smartCandidateForm, {
+    targetModel: '',
+    targetChannelId: null,
+    targetChannelName: null,
+    createdAt: null,
+    tier: 'standard',
+    priority: 0,
+    weight: 1,
+    enabled: true
+  })
+}
+
+function hydrateSmartModelForm() {
+  const row = smartProjectModel.value
+  if (!row) {
+    resetSmartModelForm()
+    return
+  }
+  editingSmartRoute.value = row
+  smartRouteCandidates.value = row.candidates.map((candidate) => ({
+    targetModel: candidate.target_model,
+    targetChannelId: candidate.target_channel_id ?? null,
+    targetChannelName: candidate.target_channel_name ?? null,
+    createdAt: candidate.created_at,
+    tier: candidate.tier,
+    priority: candidate.priority,
+    weight: candidate.weight,
+    enabled: candidate.enabled
+  }))
+}
+
 function channelLabel(channel: Channel) {
   return `${channel.name} / ${channel.provider}`
+}
+
+function defaultSmartRoutingConfig() {
+  return {
+    smart_model_name: 'auto',
+    default_tier: 'standard' as ProjectModelCandidateTier,
+    low_confidence_threshold: 0.7,
+    classifier_enabled: false,
+    classifier_model: null
+  }
+}
+
+function smartCandidatePayload(items: ProjectModelCandidateForm[]) {
+  return items.map((item) => ({
+    target_model: item.targetModel.trim(),
+    target_channel_id: item.targetChannelId,
+    tier: item.tier,
+    priority: item.priority,
+    weight: item.weight,
+    enabled: item.enabled
+  }))
+}
+
+function tierLabel(tier: ProjectModelCandidateTier) {
+  const labels: Record<ProjectModelCandidateTier, string> = {
+    simple: '简单',
+    standard: '标准',
+    advanced: '高级'
+  }
+  return labels[tier]
+}
+
+function candidateChannelLabel(candidate: ProjectModelCandidateForm) {
+  if (candidate.targetChannelName) return candidate.targetChannelName
+  if (!candidate.targetChannelId) return '自动选择'
+  const channel = channelOptions.value.find((item) => item.id === candidate.targetChannelId)
+  return channel ? channelLabel(channel) : '自动选择'
+}
+
+function smartRouteFallbackCandidate(items: ProjectModelCandidateForm[]) {
+  return items.find((item) => item.enabled) || items[0] || null
+}
+
+async function persistSmartRouteCandidates(items: ProjectModelCandidateForm[], successMessage: string) {
+  const projectId = selectedProject.value?.id
+  if (!projectId) return false
+  const fallback = smartRouteFallbackCandidate(items)
+  if (!fallback) {
+    ElMessage.error('至少配置一个候选模型')
+    return false
+  }
+  const candidates = smartCandidatePayload(items)
+  if (candidates.some((candidate) => !candidate.target_model)) {
+    ElMessage.error('候选模型必填')
+    return false
+  }
+  let saved = false
+  await withLoading(smartRouteSaving, async () => {
+    try {
+      const row = editingSmartRoute.value
+      const payload = {
+        target_model: fallback.targetModel.trim(),
+        target_channel_id: fallback.targetChannelId,
+        routing_config: row?.routing_config || defaultSmartRoutingConfig(),
+        candidates
+      }
+      if (row) {
+        await updateProjectModel(projectId, row.model, payload)
+      } else {
+        await createProjectModel(projectId, {
+          model: 'auto',
+          route_mode: 'smart',
+          enabled: true,
+          description: '',
+          ...payload
+        })
+      }
+      ElMessage.success(successMessage)
+      await loadSelectedProjectModels()
+      await reload()
+      saved = true
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+  return saved
+}
+
+async function addSmartRouteCandidate() {
+  const targetModel = smartCandidateForm.targetModel.trim()
+  if (!targetModel) {
+    ElMessage.error('实际模型必填')
+    return
+  }
+  const nextCandidates = [
+    ...smartRouteCandidates.value,
+    {
+      targetModel,
+      targetChannelId: smartCandidateForm.targetChannelId,
+      targetChannelName: null,
+      createdAt: null,
+      tier: smartCandidateForm.tier,
+      priority: smartCandidateForm.priority,
+      weight: smartCandidateForm.weight,
+      enabled: true
+    }
+  ]
+  const saved = await persistSmartRouteCandidates(nextCandidates, '候选模型已添加')
+  if (saved) resetSmartCandidateForm()
+}
+
+async function removeSmartRouteCandidate(index: number) {
+  const row = editingSmartRoute.value
+  const projectId = selectedProject.value?.id
+  if (!row || !projectId) return
+  const candidate = smartRouteCandidates.value[index]
+  const nextCandidates = smartRouteCandidates.value.filter((_, candidateIndex) => candidateIndex !== index)
+  const message =
+    nextCandidates.length === 0
+      ? '删除最后一个候选后，将删除智能模型 auto？'
+      : `删除候选模型 ${candidate.targetModel}？`
+  const confirmed = await confirmDialog(message, t('confirmDelete'), {
+    confirmText: t('delete'),
+    danger: true,
+    type: 'warning'
+  })
+  if (!confirmed) return
+  if (nextCandidates.length === 0) {
+    await withLoadingValue(deletingProjectModelName, row.model, null, async () => {
+      try {
+        await deleteProjectModel(projectId, row.model)
+        ElMessage.success(t('projectDeleted'))
+        await loadSelectedProjectModels()
+        await reload()
+      } catch (err) {
+        ElMessage.error(readError(err))
+      }
+    })
+    return
+  }
+  await persistSmartRouteCandidates(nextCandidates, '候选模型已删除')
 }
 
 async function submitProjectModelForm() {
@@ -946,109 +1159,236 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="modelsDialogVisible"
       class="user-admin-dialog project-models-dialog"
-      title="项目可用模型"
-      width="760px"
+      title="项目模型"
+      width="720px"
     >
       <div class="project-model-panel">
-        <el-form
-          class="project-model-form"
-          label-position="top"
-          @submit.prevent="submitProjectModelForm"
-        >
-          <el-form-item label="实际模型">
-            <el-select
-              v-model="projectModelForm.targetModel"
-              filterable
-              allow-create
-              default-first-option
-              placeholder="选择实际上游模型"
+        <el-tabs v-model="projectModelActiveTab" class="project-model-tabs">
+          <el-tab-pane label="指定模型" name="models">
+            <p class="project-model-help">
+              用来限制这个项目能调用哪些模型。不添加指定模型时，项目可以使用全部已启用模型；添加后，只能使用这里列出的模型或别名。
+            </p>
+            <el-form
+              class="project-model-form"
+              label-position="top"
+              @submit.prevent="submitProjectModelForm"
             >
-              <el-option
-                v-for="model in channelModelOptions"
-                :key="model"
-                :label="model"
-                :value="model"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="指定上游通道（可选）">
-            <el-select
-              v-model="projectModelForm.targetChannelId"
-              clearable
-              filterable
-              placeholder="自动选择可用通道"
-            >
-              <el-option
-                v-for="channel in channelOptions"
-                :key="channel.id"
-                :label="channelLabel(channel)"
-                :value="channel.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="模型别名（可选）">
-            <el-input v-model="projectModelForm.model" placeholder="例如 company-chat" />
-          </el-form-item>
-          <div class="project-model-actions">
-            <el-button type="primary" :loading="projectModelSaving" @click="submitProjectModelForm">
-              {{ t('create') }}
-            </el-button>
-          </div>
-        </el-form>
+              <el-form-item label="实际模型">
+                <el-select
+                  v-model="projectModelForm.targetModel"
+                  class="project-model-wide-select"
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="选择实际上游模型"
+                >
+                  <el-option
+                    v-for="model in channelModelOptions"
+                    :key="model"
+                    :label="model"
+                    :value="model"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="指定上游通道（可选）">
+                <el-select
+                  v-model="projectModelForm.targetChannelId"
+                  clearable
+                  filterable
+                  placeholder="自动选择可用通道"
+                >
+                  <el-option
+                    v-for="channel in channelOptions"
+                    :key="channel.id"
+                    :label="channelLabel(channel)"
+                    :value="channel.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="模型别名（可选）">
+                <el-input v-model="projectModelForm.model" placeholder="例如 company-chat" />
+              </el-form-item>
+              <div class="project-model-actions">
+                <el-button
+                  type="primary"
+                  :loading="projectModelSaving"
+                  @click="submitProjectModelForm"
+                >
+                  {{ t('create') }}
+                </el-button>
+              </div>
+            </el-form>
 
-        <div class="service-table-panel project-model-table-panel">
-          <div
-            v-if="!projectModelsLoading && selectedProjectModels.length === 0"
-            class="project-model-empty-hint"
-          >
-            不设置模型时，当前项目可使用全部模型
-          </div>
-          <el-table
-            v-else
-            v-loading="projectModelsLoading"
-            class="admin-table service-table"
-            :data="selectedProjectModels"
-            max-height="46vh"
-            row-key="id"
-            stripe
-          >
-            <el-table-column label="项目模型" prop="model" min-width="150" show-overflow-tooltip />
-            <el-table-column
-              label="实际模型"
-              prop="target_model"
-              min-width="170"
-              show-overflow-tooltip
-            />
-            <el-table-column label="指定通道" width="132" show-overflow-tooltip>
-              <template #default="{ row }">
-                <span>{{ row.target_channel_name || '自动选择' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('createdAt')" width="132">
-              <template #default="{ row }">
-                <span class="user-time-cell project-model-time-cell">{{
-                  formatCompactDateTime(row.created_at)
-                }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
-              <template #default="{ row }">
-                <div class="table-row-actions">
-                  <el-tooltip :content="t('delete')" placement="top" :show-after="600">
-                    <el-button
-                      class="admin-action-button compact-row-action project-member-delete-action"
-                      type="danger"
-                      :aria-label="t('delete')"
-                      :icon="Delete"
-                      :loading="deletingProjectModelName === row.model"
-                      @click="confirmDeleteProjectModel(row)"
+            <div
+              v-if="projectModelsLoading || directProjectModels.length > 0"
+              class="service-table-panel project-model-table-panel"
+            >
+              <el-table
+                v-loading="projectModelsLoading"
+                class="admin-table service-table"
+                :data="directProjectModels"
+                max-height="46vh"
+                row-key="id"
+                stripe
+              >
+                <el-table-column label="项目模型" prop="model" min-width="120" show-overflow-tooltip />
+                <el-table-column
+                  label="实际模型"
+                  prop="target_model"
+                  min-width="180"
+                  show-overflow-tooltip
+                />
+                <el-table-column label="指定通道" width="118" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span>{{ row.target_channel_name || '自动选择' }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column :label="t('createdAt')" width="104">
+                  <template #default="{ row }">
+                    <span class="user-time-cell project-model-time-cell">{{
+                      formatCompactDateTime(row.created_at)
+                    }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
+                  <template #default="{ row }">
+                    <div class="table-row-actions">
+                      <el-tooltip :content="t('delete')" placement="top" :show-after="600">
+                        <el-button
+                          class="admin-action-button compact-row-action project-member-delete-action"
+                          type="danger"
+                          :aria-label="t('delete')"
+                          :icon="Delete"
+                          :loading="deletingProjectModelName === row.model"
+                          @click="confirmDeleteProjectModel(row)"
+                        />
+                      </el-tooltip>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="智能模型" name="smart">
+            <div class="smart-route-panel">
+              <p class="project-model-help">
+                配置虚拟模型 auto。客户端请求 model=auto 时，NeoGate 会按内容复杂度从候选模型中选择实际模型；至少添加一个候选后才会启用。
+              </p>
+              <el-form
+                class="smart-model-form"
+                label-position="top"
+                @submit.prevent="addSmartRouteCandidate"
+              >
+                <el-form-item label="档位">
+                  <el-select
+                    v-model="smartCandidateForm.tier"
+                    placeholder="选择档位"
+                  >
+                    <el-option label="简单" value="simple" />
+                    <el-option label="标准" value="standard" />
+                    <el-option label="高级" value="advanced" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="实际模型">
+                  <el-select
+                    v-model="smartCandidateForm.targetModel"
+                    class="project-model-wide-select"
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="选择实际模型"
+                  >
+                    <el-option
+                      v-for="model in channelModelOptions"
+                      :key="model"
+                      :label="model"
+                      :value="model"
                     />
-                  </el-tooltip>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="指定上游通道（可选）">
+                  <el-select
+                    v-model="smartCandidateForm.targetChannelId"
+                    clearable
+                    filterable
+                    placeholder="自动选择可用通道"
+                  >
+                    <el-option
+                      v-for="channel in channelOptions"
+                      :key="channel.id"
+                      :label="channelLabel(channel)"
+                      :value="channel.id"
+                    />
+                  </el-select>
+                </el-form-item>
+                <div class="project-model-actions">
+                  <el-button
+                    type="primary"
+                    :icon="Plus"
+                    :loading="smartRouteSaving"
+                    @click="addSmartRouteCandidate"
+                  >
+                    添加候选
+                  </el-button>
                 </div>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
+              </el-form>
+
+              <div
+                v-if="projectModelsLoading || smartRouteCandidates.length > 0"
+                class="service-table-panel project-model-table-panel"
+              >
+                <el-table
+                  v-loading="projectModelsLoading || smartRouteSaving"
+                  class="admin-table service-table"
+                  :data="smartRouteCandidates"
+                  max-height="46vh"
+                  stripe
+                >
+                  <el-table-column label="档位" width="72">
+                    <template #default="{ row }">
+                      <span>{{ tierLabel(row.tier) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column
+                    label="实际模型"
+                    prop="targetModel"
+                    min-width="220"
+                    show-overflow-tooltip
+                  />
+                  <el-table-column label="指定通道" width="138" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span>{{ candidateChannelLabel(row) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column :label="t('createdAt')" width="104">
+                    <template #default="{ row }">
+                      <span class="user-time-cell project-model-time-cell">{{
+                        row.createdAt ? formatCompactDateTime(row.createdAt) : '-'
+                      }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
+                    <template #default="{ $index }">
+                      <div class="table-row-actions">
+                        <el-tooltip :content="t('delete')" placement="top" :show-after="600">
+                          <el-button
+                            class="admin-action-button compact-row-action project-member-delete-action"
+                            type="danger"
+                            :aria-label="t('delete')"
+                            :icon="Delete"
+                            :loading="deletingProjectModelName === editingSmartRoute?.model"
+                            @click="removeSmartRouteCandidate($index)"
+                          />
+                        </el-tooltip>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
       </div>
     </el-dialog>
 
@@ -1286,11 +1626,18 @@ onMounted(loadServicePolicy)
   gap: 16px;
 }
 
+.project-model-help {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 14px;
+}
+
 .project-model-form {
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(130px, 0.8fr) minmax(190px, 1.1fr) minmax(150px, 0.9fr) auto;
+  grid-template-columns: minmax(190px, 1.3fr) minmax(150px, 1fr) minmax(120px, 0.8fr) auto;
 }
 
 .project-model-form :deep(.el-form-item) {
@@ -1308,20 +1655,31 @@ onMounted(loadServicePolicy)
 }
 
 .project-model-table-panel {
-  margin: 0;
+  margin: 14px 0 0;
+}
+
+.smart-route-panel .project-model-table-panel {
+  margin-top: 0;
 }
 
 .project-model-time-cell {
   white-space: nowrap;
 }
 
-.project-model-empty-hint {
-  align-items: center;
-  color: #64748b;
-  display: flex;
-  font-size: 13px;
-  justify-content: center;
-  min-height: 120px;
+.smart-route-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.smart-model-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 78px minmax(220px, 1.4fr) minmax(160px, 1fr) auto;
+}
+
+.smart-model-form :deep(.el-form-item) {
+  margin-bottom: 0;
 }
 
 .project-table :deep(.project-row-is-disabled td) {

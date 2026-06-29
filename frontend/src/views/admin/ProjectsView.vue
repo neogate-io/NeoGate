@@ -9,7 +9,6 @@ import {
   FolderOpened,
   Link,
   Money,
-  MoreFilled,
   Plus,
   Search,
   User as UserIcon,
@@ -701,8 +700,8 @@ onMounted(loadServicePolicy)
         row-key="id"
         stripe
       >
-        <el-table-column prop="id" label="ID" width="76" align="right" header-align="right" />
-        <el-table-column prop="name" :label="t('projectName')" min-width="220">
+        <el-table-column prop="id" label="ID" width="64" align="right" header-align="right" />
+        <el-table-column prop="name" :label="t('projectName')" min-width="190">
           <template #default="{ row }">
             <span class="project-name-cell">
               <span class="project-avatar">
@@ -714,7 +713,7 @@ onMounted(loadServicePolicy)
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('projectOwner')" min-width="210">
+        <el-table-column :label="t('projectOwner')" min-width="180">
           <template #default="{ row }">
             <span class="project-owner-cell">
               <el-icon><UserFilled /></el-icon>
@@ -726,7 +725,7 @@ onMounted(loadServicePolicy)
         </el-table-column>
         <el-table-column
           :label="t('projectMembers')"
-          min-width="96"
+          min-width="86"
           align="center"
           header-align="center"
         >
@@ -736,7 +735,7 @@ onMounted(loadServicePolicy)
         </el-table-column>
         <el-table-column
           :label="t('userApiKeyCount')"
-          min-width="96"
+          min-width="86"
           align="center"
           header-align="center"
         >
@@ -746,7 +745,7 @@ onMounted(loadServicePolicy)
         </el-table-column>
         <el-table-column
           label="模型数"
-          min-width="86"
+          min-width="76"
           align="center"
           header-align="center"
         >
@@ -758,7 +757,7 @@ onMounted(loadServicePolicy)
         </el-table-column>
         <el-table-column
           :label="t('availableCredit')"
-          min-width="132"
+          min-width="118"
           align="center"
           header-align="center"
         >
@@ -770,14 +769,14 @@ onMounted(loadServicePolicy)
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('createdAt')" min-width="160">
+        <el-table-column :label="t('createdAt')" min-width="140">
           <template #default="{ row }">
             <span class="project-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
         <el-table-column
           :label="t('projectStatus')"
-          min-width="128"
+          min-width="112"
           align="center"
           header-align="center"
         >
@@ -800,60 +799,55 @@ onMounted(loadServicePolicy)
         </el-table-column>
         <el-table-column
           :label="t('actions')"
-          width="150"
-          fixed="right"
+          min-width="286"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <el-tooltip :content="t('viewProjectMembers')" placement="top" :show-after="600">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  :aria-label="t('viewProjectMembers')"
-                  :icon="UserIcon"
-                  @click="openMembersDialog(row)"
-                />
-              </el-tooltip>
-              <el-tooltip content="项目模型" placement="top" :show-after="600">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  aria-label="项目模型"
-                  :icon="Link"
-                  @click="openModelsDialog(row)"
-                />
-              </el-tooltip>
-              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  :aria-label="t('edit')"
-                  :icon="Edit"
-                  @click="openEditDialog(row)"
-                />
-              </el-tooltip>
-              <el-dropdown trigger="click" placement="bottom-end">
-                <el-button
-                  class="admin-action-button icon-only-action action-more-button"
-                  :aria-label="t('moreActions')"
-                  :icon="MoreFilled"
-                />
-                <template #dropdown>
-                  <el-dropdown-menu class="admin-row-action-menu">
-                    <el-dropdown-item v-if="isCreditRequired" @click="openCreditDialog(row)">
-                      <el-icon><Money /></el-icon>
-                      <span>{{ t('recharge') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      class="is-danger"
-                      :disabled="row.is_default || deletingProjectId === row.id"
-                      @click="confirmDeleteProject(row)"
-                    >
-                      <el-icon><Delete /></el-icon>
-                      <span>{{ t('delete') }}</span>
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('viewProjectMembers')"
+                :icon="UserIcon"
+                @click="openMembersDialog(row)"
+              >
+                {{ t('actionMembers') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                aria-label="项目模型"
+                :icon="Link"
+                @click="openModelsDialog(row)"
+              >
+                {{ t('actionModels') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('edit')"
+                :icon="Edit"
+                @click="openEditDialog(row)"
+              >
+                {{ t('actionEdit') }}
+              </el-button>
+              <el-button
+                v-if="isCreditRequired"
+                class="admin-action-button compact-row-action user-recharge-action"
+                :aria-label="t('recharge')"
+                :icon="Money"
+                @click="openCreditDialog(row)"
+              >
+                {{ t('actionRecharge') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                type="danger"
+                :aria-label="t('delete')"
+                :disabled="row.is_default || deletingProjectId === row.id"
+                :icon="Delete"
+                @click="confirmDeleteProject(row)"
+              >
+                {{ t('actionDelete') }}
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -1054,25 +1048,33 @@ onMounted(loadServicePolicy)
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('actions')" width="112" align="center" header-align="center">
+            <el-table-column
+              :label="t('actions')"
+              min-width="116"
+              align="center"
+              header-align="center"
+            >
               <template #default="{ row }">
-                <el-button
-                  class="admin-icon-action"
-                  :aria-label="t('edit')"
-                  :icon="Edit"
-                  circle
-                  text
-                  @click="editProjectModel(row)"
-                />
-                <el-button
-                  class="admin-icon-action danger"
-                  :aria-label="t('delete')"
-                  :icon="Delete"
-                  :loading="deletingProjectModelName === row.model"
-                  circle
-                  text
-                  @click="confirmDeleteProjectModel(row)"
-                />
+                <div class="table-row-actions">
+                  <el-button
+                    class="admin-action-button compact-row-action"
+                    :aria-label="t('edit')"
+                    :icon="Edit"
+                    @click="editProjectModel(row)"
+                  >
+                    {{ t('actionEdit') }}
+                  </el-button>
+                  <el-button
+                    class="admin-action-button compact-row-action"
+                    type="danger"
+                    :aria-label="t('delete')"
+                    :icon="Delete"
+                    :loading="deletingProjectModelName === row.model"
+                    @click="confirmDeleteProjectModel(row)"
+                  >
+                    {{ t('actionDelete') }}
+                  </el-button>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -1199,24 +1201,26 @@ onMounted(loadServicePolicy)
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('actions')" width="76" align="center" header-align="center">
+            <el-table-column
+              :label="t('actions')"
+              min-width="64"
+              align="center"
+              header-align="center"
+            >
               <template #default="{ row }">
-                <el-tooltip
-                  v-if="row.role !== 'owner'"
-                  :content="t('delete')"
-                  placement="top"
-                  :show-after="600"
-                >
+                <div class="table-row-actions">
                   <el-button
-                    class="admin-icon-action danger"
+                    v-if="row.role !== 'owner'"
+                    class="admin-action-button compact-row-action"
+                    type="danger"
                     :aria-label="t('delete')"
                     :icon="Delete"
                     :loading="deletingMemberId === row.id"
-                    circle
-                    text
                     @click="confirmDeleteProjectMember(row)"
-                  />
-                </el-tooltip>
+                  >
+                    {{ t('actionDelete') }}
+                  </el-button>
+                </div>
               </template>
             </el-table-column>
             <template #empty>

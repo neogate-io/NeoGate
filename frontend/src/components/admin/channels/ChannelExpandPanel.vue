@@ -174,13 +174,14 @@ const { t } = useLocale()
 .channel-expand-price-row {
   align-items: center;
   background: #ffffff;
+  column-gap: 12px;
   display: grid;
-  gap: 8px;
+  row-gap: 8px;
   grid-template-columns:
     minmax(120px, 1.5fr)
     minmax(160px, 0.7fr)
     minmax(160px, 0.7fr)
-    80px
+    92px
     56px
     132px;
   min-height: 46px;
@@ -222,6 +223,11 @@ const { t } = useLocale()
 .channel-expand-price-row.is-head span:nth-child(5),
 .channel-expand-price-row.is-head span:nth-child(6) {
   text-align: center;
+}
+
+.channel-expand-price-row.is-head span:nth-child(4),
+.channel-detail-status {
+  padding-left: 12px;
 }
 
 .channel-expand-price-row.is-missing,
@@ -359,9 +365,9 @@ const { t } = useLocale()
 }
 
 .channel-detail-runtime-raw.is-failed {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #64748b;
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #dc2626;
 }
 
 .channel-detail-runtime-switch {

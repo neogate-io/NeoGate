@@ -662,22 +662,41 @@
 
 .table-row-actions {
   flex-wrap: nowrap;
-  gap: 4px;
+  gap: 2px;
 }
 
-.admin-shell .table-row-actions .price-config-action,
-.admin-shell .table-row-actions .user-recharge-action {
-  --el-button-bg-color: var(--brand-blue-soft);
-  --el-button-border-color: var(--brand-blue-border);
+.admin-action-button.compact-row-action.el-button {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: transparent;
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--brand-blue);
+  --el-button-size: 28px;
+  border: 0;
+  gap: 2px;
+  height: 28px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 5px;
+}
+
+.admin-action-button.compact-row-action.el-button .el-icon {
+  font-size: 14px;
+  margin-right: 0;
+}
+
+.admin-action-button.compact-row-action.el-button .el-icon + span {
+  margin-left: 2px;
+}
+
+.admin-shell .table-row-actions .compact-row-action.price-config-action,
+.admin-shell .table-row-actions .compact-row-action.user-recharge-action {
   --el-button-text-color: var(--brand-blue);
+  --el-button-hover-text-color: #0f5bd8;
 }
 
-.admin-shell .table-row-actions .user-status-action {
-  --el-button-bg-color: #f0fdf4;
-  --el-button-border-color: #bbf7d0;
+.admin-shell .table-row-actions .compact-row-action.user-status-action {
   --el-button-text-color: #15803d;
-  --el-button-hover-bg-color: #dcfce7;
-  --el-button-hover-border-color: #86efac;
   --el-button-hover-text-color: #15803d;
 }
 
@@ -687,27 +706,17 @@
   --el-button-text-color: #64748b;
 }
 
-.admin-shell .table-row-actions .el-button--danger {
-  --el-button-bg-color: #fff1f2;
-  --el-button-border-color: #fecdd3;
+.admin-shell .table-row-actions .compact-row-action.el-button--danger {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
   --el-button-text-color: #dc2626;
-  --el-button-hover-bg-color: #fee2e2;
-  --el-button-hover-border-color: #fda4af;
+  --el-button-hover-bg-color: transparent;
+  --el-button-hover-border-color: transparent;
   --el-button-hover-text-color: #be123c;
 }
 
-.admin-shell .table-row-actions .el-button--danger:not(.is-disabled):hover {
-  --el-button-bg-color: #ef4444;
-  --el-button-border-color: #ef4444;
-  --el-button-hover-bg-color: #ef4444;
-  --el-button-hover-border-color: #ef4444;
-  --el-button-hover-text-color: #ffffff;
-  color: #ffffff;
-}
-
-.admin-shell .table-row-actions .el-button:not(.is-disabled):hover {
+.admin-shell .table-row-actions .compact-row-action.el-button:not(.is-disabled):hover {
   box-shadow: none !important;
-  color: var(--brand-blue);
 }
 
 .admin-row-action-menu .el-dropdown-menu__item {
@@ -1795,11 +1804,10 @@
 
   .user-table.admin-table.el-table
     .table-row-actions
-    .admin-action-button.icon-only-action.el-button {
-    height: 30px;
-    min-height: 30px;
-    min-width: 30px;
-    width: 30px;
+    .admin-action-button:is(.icon-only-action, .compact-row-action).el-button {
+    height: 28px;
+    min-height: 28px;
+    min-width: 0;
   }
 }
 
@@ -2149,26 +2157,27 @@
   outline-offset: 2px;
 }
 
-.admin-shell .table-row-actions .el-button:not(.el-button--danger),
-.admin-shell .table-row-actions .action-more-button {
-  --el-button-bg-color: #ffffff;
-  --el-button-border-color: var(--admin-border);
-  --el-button-hover-bg-color: var(--admin-primary-soft);
-  --el-button-hover-border-color: var(--admin-primary-border);
+.admin-shell .table-row-actions .compact-row-action.el-button:not(.el-button--danger),
+.admin-shell .table-row-actions .compact-row-action.action-more-button {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: transparent;
+  --el-button-hover-border-color: transparent;
   --el-button-hover-text-color: var(--admin-primary);
 }
 
-.admin-shell .table-row-actions .price-config-action,
-.admin-shell .table-row-actions .user-recharge-action {
-  --el-button-bg-color: var(--admin-primary-soft);
-  --el-button-border-color: var(--admin-primary-border);
+.admin-shell .table-row-actions .compact-row-action.price-config-action,
+.admin-shell .table-row-actions .compact-row-action.user-recharge-action {
   --el-button-text-color: var(--admin-primary);
 }
 
-.admin-shell .table-row-actions .el-button--danger {
-  --el-button-bg-color: var(--admin-danger-bg);
-  --el-button-border-color: var(--admin-danger-border);
+.admin-shell .table-row-actions .compact-row-action.el-button--danger {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
   --el-button-text-color: var(--admin-danger);
+  --el-button-hover-bg-color: transparent;
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: #b91c1c;
 }
 
 

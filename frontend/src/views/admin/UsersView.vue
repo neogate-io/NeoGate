@@ -11,7 +11,6 @@ import {
   Lock,
   Message,
   Money,
-  MoreFilled,
   Plus,
   Search,
   User as UserIcon,
@@ -558,8 +557,8 @@ onMounted(() => {
         row-key="id"
         stripe
       >
-        <el-table-column prop="id" label="ID" width="68" align="right" header-align="right" />
-        <el-table-column prop="username" :label="t('username')" min-width="180">
+        <el-table-column prop="id" label="ID" width="60" align="right" header-align="right" />
+        <el-table-column prop="username" :label="t('username')" min-width="160">
           <template #default="{ row }">
             <span class="user-email-cell">
               <span class="user-avatar">
@@ -576,67 +575,61 @@ onMounted(() => {
                 <span class="user-mobile-row-actions">
                   <el-button
                     v-if="row.status === 'pending'"
-                    class="admin-action-button icon-only-action user-status-action"
+                    class="admin-action-button compact-row-action user-status-action"
                     :aria-label="t('approve')"
                     :icon="CircleCheckFilled"
                     :loading="approvingUserId === row.id"
                     @click="approveUser(row)"
-                  />
-                  <el-tooltip
-                    v-if="isPaidServiceMode"
-                    :content="t('viewApiKeys')"
-                    placement="top"
-                    :show-after="600"
                   >
-                    <el-button
-                      class="admin-action-button icon-only-action"
-                      :aria-label="t('viewApiKeys')"
-                      :icon="Key"
-                      @click="openUserKeysDialog(row)"
-                    />
-                  </el-tooltip>
-                  <el-tooltip :content="t('edit')" placement="top" :show-after="600">
-                    <el-button
-                      class="admin-action-button icon-only-action"
-                      :aria-label="t('edit')"
-                      :icon="Edit"
-                      @click="openEditDialog(row)"
-                    />
-                  </el-tooltip>
-                  <el-dropdown trigger="click" placement="bottom-end">
-                    <el-button
-                      class="admin-action-button icon-only-action action-more-button"
-                      :aria-label="t('moreActions')"
-                      :icon="MoreFilled"
-                    />
-                    <template #dropdown>
-                      <el-dropdown-menu class="admin-row-action-menu">
-                        <el-dropdown-item v-if="isPaidServiceMode" @click="openCreditDialog(row)">
-                          <el-icon><Money /></el-icon>
-                          <span>{{ t('recharge') }}</span>
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          class="is-danger"
-                          :disabled="deletingUserId === row.id"
-                          @click="confirmDeleteUser(row)"
-                        >
-                          <el-icon><Delete /></el-icon>
-                          <span>{{ t('delete') }}</span>
-                        </el-dropdown-item>
-                      </el-dropdown-menu>
-                    </template>
-                  </el-dropdown>
+                    {{ t('actionApprove') }}
+                  </el-button>
+                  <el-button
+                    v-if="isPaidServiceMode"
+                    class="admin-action-button compact-row-action"
+                    :aria-label="t('viewApiKeys')"
+                    :icon="Key"
+                    @click="openUserKeysDialog(row)"
+                  >
+                    {{ t('actionKeys') }}
+                  </el-button>
+                  <el-button
+                    class="admin-action-button compact-row-action"
+                    :aria-label="t('edit')"
+                    :icon="Edit"
+                    @click="openEditDialog(row)"
+                  >
+                    {{ t('actionEdit') }}
+                  </el-button>
+                  <el-button
+                    v-if="isPaidServiceMode"
+                    class="admin-action-button compact-row-action user-recharge-action"
+                    :aria-label="t('recharge')"
+                    :icon="Money"
+                    @click="openCreditDialog(row)"
+                  >
+                    {{ t('actionRecharge') }}
+                  </el-button>
+                  <el-button
+                    class="admin-action-button compact-row-action"
+                    type="danger"
+                    :aria-label="t('delete')"
+                    :disabled="deletingUserId === row.id"
+                    :icon="Delete"
+                    @click="confirmDeleteUser(row)"
+                  >
+                    {{ t('actionDelete') }}
+                  </el-button>
                 </span>
               </span>
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="email" :label="t('email')" min-width="200">
+        <el-table-column prop="email" :label="t('email')" min-width="190">
           <template #default="{ row }">
             <span class="user-email-text">{{ row.email }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('userGroup')" min-width="120">
+        <el-table-column :label="t('userGroup')" min-width="110">
           <template #default="{ row }">
             <span class="user-group-tag" :class="`is-${userGroupTone(row)}`">
               {{ row.user_group_name }}
@@ -646,7 +639,7 @@ onMounted(() => {
         <el-table-column
           v-if="isPaidServiceMode"
           :label="t('userApiKeyCount')"
-          min-width="104"
+          min-width="88"
           align="center"
           header-align="center"
         >
@@ -659,7 +652,7 @@ onMounted(() => {
         <el-table-column
           v-if="showAccountBalance"
           :label="t('accountBalance')"
-          min-width="124"
+          min-width="112"
           align="center"
           header-align="center"
         >
@@ -671,12 +664,12 @@ onMounted(() => {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('createdAt')" min-width="150">
+        <el-table-column :label="t('createdAt')" min-width="138">
           <template #default="{ row }">
             <span class="user-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('lastActiveAt')" min-width="170">
+        <el-table-column :label="t('lastActiveAt')" min-width="140">
           <template #default="{ row }">
             <span class="user-time-cell" :class="{ 'is-empty': !row.last_active_at }">
               {{ formatLastActiveAt(row.last_active_at) }}
@@ -685,7 +678,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column
           :label="t('userStatus')"
-          min-width="116"
+          min-width="108"
           align="center"
           header-align="center"
         >
@@ -711,8 +704,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column
           :label="t('actions')"
-          width="150"
-          fixed="right"
+          min-width="286"
           align="center"
           header-align="center"
         >
@@ -720,56 +712,50 @@ onMounted(() => {
             <div class="table-row-actions">
               <el-button
                 v-if="row.status === 'pending'"
-                class="admin-action-button icon-only-action user-status-action"
+                class="admin-action-button compact-row-action user-status-action"
                 :aria-label="t('approve')"
                 :icon="CircleCheckFilled"
                 :loading="approvingUserId === row.id"
                 @click="approveUser(row)"
-              />
-              <el-tooltip
-                v-if="isPaidServiceMode"
-                :content="t('viewApiKeys')"
-                placement="top"
-                :show-after="600"
               >
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  :aria-label="t('viewApiKeys')"
-                  :icon="Key"
-                  @click="openUserKeysDialog(row)"
-                />
-              </el-tooltip>
-              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  :aria-label="t('edit')"
-                  :icon="Edit"
-                  @click="openEditDialog(row)"
-                />
-              </el-tooltip>
-              <el-dropdown trigger="click" placement="bottom-end">
-                <el-button
-                  class="admin-action-button icon-only-action action-more-button"
-                  :aria-label="t('moreActions')"
-                  :icon="MoreFilled"
-                />
-                <template #dropdown>
-                  <el-dropdown-menu class="admin-row-action-menu">
-                    <el-dropdown-item v-if="isPaidServiceMode" @click="openCreditDialog(row)">
-                      <el-icon><Money /></el-icon>
-                      <span>{{ t('recharge') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      class="is-danger"
-                      :disabled="deletingUserId === row.id"
-                      @click="confirmDeleteUser(row)"
-                    >
-                      <el-icon><Delete /></el-icon>
-                      <span>{{ t('delete') }}</span>
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+                {{ t('actionApprove') }}
+              </el-button>
+              <el-button
+                v-if="isPaidServiceMode"
+                class="admin-action-button compact-row-action"
+                :aria-label="t('viewApiKeys')"
+                :icon="Key"
+                @click="openUserKeysDialog(row)"
+              >
+                {{ t('actionKeys') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('edit')"
+                :icon="Edit"
+                @click="openEditDialog(row)"
+              >
+                {{ t('actionEdit') }}
+              </el-button>
+              <el-button
+                v-if="isPaidServiceMode"
+                class="admin-action-button compact-row-action user-recharge-action"
+                :aria-label="t('recharge')"
+                :icon="Money"
+                @click="openCreditDialog(row)"
+              >
+                {{ t('actionRecharge') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                type="danger"
+                :aria-label="t('delete')"
+                :disabled="deletingUserId === row.id"
+                :icon="Delete"
+                @click="confirmDeleteUser(row)"
+              >
+                {{ t('actionDelete') }}
+              </el-button>
             </div>
           </template>
         </el-table-column>

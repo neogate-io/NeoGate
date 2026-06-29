@@ -4,10 +4,9 @@ import {
   ArrowLeft,
   ArrowRight,
   CircleCheckFilled,
-  Coin,
   Delete,
   Edit,
-  MoreFilled,
+  Lightning,
   Plus,
   Search,
   VideoPause,
@@ -920,8 +919,8 @@ onMounted(loadInitialData)
             />
           </template>
         </el-table-column>
-        <el-table-column prop="id" label="ID" width="36" align="right" header-align="right" />
-        <el-table-column prop="name" :label="t('name')" min-width="160" header-align="center">
+        <el-table-column prop="id" label="ID" width="48" align="right" header-align="right" />
+        <el-table-column prop="name" :label="t('name')" min-width="150" header-align="center">
           <template #default="{ row }">
             <button
               type="button"
@@ -937,7 +936,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('modelPrices')" min-width="220">
+        <el-table-column :label="t('modelPrices')" min-width="200">
           <template #default="{ row }">
             <div class="channel-price-summary">
               <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
@@ -980,7 +979,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelKeyCountShort')"
-          min-width="100"
+          min-width="92"
           class-name="channel-key-count-column"
           label-class-name="channel-key-count-header"
         >
@@ -990,7 +989,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('probeTrend')"
-          min-width="140"
+          min-width="120"
           align="center"
           header-align="center"
         >
@@ -1000,7 +999,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelStatus')"
-          min-width="100"
+          min-width="96"
           align="center"
           header-align="center"
         >
@@ -1020,7 +1019,7 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelRuntimeSwitch')"
-          min-width="130"
+          min-width="116"
           align="center"
           header-align="center"
         >
@@ -1048,56 +1047,40 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('actions')"
-          width="130"
-          fixed="right"
+          min-width="176"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <el-tooltip :content="t('configurePrice')" placement="top" :show-after="600">
-                <el-button
-                  class="admin-action-button icon-only-action price-config-action"
-                  :aria-label="t('configurePrice')"
-                  :icon="Coin"
-                  @click="openPriceDialog(row)"
-                />
-              </el-tooltip>
-              <el-tooltip :content="t('edit')" placement="top" :show-after="600">
-                <el-button
-                  class="admin-action-button icon-only-action"
-                  :aria-label="t('edit')"
-                  :icon="Edit"
-                  @click="openEditChannelDialog(row)"
-                />
-              </el-tooltip>
-              <el-dropdown trigger="click" placement="bottom-end">
-                <el-button
-                  class="admin-action-button icon-only-action action-more-button"
-                  :aria-label="t('moreActions')"
-                  :icon="MoreFilled"
-                  :loading="isChannelDiagnosing(row.id)"
-                />
-                <template #dropdown>
-                  <el-dropdown-menu class="admin-row-action-menu">
-                    <el-dropdown-item
-                      :disabled="diagnosticInProgress"
-                      @click="runChannelDiagnostic(row)"
-                    >
-                      <el-icon><Search /></el-icon>
-                      <span>{{ t('fullDiagnoseChannel') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      class="is-danger"
-                      :disabled="deletingId === row.id"
-                      @click="confirmDeleteChannel(row)"
-                    >
-                      <el-icon><Delete /></el-icon>
-                      <span>{{ t('delete') }}</span>
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('fullDiagnoseChannel')"
+                :disabled="diagnosticInProgress"
+                :icon="Lightning"
+                :loading="isChannelDiagnosing(row.id)"
+                @click="runChannelDiagnostic(row)"
+              >
+                {{ t('actionDiagnose') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('edit')"
+                :icon="Edit"
+                @click="openEditChannelDialog(row)"
+              >
+                {{ t('actionEdit') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                type="danger"
+                :aria-label="t('delete')"
+                :disabled="deletingId === row.id"
+                :icon="Delete"
+                @click="confirmDeleteChannel(row)"
+              >
+                {{ t('actionDelete') }}
+              </el-button>
             </div>
           </template>
         </el-table-column>

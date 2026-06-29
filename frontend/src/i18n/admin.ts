@@ -76,7 +76,7 @@ export const adminMessages = {
     projectMemberUpdated: '项目成员已更新。',
     projectMemberRemoved: '项目成员已移除。',
     deleteProjectMemberConfirm: '确认移除项目成员 {email}？',
-    projectSearchPlaceholder: '搜索项目名称或管理员邮箱',
+    projectSearchPlaceholder: '搜索项目名称',
     noProjects: '暂无项目',
     noMatchingProjects: '没有匹配的项目',
     viewProjectMembers: '查看项目成员',

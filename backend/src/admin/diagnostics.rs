@@ -775,7 +775,7 @@ fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeReque
     }
 
     let adapter = adapter_for_provider(&endpoint.provider);
-    let route = RelayRoute::OpenAiChatCompletions;
+    let route = RelayRoute::ChatCompletions;
     let mut extra_headers = reqwest::header::HeaderMap::new();
     if endpoint.provider.eq_ignore_ascii_case("qwen") {
         extra_headers.insert("x-dashscope-sse", "enable".parse().expect("valid header"));

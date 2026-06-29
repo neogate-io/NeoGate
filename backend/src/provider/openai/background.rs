@@ -27,17 +27,32 @@ use crate::{
 
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
+pub(super) struct CreateBackgroundResponseRequest {
+    pub(super) state: Arc<AppState>,
+    pub(super) auth: UserAuth,
+    pub(super) body: Bytes,
+    pub(super) external_model: String,
+    pub(super) target_model: String,
+    pub(super) target_channel_id: Option<i64>,
+    pub(super) output_tokens: i64,
+    pub(super) request_params: RelayRequestParams,
+    pub(super) channel_affinity_key: Option<ChannelAffinityKey>,
+}
+
 pub(super) async fn create_background_response(
-    state: Arc<AppState>,
-    auth: UserAuth,
-    body: Bytes,
-    external_model: String,
-    target_model: String,
-    target_channel_id: Option<i64>,
-    output_tokens: i64,
-    request_params: RelayRequestParams,
-    channel_affinity_key: Option<ChannelAffinityKey>,
+    req: CreateBackgroundResponseRequest,
 ) -> AppResult<Response> {
+    let CreateBackgroundResponseRequest {
+        state,
+        auth,
+        body,
+        external_model,
+        target_model,
+        target_channel_id,
+        output_tokens,
+        request_params,
+        channel_affinity_key,
+    } = req;
     let started = Instant::now();
     let prepared = jobs::prepare_request_body(body)?;
     let upstream = if let Some(channel_id) = target_channel_id {

@@ -35,9 +35,9 @@ impl ProviderAdapter for CompatibleAdapter {
         _streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
         let (route, body, response_mode) =
-            if route == RelayRoute::OpenAiResponses && upstream.responses_chat_fallback {
+            if route == RelayRoute::Responses && upstream.responses_chat_fallback {
                 (
-                    RelayRoute::OpenAiChatCompletions,
+                    RelayRoute::ChatCompletions,
                     bridge::openai_response_to_openai_chat(body)?,
                     AdapterResponseMode::OpenAiChatAsOpenAiResponse,
                 )
@@ -62,14 +62,12 @@ mod tests {
     #[test]
     fn compatible_url_matches_upstream_url() {
         assert_eq!(
-            COMPATIBLE_ADAPTER.resolve_url(
-                "https://api.openai.com/v1",
-                RelayRoute::OpenAiChatCompletions
-            ),
+            COMPATIBLE_ADAPTER
+                .resolve_url("https://api.openai.com/v1", RelayRoute::ChatCompletions),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            COMPATIBLE_ADAPTER.resolve_url("https://api.openai.com", RelayRoute::OpenAiResponses),
+            COMPATIBLE_ADAPTER.resolve_url("https://api.openai.com", RelayRoute::Responses),
             "https://api.openai.com/v1/responses"
         );
     }

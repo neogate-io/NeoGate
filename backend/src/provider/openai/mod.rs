@@ -75,7 +75,7 @@ pub(crate) async fn openai_chat_completion_response(
         auth,
         headers,
         body,
-        RelayRoute::OpenAiChatCompletions,
+        RelayRoute::ChatCompletions,
         BodyKind::OpenaiChat,
     )
     .await
@@ -91,7 +91,7 @@ pub(crate) async fn openai_embeddings(
         auth,
         HeaderMap::new(),
         body,
-        RelayRoute::OpenAiEmbeddings,
+        RelayRoute::Embeddings,
         BodyKind::OpenaiJson,
     )
     .await
@@ -107,7 +107,7 @@ pub(crate) async fn openai_moderations(
         auth,
         HeaderMap::new(),
         body,
-        RelayRoute::OpenAiModerations,
+        RelayRoute::Moderations,
         BodyKind::OpenaiJson,
     )
     .await
@@ -124,7 +124,7 @@ pub(crate) async fn openai_responses(
         auth,
         headers,
         body,
-        RelayRoute::OpenAiResponses,
+        RelayRoute::Responses,
         BodyKind::OpenaiResponses,
     )
     .await
@@ -288,15 +288,17 @@ async fn relay_openai(
             ));
         }
         return background::create_background_response(
-            state,
-            auth,
-            upstream_body,
-            resolved.external_model,
-            resolved.target_model,
-            resolved.target_channel_id,
-            output_tokens,
-            meta.request_params,
-            meta.channel_affinity_key,
+            background::CreateBackgroundResponseRequest {
+                state,
+                auth,
+                body: upstream_body,
+                external_model: resolved.external_model,
+                target_model: resolved.target_model,
+                target_channel_id: resolved.target_channel_id,
+                output_tokens,
+                request_params: meta.request_params,
+                channel_affinity_key: meta.channel_affinity_key,
+            },
         )
         .await;
     }
@@ -334,7 +336,7 @@ async fn relay_openai(
         // 路径 B：已学习到该 (endpoint, model) 不支持 /v1/responses → 覆写为 chat 降级。
         // reuse 路径的 upstream 已是降级版（responses_chat_fallback=true），此处不重复命中。
         if !upstream.responses_chat_fallback
-            && route == RelayRoute::OpenAiResponses
+            && route == RelayRoute::Responses
             && matches!(
                 protocol,
                 UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
@@ -429,17 +431,7 @@ async fn relay_openai(
                     meta.stream,
                 )?;
                 adapter_response_mode = prepared.response_mode;
-                forward_prepared_openai(
-                    &state,
-                    &ctx.upstream,
-                    protocol,
-                    prepared.body,
-                    prepared.url,
-                    &prepared.log_path,
-                    &headers,
-                    prepared.extra_headers,
-                )
-                .await
+                forward_prepared_openai(&state, &ctx.upstream, protocol, &headers, prepared).await
             }
         };
 
@@ -465,7 +457,7 @@ async fn relay_openai(
                 // 不支持 responses，并就地降级为 chat 重试同一 upstream（不重新 select、不写
                 // ModelBlockKey/channel_model，避免误伤该模型的 chat 路径）。chat 重试若再失败，
                 // 落入下方 model-unavailable 逻辑自然区分「不支持 responses 形态」与「model 真不存在」。
-                if route == RelayRoute::OpenAiResponses
+                if route == RelayRoute::Responses
                     && matches!(
                         ctx.protocol,
                         UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth

@@ -237,7 +237,7 @@ impl StreamingRelay {
                 idle_ms,
                 "relay stream sent first response chunk"
             );
-        } else if self.chunks_sent % 256 == 0 {
+        } else if self.chunks_sent.is_multiple_of(256) {
             tracing::debug!(
                 relay_trace_id = %ctx.relay_trace_id,
                 relay_attempt = ctx.relay_attempt,

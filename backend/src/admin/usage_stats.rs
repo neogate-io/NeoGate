@@ -206,8 +206,8 @@ async fn summary(
     let filter = UsageStatsFilter::from_params(&params)?;
     let totals = aggregate_totals(&state.db.pool, &filter).await?;
     let daily = daily_stats(&state.db.pool, &filter).await?;
-    let top_users = user_stats(&state.db.pool, &filter, 1, 10, SortMode::CostDesc).await?;
-    let top_models = model_stats(&state.db.pool, &filter, 10, SortMode::CostDesc).await?;
+    let top_users = user_stats(&state.db.pool, &filter, 1, 10, SortMode::Cost).await?;
+    let top_models = model_stats(&state.db.pool, &filter, 10, SortMode::Cost).await?;
     let providers = provider_stats(&state.db.pool, &filter).await?;
 
     Ok(Json(UsageStatsSummary {
@@ -293,7 +293,7 @@ async fn export_csv(
         ExportScope::Daily => export_daily(&state.db.pool, &filter).await?,
         ExportScope::Models => export_models(&state.db.pool, &filter, sort).await?,
     };
-    Ok(csv_response(&filename, rows)?)
+    csv_response(&filename, rows)
 }
 
 impl UsageStatsFilter {
@@ -336,35 +336,33 @@ impl UsageStatsFilter {
 
 #[derive(Clone, Copy)]
 enum SortMode {
-    CostDesc,
-    TokensDesc,
-    RequestsDesc,
+    Cost,
+    Tokens,
+    Requests,
 }
 
 impl SortMode {
     fn from_param(value: Option<&str>) -> Self {
         match value {
-            Some("tokens_desc") => Self::TokensDesc,
-            Some("requests_desc") => Self::RequestsDesc,
-            _ => Self::CostDesc,
+            Some("tokens_desc") => Self::Tokens,
+            Some("requests_desc") => Self::Requests,
+            _ => Self::Cost,
         }
     }
 
     fn model_order_by(self) -> &'static str {
         match self {
-            Self::CostDesc => "cost_micro_usd DESC, request_count DESC, provider ASC, model ASC",
-            Self::TokensDesc => "total_tokens DESC, cost_micro_usd DESC, provider ASC, model ASC",
-            Self::RequestsDesc => {
-                "request_count DESC, cost_micro_usd DESC, provider ASC, model ASC"
-            }
+            Self::Cost => "cost_micro_usd DESC, request_count DESC, provider ASC, model ASC",
+            Self::Tokens => "total_tokens DESC, cost_micro_usd DESC, provider ASC, model ASC",
+            Self::Requests => "request_count DESC, cost_micro_usd DESC, provider ASC, model ASC",
         }
     }
 
     fn user_order_by(self) -> &'static str {
         match self {
-            Self::CostDesc => "cost_micro_usd DESC, request_count DESC, user_id ASC NULLS LAST",
-            Self::TokensDesc => "total_tokens DESC, cost_micro_usd DESC, user_id ASC NULLS LAST",
-            Self::RequestsDesc => "request_count DESC, cost_micro_usd DESC, user_id ASC NULLS LAST",
+            Self::Cost => "cost_micro_usd DESC, request_count DESC, user_id ASC NULLS LAST",
+            Self::Tokens => "total_tokens DESC, cost_micro_usd DESC, user_id ASC NULLS LAST",
+            Self::Requests => "request_count DESC, cost_micro_usd DESC, user_id ASC NULLS LAST",
         }
     }
 }

@@ -332,8 +332,7 @@ impl Config {
                 dir: env::var("NEOGATE_ASSET_DIR")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("data/assets")),
+                    .map_or_else(|| PathBuf::from("data/assets"), PathBuf::from),
                 retention: Duration::from_secs(parse_u64(
                     "NEOGATE_RESPONSE_RETENTION_SECONDS",
                     604_800,
@@ -444,8 +443,7 @@ impl RuntimeProbe {
         let env_file = env::var("NEOGATE_ENV_FILE")
             .ok()
             .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(default_env_file);
+            .map_or_else(default_env_file, PathBuf::from);
         let service_mode = service_mode_from_env_file(&env_file)?;
 
         Ok(Self {

@@ -213,9 +213,7 @@ impl StreamingRelay {
         self.chunks_sent = self.chunks_sent.saturating_add(1);
         self.bytes_sent = self.bytes_sent.saturating_add(chunk.len() as u64);
         self.largest_chunk_bytes = self.largest_chunk_bytes.max(chunk.len());
-        let idle_ms = previous_chunk_ms
-            .map(|last| elapsed_ms.saturating_sub(last))
-            .unwrap_or(elapsed_ms);
+        let idle_ms = previous_chunk_ms.map_or(elapsed_ms, |last| elapsed_ms.saturating_sub(last));
 
         if self.chunks_sent == 1 {
             tracing::debug!(
@@ -756,8 +754,7 @@ impl ResponseUsageParser {
 fn json_usage_buffer_capacity(content_length: Option<u64>, limit_bytes: usize) -> usize {
     content_length
         .and_then(|length| usize::try_from(length).ok())
-        .map(|length| length.min(limit_bytes))
-        .unwrap_or(0)
+        .map_or(0, |length| length.min(limit_bytes))
 }
 
 struct StreamUsageParser {

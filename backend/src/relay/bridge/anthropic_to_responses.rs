@@ -142,8 +142,7 @@ fn anthropic_tool_use_to_openai_response_function_call(item: &Value) -> Option<V
     let name = item.get("name").and_then(Value::as_str)?;
     let arguments = item
         .get("input")
-        .map(Value::to_string)
-        .unwrap_or_else(|| "{}".to_string());
+        .map_or_else(|| "{}".to_string(), Value::to_string);
     Some(json!({
         "id": format!("fc_{id}"),
         "type": "function_call",

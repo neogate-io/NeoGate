@@ -1206,9 +1206,10 @@ fn user_display_name(
     if let Some(email) = email.as_deref().filter(|value| !value.is_empty()) {
         return email.to_string();
     }
-    user_id
-        .map(|id| format!("Deleted user #{id}"))
-        .unwrap_or_else(|| "Unknown user".to_string())
+    user_id.map_or_else(
+        || "Unknown user".to_string(),
+        |id| format!("Deleted user #{id}"),
+    )
 }
 
 fn ensure_export_limit(len: usize) -> AppResult<()> {

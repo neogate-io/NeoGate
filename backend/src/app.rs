@@ -363,8 +363,10 @@ fn parse_error_body_for_log(status: StatusCode, bytes: &[u8]) -> (Option<String>
         .ok()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(truncate_log_value)
-        .unwrap_or_else(|| status.canonical_reason().unwrap_or("error").to_string());
+        .map_or_else(
+            || status.canonical_reason().unwrap_or("error").to_string(),
+            truncate_log_value,
+        );
     (None, Some(message))
 }
 

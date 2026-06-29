@@ -187,8 +187,7 @@ pub(crate) async fn openai_response(
     .await?;
     let path = uri
         .path_and_query()
-        .map(|value| value.as_str())
-        .unwrap_or_else(|| uri.path());
+        .map_or_else(|| uri.path(), |value| value.as_str());
     let response = forward_openai_bound(&state, &upstream, Method::GET, path, None).await?;
     if response_query_streams(path) {
         return background::finish_stream_response(state, auth, task, upstream, response);
@@ -653,12 +652,11 @@ fn response_subresource_path(response_id: &str, uri: &Uri, subresource: &str) ->
 fn response_query_streams(path: &str) -> bool {
     path.split_once('?')
         .and_then(|(_, query)| serde_urlencoded::from_str::<Vec<(String, String)>>(query).ok())
-        .map(|pairs| {
+        .is_some_and(|pairs| {
             pairs
                 .iter()
                 .any(|(key, value)| key == "stream" && value == "true")
         })
-        .unwrap_or(false)
 }
 
 async fn select_upstream_excluding(

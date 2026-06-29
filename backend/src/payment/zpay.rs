@@ -53,7 +53,7 @@ impl PaymentGateway for ZpayGateway {
             ("money".to_string(), money),
             ("name".to_string(), req.subject),
             ("notify_url".to_string(), req.notify_url),
-            ("out_trade_no".to_string(), out_trade_no.clone()),
+            ("out_trade_no".to_string(), out_trade_no),
             ("pid".to_string(), merchant_id.to_string()),
             ("return_url".to_string(), return_url),
             ("sitename".to_string(), self.config.site_name.clone()),

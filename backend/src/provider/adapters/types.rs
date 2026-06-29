@@ -7,6 +7,8 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Keep the complete OpenAI-compatible route set in one place so provider
+// adapters can opt in without changing the shared trait surface.
 #[allow(dead_code)]
 pub(crate) enum RelayRoute {
     ChatCompletions,
@@ -48,6 +50,8 @@ pub(crate) struct PreparedUpstreamRequest {
 }
 
 pub(crate) trait ProviderAdapter: Sync {
+    // Useful in adapter diagnostics and tests even when a call site only needs
+    // the prepared upstream request.
     #[allow(dead_code)]
     fn name(&self) -> &'static str;
 

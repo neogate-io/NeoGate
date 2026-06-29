@@ -282,8 +282,7 @@ fn should_rewrite_response_model(ctx: &RelayContext, content_type: &HeaderValue)
         && ctx.external_model != ctx.model
         && content_type
             .to_str()
-            .map(|value| value.to_ascii_lowercase().starts_with("application/json"))
-            .unwrap_or(false)
+            .is_ok_and(|value| value.to_ascii_lowercase().starts_with("application/json"))
 }
 
 fn rewrite_response_model(body: Bytes, external_model: &str) -> AppResult<Bytes> {
@@ -551,6 +550,13 @@ pub(crate) fn usage_from_context(
         (latency_ms > 0 && usage.output_tokens > 0)
             .then_some((usage.output_tokens as f64 * 1000.0) / latency_ms as f64)
     });
+    let billing_meter = billing
+        .as_ref()
+        .map_or(ctx.price.billing_meter, |billing| billing.billing_meter);
+    let billable_units = billing.as_ref().map_or_else(
+        || token_usage.map_or(0, |usage| usage.total_tokens().max(0)),
+        |billing| billing.billable_units,
+    );
     let usage = UsageInsert {
         user_id: ctx.auth.user_id,
         project_id: ctx.auth.project_id,
@@ -571,18 +577,8 @@ pub(crate) fn usage_from_context(
         output_tokens_per_second,
         error_summary,
         token_usage,
-        billing_meter: billing
-            .as_ref()
-            .map(|billing| billing.billing_meter)
-            .unwrap_or(ctx.price.billing_meter),
-        billable_units: billing
-            .as_ref()
-            .map(|billing| billing.billable_units)
-            .unwrap_or_else(|| {
-                token_usage
-                    .map(|usage| usage.total_tokens().max(0))
-                    .unwrap_or(0)
-            }),
+        billing_meter,
+        billable_units,
         billing,
     };
     log_relay_request_summary(ctx, &usage);
@@ -865,8 +861,7 @@ fn format_skipped_key_cooldown_log(ctx: &RelayContext, channel_key_id: i64) -> S
 }
 
 fn optional_id(id: Option<i64>) -> String {
-    id.map(|id| id.to_string())
-        .unwrap_or_else(|| "none".to_string())
+    id.map_or_else(|| "none".to_string(), |id| id.to_string())
 }
 
 pub(crate) async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {

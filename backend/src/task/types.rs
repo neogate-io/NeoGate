@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{
     auth::UserAuth,
@@ -88,5 +88,43 @@ impl UsageSummary {
             output_tokens: Some(usage.output_tokens),
             total_tokens: Some(usage.total_tokens()),
         }
+    }
+
+    pub(crate) fn value_from_usage(usage: Option<TokenUsage>) -> serde_json::Result<Value> {
+        usage
+            .map(Self::from_usage)
+            .map(serde_json::to_value)
+            .transpose()
+            .map(|value| value.unwrap_or_else(|| json!({})))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_summary_value_is_empty_without_usage() {
+        assert_eq!(UsageSummary::value_from_usage(None).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn usage_summary_value_contains_token_totals() {
+        let value = UsageSummary::value_from_usage(Some(TokenUsage {
+            input_tokens: 3,
+            output_tokens: 5,
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: None,
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        }))
+        .unwrap();
+
+        assert_eq!(value["input_tokens"], 3);
+        assert_eq!(value["output_tokens"], 5);
+        assert_eq!(value["total_tokens"], 8);
     }
 }

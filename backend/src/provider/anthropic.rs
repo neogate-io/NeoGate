@@ -721,8 +721,7 @@ fn task_created_at(task: &UpstreamTask) -> String {
     task.upstream_metadata
         .get("created_at")
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| task.created_at.to_rfc3339())
+        .map_or_else(|| task.created_at.to_rfc3339(), str::to_string)
 }
 
 #[cfg(test)]

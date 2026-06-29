@@ -20,18 +20,18 @@ use super::affinity::{ChannelAffinityKey, UpstreamAffinityTarget};
 mod cache;
 mod choose;
 mod load;
-mod responses_support;
+mod responses;
 
 use choose::{
-    channel_is_available, channel_matches_model, choose_channel_for_request, choose_key,
-    key_is_available, matching_channel_count, ready_at, unavailable_channel_message, was_attempted,
+    channel_is_available, channel_keys, choose_channel_for_request, choose_key, key_is_available,
+    matching_channel_count, unavailable_channel_message, was_attempted,
 };
 #[cfg(test)]
-use choose::{choose_channel, choose_channel_by_slot};
+use choose::{channel_matches_model, choose_channel, choose_channel_by_slot};
 #[cfg(test)]
 use load::build_route_indexes;
 use load::{credential_runtime_secret, load_routing_cache};
-use responses_support::ResponsesSupportCache;
+use responses::ResponsesSupportCache;
 
 const RUNTIME_SECRET_CACHE_MAX_ENTRIES: usize = 4096;
 
@@ -208,8 +208,7 @@ impl<'a> ModelBlockLookup<'a> {
     fn contains_active(&self, key: &ModelBlockKey, now: DateTime<Utc>) -> bool {
         self.persisted
             .get(key)
-            .map(|blocked_until| *blocked_until > now)
-            .unwrap_or(false)
+            .is_some_and(|blocked_until| *blocked_until > now)
             || self.local.contains_active(key, now)
     }
 
@@ -437,11 +436,7 @@ impl Selector {
                 ) {
                     continue;
                 }
-                let keys = snapshot
-                    .keys
-                    .get(&channel.id)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]);
+                let keys = channel_keys(&snapshot, channel);
                 if let Some(key) = choose_key(channel, keys, model, now, &model_blocks, attempted) {
                     return Ok((
                         protocol,
@@ -486,12 +481,7 @@ impl Selector {
         ) {
             return Ok(None);
         }
-        let keys = scope
-            .snapshot
-            .keys
-            .get(&channel.id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let keys = channel_keys(scope.snapshot, channel);
         let Some(key) = keys.iter().find(|key| {
             key.credential_id == target.credential_id
                 && (!channel.use_credentials).then_some(key.id) == target.channel_key_id
@@ -525,12 +515,7 @@ impl Selector {
                 &scope.model_blocks,
             ))
         })?;
-        let keys = scope
-            .snapshot
-            .keys
-            .get(&channel.id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let keys = channel_keys(scope.snapshot, channel);
         let key = choose_key(
             channel,
             keys,
@@ -580,7 +565,7 @@ impl Selector {
         })
     }
 
-    pub async fn mark_model_unavailable_local(
+    pub(crate) async fn mark_model_unavailable_local(
         &self,
         upstream: &SelectedUpstream,
         protocol: UpstreamProtocol,
@@ -599,7 +584,7 @@ impl Selector {
         );
     }
 
-    pub async fn mark_credential_model_unavailable(
+    pub(crate) async fn mark_credential_model_unavailable(
         &self,
         pool: &PgPool,
         upstream: &SelectedUpstream,
@@ -636,7 +621,7 @@ impl Selector {
         Ok(true)
     }
 
-    pub async fn mark_model_available(
+    pub(crate) async fn mark_model_available(
         &self,
         pool: &PgPool,
         upstream: &SelectedUpstream,
@@ -661,7 +646,7 @@ impl Selector {
         Ok(())
     }
 
-    pub async fn mark_key_failure_local(
+    pub(crate) async fn mark_key_failure_local(
         &self,
         channel_key_id: DbId,
         cooldown_until: DateTime<Utc>,
@@ -702,37 +687,7 @@ impl Selector {
         Ok(Arc::clone(&cache))
     }
 
-    pub async fn mark_key_failure(
-        &self,
-        pool: &PgPool,
-        channel_key_id: DbId,
-        protocol: UpstreamProtocol,
-        model: &str,
-        error: &str,
-        cooldown_until: DateTime<Utc>,
-    ) -> AppResult<bool> {
-        if !self
-            .has_selectable_upstream_excluding_channel_key(pool, protocol, model, channel_key_id)
-            .await?
-        {
-            return Ok(false);
-        }
-        sqlx::query(
-            "UPDATE channel_key
-             SET cooldown_until = $2,
-                 last_error = $3,
-                 updated_at = now()
-             WHERE id = $1",
-        )
-        .bind(channel_key_id)
-        .bind(cooldown_until)
-        .bind(error.chars().take(500).collect::<String>())
-        .execute(pool)
-        .await?;
-        Ok(true)
-    }
-
-    pub async fn has_alternate_channel_for_model(
+    pub(crate) async fn has_alternate_channel_for_model(
         &self,
         pool: &PgPool,
         protocol: UpstreamProtocol,
@@ -757,39 +712,8 @@ impl Selector {
         else {
             return Ok(false);
         };
-        let keys = snapshot
-            .keys
-            .get(&channel.id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let keys = channel_keys(&snapshot, channel);
         Ok(choose_key(channel, keys, model, now, &model_blocks, attempted).is_some())
-    }
-
-    async fn has_selectable_upstream_excluding_channel_key(
-        &self,
-        pool: &PgPool,
-        protocol: UpstreamProtocol,
-        model: &str,
-        channel_key_id: DbId,
-    ) -> AppResult<bool> {
-        let snapshot = self.routing_snapshot(pool).await?;
-        let now = Utc::now();
-        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        Ok(snapshot.channels.iter().any(|channel| {
-            channel.protocol == protocol
-                && channel_matches_model(channel, model)
-                && ready_at(channel.cooldown_until, now)
-                && snapshot
-                    .keys
-                    .get(&channel.id)
-                    .map(|keys| {
-                        keys.iter().any(|key| {
-                            (!channel.use_credentials).then_some(key.id) != Some(channel_key_id)
-                                && key_is_available(channel, key, model, now, &model_blocks)
-                        })
-                    })
-                    .unwrap_or(false)
-        }))
     }
 }
 

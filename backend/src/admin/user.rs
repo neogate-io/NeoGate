@@ -756,9 +756,10 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
 }
 
 fn email_error(err: anyhow::Error) -> AppError {
-    smtp_config_error(&err)
-        .map(|(code, message)| AppError::BadRequestWithCode { code, message })
-        .unwrap_or_else(|| AppError::Anyhow(err))
+    smtp_config_error(&err).map_or_else(
+        || AppError::Anyhow(err),
+        |(code, message)| AppError::BadRequestWithCode { code, message },
+    )
 }
 
 fn push_where_clause<'a>(

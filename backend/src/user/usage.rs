@@ -87,8 +87,7 @@ async fn usage(
     let limit = bounded_limit(params.limit, 20, 1000);
     let (cursor_created_at, cursor_id) =
         parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
-            .map(|cursor| (Some(cursor.0), Some(cursor.1)))
-            .unwrap_or((None, None));
+            .map_or((None, None), |cursor| (Some(cursor.0), Some(cursor.1)));
     let rows = sqlx::query(
         "SELECT id, user_id, user_key_id, channel_id, channel_key_id, credential_id,
                 relay_trace_id, relay_attempt, relay_final, provider, model,

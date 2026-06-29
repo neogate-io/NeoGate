@@ -193,8 +193,7 @@ pub async fn validate_admin_session_claims(
     }
     let password_changed_at: Option<DateTime<Utc>> = row.try_get("password_changed_at")?;
     if password_changed_at
-        .map(|changed_at| changed_at.timestamp_millis() > claims.issued_at_ms)
-        .unwrap_or(false)
+        .is_some_and(|changed_at| changed_at.timestamp_millis() > claims.issued_at_ms)
     {
         return Err(AppError::Unauthorized);
     }
@@ -462,7 +461,7 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             return Err(AppError::Forbidden);
         }
         let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
-        if expires_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+        if expires_at.is_some_and(|value| value <= Utc::now()) {
             return Err(AppError::Forbidden);
         }
 
@@ -540,7 +539,7 @@ pub(crate) async fn user_auth_for_key_id(
         return Err(AppError::Forbidden);
     }
     let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
-    if expires_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+    if expires_at.is_some_and(|value| value <= Utc::now()) {
         return Err(AppError::Forbidden);
     }
 

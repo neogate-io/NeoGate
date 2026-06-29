@@ -97,9 +97,10 @@ pub async fn get_site_setting(state: &AppState) -> AppResult<SiteSettingRecord> 
         .and_then(|setting| setting.site_name.clone())
         .or(probe.site_name)
         .unwrap_or_else(|| "NeoGate".to_string());
-    let logo_url = brand
-        .map(|setting| setting.logo_url)
-        .unwrap_or_else(|| Some(DEFAULT_LOGO_URL.to_string()));
+    let logo_url = brand.map_or_else(
+        || Some(DEFAULT_LOGO_URL.to_string()),
+        |setting| setting.logo_url,
+    );
     Ok(SiteSettingRecord {
         site_name,
         public_base_url: probe.public_base_url,

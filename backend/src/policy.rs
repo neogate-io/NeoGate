@@ -853,14 +853,11 @@ fn record_from_stored(
 ) -> ServicePolicyRecord {
     let stored = normalize_stored_policy(stored);
     let probe = RuntimeProbe::from_env().ok();
-    let runtime_mode = probe
-        .as_ref()
-        .map(|probe| probe.runtime_mode.as_str().to_string())
-        .unwrap_or_else(|| "standalone".to_string());
-    let redis_configured = probe
-        .as_ref()
-        .map(|probe| probe.redis_configured())
-        .unwrap_or(false);
+    let runtime_mode = probe.as_ref().map_or_else(
+        || "standalone".to_string(),
+        |probe| probe.runtime_mode.as_str().to_string(),
+    );
+    let redis_configured = probe.as_ref().is_some_and(|probe| probe.redis_configured());
     let is_distributed = runtime_mode == "distributed";
     ServicePolicyRecord {
         runtime_mode,

@@ -90,7 +90,6 @@ pub(crate) fn messages_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let prompt_cache_key = explicit_prompt_cache_key
-        .clone()
         .or_else(|| derive_anthropic_cache_key(&messages, object.get("tools")));
     if let Some(prompt_cache_key) = prompt_cache_key {
         object.insert(
@@ -275,8 +274,7 @@ fn append_anthropic_message_as_openai_chat(
                 tool_names_by_id.insert(id.to_string(), name.to_string());
                 let arguments = object
                     .get("input")
-                    .map(json_string)
-                    .unwrap_or_else(|| "{}".to_string());
+                    .map_or_else(|| "{}".to_string(), json_string);
                 tool_calls.push(json!({
                     "id": id,
                     "type": "function",
@@ -550,8 +548,7 @@ fn anthropic_tool_use_to_openai_chat_tool_call(item: &Value) -> Option<Value> {
     let name = item.get("name").and_then(Value::as_str)?;
     let arguments = item
         .get("input")
-        .map(Value::to_string)
-        .unwrap_or_else(|| "{}".to_string());
+        .map_or_else(|| "{}".to_string(), Value::to_string);
     Some(json!({
         "id": id,
         "type": "function",

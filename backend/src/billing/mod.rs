@@ -344,10 +344,8 @@ impl Billing {
         };
         let cost_micro_usd = cost_micro_usd.max(0);
         let token_usage = usage.and_then(|usage| usage.token_usage);
-        let billing_meter = usage
-            .map(|usage| usage.meter)
-            .unwrap_or(price.billing_meter);
-        let billable_units = usage.map(|usage| usage.billable_units.max(0)).unwrap_or(0);
+        let billing_meter = usage.map_or(price.billing_meter, |usage| usage.meter);
+        let billable_units = usage.map_or(0, |usage| usage.billable_units.max(0));
 
         if !hold.charge_credit {
             return Ok(BillingCharge {

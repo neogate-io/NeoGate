@@ -1161,9 +1161,9 @@ async fn usage_rows(
         Some("failed") => Some("failed"),
         _ => None,
     };
-    let (cursor_created_at, cursor_id) = cursor
-        .map(|(created_at, id)| (Some(created_at), Some(id)))
-        .unwrap_or((None, None));
+    let (cursor_created_at, cursor_id) = cursor.map_or((None, None), |(created_at, id)| {
+        (Some(created_at), Some(id))
+    });
     let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
     let query_pattern = query_pattern.as_deref();
 
@@ -1363,12 +1363,14 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
 }
 
 fn usage_export_filename(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> String {
-    let start = start
-        .map(|value| value.format("%Y%m%d%H%M%S").to_string())
-        .unwrap_or_else(|| "all".to_string());
-    let end = end
-        .map(|value| value.format("%Y%m%d%H%M%S").to_string())
-        .unwrap_or_else(|| "all".to_string());
+    let start = start.map_or_else(
+        || "all".to_string(),
+        |value| value.format("%Y%m%d%H%M%S").to_string(),
+    );
+    let end = end.map_or_else(
+        || "all".to_string(),
+        |value| value.format("%Y%m%d%H%M%S").to_string(),
+    );
     format!("usage-details-{start}-{end}.csv")
 }
 

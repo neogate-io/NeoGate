@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::{PgPool, Row};
 
 use crate::{
@@ -367,12 +367,7 @@ pub(crate) async fn update_task_from_upstream_value(
     pool: &PgPool,
     update: UpstreamTaskUpdate,
 ) -> AppResult<()> {
-    let usage_summary = update
-        .usage
-        .map(UsageSummary::from_usage)
-        .map(serde_json::to_value)
-        .transpose()?
-        .unwrap_or_else(|| json!({}));
+    let usage_summary = UsageSummary::value_from_usage(update.usage)?;
     let next_poll_at = (!update.terminal).then(|| next_poll_at(update.poll_interval));
     sqlx::query(
         r#"

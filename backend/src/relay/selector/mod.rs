@@ -406,6 +406,65 @@ impl Selector {
         ))
     }
 
+    pub(crate) async fn select_bound_channel_protocols(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        protocols: &[UpstreamProtocol],
+        model: &str,
+        channel_id: DbId,
+        attempted: &[AttemptedUpstream],
+    ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let mut last_unavailable = None;
+
+        for &protocol in protocols {
+            let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+            let channels = snapshot
+                .channels
+                .iter()
+                .filter(|channel| channel.id == channel_id && channel.protocol == protocol);
+            for channel in channels {
+                if !channel_is_available(
+                    &snapshot,
+                    channel,
+                    protocol,
+                    model,
+                    now,
+                    &model_blocks,
+                    attempted,
+                ) {
+                    continue;
+                }
+                let keys = snapshot
+                    .keys
+                    .get(&channel.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                if let Some(key) = choose_key(channel, keys, model, now, &model_blocks, attempted) {
+                    return Ok((
+                        protocol,
+                        self.selected_upstream_from_candidate(secrets, channel, key)?,
+                    ));
+                }
+            }
+            last_unavailable = Some(unavailable_channel_message(
+                &snapshot,
+                protocol,
+                model,
+                now,
+                &model_blocks,
+            ));
+        }
+
+        Err(AppError::UpstreamUnavailable(
+            last_unavailable.unwrap_or_else(|| {
+                format!("no available upstream channel {channel_id} for {model}")
+            }),
+        ))
+    }
+
     fn selected_affinity_upstream(
         &self,
         scope: &SelectionScope<'_>,

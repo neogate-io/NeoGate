@@ -24,6 +24,7 @@ pub struct ProjectRecord {
     pub is_default: bool,
     pub member_count: i64,
     pub user_key_count: i64,
+    pub project_model_count: i64,
     pub balance_micro_usd: i64,
     pub reserved_micro_usd: i64,
     pub available_micro_usd: i64,
@@ -168,6 +169,7 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
                   p.status, p.is_default,
                   COALESCE(pm.member_count, 0) AS member_count,
                   COALESCE(uk.user_key_count, 0) AS user_key_count,
+                  COALESCE(pmodels.project_model_count, 0) AS project_model_count,
                   COALESCE(w.balance_micro_usd, 0) AS balance_micro_usd,
                   COALESCE(w.reserved_micro_usd, 0) AS reserved_micro_usd,
                   p.created_at, p.updated_at
@@ -194,6 +196,11 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
                FROM user_key key
                WHERE key.project_id = p.id
            ) uk ON TRUE
+           LEFT JOIN LATERAL (
+               SELECT count(*) AS project_model_count
+               FROM project_model model
+               WHERE model.project_id = p.id
+           ) pmodels ON TRUE
            ORDER BY p.created_at DESC, p.id DESC"#,
         );
 
@@ -505,6 +512,7 @@ async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
                 p.status, p.is_default,
                 COALESCE(pm.member_count, 0) AS member_count,
                 COALESCE(uk.user_key_count, 0) AS user_key_count,
+                COALESCE(pmodels.project_model_count, 0) AS project_model_count,
                 COALESCE(w.balance_micro_usd, 0) AS balance_micro_usd,
                 COALESCE(w.reserved_micro_usd, 0) AS reserved_micro_usd,
                 p.created_at, p.updated_at
@@ -531,6 +539,11 @@ async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
              FROM user_key key
              WHERE key.project_id = p.id
          ) uk ON TRUE
+         LEFT JOIN LATERAL (
+             SELECT count(*) AS project_model_count
+             FROM project_model model
+             WHERE model.project_id = p.id
+         ) pmodels ON TRUE
          WHERE p.id = $1",
     )
     .bind(id)
@@ -863,6 +876,7 @@ fn project_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectRecord> {
         is_default: row.try_get("is_default")?,
         member_count: row.try_get("member_count")?,
         user_key_count: row.try_get("user_key_count")?,
+        project_model_count: row.try_get("project_model_count")?,
         balance_micro_usd,
         reserved_micro_usd,
         available_micro_usd: balance_micro_usd - reserved_micro_usd,

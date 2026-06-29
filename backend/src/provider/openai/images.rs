@@ -20,8 +20,8 @@ use crate::{
         handle_upstream_http_error, log_upstream_http_failure, read_upstream_error_body,
         record_upstream_http_failure, record_upstream_transport_failure_for_failover,
         release_empty_hold, reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
-        response_from_bytes, selector::AttemptedUpstream,
-        should_failover_retryable_upstream_failure, RelayContext, RelayRequestParams,
+        response_from_bytes, rewrite_relay_body_model, selector::AttemptedUpstream,
+        should_failover_retryable_upstream_failure, BodyKind, RelayContext, RelayRequestParams,
     },
     AppState,
 };
@@ -45,8 +45,22 @@ pub(super) async fn relay_openai_image(
     path: &'static str,
 ) -> AppResult<Response> {
     let meta = image_request_meta(path, &headers, &body)?;
-    auth.ensure_model_allowed(&meta.model)?;
-    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let resolved =
+        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
+            .await?;
+    let content_type = meta.content_type.to_str().unwrap_or("");
+    let upstream_body = if resolved.target_model == meta.model {
+        body.clone()
+    } else if content_type
+        .to_ascii_lowercase()
+        .starts_with("application/json")
+    {
+        rewrite_relay_body_model(body.clone(), BodyKind::OpenaiJson, &resolved.target_model)?
+    } else {
+        rewrite_multipart_model_field(&body, content_type, &resolved.target_model)?
+    };
+    let user_key_model_credit_account =
+        auth.model_credit_account(&resolved.external_model).cloned();
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
     let estimated_image_units = meta.image_count.max(1);
     let relay_trace_id = Uuid::new_v4();
@@ -55,16 +69,22 @@ pub(super) async fn relay_openai_image(
 
     loop {
         let started = Instant::now();
-        let (protocol, upstream) =
-            select_upstream_excluding(&state, path, &meta.model, None, &attempted_upstreams)
-                .await?;
+        let (protocol, upstream) = select_upstream_excluding(
+            &state,
+            path,
+            &resolved.target_model,
+            resolved.target_channel_id,
+            None,
+            &attempted_upstreams,
+        )
+        .await?;
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         let price = state
             .billing
             .price_for(
                 &state.db.pool,
                 &upstream.provider,
-                &meta.model,
+                &resolved.target_model,
                 &auth.user_group,
             )
             .await?;
@@ -90,7 +110,7 @@ pub(super) async fn relay_openai_image(
                 &state,
                 &auth,
                 user_key_model_credit_account.as_ref(),
-                &body,
+                &upstream_body,
                 state.billing.default_output_tokens(),
                 &price,
             )
@@ -102,7 +122,9 @@ pub(super) async fn relay_openai_image(
             upstream: upstream.clone(),
             protocol,
             path,
-            model: meta.model.clone(),
+            model: resolved.target_model.clone(),
+            external_model: resolved.external_model.clone(),
+            upstream_model: resolved.target_model.clone(),
             streamed: meta.stream,
             price,
             hold,
@@ -119,7 +141,7 @@ pub(super) async fn relay_openai_image(
             &state,
             &upstream,
             protocol,
-            body.clone(),
+            upstream_body.clone(),
             path,
             meta.content_type.clone(),
             meta.stream,
@@ -598,6 +620,25 @@ fn multipart_boundary(content_type: &str) -> AppResult<String> {
 }
 
 fn multipart_text_fields(body: &[u8], boundary: &str) -> AppResult<Vec<(String, String)>> {
+    multipart_text_fields_with_ranges(body, boundary).map(|fields| {
+        fields
+            .into_iter()
+            .map(|field| (field.name, field.value))
+            .collect()
+    })
+}
+
+struct MultipartTextField {
+    name: String,
+    value: String,
+    value_start: usize,
+    value_end: usize,
+}
+
+fn multipart_text_fields_with_ranges(
+    body: &[u8],
+    boundary: &str,
+) -> AppResult<Vec<MultipartTextField>> {
     let marker = format!("--{boundary}").into_bytes();
     let mut fields = Vec::new();
     let Some(mut cursor) = find_bytes(body, &marker) else {
@@ -619,13 +660,31 @@ fn multipart_text_fields(body: &[u8], boundary: &str) -> AppResult<Vec<(String, 
         } else if part.ends_with(b"\n") {
             part = &part[..part.len() - 1];
         }
-        if let Some((name, value)) = multipart_text_field(part)? {
-            fields.push((name, value));
+        if let Some(field) = multipart_text_field(part, cursor)? {
+            fields.push(field);
         }
         cursor += next_marker_offset;
     }
 
     Ok(fields)
+}
+
+fn rewrite_multipart_model_field(
+    body: &[u8],
+    content_type: &str,
+    target_model: &str,
+) -> AppResult<Bytes> {
+    let boundary = multipart_boundary(content_type)?;
+    let fields = multipart_text_fields_with_ranges(body, &boundary)?;
+    let Some(field) = fields.into_iter().find(|field| field.name == "model") else {
+        return Err(AppError::BadRequest("model is required".to_string()));
+    };
+    let mut output =
+        Vec::with_capacity(body.len().saturating_sub(field.value.len()) + target_model.len());
+    output.extend_from_slice(&body[..field.value_start]);
+    output.extend_from_slice(target_model.as_bytes());
+    output.extend_from_slice(&body[field.value_end..]);
+    Ok(Bytes::from(output))
 }
 
 fn skip_line_break(body: &[u8], cursor: usize) -> AppResult<usize> {
@@ -638,11 +697,11 @@ fn skip_line_break(body: &[u8], cursor: usize) -> AppResult<usize> {
     Err(AppError::BadRequest("invalid multipart body".to_string()))
 }
 
-fn multipart_text_field(part: &[u8]) -> AppResult<Option<(String, String)>> {
-    let (headers, value) = if let Some(offset) = find_bytes(part, b"\r\n\r\n") {
-        (&part[..offset], &part[offset + 4..])
+fn multipart_text_field(part: &[u8], part_start: usize) -> AppResult<Option<MultipartTextField>> {
+    let (headers, value, value_start_offset) = if let Some(offset) = find_bytes(part, b"\r\n\r\n") {
+        (&part[..offset], &part[offset + 4..], offset + 4)
     } else if let Some(offset) = find_bytes(part, b"\n\n") {
-        (&part[..offset], &part[offset + 2..])
+        (&part[..offset], &part[offset + 2..], offset + 2)
     } else {
         return Err(AppError::BadRequest("invalid multipart body".to_string()));
     };
@@ -660,11 +719,18 @@ fn multipart_text_field(part: &[u8]) -> AppResult<Option<(String, String)>> {
     let Some(name) = multipart_disposition_name(disposition) else {
         return Ok(None);
     };
-    let value = std::str::from_utf8(value)
+    let value_text = std::str::from_utf8(value)
         .map_err(|_| AppError::BadRequest("invalid multipart text field".to_string()))?
         .trim()
         .to_string();
-    Ok(Some((name, value)))
+    let leading_ws = value.len() - value.trim_ascii_start().len();
+    let trailing_ws = value.trim_ascii_end().len();
+    Ok(Some(MultipartTextField {
+        name,
+        value: value_text,
+        value_start: part_start + value_start_offset + leading_ws,
+        value_end: part_start + value_start_offset + trailing_ws,
+    }))
 }
 
 fn multipart_disposition_name(disposition: &str) -> Option<String> {
@@ -762,6 +828,23 @@ mod tests {
             meta.content_type,
             HeaderValue::from_static("multipart/form-data; boundary=----neogate-boundary")
         );
+    }
+
+    #[test]
+    fn rewrites_multipart_image_model_field() {
+        let body = b"------neogate-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncompany-image\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n------neogate-boundary--\r\n";
+
+        let rewritten = rewrite_multipart_model_field(
+            body,
+            "multipart/form-data; boundary=----neogate-boundary",
+            "gpt-image-1",
+        )
+        .unwrap();
+        let text = std::str::from_utf8(&rewritten).unwrap();
+
+        assert!(text.contains("\r\n\r\ngpt-image-1\r\n"));
+        assert!(text.contains("PNG_BYTES"));
+        assert!(!text.contains("company-image"));
     }
 
     #[test]

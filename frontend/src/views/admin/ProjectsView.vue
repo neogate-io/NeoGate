@@ -7,6 +7,7 @@ import {
   DocumentCopy,
   Edit,
   FolderOpened,
+  Link,
   Money,
   MoreFilled,
   Plus,
@@ -20,14 +21,20 @@ import { ElMessage } from 'element-plus'
 import CreditAdjustDialog from '../../components/admin/common/CreditAdjustDialog.vue'
 import {
   addProjectMember,
+  createProjectModel,
   createProject,
   deleteProject,
   deleteProjectMember,
+  deleteProjectModel,
+  getProjectModels,
   getProjectMembers,
   getProjects,
   type ProjectPage,
+  updateProjectModel,
   updateProject
 } from '../../api/projects'
+import { getChannels } from '../../api/channels'
+import { getProviderModels } from '../../api/prices'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { adjustCredit } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
@@ -37,7 +44,7 @@ import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
-import type { Project, ProjectMember, ProjectStatus, User } from '../../types/admin'
+import type { Channel, Project, ProjectMember, ProjectModel, ProjectStatus, ProviderModel, User } from '../../types/admin'
 import { copyTextWithMessage } from '../../utils/clipboard'
 import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
@@ -73,6 +80,13 @@ type ProjectMemberForm = {
   userId: number | null
   role: EditableProjectMemberRole
 }
+type ProjectModelForm = {
+  model: string
+  targetModel: string
+  targetChannelId: number | null
+  enabled: boolean
+  description: string
+}
 
 const DEFAULT_PAGE_SIZE = 50
 const DEFAULT_RECHARGE_USD = 0
@@ -96,8 +110,12 @@ const projectSaving = ref(false)
 const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
 const membersDialogVisible = ref(false)
+const modelsDialogVisible = ref(false)
 const membersLoading = ref(false)
+const projectModelsLoading = ref(false)
 const memberSaving = ref(false)
+const projectModelSaving = ref(false)
+const deletingProjectModelName = ref<string | null>(null)
 const memberUserOptions = ref<User[]>([])
 const memberUserSearchLoading = ref(false)
 const deletingMemberId = ref<number | null>(null)
@@ -105,6 +123,10 @@ const deletingProjectId = ref<number | null>(null)
 const togglingProjectIds = useReactiveSet<number>()
 const selectedProject = ref<Project | null>(null)
 const selectedMembers = ref<ProjectMember[]>([])
+const selectedProjectModels = ref<ProjectModel[]>([])
+const providerModelOptions = ref<ProviderModel[]>([])
+const channelOptions = ref<Channel[]>([])
+const editingProjectModel = ref<ProjectModel | null>(null)
 const ownerOptions = ref<User[]>([])
 const ownerSearchLoading = ref(false)
 const amountUsd = ref(DEFAULT_RECHARGE_USD)
@@ -117,6 +139,13 @@ const projectForm = reactive<ProjectForm>({
 const memberForm = reactive<ProjectMemberForm>({
   userId: null,
   role: 'member'
+})
+const projectModelForm = reactive<ProjectModelForm>({
+  model: '',
+  targetModel: '',
+  targetChannelId: null,
+  enabled: true,
+  description: ''
 })
 const {
   currentPage,
@@ -283,9 +312,119 @@ async function openMembersDialog(row: Project) {
   })
 }
 
+async function openModelsDialog(row: Project) {
+  selectedProject.value = row
+  modelsDialogVisible.value = true
+  selectedProjectModels.value = []
+  resetProjectModelForm()
+  await withLoading(projectModelsLoading, async () => {
+    try {
+      await Promise.all([loadSelectedProjectModels(), loadProjectModelOptions()])
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
 async function loadSelectedProjectMembers() {
   if (!selectedProject.value) return
   selectedMembers.value = await getProjectMembers(selectedProject.value.id)
+}
+
+async function loadSelectedProjectModels() {
+  if (!selectedProject.value) return
+  selectedProjectModels.value = await getProjectModels(selectedProject.value.id)
+}
+
+async function loadProjectModelOptions() {
+  const [models, channels] = await Promise.all([getProviderModels(), getChannels()])
+  providerModelOptions.value = models
+  channelOptions.value = channels
+}
+
+function resetProjectModelForm() {
+  editingProjectModel.value = null
+  Object.assign(projectModelForm, {
+    model: '',
+    targetModel: '',
+    targetChannelId: null,
+    enabled: true,
+    description: ''
+  })
+}
+
+function editProjectModel(row: ProjectModel) {
+  editingProjectModel.value = row
+  Object.assign(projectModelForm, {
+    model: row.model,
+    targetModel: row.target_model,
+    targetChannelId: row.target_channel_id ?? null,
+    enabled: row.enabled,
+    description: row.description
+  })
+}
+
+function targetModelLabel(model: ProviderModel) {
+  return `${model.provider} / ${model.model}`
+}
+
+function channelLabel(channel: Channel) {
+  return `${channel.name} / ${channel.provider}`
+}
+
+async function submitProjectModelForm() {
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  const model = projectModelForm.model.trim()
+  const targetModel = projectModelForm.targetModel.trim()
+  if (!model || !targetModel) {
+    ElMessage.error('项目模型名和实际模型必填')
+    return
+  }
+  await withLoading(projectModelSaving, async () => {
+    try {
+      const payload = {
+        model,
+        target_model: targetModel,
+        target_channel_id: projectModelForm.targetChannelId,
+        enabled: projectModelForm.enabled,
+        description: projectModelForm.description.trim()
+      }
+      if (editingProjectModel.value) {
+        await updateProjectModel(projectId, editingProjectModel.value.model, payload)
+        ElMessage.success(t('projectUpdated'))
+      } else {
+        await createProjectModel(projectId, payload)
+        ElMessage.success(t('projectCreated'))
+      }
+      resetProjectModelForm()
+      await loadSelectedProjectModels()
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+async function confirmDeleteProjectModel(row: ProjectModel) {
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  const confirmed = await confirmDialog(
+    `删除项目模型 ${row.model}？`,
+    t('confirmDelete'),
+    { confirmText: t('delete'), danger: true, type: 'warning' }
+  )
+  if (!confirmed) return
+  await withLoadingValue(deletingProjectModelName, row.model, null, async () => {
+    try {
+      await deleteProjectModel(projectId, row.model)
+      ElMessage.success(t('projectDeleted'))
+      await loadSelectedProjectModels()
+      await reload()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
 }
 
 async function submitProjectForm() {
@@ -606,6 +745,18 @@ onMounted(loadServicePolicy)
           </template>
         </el-table-column>
         <el-table-column
+          label="模型数"
+          min-width="86"
+          align="center"
+          header-align="center"
+        >
+          <template #default="{ row }">
+            <span class="project-count-cell">{{
+              row.project_model_count.toLocaleString(locale)
+            }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
           :label="t('availableCredit')"
           min-width="132"
           align="center"
@@ -662,6 +813,14 @@ onMounted(loadServicePolicy)
                   :aria-label="t('viewProjectMembers')"
                   :icon="UserIcon"
                   @click="openMembersDialog(row)"
+                />
+              </el-tooltip>
+              <el-tooltip content="项目模型" placement="top" :show-after="600">
+                <el-button
+                  class="admin-action-button icon-only-action"
+                  aria-label="项目模型"
+                  :icon="Link"
+                  @click="openModelsDialog(row)"
                 />
               </el-tooltip>
               <el-tooltip :content="t('edit')" placement="top" :show-after="600">
@@ -815,6 +974,111 @@ onMounted(loadServicePolicy)
       :title="t('projectBalance')"
       @submit="submitCredit"
     />
+
+    <el-dialog
+      v-model="modelsDialogVisible"
+      class="user-admin-dialog project-models-dialog"
+      title="项目模型"
+      width="920px"
+    >
+      <div class="project-model-panel">
+        <el-form class="project-model-form" label-position="top" @submit.prevent="submitProjectModelForm">
+          <el-form-item label="项目模型名">
+            <el-input v-model="projectModelForm.model" placeholder="例如 company-chat" />
+          </el-form-item>
+          <el-form-item label="实际模型">
+            <el-select
+              v-model="projectModelForm.targetModel"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="选择或输入实际上游模型"
+            >
+              <el-option
+                v-for="item in providerModelOptions"
+                :key="`${item.provider}:${item.model}`"
+                :label="targetModelLabel(item)"
+                :value="item.model"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="指定上游通道（高级，可选）">
+            <el-select
+              v-model="projectModelForm.targetChannelId"
+              clearable
+              filterable
+              placeholder="自动选择可用通道"
+            >
+              <el-option
+                v-for="channel in channelOptions"
+                :key="channel.id"
+                :label="channelLabel(channel)"
+                :value="channel.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="描述">
+            <el-input v-model="projectModelForm.description" placeholder="可选" />
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-switch v-model="projectModelForm.enabled" />
+          </el-form-item>
+          <div class="project-model-actions">
+            <el-button @click="resetProjectModelForm">{{ t('cancel') }}</el-button>
+            <el-button type="primary" :loading="projectModelSaving" @click="submitProjectModelForm">
+              {{ editingProjectModel ? t('save') : t('create') }}
+            </el-button>
+          </div>
+        </el-form>
+
+        <div class="service-table-panel project-model-table-panel">
+          <el-table
+            v-loading="projectModelsLoading"
+            class="admin-table service-table"
+            :data="selectedProjectModels"
+            max-height="46vh"
+            row-key="id"
+            stripe
+          >
+            <el-table-column label="项目模型" prop="model" min-width="160" />
+            <el-table-column label="实际模型" prop="target_model" min-width="180" />
+            <el-table-column label="指定通道" min-width="160">
+              <template #default="{ row }">
+                <span>{{ row.target_channel_name || '自动选择' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="88" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.enabled ? 'success' : 'info'" effect="plain">
+                  {{ row.enabled ? t('enabled') : t('disabled') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('actions')" width="112" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-button
+                  class="admin-icon-action"
+                  :aria-label="t('edit')"
+                  :icon="Edit"
+                  circle
+                  text
+                  @click="editProjectModel(row)"
+                />
+                <el-button
+                  class="admin-icon-action danger"
+                  :aria-label="t('delete')"
+                  :icon="Delete"
+                  :loading="deletingProjectModelName === row.model"
+                  circle
+                  text
+                  @click="confirmDeleteProjectModel(row)"
+                />
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+    </el-dialog>
 
     <el-dialog
       v-model="membersDialogVisible"
@@ -1053,6 +1317,32 @@ onMounted(loadServicePolicy)
 .project-table,
 .project-member-detail-panel {
   font-size: 13px;
+}
+
+.project-model-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.project-model-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr);
+}
+
+.project-model-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.project-model-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.project-model-table-panel {
+  margin: 0;
 }
 
 .project-table :deep(.project-row-is-disabled td) {

@@ -429,8 +429,8 @@ export function useAppCreate() {
     }
   }
 
-  async function loadModelOptions() {
-    modelOptions.value = await getAppModelOptions()
+  async function loadModelOptions(userKeyId?: number) {
+    modelOptions.value = await getAppModelOptions({ userKeyId })
     if (!form.model) applyRecommendedModel(true)
   }
 

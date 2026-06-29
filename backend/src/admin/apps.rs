@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{AssertSqlSafe, Row};
 
@@ -34,6 +34,11 @@ struct AppModelOption {
     model: String,
     providers: Vec<String>,
     channel_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppModelOptionsQuery {
+    user_key_id: Option<DbId>,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -67,7 +72,140 @@ async fn get_app_handler(
 async fn app_model_options(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
+    Query(query): Query<AppModelOptionsQuery>,
 ) -> AppResult<Json<Vec<AppModelOption>>> {
+    if let Some(project_id) = app_model_options_project_id(&state, query.user_key_id).await? {
+        if crate::project_models::project_has_models(&state.db.pool, project_id).await? {
+            return Ok(Json(project_app_model_options(&state, project_id).await?));
+        }
+    }
+    Ok(Json(global_app_model_options(&state).await?))
+}
+
+async fn app_model_options_project_id(
+    state: &AppState,
+    user_key_id: Option<DbId>,
+) -> AppResult<Option<DbId>> {
+    if let Some(user_key_id) = user_key_id {
+        return sqlx::query_scalar("SELECT project_id FROM user_key WHERE id = $1")
+            .bind(user_key_id)
+            .fetch_optional(&state.db.pool)
+            .await?
+            .ok_or_else(|| AppError::BadRequest("invalid API key".to_string()))
+            .map(Some);
+    }
+
+    sqlx::query_scalar(
+        r#"
+        SELECT p.id
+        FROM project p
+        JOIN "user" u ON u.id = p.owner_user_id
+        WHERE u.email = $1
+          AND p.is_default = TRUE
+          AND p.deleted_at IS NULL
+        ORDER BY p.id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(SYSTEM_APPS_USER_EMAIL)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn project_app_model_options(
+    state: &AppState,
+    project_id: DbId,
+) -> AppResult<Vec<AppModelOption>> {
+    let rows = sqlx::query(AssertSqlSafe(format!(
+        r#"
+        SELECT pm.model,
+               COALESCE(
+                   array_remove(array_agg(DISTINCT c.provider ORDER BY c.provider), NULL),
+                   ARRAY[]::TEXT[]
+               ) AS providers,
+               COUNT(DISTINCT c.id)::BIGINT AS channel_count
+        FROM project_model pm
+        LEFT JOIN channel_model cm
+          ON cm.model = pm.target_model
+         AND cm.enabled = TRUE
+         AND cm.status = 'available'
+         AND (
+             cm.runtime_status = 'normal'
+             OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+         )
+        LEFT JOIN channel c
+          ON c.id = cm.channel_id
+         AND (pm.target_channel_id IS NULL OR c.id = pm.target_channel_id)
+         AND c.enabled = TRUE
+        LEFT JOIN provider p
+          ON p.code = c.provider
+         AND p.enabled = TRUE
+        LEFT JOIN channel_endpoint ce
+          ON ce.channel_id = c.id
+         AND ce.enabled = TRUE
+         AND ce.healthy = TRUE
+         AND EXISTS (
+             SELECT 1
+             FROM unnest(ce.models) AS endpoint_model(model)
+             WHERE btrim(endpoint_model.model) = pm.target_model
+         )
+        LEFT JOIN provider_price pp
+          ON pp.provider = cm.provider
+         AND pp.model = cm.model
+         AND pp.enabled = TRUE
+         AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+        WHERE pm.project_id = $1
+          AND pm.enabled = TRUE
+          AND (
+              c.id IS NULL
+              OR (
+                  p.code IS NOT NULL
+                  AND ce.id IS NOT NULL
+                  AND pp.provider IS NOT NULL
+                  AND (
+                      (
+                          c.use_credentials = FALSE
+                          AND EXISTS (
+                              SELECT 1
+                              FROM channel_key ck
+                              WHERE ck.channel_id = c.id
+                                AND ck.enabled = TRUE
+                                AND ck.healthy = TRUE
+                          )
+                      )
+                      OR (
+                          c.use_credentials = TRUE
+                          AND EXISTS (
+                              SELECT 1
+                              FROM credential cr
+                              WHERE cr.provider = c.provider
+                                AND cr.enabled = TRUE
+                          )
+                      )
+                  )
+              )
+          )
+        GROUP BY pm.model
+        ORDER BY pm.model ASC
+        "#
+    )))
+    .bind(project_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(AppModelOption {
+                model: row.try_get("model")?,
+                providers: row.try_get("providers")?,
+                channel_count: row.try_get("channel_count")?,
+            })
+        })
+        .collect()
+}
+
+async fn global_app_model_options(state: &AppState) -> AppResult<Vec<AppModelOption>> {
     let rows = sqlx::query(AssertSqlSafe(format!(
         r#"
         SELECT cm.model,
@@ -125,8 +263,7 @@ async fn app_model_options(
     .fetch_all(&state.db.pool)
     .await?;
 
-    let options = rows
-        .iter()
+    rows.iter()
         .map(|row| {
             Ok(AppModelOption {
                 model: row.try_get("model")?,
@@ -134,8 +271,7 @@ async fn app_model_options(
                 channel_count: row.try_get("channel_count")?,
             })
         })
-        .collect::<AppResult<Vec<_>>>()?;
-    Ok(Json(options))
+        .collect()
 }
 
 async fn create_app(
@@ -369,8 +505,8 @@ async fn create_system_app_user_key_tx(
         r#"
         INSERT INTO user_key
             (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext,
-             status, expires_at, model_limits)
-        VALUES ($1, $2, $1, $3, $4, $5, 'enabled', NULL, NULL)
+             status, expires_at)
+        VALUES ($1, $2, $1, $3, $4, $5, 'enabled', NULL)
         RETURNING id
         "#,
     )

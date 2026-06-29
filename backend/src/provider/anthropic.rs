@@ -28,6 +28,7 @@ use crate::relay::{
     log_upstream_http_failure, prepare_relay_body, raw_upstream_response, read_upstream_error_body,
     record_upstream_http_failure, record_upstream_transport_failure_for_failover,
     release_empty_hold, reserve_credit, respond_upstream_http_failure, response_from_bytes,
+    rewrite_relay_body_model,
     selector::{AttemptedUpstream, SelectedUpstream, SelectionConstraints, UpstreamProtocol},
     should_failover_retryable_upstream_failure, BodyKind, PreparedRelayBody, RelayBody,
     RelayContext,
@@ -59,9 +60,17 @@ pub(crate) async fn anthropic_messages(
         BodyKind::Anthropic,
         state.billing.default_output_tokens(),
     )?;
-    auth.ensure_model_allowed(&meta.model)?;
+    let resolved =
+        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
+            .await?;
+    let upstream_body = if resolved.target_model == meta.model {
+        body.clone()
+    } else {
+        rewrite_relay_body_model(body.clone(), BodyKind::Anthropic, &resolved.target_model)?
+    };
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
-    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let user_key_model_credit_account =
+        auth.model_credit_account(&resolved.external_model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
     let relay_trace_id = Uuid::new_v4();
 
@@ -69,27 +78,41 @@ pub(crate) async fn anthropic_messages(
     let mut attempted_upstreams = Vec::new();
     loop {
         let started = Instant::now();
-        let (protocol, upstream) = state
-            .selector
-            .select_with_affinity_excluding_protocols(
-                &state.db.pool,
-                &state.secrets,
-                &state.channel_affinity,
-                &ANTHROPIC_MESSAGE_PROTOCOLS,
-                &meta.model,
-                SelectionConstraints {
-                    affinity_key: channel_affinity_key.as_ref(),
-                    attempted: &attempted_upstreams,
-                },
-            )
-            .await?;
+        let (protocol, upstream) = if let Some(channel_id) = resolved.target_channel_id {
+            state
+                .selector
+                .select_bound_channel_protocols(
+                    &state.db.pool,
+                    &state.secrets,
+                    &ANTHROPIC_MESSAGE_PROTOCOLS,
+                    &resolved.target_model,
+                    channel_id,
+                    &attempted_upstreams,
+                )
+                .await?
+        } else {
+            state
+                .selector
+                .select_with_affinity_excluding_protocols(
+                    &state.db.pool,
+                    &state.secrets,
+                    &state.channel_affinity,
+                    &ANTHROPIC_MESSAGE_PROTOCOLS,
+                    &resolved.target_model,
+                    SelectionConstraints {
+                        affinity_key: channel_affinity_key.as_ref(),
+                        attempted: &attempted_upstreams,
+                    },
+                )
+                .await?
+        };
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         let price = state
             .billing
             .price_for(
                 &state.db.pool,
                 &upstream.provider,
-                &meta.model,
+                &resolved.target_model,
                 &auth.user_group,
             )
             .await?;
@@ -97,7 +120,7 @@ pub(crate) async fn anthropic_messages(
             &state,
             &auth,
             user_key_model_credit_account.as_ref(),
-            &body,
+            &upstream_body,
             output_tokens,
             &price,
         )
@@ -108,7 +131,9 @@ pub(crate) async fn anthropic_messages(
             upstream,
             protocol,
             path: "/v1/messages",
-            model: meta.model.clone(),
+            model: resolved.target_model.clone(),
+            external_model: resolved.external_model.clone(),
+            upstream_model: resolved.target_model.clone(),
             streamed: meta.stream,
             price,
             hold,
@@ -123,10 +148,10 @@ pub(crate) async fn anthropic_messages(
         };
         let response = match protocol {
             UpstreamProtocol::Anthropic => {
-                forward_anthropic(&state, &headers, &ctx.upstream, body.clone()).await
+                forward_anthropic(&state, &headers, &ctx.upstream, upstream_body.clone()).await
             }
             UpstreamProtocol::Openai => {
-                let body = bridge::messages_to_openai_chat(body.clone())?;
+                let body = bridge::messages_to_openai_chat(upstream_body.clone())?;
                 let route = RelayRoute::OpenAiChatCompletions;
                 let adapter = adapter_for_provider(&ctx.upstream.provider);
                 let prepared = adapter.prepare_openai_request(
@@ -250,28 +275,56 @@ pub(crate) async fn create_anthropic_message_batch(
 ) -> AppResult<Response> {
     let model = batch_model(&body)?;
     let request_count = batch_request_count(&body)?;
-    auth.ensure_model_allowed(&model)?;
+    let resolved =
+        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &model)
+            .await?;
+    let upstream_body = if resolved.target_model == model {
+        body.clone()
+    } else {
+        rewrite_relay_body_model(body.clone(), BodyKind::Anthropic, &resolved.target_model)?
+    };
     let _request_permit = state.user_request_limiter.try_acquire(auth.user_id).await?;
-    let user_key_model_credit_account = auth.model_credit_account(&model).cloned();
-    let upstream = state
-        .selector
-        .select(
-            &state.db.pool,
-            &state.secrets,
-            UpstreamProtocol::Anthropic,
-            &model,
-        )
-        .await?;
+    let user_key_model_credit_account =
+        auth.model_credit_account(&resolved.external_model).cloned();
+    let upstream = if let Some(channel_id) = resolved.target_channel_id {
+        state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                &[UpstreamProtocol::Anthropic],
+                &resolved.target_model,
+                channel_id,
+                &[],
+            )
+            .await?
+            .1
+    } else {
+        state
+            .selector
+            .select(
+                &state.db.pool,
+                &state.secrets,
+                UpstreamProtocol::Anthropic,
+                &resolved.target_model,
+            )
+            .await?
+    };
     ensure_key_backed_async_upstream(&upstream)?;
     let price = state
         .billing
-        .price_for(&state.db.pool, &upstream.provider, &model, &auth.user_group)
+        .price_for(
+            &state.db.pool,
+            &upstream.provider,
+            &resolved.target_model,
+            &auth.user_group,
+        )
         .await?;
     let hold = reserve_credit(
         &state,
         &auth,
         user_key_model_credit_account.as_ref(),
-        &body,
+        &upstream_body,
         state
             .billing
             .default_output_tokens()
@@ -285,7 +338,7 @@ pub(crate) async fn create_anthropic_message_batch(
         &upstream,
         Method::POST,
         "/v1/messages/batches",
-        Some(body),
+        Some(upstream_body),
     )
     .await
     {
@@ -300,7 +353,16 @@ pub(crate) async fn create_anthropic_message_batch(
             return Err(err);
         }
     };
-    finish_batch_create(state, auth, upstream, model, hold, response).await
+    finish_batch_create(
+        state,
+        auth,
+        upstream,
+        resolved.external_model,
+        resolved.target_model,
+        hold,
+        response,
+    )
+    .await
 }
 
 pub(crate) async fn list_anthropic_message_batches(
@@ -438,6 +500,7 @@ async fn finish_batch_create(
     auth: UserAuth,
     upstream: SelectedUpstream,
     model: String,
+    upstream_model: String,
     hold: crate::billing::DebitHold,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
@@ -491,6 +554,7 @@ async fn finish_batch_create(
             protocol: UpstreamProtocol::Anthropic,
             upstream: &upstream,
             model: Some(&model),
+            upstream_model: Some(&upstream_model),
             status: &status_text,
             terminal: batch_terminal(&status_text),
             hold: &hold,

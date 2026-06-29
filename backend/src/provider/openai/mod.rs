@@ -29,6 +29,7 @@ use crate::relay::{
     forward_anthropic, forward_openai_bound, forward_prepared_openai, log_upstream_http_failure,
     prepare_relay_body, read_upstream_error_body, record_upstream_http_failure,
     record_upstream_transport_failure_for_failover, reserve_credit, respond_upstream_http_failure,
+    rewrite_relay_body_model,
     selector::{
         AttemptedUpstream, ModelCooldown, SelectedUpstream, SelectionConstraints, UpstreamProtocol,
     },
@@ -267,7 +268,14 @@ async fn relay_openai(
         meta,
         output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
-    auth.ensure_model_allowed(&meta.model)?;
+    let resolved =
+        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
+            .await?;
+    let upstream_body = if resolved.target_model == meta.model {
+        body.clone()
+    } else {
+        rewrite_relay_body_model(body.clone(), body_kind, &resolved.target_model)?
+    };
     if matches!(body_kind, BodyKind::OpenaiResponses) && meta.background {
         if meta.store == Some(false) {
             return Err(AppError::BadRequest(
@@ -282,8 +290,10 @@ async fn relay_openai(
         return background::create_background_response(
             state,
             auth,
-            body,
-            meta.model,
+            upstream_body,
+            resolved.external_model,
+            resolved.target_model,
+            resolved.target_channel_id,
             output_tokens,
             meta.request_params,
             meta.channel_affinity_key,
@@ -291,7 +301,8 @@ async fn relay_openai(
         .await;
     }
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
-    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let user_key_model_credit_account =
+        auth.model_credit_account(&resolved.external_model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
     let relay_trace_id = Uuid::new_v4();
 
@@ -311,7 +322,8 @@ async fn relay_openai(
                 select_upstream_excluding(
                     &state,
                     path,
-                    &meta.model,
+                    &resolved.target_model,
+                    resolved.target_channel_id,
                     channel_affinity_key.as_ref(),
                     &attempted_upstreams,
                 )
@@ -329,7 +341,7 @@ async fn relay_openai(
             )
             && state
                 .selector
-                .responses_unsupported(upstream.channel_endpoint_id, &meta.model)
+                .responses_unsupported(upstream.channel_endpoint_id, &resolved.target_model)
                 .await
         {
             tracing::debug!(
@@ -339,6 +351,7 @@ async fn relay_openai(
                 channel_endpoint_id = upstream.channel_endpoint_id,
                 protocol = protocol.as_str(),
                 model = %meta.model,
+                target_model = %resolved.target_model,
                 path,
                 "downgrading responses to chat fallback (learned unsupported for this model)"
             );
@@ -352,7 +365,7 @@ async fn relay_openai(
             .price_for(
                 &state.db.pool,
                 &upstream.provider,
-                &meta.model,
+                &resolved.target_model,
                 &auth.user_group,
             )
             .await?;
@@ -365,7 +378,7 @@ async fn relay_openai(
                 &state,
                 &auth,
                 user_key_model_credit_account.as_ref(),
-                &body,
+                &upstream_body,
                 output_tokens,
                 &price,
             )
@@ -377,7 +390,9 @@ async fn relay_openai(
             upstream,
             protocol,
             path,
-            model: meta.model.clone(),
+            model: resolved.target_model.clone(),
+            external_model: resolved.external_model.clone(),
+            upstream_model: resolved.target_model.clone(),
             streamed: meta.stream,
             price,
             hold,
@@ -393,11 +408,11 @@ async fn relay_openai(
         let mut adapter_response_mode = AdapterResponseMode::Passthrough;
         let response = match protocol {
             UpstreamProtocol::Anthropic if path == "/v1/chat/completions" => {
-                let body = bridge::openai_chat_to_anthropic_messages(body.clone())?;
+                let body = bridge::openai_chat_to_anthropic_messages(upstream_body.clone())?;
                 forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
             }
             UpstreamProtocol::Anthropic if path == "/v1/responses" => {
-                let body = bridge::openai_response_to_anthropic_messages(body.clone())?;
+                let body = bridge::openai_response_to_anthropic_messages(upstream_body.clone())?;
                 forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
             }
             UpstreamProtocol::Anthropic => Err(AppError::BadRequest(format!(
@@ -409,7 +424,7 @@ async fn relay_openai(
                     &ctx.upstream,
                     protocol,
                     route,
-                    body.clone(),
+                    upstream_body.clone(),
                     &headers,
                     meta.stream,
                 )?;
@@ -658,6 +673,7 @@ async fn select_upstream_excluding(
     state: &AppState,
     path: &'static str,
     model: &str,
+    target_channel_id: Option<i64>,
     affinity_key: Option<&ChannelAffinityKey>,
     attempted: &[AttemptedUpstream],
 ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
@@ -666,6 +682,20 @@ async fn select_upstream_excluding(
         "/v1/responses" => &OPENAI_RESPONSES_PROTOCOLS[..],
         _ => &OPENAI_PROTOCOLS[..],
     };
+
+    if let Some(channel_id) = target_channel_id {
+        return state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                protocols,
+                model,
+                channel_id,
+                attempted,
+            )
+            .await;
+    }
 
     state
         .selector

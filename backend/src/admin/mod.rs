@@ -37,6 +37,10 @@ use crate::{
     id::DbId,
     input::{bounded_limit, trimmed_non_empty},
     pagination::{created_id_cursor_page, parse_created_id_cursor},
+    project_models::{
+        create_project_model, delete_project_model, list_project_models, update_project_model,
+        ProjectModelRecord, UpdateProjectModelRequest, UpsertProjectModelRequest,
+    },
     AppState,
 };
 
@@ -142,6 +146,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/projects/{id}/members",
             get(project_members).post(add_project_member_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/models",
+            get(project_models_handler).post(create_project_model_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/models/{model}",
+            patch(update_project_model_handler).delete(delete_project_model_handler),
         )
         .route(
             "/api/admin/projects/{id}/members/{member_id}",
@@ -495,6 +507,61 @@ async fn delete_project_member_handler(
 ) -> AppResult<Json<Value>> {
     delete_project_member(&state, id, member_id).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn project_models_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+) -> AppResult<Json<Vec<ProjectModelRecord>>> {
+    Ok(Json(list_project_models(&state.db.pool, id).await?))
+}
+
+async fn create_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<UpsertProjectModelRequest>,
+) -> AppResult<Json<ProjectModelRecord>> {
+    let record = create_project_model(&state.db.pool, id, req).await?;
+    invalidate_project_auth(&state, id).await?;
+    Ok(Json(record))
+}
+
+async fn update_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, model)): Path<(DbId, String)>,
+    Json(req): Json<UpdateProjectModelRequest>,
+) -> AppResult<Json<ProjectModelRecord>> {
+    let record = update_project_model(&state.db.pool, id, &model, req).await?;
+    invalidate_project_auth(&state, id).await?;
+    Ok(Json(record))
+}
+
+async fn delete_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, model)): Path<(DbId, String)>,
+) -> AppResult<Json<Value>> {
+    delete_project_model(&state.db.pool, id, &model).await?;
+    invalidate_project_auth(&state, id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn invalidate_project_auth(state: &AppState, project_id: DbId) -> AppResult<()> {
+    let rows = sqlx::query("SELECT id FROM user_key WHERE project_id = $1")
+        .bind(project_id)
+        .fetch_all(&state.db.pool)
+        .await?;
+    for row in rows {
+        let id: DbId = row.try_get("id")?;
+        state
+            .cache_invalidator
+            .invalidate(state, InvalidationEvent::UserKey { id })
+            .await;
+    }
+    Ok(())
 }
 
 async fn channels(

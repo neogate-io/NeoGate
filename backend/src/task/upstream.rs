@@ -52,11 +52,12 @@ pub(crate) async fn insert_task(
     sqlx::query(
         r#"
         INSERT INTO task_upstream (
-            task_type, upstream_task_id, user_id, project_id, user_key_id, protocol, provider, model,
+            task_type, upstream_task_id, user_id, project_id, user_key_id,
+            protocol, provider, model, upstream_model,
             channel_id, channel_endpoint_id, channel_key_id, credential_id, upstream_base_url,
             status, terminal, billing_hold, upstream_metadata, next_poll_at, expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         ON CONFLICT (task_type, provider, upstream_task_id) DO UPDATE
         SET status = EXCLUDED.status,
             terminal = EXCLUDED.terminal,
@@ -72,6 +73,7 @@ pub(crate) async fn insert_task(
     .bind(protocol)
     .bind(&task.upstream.provider)
     .bind(task.model)
+    .bind(task.upstream_model)
     .bind(task.upstream.channel_id)
     .bind(task.upstream.channel_endpoint_id)
     .bind(task.upstream.channel_key_id)
@@ -131,7 +133,7 @@ pub(crate) async fn claim_due_tasks(
         FROM due
         WHERE task.id = due.id
         RETURNING task.id, task.task_type, task.upstream_task_id, task.user_id, task.project_id, task.user_key_id,
-                  task.provider, task.model, task.channel_id, task.channel_endpoint_id,
+                  task.provider, task.model, task.upstream_model, task.channel_id, task.channel_endpoint_id,
                   task.channel_key_id, task.credential_id, task.upstream_base_url,
                   task.status, task.terminal, task.upstream_metadata, task.created_at
         "#,
@@ -151,7 +153,7 @@ pub(crate) async fn fetch_stale_terminal_held_tasks(
     let rows = sqlx::query(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
-               provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
+               provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
                upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE terminal = TRUE
@@ -180,7 +182,7 @@ pub(crate) async fn list_tasks_for_auth(
     let rows = sqlx::query(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
-               provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
+               provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
                upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE user_key_id = $1
@@ -304,7 +306,7 @@ pub(crate) async fn fetch_task(
     let row = sqlx::query(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
-               provider, model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
+               provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
                upstream_base_url, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE user_key_id = $1
@@ -447,6 +449,9 @@ fn task_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UpstreamTask> {
         user_key_id: row.try_get("user_key_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
+        upstream_model: row
+            .try_get::<Option<String>, _>("upstream_model")?
+            .or_else(|| row.try_get("model").ok()),
         channel_id: row.try_get("channel_id")?,
         channel_endpoint_id: row.try_get("channel_endpoint_id")?,
         channel_key_id: row.try_get("channel_key_id")?,

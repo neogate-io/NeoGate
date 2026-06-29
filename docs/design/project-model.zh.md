@@ -76,8 +76,9 @@ user_key
   secret_ciphertext
   status
   expires_at
-  model_limits
 ```
+
+项目级模型权限由 `project_model` 单独承载。
 
 `owner_user_id` 描述 key 在 project 内的可见性和个人所有权：
 

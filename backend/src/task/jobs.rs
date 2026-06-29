@@ -175,6 +175,7 @@ pub(crate) async fn create(
             protocol: UpstreamProtocol::Openai,
             upstream,
             model: Some(model),
+            upstream_model: Some(model),
             status: STATUS_QUEUED,
             terminal: false,
             hold,

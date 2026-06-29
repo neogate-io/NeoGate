@@ -12,6 +12,7 @@ use crate::{
     },
     AppState,
 };
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
@@ -29,6 +30,8 @@ pub(crate) struct RelayContext {
     pub(crate) protocol: UpstreamProtocol,
     pub(crate) path: &'static str,
     pub(crate) model: String,
+    pub(crate) external_model: String,
+    pub(crate) upstream_model: String,
     pub(crate) streamed: bool,
     pub(crate) price: Price,
     pub(crate) hold: DebitHold,
@@ -91,6 +94,8 @@ pub(crate) fn body_from_stream(
 ) -> Body {
     let streamed = ctx.streamed;
     let path = ctx.path;
+    let model_rewriter = (ctx.streamed && ctx.external_model != ctx.model)
+        .then(|| SseModelRewriter::new(ctx.external_model.clone()));
     tracing::debug!(
         relay_trace_id = %ctx.relay_trace_id,
         relay_attempt = ctx.relay_attempt,
@@ -122,6 +127,7 @@ pub(crate) fn body_from_stream(
             content_length,
             usage_buffer_limit_bytes,
         ),
+        model_rewriter,
         first_response_ms: None,
         last_chunk_ms: None,
         chunks_sent: 0,
@@ -135,6 +141,10 @@ pub(crate) fn body_from_stream(
             let mut relay = relay?;
             match relay.stream.next().await {
                 Some(Ok(chunk)) => {
+                    let chunk = relay.rewrite_model_chunk(chunk);
+                    if chunk.is_empty() {
+                        return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
+                    }
                     relay.observe_chunk(&chunk);
                     relay.usage.observe(&chunk);
                     Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
@@ -149,6 +159,11 @@ pub(crate) fn body_from_stream(
                     }
                 }
                 None => {
+                    if let Some(chunk) = relay.finish_model_rewrite() {
+                        relay.observe_chunk(&chunk);
+                        relay.usage.observe(&chunk);
+                        return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
+                    }
                     relay.finish_stream_success().await;
                     None
                 }
@@ -162,6 +177,7 @@ struct StreamingRelay {
     status: StatusCode,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
     usage: ResponseUsageParser,
+    model_rewriter: Option<SseModelRewriter>,
     first_response_ms: Option<i64>,
     last_chunk_ms: Option<i64>,
     chunks_sent: u64,
@@ -170,6 +186,19 @@ struct StreamingRelay {
 }
 
 impl StreamingRelay {
+    fn rewrite_model_chunk(&mut self, chunk: Bytes) -> Bytes {
+        match self.model_rewriter.as_mut() {
+            Some(rewriter) => rewriter.rewrite_chunk(chunk),
+            None => chunk,
+        }
+    }
+
+    fn finish_model_rewrite(&mut self) -> Option<Bytes> {
+        self.model_rewriter
+            .as_mut()
+            .and_then(SseModelRewriter::finish)
+    }
+
     fn observe_chunk(&mut self, chunk: &Bytes) {
         if chunk.is_empty() {
             return;
@@ -411,6 +440,100 @@ impl StreamingRelay {
         );
         enqueue_relay_usage(&ctx.state, usage, failure).await;
     }
+}
+
+struct SseModelRewriter {
+    buffered: Vec<u8>,
+    external_model: String,
+    finished: bool,
+}
+
+impl SseModelRewriter {
+    fn new(external_model: String) -> Self {
+        Self {
+            buffered: Vec::new(),
+            external_model,
+            finished: false,
+        }
+    }
+
+    fn rewrite_chunk(&mut self, chunk: Bytes) -> Bytes {
+        if chunk.is_empty() {
+            return chunk;
+        }
+        self.buffered.extend_from_slice(&chunk);
+        let mut output = Vec::with_capacity(self.buffered.len());
+        let mut consumed = 0;
+        while let Some(offset) = self.buffered[consumed..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let line_end = consumed + offset;
+            output.extend_from_slice(&self.rewrite_line(&self.buffered[consumed..line_end]));
+            output.push(b'\n');
+            consumed = line_end + 1;
+        }
+        if consumed == self.buffered.len() {
+            self.buffered.clear();
+        } else if consumed > 0 {
+            self.buffered.drain(..consumed);
+        }
+        Bytes::from(output)
+    }
+
+    fn finish(&mut self) -> Option<Bytes> {
+        if self.finished {
+            return None;
+        }
+        self.finished = true;
+        if self.buffered.is_empty() {
+            return None;
+        }
+        let line = std::mem::take(&mut self.buffered);
+        Some(Bytes::from(self.rewrite_line(&line)))
+    }
+
+    fn rewrite_line(&self, line: &[u8]) -> Vec<u8> {
+        let (line, cr) = match line.strip_suffix(b"\r") {
+            Some(line) => (line, true),
+            None => (line, false),
+        };
+        let Some(rewritten) = rewrite_sse_data_model(line, &self.external_model) else {
+            let mut output = line.to_vec();
+            if cr {
+                output.push(b'\r');
+            }
+            return output;
+        };
+        let mut output = rewritten.into_bytes();
+        if cr {
+            output.push(b'\r');
+        }
+        output
+    }
+}
+
+fn rewrite_sse_data_model(line: &[u8], external_model: &str) -> Option<String> {
+    let line = std::str::from_utf8(line).ok()?;
+    let rest = line.strip_prefix("data:")?;
+    let leading_len = rest.len() - rest.trim_start().len();
+    let leading = &rest[..leading_len];
+    let data = rest[leading_len..].trim();
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+    let mut value = serde_json::from_str::<Value>(data).ok()?;
+    let object = value.as_object_mut()?;
+    if !object.contains_key("model") {
+        return None;
+    }
+    object.insert(
+        "model".to_string(),
+        Value::String(external_model.to_string()),
+    );
+    serde_json::to_string(&value)
+        .ok()
+        .map(|json| format!("data:{leading}{json}"))
 }
 
 async fn settle_successful_hold(
@@ -812,6 +935,41 @@ mod tests {
     #[test]
     fn body_decode_errors_are_identified() {
         assert!(is_body_decode_error("error decoding response body"));
+    }
+
+    #[test]
+    fn sse_model_rewriter_rewrites_top_level_model() {
+        let mut rewriter = SseModelRewriter::new("company-chat".to_string());
+
+        let output = rewriter.rewrite_chunk(Bytes::from_static(
+            br#"event: message
+data: {"id":"1","model":"gpt-4o-mini","choices":[]}
+data: [DONE]
+"#,
+        ));
+
+        assert_eq!(
+            std::str::from_utf8(&output).unwrap(),
+            "event: message\ndata: {\"choices\":[],\"id\":\"1\",\"model\":\"company-chat\"}\ndata: [DONE]\n"
+        );
+        assert!(rewriter.finish().is_none());
+    }
+
+    #[test]
+    fn sse_model_rewriter_buffers_partial_lines() {
+        let mut rewriter = SseModelRewriter::new("project-model".to_string());
+
+        assert!(rewriter
+            .rewrite_chunk(Bytes::from_static(br#"data: {"model":"#))
+            .is_empty());
+        let output = rewriter.rewrite_chunk(Bytes::from_static(br#""real-model"}"#));
+        assert!(output.is_empty());
+        let trailing = rewriter.finish().expect("unterminated line is flushed");
+
+        assert_eq!(
+            std::str::from_utf8(&trailing).unwrap(),
+            "data: {\"model\":\"project-model\"}"
+        );
     }
 
     #[test]

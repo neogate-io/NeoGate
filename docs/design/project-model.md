@@ -76,8 +76,9 @@ user_key
   secret_ciphertext
   status
   expires_at
-  model_limits
 ```
+
+Project-level model permissions are stored separately in `project_model`.
 
 `owner_user_id` describes key visibility and personal ownership inside a project:
 

@@ -39,8 +39,11 @@ export function getApps(filters: { search?: string; status?: string; appType?: s
   return adminRequest<AppRecord[]>(`/api/admin/apps${query ? `?${query}` : ''}`)
 }
 
-export function getAppModelOptions() {
-  return adminRequest<AppModelOption[]>('/api/admin/app-model-options')
+export function getAppModelOptions(filters: { userKeyId?: number } = {}) {
+  const searchParams = new URLSearchParams()
+  if (filters.userKeyId != null) searchParams.set('user_key_id', String(filters.userKeyId))
+  const query = searchParams.toString()
+  return adminRequest<AppModelOption[]>(`/api/admin/app-model-options${query ? `?${query}` : ''}`)
 }
 
 export function createApp(payload: CreateAppInput) {

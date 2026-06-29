@@ -804,6 +804,7 @@ mod tests {
             relay_final: true,
             provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
+            upstream_model: Some("gpt-4.1".to_string()),
             status_code: Some(200),
             streamed: false,
             latency_ms: 1,

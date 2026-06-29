@@ -84,9 +84,14 @@ async function toggleApp(app: AppRecord) {
   }
 }
 
-function openEdit(app: AppRecord) {
+async function openEdit(app: AppRecord) {
   selectedApp.value = app
-  edit.modelOptions.value = create.modelOptions.value
+  try {
+    await edit.loadModelOptions(app.user_key_id)
+  } catch (err) {
+    edit.modelOptions.value = create.modelOptions.value
+    ElMessage.error(readError(err))
+  }
   edit.fillFromApp(app)
   editOpen.value = true
 }

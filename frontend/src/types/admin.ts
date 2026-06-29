@@ -39,7 +39,6 @@ export type UserKey = CreditBalance & {
   status: UserKeyStatus
   last_active_at?: string | null
   expires_at?: string | null
-  model_limits?: string[] | null
   month_cost_micro_usd: number
   created_at: string
   updated_at: string
@@ -83,6 +82,7 @@ export type Project = CreditBalance & {
   is_default: boolean
   member_count: number
   user_key_count: number
+  project_model_count: number
   created_at: string
   updated_at: string
 }
@@ -98,6 +98,19 @@ export type ProjectMember = {
   api_key?: string | null
   api_key_prefix?: string | null
   last_active_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectModel = {
+  id: number
+  project_id: number
+  model: string
+  target_model: string
+  target_channel_id?: number | null
+  target_channel_name?: string | null
+  enabled: boolean
+  description: string
   created_at: string
   updated_at: string
 }

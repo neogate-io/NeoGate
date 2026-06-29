@@ -20,6 +20,7 @@ pub struct UsageInsert {
     pub relay_final: bool,
     pub provider: String,
     pub model: Option<String>,
+    pub upstream_model: Option<String>,
     pub status_code: Option<i32>,
     pub streamed: bool,
     pub latency_ms: i64,

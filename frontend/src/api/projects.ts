@@ -1,4 +1,4 @@
-import type { CursorPage, Project, ProjectMember, ProjectStatus } from '../types/admin'
+import type { CursorPage, Project, ProjectMember, ProjectModel, ProjectStatus } from '../types/admin'
 import { adminRequest } from './request'
 
 export type ProjectPage = CursorPage<Project>
@@ -97,4 +97,57 @@ export function deleteProjectMember(projectId: number, memberId: number) {
   return adminRequest<{ ok: boolean }>(`/api/admin/projects/${projectId}/members/${memberId}`, {
     method: 'DELETE'
   })
+}
+
+export function getProjectModels(projectId: number) {
+  return adminRequest<ProjectModel[]>(`/api/admin/projects/${projectId}/models`)
+}
+
+export function createProjectModel(
+  projectId: number,
+  payload: {
+    model: string
+    target_model: string
+    target_channel_id?: number | null
+    enabled: boolean
+    description?: string
+  }
+) {
+  return adminRequest<ProjectModel>(`/api/admin/projects/${projectId}/models`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function updateProjectModel(
+  projectId: number,
+  model: string,
+  payload: {
+    model?: string
+    target_model?: string
+    target_channel_id?: number | null
+    enabled?: boolean
+    description?: string
+  }
+) {
+  return adminRequest<ProjectModel>(
+    `/api/admin/projects/${projectId}/models/${encodeURIComponent(model)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        ...payload,
+        target_channel_id:
+          Object.prototype.hasOwnProperty.call(payload, 'target_channel_id')
+            ? payload.target_channel_id
+            : undefined
+      })
+    }
+  )
+}
+
+export function deleteProjectModel(projectId: number, model: string) {
+  return adminRequest<{ ok: boolean }>(
+    `/api/admin/projects/${projectId}/models/${encodeURIComponent(model)}`,
+    { method: 'DELETE' }
+  )
 }

@@ -10,6 +10,7 @@ mod health;
 mod payment;
 mod policy;
 mod project;
+mod project_models;
 mod provider;
 mod relay;
 mod setup;

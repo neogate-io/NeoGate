@@ -31,33 +31,55 @@ pub(super) async fn create_background_response(
     state: Arc<AppState>,
     auth: UserAuth,
     body: Bytes,
-    model: String,
+    external_model: String,
+    target_model: String,
+    target_channel_id: Option<i64>,
     output_tokens: i64,
     request_params: RelayRequestParams,
     channel_affinity_key: Option<ChannelAffinityKey>,
 ) -> AppResult<Response> {
     let started = Instant::now();
     let prepared = jobs::prepare_request_body(body)?;
-    let upstream = state
-        .selector
-        .select_with_affinity(
-            &state.db.pool,
-            &state.secrets,
-            &state.channel_affinity,
-            UpstreamProtocol::Openai,
-            &model,
-            SelectionConstraints {
-                affinity_key: channel_affinity_key.as_ref(),
-                attempted: &[],
-            },
-        )
-        .await?;
+    let upstream = if let Some(channel_id) = target_channel_id {
+        state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                &[UpstreamProtocol::Openai],
+                &target_model,
+                channel_id,
+                &[],
+            )
+            .await?
+            .1
+    } else {
+        state
+            .selector
+            .select_with_affinity(
+                &state.db.pool,
+                &state.secrets,
+                &state.channel_affinity,
+                UpstreamProtocol::Openai,
+                &target_model,
+                SelectionConstraints {
+                    affinity_key: channel_affinity_key.as_ref(),
+                    attempted: &[],
+                },
+            )
+            .await?
+    };
     ensure_key_backed_async_upstream(&upstream)?;
     let price = state
         .billing
-        .price_for(&state.db.pool, &upstream.provider, &model, &auth.user_group)
+        .price_for(
+            &state.db.pool,
+            &upstream.provider,
+            &target_model,
+            &auth.user_group,
+        )
         .await?;
-    let user_key_model_credit_account = auth.model_credit_account(&model).cloned();
+    let user_key_model_credit_account = auth.model_credit_account(&external_model).cloned();
     let hold = reserve_credit(
         &state,
         &auth,
@@ -72,7 +94,7 @@ pub(super) async fn create_background_response(
             &state,
             &auth,
             &upstream,
-            &model,
+            &target_model,
             prepared.body.clone(),
             prepared.image_format,
             &hold,
@@ -111,7 +133,9 @@ pub(super) async fn create_background_response(
         upstream: upstream.clone(),
         protocol: UpstreamProtocol::Openai,
         path: "/v1/responses",
-        model: model.clone(),
+        model: target_model.clone(),
+        external_model: external_model.clone(),
+        upstream_model: target_model.clone(),
         streamed: false,
         price,
         hold: hold.clone(),
@@ -178,7 +202,8 @@ pub(super) async fn create_background_response(
             auth: &auth,
             protocol: UpstreamProtocol::Openai,
             upstream: &upstream,
-            model: Some(&model),
+            model: Some(&external_model),
+            upstream_model: Some(&target_model),
             status: status_text,
             terminal,
             hold: &hold,

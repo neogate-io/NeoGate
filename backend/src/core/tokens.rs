@@ -502,7 +502,7 @@ impl UserAuth {
     }
 
     pub async fn ensure_model_allowed(&self, state: &AppState, model: &str) -> AppResult<()> {
-        crate::project_models::resolve_project_model(&state.db.pool, self.project_id, model)
+        crate::project::models::resolve_project_model(&state.db.pool, self.project_id, model)
             .await
             .map(|_| ())
     }

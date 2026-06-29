@@ -1,5 +1,7 @@
 use sqlx::{Postgres, Row, Transaction};
 
+pub(crate) mod models;
+
 use crate::{
     billing::{account, CreditAccountType},
     error::{AppError, AppResult},

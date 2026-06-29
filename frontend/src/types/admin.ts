@@ -195,7 +195,7 @@ export type ChannelKey = {
   id: number
   channel_id: number
   name: string
-  key_prefix: string
+  masked_key: string
   enabled: boolean
   healthy: boolean
   cooldown_until?: string | null

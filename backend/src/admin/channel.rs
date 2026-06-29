@@ -157,7 +157,7 @@ pub struct ChannelKeyRecord {
     pub id: DbId,
     pub channel_id: DbId,
     pub name: String,
-    pub key_prefix: String,
+    pub masked_key: String,
     pub enabled: bool,
     pub healthy: bool,
     pub cooldown_until: Option<DateTime<Utc>>,
@@ -429,7 +429,7 @@ pub async fn create_channel_key(
     let row = sqlx::query(
         "INSERT INTO channel_key (channel_id, name, key_prefix, secret_ciphertext, enabled)
          VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, channel_id, name, key_prefix, enabled, healthy, cooldown_until,
+         RETURNING id, channel_id, name, enabled, healthy, cooldown_until,
                    last_error, last_used_at, created_at, updated_at",
     )
     .bind(channel_id)
@@ -441,7 +441,7 @@ pub async fn create_channel_key(
     .await?;
     reset_channel_endpoint_health(&mut tx, channel_id).await?;
     tx.commit().await?;
-    channel_key_from_row(&row)
+    channel_key_from_row(&row, &req.secret)
 }
 
 pub async fn list_channel_keys(
@@ -449,25 +449,29 @@ pub async fn list_channel_keys(
     channel_id: DbId,
 ) -> AppResult<Vec<ChannelKeyRecord>> {
     let rows = sqlx::query(
-        "SELECT id, channel_id, name, key_prefix, enabled, healthy, cooldown_until,
+        "SELECT id, channel_id, name, secret_ciphertext, enabled, healthy, cooldown_until,
                 last_error, last_used_at, created_at, updated_at
          FROM channel_key WHERE channel_id = $1 ORDER BY created_at ASC",
     )
     .bind(channel_id)
     .fetch_all(&state.db.pool)
     .await?;
-    rows.iter().map(channel_key_from_row).collect()
+    rows.iter()
+        .map(|row| channel_key_from_secret_row(state, row))
+        .collect()
 }
 
 pub async fn list_all_channel_keys(state: &AppState) -> AppResult<Vec<ChannelKeyRecord>> {
     let rows = sqlx::query(
-        "SELECT id, channel_id, name, key_prefix, enabled, healthy, cooldown_until,
+        "SELECT id, channel_id, name, secret_ciphertext, enabled, healthy, cooldown_until,
                 last_error, last_used_at, created_at, updated_at
          FROM channel_key ORDER BY channel_id ASC, created_at ASC",
     )
     .fetch_all(&state.db.pool)
     .await?;
-    rows.iter().map(channel_key_from_row).collect()
+    rows.iter()
+        .map(|row| channel_key_from_secret_row(state, row))
+        .collect()
 }
 
 pub async fn reveal_channel_key_secret(
@@ -498,7 +502,7 @@ pub async fn update_channel_key(
     req: UpdateChannelKeyRequest,
 ) -> AppResult<ChannelKeyRecord> {
     let current = sqlx::query(
-        "SELECT id, channel_id, name, key_prefix, enabled, healthy, cooldown_until,
+        "SELECT id, channel_id, name, enabled, healthy, cooldown_until,
                 last_error, last_used_at, created_at, updated_at
          FROM channel_key WHERE id = $1",
     )
@@ -544,8 +548,8 @@ pub async fn update_channel_key(
              last_error = $8,
              updated_at = now()
          WHERE id = $1
-         RETURNING id, channel_id, name, key_prefix, enabled, healthy, cooldown_until,
-                   last_error, last_used_at, created_at, updated_at",
+         RETURNING id, channel_id, name, enabled, healthy, cooldown_until,
+                   last_error, last_used_at, created_at, updated_at, secret_ciphertext",
     )
     .bind(id)
     .bind(req.name)
@@ -564,7 +568,7 @@ pub async fn update_channel_key(
     if replacing_secret {
         state.secrets.forget(id);
     }
-    channel_key_from_row(&row)
+    channel_key_from_secret_row(state, &row)
 }
 
 pub async fn delete_channel_key(state: &AppState, id: DbId) -> AppResult<()> {
@@ -1191,12 +1195,22 @@ fn channel_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelModel
     })
 }
 
-pub fn channel_key_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelKeyRecord> {
+fn channel_key_from_secret_row(
+    state: &AppState,
+    row: &sqlx::postgres::PgRow,
+) -> AppResult<ChannelKeyRecord> {
+    let id = row.try_get("id")?;
+    let secret_ciphertext: String = row.try_get("secret_ciphertext")?;
+    let secret = state.secrets.plaintext(id, &secret_ciphertext)?;
+    channel_key_from_row(row, &secret)
+}
+
+fn channel_key_from_row(row: &sqlx::postgres::PgRow, secret: &str) -> AppResult<ChannelKeyRecord> {
     Ok(ChannelKeyRecord {
         id: row.try_get("id")?,
         channel_id: row.try_get("channel_id")?,
         name: row.try_get("name")?,
-        key_prefix: row.try_get("key_prefix")?,
+        masked_key: mask_channel_key(secret),
         enabled: row.try_get("enabled")?,
         healthy: row.try_get("healthy")?,
         cooldown_until: row.try_get("cooldown_until")?,
@@ -1205,4 +1219,22 @@ pub fn channel_key_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelKey
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+fn mask_channel_key(secret: &str) -> String {
+    const HEAD_LEN: usize = 8;
+    const TAIL_LEN: usize = 6;
+    const MASK_THRESHOLD: usize = 18;
+
+    let length = secret.chars().count();
+    if length <= MASK_THRESHOLD {
+        return secret.to_string();
+    }
+
+    let head: String = secret.chars().take(HEAD_LEN).collect();
+    let tail: String = secret
+        .chars()
+        .skip(length.saturating_sub(TAIL_LEN))
+        .collect();
+    format!("{head}********{tail}")
 }

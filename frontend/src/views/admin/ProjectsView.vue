@@ -29,11 +29,9 @@ import {
   getProjectMembers,
   getProjects,
   type ProjectPage,
-  updateProjectModel,
   updateProject
 } from '../../api/projects'
 import { getChannels } from '../../api/channels'
-import { getProviderModels } from '../../api/prices'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { adjustCredit } from '../../api/userKeys'
 import { getUsers } from '../../api/users'
@@ -43,7 +41,14 @@ import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
-import type { Channel, Project, ProjectMember, ProjectModel, ProjectStatus, ProviderModel, User } from '../../types/admin'
+import type {
+  Channel,
+  Project,
+  ProjectMember,
+  ProjectModel,
+  ProjectStatus,
+  User
+} from '../../types/admin'
 import { copyTextWithMessage } from '../../utils/clipboard'
 import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
@@ -83,8 +88,6 @@ type ProjectModelForm = {
   model: string
   targetModel: string
   targetChannelId: number | null
-  enabled: boolean
-  description: string
 }
 
 const DEFAULT_PAGE_SIZE = 50
@@ -123,9 +126,7 @@ const togglingProjectIds = useReactiveSet<number>()
 const selectedProject = ref<Project | null>(null)
 const selectedMembers = ref<ProjectMember[]>([])
 const selectedProjectModels = ref<ProjectModel[]>([])
-const providerModelOptions = ref<ProviderModel[]>([])
 const channelOptions = ref<Channel[]>([])
-const editingProjectModel = ref<ProjectModel | null>(null)
 const ownerOptions = ref<User[]>([])
 const ownerSearchLoading = ref(false)
 const amountUsd = ref(DEFAULT_RECHARGE_USD)
@@ -142,9 +143,7 @@ const memberForm = reactive<ProjectMemberForm>({
 const projectModelForm = reactive<ProjectModelForm>({
   model: '',
   targetModel: '',
-  targetChannelId: null,
-  enabled: true,
-  description: ''
+  targetChannelId: null
 })
 const {
   currentPage,
@@ -171,6 +170,18 @@ const showProjectsPagination = computed(
     !initialLoading.value &&
     (projectsPage.value.items.length > 0 || currentPage.value > 1 || projectsPage.value.has_more)
 )
+const channelModelOptions = computed(() => {
+  const seen = new Set<string>()
+  const options: string[] = []
+  for (const channel of channelOptions.value) {
+    for (const item of channel.models) {
+      if (seen.has(item.model)) continue
+      seen.add(item.model)
+      options.push(item.model)
+    }
+  }
+  return options.sort((a, b) => a.localeCompare(b))
+})
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
 )
@@ -231,6 +242,12 @@ function formatAvailableUsd(row: Project) {
   return formatMicroUsd(row.available_micro_usd, 2)
 }
 
+function formatProjectModelCount(row: Project) {
+  return row.project_model_count === 0
+    ? t('unlimitedModels')
+    : row.project_model_count.toLocaleString(locale.value)
+}
+
 function memberRoleText(role: ProjectMember['role']) {
   const keys: Record<ProjectMember['role'], TranslationKey> = {
     owner: 'memberRoleOwner',
@@ -261,7 +278,8 @@ const editableMemberRoleOptions = computed<
 ])
 
 function projectMemberDisplayName(member: ProjectMember) {
-  return member.user_username || member.user_email
+  const name = member.user_username || member.user_email
+  return member.role === 'admin' ? `${name}（管理员）` : name
 }
 
 function openCreateDialog() {
@@ -336,35 +354,15 @@ async function loadSelectedProjectModels() {
 }
 
 async function loadProjectModelOptions() {
-  const [models, channels] = await Promise.all([getProviderModels(), getChannels()])
-  providerModelOptions.value = models
-  channelOptions.value = channels
+  channelOptions.value = await getChannels()
 }
 
 function resetProjectModelForm() {
-  editingProjectModel.value = null
   Object.assign(projectModelForm, {
     model: '',
     targetModel: '',
-    targetChannelId: null,
-    enabled: true,
-    description: ''
+    targetChannelId: null
   })
-}
-
-function editProjectModel(row: ProjectModel) {
-  editingProjectModel.value = row
-  Object.assign(projectModelForm, {
-    model: row.model,
-    targetModel: row.target_model,
-    targetChannelId: row.target_channel_id ?? null,
-    enabled: row.enabled,
-    description: row.description
-  })
-}
-
-function targetModelLabel(model: ProviderModel) {
-  return `${model.provider} / ${model.model}`
 }
 
 function channelLabel(channel: Channel) {
@@ -374,10 +372,10 @@ function channelLabel(channel: Channel) {
 async function submitProjectModelForm() {
   const projectId = selectedProject.value?.id
   if (!projectId) return
-  const model = projectModelForm.model.trim()
   const targetModel = projectModelForm.targetModel.trim()
-  if (!model || !targetModel) {
-    ElMessage.error('项目模型名和实际模型必填')
+  const model = projectModelForm.model.trim() || targetModel
+  if (!targetModel) {
+    ElMessage.error('实际模型必填')
     return
   }
   await withLoading(projectModelSaving, async () => {
@@ -385,17 +383,10 @@ async function submitProjectModelForm() {
       const payload = {
         model,
         target_model: targetModel,
-        target_channel_id: projectModelForm.targetChannelId,
-        enabled: projectModelForm.enabled,
-        description: projectModelForm.description.trim()
+        target_channel_id: projectModelForm.targetChannelId
       }
-      if (editingProjectModel.value) {
-        await updateProjectModel(projectId, editingProjectModel.value.model, payload)
-        ElMessage.success(t('projectUpdated'))
-      } else {
-        await createProjectModel(projectId, payload)
-        ElMessage.success(t('projectCreated'))
-      }
+      await createProjectModel(projectId, payload)
+      ElMessage.success(t('projectCreated'))
       resetProjectModelForm()
       await loadSelectedProjectModels()
       await reload()
@@ -408,11 +399,11 @@ async function submitProjectModelForm() {
 async function confirmDeleteProjectModel(row: ProjectModel) {
   const projectId = selectedProject.value?.id
   if (!projectId) return
-  const confirmed = await confirmDialog(
-    `删除项目模型 ${row.model}？`,
-    t('confirmDelete'),
-    { confirmText: t('delete'), danger: true, type: 'warning' }
-  )
+  const confirmed = await confirmDialog(`删除项目模型 ${row.model}？`, t('confirmDelete'), {
+    confirmText: t('delete'),
+    danger: true,
+    type: 'warning'
+  })
   if (!confirmed) return
   await withLoadingValue(deletingProjectModelName, row.model, null, async () => {
     try {
@@ -734,25 +725,13 @@ onMounted(loadServicePolicy)
           </template>
         </el-table-column>
         <el-table-column
-          :label="t('userApiKeyCount')"
-          min-width="86"
-          align="center"
-          header-align="center"
-        >
-          <template #default="{ row }">
-            <span class="project-count-cell">{{ row.user_key_count.toLocaleString(locale) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="模型数"
+          :label="t('modelCount')"
           min-width="76"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
-            <span class="project-count-cell">{{
-              row.project_model_count.toLocaleString(locale)
-            }}</span>
+            <span class="project-count-cell">{{ formatProjectModelCount(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -797,12 +776,7 @@ onMounted(loadServicePolicy)
             </button>
           </template>
         </el-table-column>
-        <el-table-column
-          :label="t('actions')"
-          min-width="286"
-          align="center"
-          header-align="center"
-        >
+        <el-table-column :label="t('actions')" min-width="286" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -972,31 +946,32 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="modelsDialogVisible"
       class="user-admin-dialog project-models-dialog"
-      title="项目模型"
-      width="920px"
+      title="项目可用模型"
+      width="760px"
     >
       <div class="project-model-panel">
-        <el-form class="project-model-form" label-position="top" @submit.prevent="submitProjectModelForm">
-          <el-form-item label="项目模型名">
-            <el-input v-model="projectModelForm.model" placeholder="例如 company-chat" />
-          </el-form-item>
+        <el-form
+          class="project-model-form"
+          label-position="top"
+          @submit.prevent="submitProjectModelForm"
+        >
           <el-form-item label="实际模型">
             <el-select
               v-model="projectModelForm.targetModel"
               filterable
               allow-create
               default-first-option
-              placeholder="选择或输入实际上游模型"
+              placeholder="选择实际上游模型"
             >
               <el-option
-                v-for="item in providerModelOptions"
-                :key="`${item.provider}:${item.model}`"
-                :label="targetModelLabel(item)"
-                :value="item.model"
+                v-for="model in channelModelOptions"
+                :key="model"
+                :label="model"
+                :value="model"
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="指定上游通道（高级，可选）">
+          <el-form-item label="指定上游通道（可选）">
             <el-select
               v-model="projectModelForm.targetChannelId"
               clearable
@@ -1011,22 +986,25 @@ onMounted(loadServicePolicy)
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="描述">
-            <el-input v-model="projectModelForm.description" placeholder="可选" />
-          </el-form-item>
-          <el-form-item label="状态">
-            <el-switch v-model="projectModelForm.enabled" />
+          <el-form-item label="模型别名（可选）">
+            <el-input v-model="projectModelForm.model" placeholder="例如 company-chat" />
           </el-form-item>
           <div class="project-model-actions">
-            <el-button @click="resetProjectModelForm">{{ t('cancel') }}</el-button>
             <el-button type="primary" :loading="projectModelSaving" @click="submitProjectModelForm">
-              {{ editingProjectModel ? t('save') : t('create') }}
+              {{ t('create') }}
             </el-button>
           </div>
         </el-form>
 
         <div class="service-table-panel project-model-table-panel">
+          <div
+            v-if="!projectModelsLoading && selectedProjectModels.length === 0"
+            class="project-model-empty-hint"
+          >
+            不设置模型时，当前项目可使用全部模型
+          </div>
           <el-table
+            v-else
             v-loading="projectModelsLoading"
             class="admin-table service-table"
             :data="selectedProjectModels"
@@ -1034,46 +1012,38 @@ onMounted(loadServicePolicy)
             row-key="id"
             stripe
           >
-            <el-table-column label="项目模型" prop="model" min-width="160" />
-            <el-table-column label="实际模型" prop="target_model" min-width="180" />
-            <el-table-column label="指定通道" min-width="160">
+            <el-table-column label="项目模型" prop="model" min-width="150" show-overflow-tooltip />
+            <el-table-column
+              label="实际模型"
+              prop="target_model"
+              min-width="170"
+              show-overflow-tooltip
+            />
+            <el-table-column label="指定通道" width="132" show-overflow-tooltip>
               <template #default="{ row }">
                 <span>{{ row.target_channel_name || '自动选择' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="88" align="center" header-align="center">
+            <el-table-column :label="t('createdAt')" width="132">
               <template #default="{ row }">
-                <el-tag :type="row.enabled ? 'success' : 'info'" effect="plain">
-                  {{ row.enabled ? t('enabled') : t('disabled') }}
-                </el-tag>
+                <span class="user-time-cell project-model-time-cell">{{
+                  formatCompactDateTime(row.created_at)
+                }}</span>
               </template>
             </el-table-column>
-            <el-table-column
-              :label="t('actions')"
-              min-width="116"
-              align="center"
-              header-align="center"
-            >
+            <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
               <template #default="{ row }">
                 <div class="table-row-actions">
-                  <el-button
-                    class="admin-action-button compact-row-action"
-                    :aria-label="t('edit')"
-                    :icon="Edit"
-                    @click="editProjectModel(row)"
-                  >
-                    {{ t('actionEdit') }}
-                  </el-button>
-                  <el-button
-                    class="admin-action-button compact-row-action"
-                    type="danger"
-                    :aria-label="t('delete')"
-                    :icon="Delete"
-                    :loading="deletingProjectModelName === row.model"
-                    @click="confirmDeleteProjectModel(row)"
-                  >
-                    {{ t('actionDelete') }}
-                  </el-button>
+                  <el-tooltip :content="t('delete')" placement="top" :show-after="600">
+                    <el-button
+                      class="admin-action-button compact-row-action project-member-delete-action"
+                      type="danger"
+                      :aria-label="t('delete')"
+                      :icon="Delete"
+                      :loading="deletingProjectModelName === row.model"
+                      @click="confirmDeleteProjectModel(row)"
+                    />
+                  </el-tooltip>
                 </div>
               </template>
             </el-table-column>
@@ -1086,7 +1056,7 @@ onMounted(loadServicePolicy)
       v-model="membersDialogVisible"
       class="user-admin-dialog project-members-dialog"
       :title="t('projectMembers')"
-      width="860px"
+      width="820px"
     >
       <div class="project-keys-dialog-body project-member-panel">
         <el-form class="project-member-add-form" @submit.prevent="submitAddProjectMember">
@@ -1150,7 +1120,7 @@ onMounted(loadServicePolicy)
             row-key="id"
             stripe
           >
-            <el-table-column :label="t('username')" width="112">
+            <el-table-column :label="t('username')" width="180">
               <template #default="{ row }">
                 <span class="project-owner-cell">
                   <el-icon><UserFilled /></el-icon>
@@ -1158,19 +1128,7 @@ onMounted(loadServicePolicy)
                 </span>
               </template>
             </el-table-column>
-            <el-table-column
-              :label="t('memberRole')"
-              width="88"
-              align="center"
-              header-align="center"
-            >
-              <template #default="{ row }">
-                <el-tag class="static-state-tag" effect="plain">
-                  {{ memberRoleText(row.role) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('apiKey')" min-width="250">
+            <el-table-column :label="t('apiKey')" width="260">
               <template #default="{ row }">
                 <div v-if="row.api_key" class="user-key-cell project-member-key-cell">
                   <code class="user-key-value">{{ maskApiKey(row.api_key) }}</code>
@@ -1186,40 +1144,40 @@ onMounted(loadServicePolicy)
                 <span v-else class="user-time-cell is-empty">-</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('createdAt')" width="116">
+            <el-table-column :label="t('createdAt')" width="124">
               <template #default="{ row }">
-                <span class="user-time-cell">{{ formatCompactDateTime(row.created_at) }}</span>
+                <span class="user-time-cell project-member-time-cell">{{
+                  formatCompactDateTime(row.created_at)
+                }}</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('lastActiveAt')" width="116">
+            <el-table-column :label="t('lastActiveAt')" width="124">
               <template #default="{ row }">
-                <span v-if="row.last_active_at" class="user-time-cell">{{
+                <span v-if="row.last_active_at" class="user-time-cell project-member-time-cell">{{
                   formatCompactDateTime(row.last_active_at)
                 }}</span>
-                <span v-else class="user-time-cell project-member-empty-time is-empty">
+                <span
+                  v-else
+                  class="user-time-cell project-member-time-cell project-member-empty-time is-empty"
+                >
                   {{ t('neverActive') }}
                 </span>
               </template>
             </el-table-column>
-            <el-table-column
-              :label="t('actions')"
-              min-width="64"
-              align="center"
-              header-align="center"
-            >
+            <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
               <template #default="{ row }">
                 <div class="table-row-actions">
-                  <el-button
-                    v-if="row.role !== 'owner'"
-                    class="admin-action-button compact-row-action"
-                    type="danger"
-                    :aria-label="t('delete')"
-                    :icon="Delete"
-                    :loading="deletingMemberId === row.id"
-                    @click="confirmDeleteProjectMember(row)"
-                  >
-                    {{ t('actionDelete') }}
-                  </el-button>
+                  <el-tooltip :content="t('delete')" placement="top" :show-after="600">
+                    <el-button
+                      v-if="row.role !== 'owner'"
+                      class="admin-action-button compact-row-action project-member-delete-action"
+                      type="danger"
+                      :aria-label="t('delete')"
+                      :icon="Delete"
+                      :loading="deletingMemberId === row.id"
+                      @click="confirmDeleteProjectMember(row)"
+                    />
+                  </el-tooltip>
                 </div>
               </template>
             </el-table-column>
@@ -1332,7 +1290,7 @@ onMounted(loadServicePolicy)
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr);
+  grid-template-columns: minmax(130px, 0.8fr) minmax(190px, 1.1fr) minmax(150px, 0.9fr) auto;
 }
 
 .project-model-form :deep(.el-form-item) {
@@ -1345,8 +1303,25 @@ onMounted(loadServicePolicy)
   justify-content: flex-end;
 }
 
+.project-model-actions .el-button {
+  min-width: 82px;
+}
+
 .project-model-table-panel {
   margin: 0;
+}
+
+.project-model-time-cell {
+  white-space: nowrap;
+}
+
+.project-model-empty-hint {
+  align-items: center;
+  color: #64748b;
+  display: flex;
+  font-size: 13px;
+  justify-content: center;
+  min-height: 120px;
 }
 
 .project-table :deep(.project-row-is-disabled td) {
@@ -1615,9 +1590,18 @@ onMounted(loadServicePolicy)
 }
 
 .project-member-key-cell .user-key-value {
-  flex: 1 1 auto;
-  max-width: 178px;
+  flex: 0 0 auto;
+  font-size: 13px;
+  max-width: none;
   min-width: 0;
+}
+
+.project-member-delete-action.el-button {
+  width: 28px;
+}
+
+.project-member-time-cell {
+  white-space: nowrap;
 }
 
 .project-member-empty-time {
@@ -1685,6 +1669,5 @@ onMounted(loadServicePolicy)
   .project-member-add-form {
     grid-template-columns: 1fr;
   }
-
 }
 </style>

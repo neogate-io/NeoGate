@@ -269,7 +269,7 @@ async fn relay_openai(
         output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
     let resolved =
-        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
+        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
             .await?;
     let upstream_body = if resolved.target_model == meta.model {
         body.clone()

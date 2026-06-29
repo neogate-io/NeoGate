@@ -46,7 +46,7 @@ pub(super) async fn relay_openai_image(
 ) -> AppResult<Response> {
     let meta = image_request_meta(path, &headers, &body)?;
     let resolved =
-        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
+        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
             .await?;
     let content_type = meta.content_type.to_str().unwrap_or("");
     let upstream_body = if resolved.target_model == meta.model {

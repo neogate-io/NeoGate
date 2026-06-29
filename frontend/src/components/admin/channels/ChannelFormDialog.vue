@@ -61,7 +61,8 @@ const visibleEndpointRows = computed(() =>
   visibleEndpointProtocols.value.map((protocol) => ({
     protocol,
     label: endpointBaseUrlLabel(protocol),
-    placeholder: protocol === 'anthropic' ? t('anthropicBaseUrlPlaceholder') : t('baseUrlPlaceholder')
+    placeholder:
+      protocol === 'anthropic' ? t('anthropicBaseUrlPlaceholder') : t('baseUrlPlaceholder')
   }))
 )
 const selectedModels = computed(() =>
@@ -92,22 +93,6 @@ function endpointBaseUrlLabel(protocol: EndpointProtocol) {
   if (protocol === 'openai') return t('openAiBaseUrl')
   if (protocol === 'anthropic') return t('anthropicBaseUrl')
   return t('baseUrl')
-}
-
-function maskedKey(key: ChannelKey) {
-  const prefix = key.key_prefix.trim()
-  if (!prefix) return '********'
-  return `${prefix}${'********'}`
-}
-
-function keyHealthType(key: ChannelKey) {
-  if (!key.enabled) return 'info'
-  return key.healthy ? 'success' : 'danger'
-}
-
-function keyHealthLabel(key: ChannelKey) {
-  if (!key.enabled) return t('disabled')
-  return key.healthy ? t('healthy') : t('unhealthy')
 }
 </script>
 
@@ -211,17 +196,15 @@ function keyHealthLabel(key: ChannelKey) {
           <el-table :data="existingKeys" class="existing-keys-table" size="small" row-key="id">
             <el-table-column :label="t('upstreamApiKey')" min-width="0">
               <template #default="{ row }: { row: ChannelKey }">
-                <code class="existing-key-value">{{ maskedKey(row) }}</code>
+                <code class="existing-key-value">{{ row.masked_key }}</code>
               </template>
             </el-table-column>
-            <el-table-column :label="t('status')" width="76">
+            <el-table-column :label="t('createdAt')" width="132">
               <template #default="{ row }: { row: ChannelKey }">
-                <el-tag :type="keyHealthType(row)" effect="light" round>
-                  {{ keyHealthLabel(row) }}
-                </el-tag>
+                <span class="existing-key-time">{{ formatCompactDateTime(row.created_at) }}</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('lastUsedAt')" width="106">
+            <el-table-column :label="t('lastUsedAt')" width="132">
               <template #default="{ row }: { row: ChannelKey }">
                 <span class="existing-key-time">{{ formatCompactDateTime(row.last_used_at) }}</span>
               </template>

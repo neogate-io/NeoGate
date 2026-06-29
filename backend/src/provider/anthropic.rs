@@ -61,7 +61,7 @@ pub(crate) async fn anthropic_messages(
         state.billing.default_output_tokens(),
     )?;
     let resolved =
-        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
+        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
             .await?;
     let upstream_body = if resolved.target_model == meta.model {
         body.clone()
@@ -276,7 +276,7 @@ pub(crate) async fn create_anthropic_message_batch(
     let model = batch_model(&body)?;
     let request_count = batch_request_count(&body)?;
     let resolved =
-        crate::project_models::resolve_project_model(&state.db.pool, auth.project_id, &model)
+        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &model)
             .await?;
     let upstream_body = if resolved.target_model == model {
         body.clone()

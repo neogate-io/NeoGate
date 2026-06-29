@@ -1,4 +1,10 @@
-import type { CursorPage, Project, ProjectMember, ProjectModel, ProjectStatus } from '../types/admin'
+import type {
+  CursorPage,
+  Project,
+  ProjectMember,
+  ProjectModel,
+  ProjectStatus
+} from '../types/admin'
 import { adminRequest } from './request'
 
 export type ProjectPage = CursorPage<Project>
@@ -109,7 +115,7 @@ export function createProjectModel(
     model: string
     target_model: string
     target_channel_id?: number | null
-    enabled: boolean
+    enabled?: boolean
     description?: string
   }
 ) {
@@ -136,10 +142,9 @@ export function updateProjectModel(
       method: 'PATCH',
       body: JSON.stringify({
         ...payload,
-        target_channel_id:
-          Object.prototype.hasOwnProperty.call(payload, 'target_channel_id')
-            ? payload.target_channel_id
-            : undefined
+        target_channel_id: Object.prototype.hasOwnProperty.call(payload, 'target_channel_id')
+          ? payload.target_channel_id
+          : undefined
       })
     }
   )

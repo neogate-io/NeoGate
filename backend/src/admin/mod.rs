@@ -37,7 +37,7 @@ use crate::{
     id::DbId,
     input::{bounded_limit, trimmed_non_empty},
     pagination::{created_id_cursor_page, parse_created_id_cursor},
-    project_models::{
+    project::models::{
         create_project_model, delete_project_model, list_project_models, update_project_model,
         ProjectModelRecord, UpdateProjectModelRequest, UpsertProjectModelRequest,
     },

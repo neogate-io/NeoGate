@@ -75,7 +75,7 @@ async fn app_model_options(
     Query(query): Query<AppModelOptionsQuery>,
 ) -> AppResult<Json<Vec<AppModelOption>>> {
     if let Some(project_id) = app_model_options_project_id(&state, query.user_key_id).await? {
-        if crate::project_models::project_has_models(&state.db.pool, project_id).await? {
+        if crate::project::models::project_has_models(&state.db.pool, project_id).await? {
             return Ok(Json(project_app_model_options(&state, project_id).await?));
         }
     }

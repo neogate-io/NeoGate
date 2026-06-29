@@ -151,8 +151,22 @@ pub async fn create_project_model(
     .bind(req.enabled)
     .bind(description)
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(map_project_model_write_error)?;
     get_project_model(pool, project_id, row.try_get("id")?).await
+}
+
+fn map_project_model_write_error(err: sqlx::Error) -> AppError {
+    if has_database_constraint(&err, "project_model_project_id_model_key") {
+        return AppError::Conflict("同一项目下模型别名不能重复".to_string());
+    }
+    AppError::Sqlx(err)
+}
+
+fn has_database_constraint(err: &sqlx::Error, constraint: &str) -> bool {
+    err.as_database_error()
+        .and_then(|db_error| db_error.constraint())
+        == Some(constraint)
 }
 
 pub async fn update_project_model(
@@ -168,8 +182,8 @@ pub async fn update_project_model(
     .bind(project_id)
     .bind(&current_model)
     .fetch_optional(pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    .await?;
+    let existing = existing.ok_or(AppError::NotFound)?;
     let id: DbId = existing.try_get("id")?;
     let model = req
         .model

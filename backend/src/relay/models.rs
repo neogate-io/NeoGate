@@ -114,7 +114,7 @@ async fn available_models(
     protocols: Option<&[UpstreamProtocol]>,
 ) -> AppResult<Vec<AvailableModel>> {
     let project_models =
-        crate::project_models::list_project_models(&state.db.pool, auth.project_id).await?;
+        crate::project::models::list_project_models(&state.db.pool, auth.project_id).await?;
     if !project_models.is_empty() {
         return Ok(project_models
             .into_iter()

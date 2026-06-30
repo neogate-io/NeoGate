@@ -45,14 +45,25 @@ CREATE TABLE routing_decision (
     selected_channel_id BIGINT REFERENCES channel(id) ON DELETE SET NULL,
     decision_source TEXT NOT NULL CHECK (decision_source IN ('rules', 'classifier', 'fallback')),
     tier TEXT NOT NULL CHECK (tier IN ('simple', 'standard', 'advanced')),
+    task_type TEXT NOT NULL DEFAULT 'unknown',
     confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
     reason TEXT NOT NULL DEFAULT '',
+    matched_rules JSONB NOT NULL DEFAULT '[]'::JSONB,
+    candidate_scores JSONB NOT NULL DEFAULT '[]'::JSONB,
+    fallback_reason TEXT,
+    classifier_model TEXT,
     latency_ms BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_routing_decision_project_created
     ON routing_decision(project_id, created_at DESC, id DESC);
+
+CREATE INDEX idx_routing_decision_task_type_created
+    ON routing_decision(project_id, task_type, created_at DESC, id DESC);
+
+CREATE INDEX idx_routing_decision_tier_created
+    ON routing_decision(project_id, tier, created_at DESC, id DESC);
 
 ALTER TABLE usage
     ADD COLUMN upstream_model TEXT,

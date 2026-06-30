@@ -1343,10 +1343,10 @@ onMounted(loadServicePolicy)
             </div>
           </el-tab-pane>
 
-          <el-tab-pane label="智能模型" name="smart">
+          <el-tab-pane label="自动选择模型" name="smart">
             <div class="smart-route-panel">
               <p class="project-model-help">
-                添加 auto 智能模型后，用户在客户端选择 auto 模型即可使用智能选择。系统会根据请求内容，在下方候选模型中自动选择一个实际模型；未添加候选时，auto 不会生效。
+                添加候选模型后，用户在客户端选择 auto 模型即可实现自动选择。系统会在候选模型中按优先级和权重选择实际模型。未添加候选模型时，自动选择功能不生效。
               </p>
               <el-form
                 class="smart-model-form"
@@ -1426,7 +1426,7 @@ onMounted(loadServicePolicy)
                   max-height="46vh"
                   stripe
                 >
-                  <el-table-column label="档位" width="72">
+                  <el-table-column label="档位" width="64">
                     <template #default="{ row }">
                       <span>{{ tierLabel(row.tier) }}</span>
                     </template>
@@ -1434,12 +1434,22 @@ onMounted(loadServicePolicy)
                   <el-table-column
                     label="实际模型"
                     prop="targetModel"
-                    min-width="220"
+                    width="168"
                     show-overflow-tooltip
                   />
-                  <el-table-column label="指定通道" width="138" show-overflow-tooltip>
+                  <el-table-column label="指定通道" width="132" show-overflow-tooltip>
                     <template #default="{ row }">
                       <span>{{ candidateChannelLabel(row) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="优先级" width="64" align="center">
+                    <template #default="{ row }">
+                      <span>{{ row.priority }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="权重" width="56" align="center">
+                    <template #default="{ row }">
+                      <span>{{ row.weight }}</span>
                     </template>
                   </el-table-column>
                   <el-table-column :label="t('createdAt')" width="104">
@@ -1449,7 +1459,7 @@ onMounted(loadServicePolicy)
                       }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
+                  <el-table-column :label="t('actions')" width="58" align="center" header-align="center">
                     <template #default="{ $index }">
                       <div class="table-row-actions">
                         <el-tooltip :content="t('delete')" placement="top" :show-after="600">
@@ -1506,10 +1516,10 @@ onMounted(loadServicePolicy)
             <el-table-column
               label="推荐模型"
               prop="target_model"
-              min-width="190"
+              min-width="160"
               show-overflow-tooltip
             />
-            <el-table-column label="指定通道" width="130" show-overflow-tooltip>
+            <el-table-column label="指定通道" width="112" show-overflow-tooltip>
               <template #default="{ row }">
                 <span>{{ suggestionChannelLabel(row) }}</span>
               </template>

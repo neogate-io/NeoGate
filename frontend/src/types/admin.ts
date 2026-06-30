@@ -102,6 +102,56 @@ export type ProjectMember = {
   updated_at: string
 }
 
+export type ProjectModelRoutingTaskType =
+  | 'chat'
+  | 'code'
+  | 'reasoning'
+  | 'translation'
+  | 'summarization'
+  | 'extraction'
+  | 'structured_output'
+  | 'tool_use'
+  | 'vision'
+  | 'long_context'
+  | 'unknown'
+
+export type RoutingMatchedRule = {
+  id: string
+  category: string
+  weight: number
+  reason: string
+}
+
+export type RoutingCandidateScore = {
+  candidate_id: number
+  target_model: string
+  tier: ProjectModelCandidateTier
+  priority: number
+  weight: number
+  score: number
+  reason: string
+}
+
+export type RoutingDecision = {
+  id: number
+  project_id: number
+  project_model_id?: number | null
+  requested_model: string
+  selected_model: string
+  selected_channel_id?: number | null
+  decision_source: 'rules' | 'classifier' | 'fallback' | string
+  tier: ProjectModelCandidateTier
+  task_type: ProjectModelRoutingTaskType | string
+  confidence: number
+  reason: string
+  matched_rules: RoutingMatchedRule[]
+  candidate_scores: RoutingCandidateScore[]
+  fallback_reason?: string | null
+  classifier_model?: string | null
+  latency_ms: number
+  created_at: string
+}
+
 export type ProjectModel = {
   id: number
   project_id: number

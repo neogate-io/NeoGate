@@ -322,9 +322,9 @@ async function exportUsage() {
                 </div>
               </dl>
             </section>
-            <section v-if="row.routing" class="usage-detail-section">
+            <section v-if="row.routing" class="usage-detail-section usage-routing-section">
               <h4>{{ t('autoRouting') }}</h4>
-              <dl class="usage-detail-list">
+              <dl class="usage-detail-list usage-routing-list">
                 <div>
                   <dt>{{ t('model') }}</dt>
                   <dd>{{ row.routing.requested_model }} -> {{ row.routing.selected_model }}</dd>
@@ -337,17 +337,17 @@ async function exportUsage() {
                   <dt>{{ t('routingTask') }}</dt>
                   <dd>{{ routingTaskText(row.routing.task_type) }}</dd>
                 </div>
-                <div>
+                <div v-if="row.routing.candidate_summary.length">
+                  <dt>{{ t('routingCandidates') }}</dt>
+                  <dd>{{ routingCandidatesText(row) }}</dd>
+                </div>
+                <div class="usage-routing-wide">
                   <dt>{{ t('routingReason') }}</dt>
                   <dd>{{ routingReasonText(row) }}</dd>
                 </div>
-                <div v-if="row.routing.matched_rule_ids.length" class="usage-detail-wide">
+                <div v-if="row.routing.matched_rule_ids.length" class="usage-routing-wide">
                   <dt>{{ t('routingRules') }}</dt>
                   <dd>{{ routingRulesText(row) }}</dd>
-                </div>
-                <div v-if="row.routing.candidate_summary.length" class="usage-detail-wide">
-                  <dt>{{ t('routingCandidates') }}</dt>
-                  <dd>{{ routingCandidatesText(row) }}</dd>
                 </div>
               </dl>
             </section>
@@ -841,6 +841,21 @@ async function exportUsage() {
   margin: 0;
 }
 
+.usage-routing-section {
+  gap: 8px;
+}
+
+.usage-routing-list {
+  gap: 8px 28px;
+  grid-template-columns:
+    minmax(220px, max-content) minmax(120px, max-content) minmax(150px, max-content)
+    minmax(180px, 1fr);
+}
+
+.usage-routing-list .usage-routing-wide {
+  grid-column: 1 / -1;
+}
+
 .usage-detail-list {
   display: grid;
   gap: 7px 14px;
@@ -912,6 +927,14 @@ async function exportUsage() {
 
   .usage-detail-section {
     gap: 9px;
+  }
+
+  .usage-routing-list {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-routing-list .usage-routing-wide {
+    grid-column: auto;
   }
 
   .usage-detail-list {

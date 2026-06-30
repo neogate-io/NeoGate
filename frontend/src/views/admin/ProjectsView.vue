@@ -207,10 +207,14 @@ const channelModelOptions = computed(() => {
   const seen = new Set<string>()
   const options: string[] = []
   for (const channel of channelOptions.value) {
-    for (const item of channel.models) {
-      if (seen.has(item.model)) continue
-      seen.add(item.model)
-      options.push(item.model)
+    if (!channel.enabled) continue
+    for (const endpoint of channel.endpoints) {
+      if (!endpoint.enabled) continue
+      for (const model of endpoint.models) {
+        if (seen.has(model)) continue
+        seen.add(model)
+        options.push(model)
+      }
     }
   }
   return options.sort((a, b) => a.localeCompare(b))

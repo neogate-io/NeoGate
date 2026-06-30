@@ -1,4 +1,4 @@
-use axum::http::{header::ACCEPT, HeaderMap, HeaderValue};
+use axum::http::{header::ACCEPT, HeaderMap, HeaderName, HeaderValue};
 use bytes::Bytes;
 use serde_json::Value;
 
@@ -40,18 +40,24 @@ impl ProviderAdapter for JdcloudAdapter {
             extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
         let (route, body, response_mode) = if route == RelayRoute::Responses {
+            let route = RelayRoute::ChatCompletions;
             (
-                RelayRoute::ChatCompletions,
-                jdcloud_chat_cache_body(bridge::openai_response_to_openai_chat(body)?, route)?,
+                route,
+                jdcloud_chat_body(bridge::openai_response_to_openai_chat(body)?, route)?,
                 AdapterResponseMode::OpenAiChatAsOpenAiResponse,
             )
         } else {
             (
                 route,
-                jdcloud_chat_cache_body(body, route)?,
+                jdcloud_chat_body(body, route)?,
                 AdapterResponseMode::Passthrough,
             )
         };
+        if let Some(session_id) = session_id_from_body(&body)? {
+            if let Ok(value) = HeaderValue::from_str(&session_id) {
+                extra_headers.insert(HeaderName::from_static("session_id"), value);
+            }
+        }
 
         Ok(PreparedUpstreamRequest {
             url: self.resolve_url(&upstream.base_url, route),
@@ -63,27 +69,87 @@ impl ProviderAdapter for JdcloudAdapter {
     }
 }
 
-fn jdcloud_chat_cache_body(body: Bytes, route: RelayRoute) -> AppResult<Bytes> {
-    let Some(prompt_cache_key) = prompt_cache_key_from_body(&body)? else {
-        return Ok(body);
-    };
+fn jdcloud_chat_body(body: Bytes, route: RelayRoute) -> AppResult<Bytes> {
+    let prompt_cache_key = prompt_cache_key_from_body(&body)?;
     let mut value: Value = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let Some(object) = value.as_object_mut() else {
         return Ok(body);
     };
     if route == RelayRoute::ChatCompletions {
-        reorder_system_cache_prefix(object.get_mut("messages"));
+        if prompt_cache_key.is_some() {
+            reorder_system_cache_prefix(object.get_mut("messages"));
+        }
+        sanitize_chat_messages(object.get_mut("messages"));
+        sanitize_tools(object.get_mut("tools"));
+        object.remove("stream_options");
     }
-    let has_session_id = object
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if !has_session_id {
-        object.insert("session_id".to_string(), Value::String(prompt_cache_key));
+    if let Some(prompt_cache_key) = prompt_cache_key {
+        let has_session_id = object
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if !has_session_id {
+            object.insert("session_id".to_string(), Value::String(prompt_cache_key));
+        }
+        object.remove("prompt_cache_key");
     }
     Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
+fn sanitize_chat_messages(messages: Option<&mut Value>) {
+    let Some(Value::Array(messages)) = messages else {
+        return;
+    };
+    for message in messages {
+        let Some(message) = message.as_object_mut() else {
+            continue;
+        };
+        if let Some(content) = message.get_mut("content") {
+            sanitize_chat_content(content);
+        }
+    }
+}
+
+fn sanitize_chat_content(content: &mut Value) {
+    let Value::Array(items) = content else {
+        return;
+    };
+    for item in items.iter_mut() {
+        if let Some(object) = item.as_object_mut() {
+            object.remove("cache_control");
+        }
+    }
+    if let Some(text) = text_only_content(items) {
+        *content = Value::String(text);
+    }
+}
+
+fn text_only_content(items: &[Value]) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in items {
+        match item {
+            Value::String(text) => parts.push(text.clone()),
+            Value::Object(object) if object.get("type").and_then(Value::as_str) == Some("text") => {
+                parts.push(object.get("text").and_then(Value::as_str)?.to_string());
+            }
+            _ => return None,
+        }
+    }
+    Some(parts.join("\n"))
+}
+
+fn sanitize_tools(tools: Option<&mut Value>) {
+    let Some(Value::Array(tools)) = tools else {
+        return;
+    };
+    for tool in tools {
+        let Some(tool) = tool.as_object_mut() else {
+            continue;
+        };
+        tool.remove("cache_control");
+    }
 }
 
 fn reorder_system_cache_prefix(messages: Option<&mut Value>) {
@@ -161,6 +227,17 @@ fn prompt_cache_key_from_body(body: &[u8]) -> AppResult<Option<String>> {
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     Ok(value
         .get("prompt_cache_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string))
+}
+
+fn session_id_from_body(body: &[u8]) -> AppResult<Option<String>> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    Ok(value
+        .get("session_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -292,8 +369,12 @@ mod tests {
             .unwrap();
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
 
-        assert_eq!(value["prompt_cache_key"], "anthropic-cache-1");
+        assert!(value.get("prompt_cache_key").is_none());
         assert_eq!(value["session_id"], "anthropic-cache-1");
+        assert_eq!(
+            prepared.extra_headers.get("session_id").unwrap(),
+            "anthropic-cache-1"
+        );
     }
 
     #[test]
@@ -313,8 +394,88 @@ mod tests {
             .unwrap();
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
 
-        assert_eq!(value["prompt_cache_key"], "anthropic-cache-1");
+        assert!(value.get("prompt_cache_key").is_none());
         assert_eq!(value["session_id"], "client-session");
+        assert_eq!(
+            prepared.extra_headers.get("session_id").unwrap(),
+            "client-session"
+        );
+    }
+
+    #[test]
+    fn jdcloud_sanitizes_anthropic_cache_extensions_from_chat_body() {
+        let body = Bytes::from_static(
+            br#"{"model":"GLM-5.1","messages":[{"role":"system","content":[{"type":"text","text":"stable","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}},{"type":"text","text":"there"}]}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}},"cache_control":{"type":"ephemeral"}}],"prompt_cache_key":"anthropic-cache-1","stream_options":{"include_usage":true}}"#,
+        );
+        let prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::ChatCompletions,
+                body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert_eq!(value["messages"][0]["content"], "stable");
+        assert_eq!(value["messages"][1]["content"], "hi\nthere");
+        assert!(!value["messages"][0]["content"]
+            .to_string()
+            .contains("cache_control"));
+        assert!(value["tools"][0].get("cache_control").is_none());
+        assert!(value.get("prompt_cache_key").is_none());
+        assert!(value.get("stream_options").is_none());
+        assert_eq!(value["session_id"], "anthropic-cache-1");
+        assert_eq!(
+            prepared.extra_headers.get("session_id").unwrap(),
+            "anthropic-cache-1"
+        );
+    }
+
+    #[test]
+    fn jdcloud_keeps_session_id_stable_for_matching_cache_blocks() {
+        let first = bridge::messages_to_openai_chat(Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Stable system","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Fresh question A"}],"max_tokens":16}"#,
+        ))
+        .unwrap();
+        let second = bridge::messages_to_openai_chat(Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Stable system","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Fresh question B"}],"max_tokens":16}"#,
+        ))
+        .unwrap();
+
+        let first = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::ChatCompletions,
+                first,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let second = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::ChatCompletions,
+                second,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        let first_value: Value = serde_json::from_slice(&first.body).unwrap();
+        let second_value: Value = serde_json::from_slice(&second.body).unwrap();
+
+        assert_eq!(first_value["session_id"], second_value["session_id"]);
+        assert_eq!(
+            first.extra_headers.get("session_id"),
+            second.extra_headers.get("session_id")
+        );
+        assert_eq!(first_value["messages"][0]["content"], "Stable system");
+        assert_eq!(first_value["messages"][1]["content"], "Fresh question A");
+        assert_eq!(second_value["messages"][1]["content"], "Fresh question B");
     }
 
     #[test]
@@ -333,14 +494,11 @@ mod tests {
             )
             .unwrap();
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
-        let content = value["messages"][0]["content"].as_array().unwrap();
 
-        assert_eq!(content[0]["text"], "stable-a");
-        assert_eq!(content[1]["text"], "stable-b");
-        assert_eq!(content.len(), 2);
-        let user_content = value["messages"][1]["content"].as_array().unwrap();
-        assert_eq!(user_content[0], "hi");
-        assert_eq!(user_content[1]["text"], "volatile");
+        assert_eq!(value["messages"][0]["content"], "stable-a\nstable-b");
+        assert_eq!(value["messages"][1]["content"], "hi\nvolatile");
+        assert_eq!(value["session_id"], "anthropic-cache-1");
+        assert!(value.get("prompt_cache_key").is_none());
     }
 
     #[test]
@@ -359,9 +517,33 @@ mod tests {
             )
             .unwrap();
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
-        let content = value["messages"][0]["content"].as_array().unwrap();
 
-        assert_eq!(content[0]["text"], "stable");
-        assert_eq!(content[1]["text"], "volatile");
+        assert_eq!(value["messages"][0]["content"], "stable\nvolatile");
+    }
+
+    #[test]
+    fn jdcloud_responses_fallback_sanitizes_chat_request_body() {
+        let body = Bytes::from_static(
+            br#"{"model":"deepseek-v3.2","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}],"max_output_tokens":16,"prompt_cache_key":"trace-1","stream":true}"#,
+        );
+        let prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::Responses,
+                body,
+                &HeaderMap::new(),
+                true,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert_eq!(prepared.log_path, "/v1/chat/completions");
+        assert!(prepared.url.ends_with("/openai-u/v1/chat/completions"));
+        assert_eq!(value["messages"][0]["content"], "hi");
+        assert_eq!(value["session_id"], "trace-1");
+        assert_eq!(prepared.extra_headers.get("session_id").unwrap(), "trace-1");
+        assert!(value.get("prompt_cache_key").is_none());
+        assert!(value.get("stream_options").is_none());
     }
 }

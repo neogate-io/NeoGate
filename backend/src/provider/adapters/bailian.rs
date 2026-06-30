@@ -25,7 +25,7 @@ impl ProviderAdapter for BailianAdapter {
 
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
         match route {
-            RelayRoute::OpenAiResponses => bailian_responses_url(base_url),
+            RelayRoute::Responses => bailian_responses_url(base_url),
             _ => upstream_url(base_url, route.path()),
         }
     }
@@ -40,9 +40,9 @@ impl ProviderAdapter for BailianAdapter {
         streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
         let (route, body, response_mode) =
-            if route == RelayRoute::OpenAiResponses && upstream.responses_chat_fallback {
+            if route == RelayRoute::Responses && upstream.responses_chat_fallback {
                 (
-                    RelayRoute::OpenAiChatCompletions,
+                    RelayRoute::ChatCompletions,
                     bridge::openai_response_to_openai_chat(body)?,
                     AdapterResponseMode::OpenAiChatAsOpenAiResponse,
                 )
@@ -75,7 +75,7 @@ fn bailian_responses_url(base_url: &str) -> String {
     if base.ends_with("/compatible-mode") {
         return format!("{base}/v1/responses");
     }
-    upstream_url(base, RelayRoute::OpenAiResponses.path())
+    upstream_url(base, RelayRoute::Responses.path())
 }
 
 #[cfg(test)]
@@ -103,21 +103,21 @@ mod tests {
         assert_eq!(
             BAILIAN_ADAPTER.resolve_url(
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                RelayRoute::OpenAiResponses
+                RelayRoute::Responses
             ),
             "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
         );
         assert_eq!(
             BAILIAN_ADAPTER.resolve_url(
                 "https://dashscope.aliyuncs.com/compatible-mode",
-                RelayRoute::OpenAiResponses
+                RelayRoute::Responses
             ),
             "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
         );
         assert_eq!(
             BAILIAN_ADAPTER.resolve_url(
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                RelayRoute::OpenAiChatCompletions
+                RelayRoute::ChatCompletions
             ),
             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         );
@@ -132,7 +132,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(false),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiResponses,
+                RelayRoute::Responses,
                 body.clone(),
                 &HeaderMap::new(),
                 true,
@@ -156,7 +156,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(true),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiResponses,
+                RelayRoute::Responses,
                 body,
                 &HeaderMap::new(),
                 false,

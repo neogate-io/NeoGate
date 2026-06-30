@@ -20,8 +20,7 @@ pub(crate) fn should_wrap_image_stream(provider: &str, stream: bool, path: &str)
 pub(crate) fn is_event_stream(content_type: &HeaderValue) -> bool {
     content_type
         .to_str()
-        .map(|value| value.to_ascii_lowercase().contains("text/event-stream"))
-        .unwrap_or(false)
+        .is_ok_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
 }
 
 pub(crate) fn should_retry_variation_as_edit(

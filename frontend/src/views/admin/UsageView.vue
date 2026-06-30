@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
   CircleCheckFilled,
+  Download,
   Refresh,
   Search,
   WarningFilled
 } from '@element-plus/icons-vue'
-import { getAdminUsage, type AdminUsageStatus, type UsagePage } from '../../api/usage'
+import {
+  downloadAdminUsageCsv,
+  getAdminUsage,
+  type AdminUsageQuery,
+  type AdminUsageStatus,
+  type UsagePage
+} from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
@@ -16,6 +23,7 @@ import { useLocale } from '../../composables/useLocale'
 import type { UsageRecord } from '../../types/admin'
 import {
   cacheWriteTokens,
+  downloadBlob,
   formatDateTime,
   formatDurationMs,
   formatMicroUsd,
@@ -38,6 +46,7 @@ const filters = reactive<UsageFilters>({
   query: '',
   status: 'all'
 })
+const exporting = ref(false)
 const {
   currentPage,
   pageSize,
@@ -54,6 +63,12 @@ const usageQueryRange = computed(() => {
     end: end ? new Date(`${end}T23:59:59.999`).toISOString() : undefined
   }
 })
+const usageBaseQuery = computed<AdminUsageQuery>(() => ({
+  start: usageQueryRange.value.start,
+  end: usageQueryRange.value.end,
+  query: filters.query.trim() || undefined,
+  status: filters.status
+}))
 
 const {
   data: usagePage,
@@ -63,12 +78,9 @@ const {
 } = useAsyncData(
   () =>
     getAdminUsage({
+      ...usageBaseQuery.value,
       page: currentPage.value,
       limit: pageSize.value,
-      start: usageQueryRange.value.start,
-      end: usageQueryRange.value.end,
-      query: filters.query.trim() || undefined,
-      status: filters.status,
       cursor: currentCursor.value
     }),
   { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE } satisfies UsagePage
@@ -111,7 +123,10 @@ function usageStatusTooltip(statusCode?: number | null) {
 }
 
 function relayPathSegments(row: UsageRecord): string[] {
-  if (!row.relay_path) return []
+  if (!row.relay_path) {
+    const label = relayChannelLabel(row)
+    return label === '-' ? [] : [label]
+  }
   return row.relay_path.split(' → ')
 }
 
@@ -133,8 +148,88 @@ function usageUserDisplay(row: UsageRecord) {
   return '-'
 }
 
+function usageModelDisplay(row: UsageRecord) {
+  const model = row.model?.trim()
+  const upstreamModel = row.upstream_model?.trim()
+  if (model && upstreamModel && model !== upstreamModel) return `${model} / ${upstreamModel}`
+  return model || upstreamModel || '-'
+}
+
+function routingTierLabel(tier?: string | null) {
+  if (tier === 'simple') return t('routingTier_simple')
+  if (tier === 'standard') return t('routingTier_standard')
+  if (tier === 'advanced') return t('routingTier_advanced')
+  return tier || '-'
+}
+
+function routingReasonText(row: UsageRecord) {
+  const code = row.routing?.reason_code
+  if (code === 'selected_priority_weight') return t('routingReason_selected_priority_weight')
+  if (code === 'fallback_no_candidate') return t('routingReason_fallback_no_candidate')
+  if (code === 'missing_context') return t('routingReason_missing_context')
+  if (code === 'complex_signal') return t('routingReason_complex_signal')
+  if (code === 'medium_signal') return t('routingReason_medium_signal')
+  if (code === 'simple_signal') return t('routingReason_simple_signal')
+  return code || '-'
+}
+
+function routingTaskText(taskType?: string | null) {
+  if (taskType === 'vision') return t('routingTask_vision')
+  if (taskType === 'tool_use') return t('routingTask_tool_use')
+  if (taskType === 'structured_output') return t('routingTask_structured_output')
+  if (taskType === 'reasoning') return t('routingTask_reasoning')
+  if (taskType === 'code') return t('routingTask_code')
+  if (taskType === 'translation') return t('routingTask_translation')
+  if (taskType === 'summarization') return t('routingTask_summarization')
+  if (taskType === 'extraction') return t('routingTask_extraction')
+  if (taskType === 'long_context') return t('routingTask_long_context')
+  if (taskType === 'chat') return t('routingTask_chat')
+  if (taskType === 'unknown') return t('routingTask_unknown')
+  return taskType || '-'
+}
+
+function routingRuleText(ruleId: string) {
+  if (ruleId === 'missing_context') return t('routingRule_missing_context')
+  if (ruleId === 'has_images') return t('routingRule_has_images')
+  if (ruleId === 'reasoning_effort') return t('routingRule_reasoning_effort')
+  if (ruleId === 'reasoning_keywords') return t('routingRule_reasoning_keywords')
+  if (ruleId === 'very_long_context') return t('routingRule_very_long_context')
+  if (ruleId === 'long_context') return t('routingRule_long_context')
+  if (ruleId === 'has_tools') return t('routingRule_has_tools')
+  if (ruleId === 'has_response_format') return t('routingRule_has_response_format')
+  if (ruleId === 'code_signal') return t('routingRule_code_signal')
+  if (ruleId === 'multi_turn_context') return t('routingRule_multi_turn_context')
+  if (ruleId === 'translation_signal') return t('routingRule_translation_signal')
+  if (ruleId === 'summarization_signal') return t('routingRule_summarization_signal')
+  if (ruleId === 'extraction_signal') return t('routingRule_extraction_signal')
+  if (ruleId === 'short_plain_text') return t('routingRule_short_plain_text')
+  return ruleId
+}
+
+function routingRulesText(row: UsageRecord) {
+  return row.routing?.matched_rule_ids.map(routingRuleText).join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+}
+
+function routingCandidatesText(row: UsageRecord) {
+  return (
+    row.routing?.candidate_summary
+      .map((candidate) => `${candidate.target_model} P${candidate.priority}/W${candidate.weight}`)
+      .join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  )
+}
+
 async function handleSearch() {
   await resetUsageAndReload()
+}
+
+async function exportUsage() {
+  exporting.value = true
+  try {
+    const result = await downloadAdminUsageCsv(usageBaseQuery.value)
+    downloadBlob(result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`, result.blob)
+  } finally {
+    exporting.value = false
+  }
 }
 </script>
 
@@ -183,6 +278,15 @@ async function handleSearch() {
         </el-button>
       </div>
       <div class="usage-toolbar-actions">
+        <el-button
+          class="admin-action-button"
+          :icon="Download"
+          :loading="exporting"
+          :disabled="usagePage.items.length === 0"
+          @click="exportUsage"
+        >
+          {{ t('exportDetails') }}
+        </el-button>
         <el-button class="admin-action-button" :icon="Refresh" :loading="loading" @click="reload">
           {{ t('refresh') }}
         </el-button>
@@ -231,12 +335,9 @@ async function handleSearch() {
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('model')" min-width="120">
+        <el-table-column :label="t('model')" min-width="170">
           <template #default="{ row }">
-            <div class="usage-model">
-              <span class="usage-provider">{{ row.provider }}</span>
-              <span>{{ row.model || '-' }}</span>
-            </div>
+            <span class="usage-model-name">{{ usageModelDisplay(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('latencyColumnHint')" min-width="170">
@@ -315,7 +416,7 @@ async function handleSearch() {
           <template #default="{ row }">
             <el-tooltip :disabled="!row.relay_trace_id" placement="top" :show-after="400" popper-class="usage-trace-tip-popper">
               <template #content>
-                <div class="usage-trace-tip">
+                <div class="usage-trace-tip" :class="{ 'is-zh': locale === 'zh-CN' }">
                   <div class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('relayTipPath') }}</span>
                     <span class="usage-trace-tip-value is-mono">{{ row.relay_path || relayChannelLabel(row) }}</span>
@@ -323,6 +424,10 @@ async function handleSearch() {
                   <div class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('relayTipChannel') }}</span>
                     <span class="usage-trace-tip-value is-mono">{{ relayChannelLabel(row) }}</span>
+                  </div>
+                  <div v-if="row.channel_name" class="usage-trace-tip-row">
+                    <span class="usage-trace-tip-label">{{ t('channelName') }}</span>
+                    <span class="usage-trace-tip-value">{{ row.channel_name }}</span>
                   </div>
                   <div v-if="row.status_code != null" class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('relayTipStatus') }}</span>
@@ -336,6 +441,34 @@ async function handleSearch() {
                     <span class="usage-trace-tip-label">{{ t('relayTipError') }}</span>
                     <span class="usage-trace-tip-value is-error">{{ row.error_summary }}</span>
                   </div>
+                  <template v-if="row.routing">
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('autoRouting') }}</span>
+                      <span class="usage-trace-tip-value">
+                        {{ row.routing.requested_model }} -> {{ row.routing.selected_model }}
+                      </span>
+                    </div>
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingTier') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingTierLabel(row.routing.tier) }}</span>
+                    </div>
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingTask') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingTaskText(row.routing.task_type) }}</span>
+                    </div>
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingReason') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingReasonText(row) }}</span>
+                    </div>
+                    <div v-if="row.routing.matched_rule_ids.length" class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingRules') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingRulesText(row) }}</span>
+                    </div>
+                    <div v-if="row.routing.candidate_summary.length" class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingCandidates') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingCandidatesText(row) }}</span>
+                    </div>
+                  </template>
                   <div class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('status') }}</span>
                     <span
@@ -345,16 +478,22 @@ async function handleSearch() {
                   </div>
                 </div>
               </template>
-              <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
-                <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
-                  <span v-if="i > 0" class="usage-trace-sep">→</span>
+              <div class="usage-trace-cell">
+                <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
+                  <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
+                    <span v-if="i > 0" class="usage-trace-sep">→</span>
+                    <span
+                      class="usage-trace-seg"
+                      :class="{ 'is-current': i === row.relay_path_index }"
+                    >{{ seg }}</span>
+                  </template>
                   <span
-                    class="usage-trace-seg"
-                    :class="{ 'is-current': i === row.relay_path_index }"
-                  >{{ seg }}</span>
-                </template>
-                <span v-if="!row.relay_trace_id" class="usage-muted">-</span>
-              </span>
+                    v-if="!row.relay_trace_id && relayPathSegments(row).length === 0"
+                    class="usage-muted"
+                  >-</span>
+                </span>
+                <span v-if="row.channel_name" class="usage-trace-name">{{ row.channel_name }}</span>
+              </div>
             </el-tooltip>
           </template>
         </el-table-column>
@@ -488,7 +627,6 @@ async function handleSearch() {
   width: 78px;
 }
 
-.usage-model,
 .usage-stack {
   display: flex;
   flex-direction: column;
@@ -502,8 +640,9 @@ async function handleSearch() {
   font-weight: 560;
 }
 
-.usage-model > span:last-child {
+.usage-model-name {
   color: #1d2129;
+  display: block;
   font-size: 13px;
   font-weight: 680;
   overflow: hidden;
@@ -586,6 +725,14 @@ async function handleSearch() {
   white-space: normal;
 }
 
+.usage-trace-cell {
+  align-items: flex-start;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 100%;
+}
+
 .usage-trace-path {
   align-items: center;
   border-radius: 6px;
@@ -595,6 +742,18 @@ async function handleSearch() {
   gap: 2px;
   justify-content: flex-start;
   line-height: 1.4;
+  white-space: nowrap;
+}
+
+.usage-trace-name {
+  color: #667085;
+  display: block;
+  font-size: 11px;
+  font-weight: 520;
+  line-height: 1.25;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -644,7 +803,7 @@ async function handleSearch() {
 
 <style>
 .usage-trace-tip-popper {
-  max-width: 420px;
+  max-width: min(640px, calc(100vw - 48px));
   padding: 4px 2px;
 }
 
@@ -652,29 +811,39 @@ async function handleSearch() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 240px;
+  min-width: min(520px, calc(100vw - 72px));
+}
+
+.usage-trace-tip.is-zh {
+  min-width: min(420px, calc(100vw - 72px));
 }
 
 .usage-trace-tip-row {
   align-items: flex-start;
-  display: flex;
-  gap: 10px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 132px minmax(0, 1fr);
   line-height: 1.45;
+}
+
+.usage-trace-tip.is-zh .usage-trace-tip-row {
+  grid-template-columns: 78px minmax(0, 1fr);
 }
 
 .usage-trace-tip-label {
   color: #98a2b3;
-  flex: 0 0 64px;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .usage-trace-tip-value {
   color: #f2f4f7;
-  flex: 1;
   font-size: 12px;
   font-weight: 600;
-  word-break: break-all;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .usage-trace-tip-value.is-mono {

@@ -52,6 +52,11 @@
   padding: 0 4px;
 }
 
+.user-shell > .el-aside .shell-logo-link,
+.user-shell > .el-aside .shell-logo-name {
+  color: var(--user-text);
+}
+
 .user-shell > .el-aside .el-menu-item {
   font-weight: 680;
 }
@@ -123,7 +128,7 @@
   }
 
   .user-shell > .el-aside .shell-logo-image {
-    width: 96px;
+    width: 30px;
   }
 
   .user-shell > .el-aside .el-menu {

@@ -44,9 +44,11 @@ pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
 pub(crate) use error::{describe_upstream_http_failure, UpstreamHttpFailure};
-pub(crate) use limit::ImageSyncLimiter;
+pub(crate) use limit::UserRequestLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
-pub(crate) use request::{prepare_relay_body, BodyKind, PreparedRelayBody, RelayRequestParams};
+pub(crate) use request::{
+    prepare_relay_body, rewrite_relay_body_model, BodyKind, PreparedRelayBody, RelayRequestParams,
+};
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
@@ -256,6 +258,15 @@ pub(crate) async fn finish_relay(
                         HeaderValue::from_static("application/json")
                     }
                 });
+            if should_rewrite_response_model(&ctx, &content_type) {
+                let body = upstream_response.bytes().await?;
+                let body = rewrite_response_model(body, &ctx.external_model)?;
+                return Response::builder()
+                    .status(status)
+                    .header("content-type", content_type)
+                    .body(streaming::body_from_bytes(ctx, status, body))
+                    .map_err(|err| AppError::BadRequest(err.to_string()));
+            }
             Response::builder()
                 .status(status)
                 .header("content-type", content_type)
@@ -264,6 +275,32 @@ pub(crate) async fn finish_relay(
         }
         Err(err) => finish_relay_error(ctx, err).await,
     }
+}
+
+fn should_rewrite_response_model(ctx: &RelayContext, content_type: &HeaderValue) -> bool {
+    !ctx.streamed
+        && ctx.external_model != ctx.model
+        && content_type
+            .to_str()
+            .is_ok_and(|value| value.to_ascii_lowercase().starts_with("application/json"))
+}
+
+fn rewrite_response_model(body: Bytes, external_model: &str) -> AppResult<Bytes> {
+    let mut value: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return Ok(body),
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Ok(body);
+    };
+    if object.contains_key("model") {
+        object.insert(
+            "model".to_string(),
+            Value::String(external_model.to_string()),
+        );
+        return Ok(Bytes::from(serde_json::to_vec(&value)?));
+    }
+    Ok(body)
 }
 
 async fn finish_relay_error(ctx: RelayContext, err: AppError) -> AppResult<Response> {
@@ -513,6 +550,13 @@ pub(crate) fn usage_from_context(
         (latency_ms > 0 && usage.output_tokens > 0)
             .then_some((usage.output_tokens as f64 * 1000.0) / latency_ms as f64)
     });
+    let billing_meter = billing
+        .as_ref()
+        .map_or(ctx.price.billing_meter, |billing| billing.billing_meter);
+    let billable_units = billing.as_ref().map_or_else(
+        || token_usage.map_or(0, |usage| usage.total_tokens().max(0)),
+        |billing| billing.billable_units,
+    );
     let usage = UsageInsert {
         user_id: ctx.auth.user_id,
         project_id: ctx.auth.project_id,
@@ -524,7 +568,10 @@ pub(crate) fn usage_from_context(
         relay_attempt: ctx.relay_attempt,
         relay_final: ctx.relay_final,
         provider: ctx.upstream.provider.clone(),
-        model: Some(ctx.model.clone()),
+        model: Some(ctx.external_model.clone()),
+        upstream_model: Some(ctx.upstream_model.clone()),
+        routing_phase: "relay".to_string(),
+        routing: ctx.routing.clone(),
         status_code,
         streamed: ctx.streamed,
         latency_ms,
@@ -532,18 +579,8 @@ pub(crate) fn usage_from_context(
         output_tokens_per_second,
         error_summary,
         token_usage,
-        billing_meter: billing
-            .as_ref()
-            .map(|billing| billing.billing_meter)
-            .unwrap_or(ctx.price.billing_meter),
-        billable_units: billing
-            .as_ref()
-            .map(|billing| billing.billable_units)
-            .unwrap_or_else(|| {
-                token_usage
-                    .map(|usage| usage.total_tokens().max(0))
-                    .unwrap_or(0)
-            }),
+        billing_meter,
+        billable_units,
         billing,
     };
     log_relay_request_summary(ctx, &usage);
@@ -826,8 +863,7 @@ fn format_skipped_key_cooldown_log(ctx: &RelayContext, channel_key_id: i64) -> S
 }
 
 fn optional_id(id: Option<i64>) -> String {
-    id.map(|id| id.to_string())
-        .unwrap_or_else(|| "none".to_string())
+    id.map_or_else(|| "none".to_string(), |id| id.to_string())
 }
 
 pub(crate) async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {

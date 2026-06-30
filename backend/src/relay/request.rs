@@ -107,6 +107,27 @@ pub(crate) fn prepare_relay_body(
     })
 }
 
+pub(crate) fn rewrite_relay_body_model(
+    body: Bytes,
+    kind: BodyKind,
+    target_model: &str,
+) -> AppResult<Bytes> {
+    let mut value: Value = serde_json::from_slice(&body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("request body must be a json object".to_string()))?;
+    if !object.contains_key("model") {
+        return Err(AppError::BadRequest("model is required".to_string()));
+    }
+    object.insert("model".to_string(), Value::String(target_model.to_string()));
+    if matches!(kind, BodyKind::OpenaiResponses) {
+        // Affinity keys include the requested model. The relay now routes on the target model,
+        // so downstream affinity must follow the body sent upstream.
+    }
+    Ok(Bytes::from(serde_json::to_vec(&value)?))
+}
+
 fn request_meta_from_value(value: &Value, kind: BodyKind) -> AppResult<RelayRequestMeta> {
     let model = value
         .get("model")

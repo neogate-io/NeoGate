@@ -48,14 +48,11 @@ async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     } else {
         None
     };
-    let backlog_ok = outbox_status
-        .as_ref()
-        .map(|status| {
-            status.pending_count <= state.config.health.billing_outbox_max_pending
-                && status.oldest_pending_age_seconds
-                    <= state.config.health.billing_outbox_max_age.as_secs() as i64
-        })
-        .unwrap_or(false);
+    let backlog_ok = outbox_status.as_ref().is_some_and(|status| {
+        status.pending_count <= state.config.health.billing_outbox_max_pending
+            && status.oldest_pending_age_seconds
+                <= state.config.health.billing_outbox_max_age.as_secs() as i64
+    });
     let billing_outbox_ok = write_status.healthy && backlog_ok;
 
     if db_ok && redis_ok && billing_outbox_ok {

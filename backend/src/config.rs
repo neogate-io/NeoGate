@@ -156,8 +156,8 @@ pub struct RelayConfig {
     pub body_limit_bytes: usize,
     pub usage_buffer_limit_bytes: usize,
     pub credential_upload_limit_bytes: usize,
-    pub image_sync_global_limit: usize,
-    pub image_sync_key_limit: usize,
+    pub user_concurrent_request_limit: usize,
+    pub global_concurrent_request_limit: usize,
     pub channel_affinity_enabled: bool,
     pub channel_affinity_ttl: Duration,
     pub channel_affinity_max_entries: usize,
@@ -270,8 +270,8 @@ impl Config {
                     "CREDENTIAL_UPLOAD_LIMIT_BYTES",
                     DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                 )?,
-                image_sync_global_limit: parse_usize("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT", 8)?,
-                image_sync_key_limit: parse_usize("NEOGATE_IMAGE_SYNC_KEY_LIMIT", 2)?,
+                user_concurrent_request_limit: parse_usize("USER_CONCURRENT_REQUEST_LIMIT", 10)?,
+                global_concurrent_request_limit: parse_usize("GLOBAL_CONCURRENT_REQUEST_LIMIT", 0)?,
                 channel_affinity_enabled: parse_bool("CHANNEL_AFFINITY_ENABLED", true)?,
                 channel_affinity_ttl: Duration::from_secs(parse_u64(
                     "CHANNEL_AFFINITY_TTL_SECONDS",
@@ -297,11 +297,11 @@ impl Config {
             billing: BillingConfig {
                 credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000)?,
                 credit_allocation_recovery_after: Duration::from_secs(parse_u64(
-                    "CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS",
+                    "CREDIT_RELEASE_AFTER_SECONDS",
                     900,
                 )?),
                 credit_allocation_recovery_interval: Duration::from_secs(parse_u64(
-                    "CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS",
+                    "CREDIT_RELEASE_INTERVAL_SECONDS",
                     60,
                 )?),
                 default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 2048)?,
@@ -332,8 +332,7 @@ impl Config {
                 dir: env::var("NEOGATE_ASSET_DIR")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("data/assets")),
+                    .map_or_else(|| PathBuf::from("data/assets"), PathBuf::from),
                 retention: Duration::from_secs(parse_u64(
                     "NEOGATE_RESPONSE_RETENTION_SECONDS",
                     604_800,
@@ -357,10 +356,10 @@ impl Config {
             anyhow::bail!("CREDIT_PREFETCH_MICRO_USD must be positive");
         }
         if self.billing.credit_allocation_recovery_after.is_zero() {
-            anyhow::bail!("CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS must be positive");
+            anyhow::bail!("CREDIT_RELEASE_AFTER_SECONDS must be positive");
         }
         if self.billing.credit_allocation_recovery_interval.is_zero() {
-            anyhow::bail!("CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS must be positive");
+            anyhow::bail!("CREDIT_RELEASE_INTERVAL_SECONDS must be positive");
         }
         if self.billing.default_output_tokens <= 0 {
             anyhow::bail!("DEFAULT_OUTPUT_TOKENS must be positive");
@@ -398,11 +397,8 @@ impl Config {
         if self.response_assets.retention.is_zero() {
             anyhow::bail!("NEOGATE_RESPONSE_RETENTION_SECONDS must be positive");
         }
-        if self.relay.image_sync_global_limit == 0 {
-            anyhow::bail!("NEOGATE_IMAGE_SYNC_GLOBAL_LIMIT must be positive");
-        }
-        if self.relay.image_sync_key_limit == 0 {
-            anyhow::bail!("NEOGATE_IMAGE_SYNC_KEY_LIMIT must be positive");
+        if self.relay.user_concurrent_request_limit == 0 {
+            anyhow::bail!("USER_CONCURRENT_REQUEST_LIMIT must be positive");
         }
         if self.relay.channel_affinity_ttl.is_zero() {
             anyhow::bail!("CHANNEL_AFFINITY_TTL_SECONDS must be positive");
@@ -447,8 +443,7 @@ impl RuntimeProbe {
         let env_file = env::var("NEOGATE_ENV_FILE")
             .ok()
             .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(default_env_file);
+            .map_or_else(default_env_file, PathBuf::from);
         let service_mode = service_mode_from_env_file(&env_file)?;
 
         Ok(Self {
@@ -474,12 +469,7 @@ impl RuntimeProbe {
     }
 
     pub fn site_configured(&self) -> bool {
-        self.site_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some()
-            && self.public_base_url.is_some()
+        self.public_base_url.is_some()
     }
 
     pub fn secrets_configured(&self) -> bool {

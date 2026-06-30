@@ -14,6 +14,7 @@ use crate::{
     auth::UserAuth,
     billing::parse_usage_from_bytes,
     error::{AppError, AppResult},
+    project::models::UsageRoutingSnapshot,
     provider::newapi,
     relay::{
         ensure_key_backed_async_upstream, finish_relay, forward_openai, forward_openai_bound,
@@ -27,37 +28,76 @@ use crate::{
 
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
+pub(super) struct CreateBackgroundResponseRequest {
+    pub(super) state: Arc<AppState>,
+    pub(super) auth: UserAuth,
+    pub(super) body: Bytes,
+    pub(super) external_model: String,
+    pub(super) target_model: String,
+    pub(super) target_channel_id: Option<i64>,
+    pub(super) routing: Option<UsageRoutingSnapshot>,
+    pub(super) output_tokens: i64,
+    pub(super) request_params: RelayRequestParams,
+    pub(super) channel_affinity_key: Option<ChannelAffinityKey>,
+}
+
 pub(super) async fn create_background_response(
-    state: Arc<AppState>,
-    auth: UserAuth,
-    body: Bytes,
-    model: String,
-    output_tokens: i64,
-    request_params: RelayRequestParams,
-    channel_affinity_key: Option<ChannelAffinityKey>,
+    req: CreateBackgroundResponseRequest,
 ) -> AppResult<Response> {
+    let CreateBackgroundResponseRequest {
+        state,
+        auth,
+        body,
+        external_model,
+        target_model,
+        target_channel_id,
+        routing,
+        output_tokens,
+        request_params,
+        channel_affinity_key,
+    } = req;
     let started = Instant::now();
     let prepared = jobs::prepare_request_body(body)?;
-    let upstream = state
-        .selector
-        .select_with_affinity(
-            &state.db.pool,
-            &state.secrets,
-            &state.channel_affinity,
-            UpstreamProtocol::Openai,
-            &model,
-            SelectionConstraints {
-                affinity_key: channel_affinity_key.as_ref(),
-                attempted: &[],
-            },
-        )
-        .await?;
+    let upstream = if let Some(channel_id) = target_channel_id {
+        state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                &[UpstreamProtocol::Openai],
+                &target_model,
+                channel_id,
+                &[],
+            )
+            .await?
+            .1
+    } else {
+        state
+            .selector
+            .select_with_affinity(
+                &state.db.pool,
+                &state.secrets,
+                &state.channel_affinity,
+                UpstreamProtocol::Openai,
+                &target_model,
+                SelectionConstraints {
+                    affinity_key: channel_affinity_key.as_ref(),
+                    attempted: &[],
+                },
+            )
+            .await?
+    };
     ensure_key_backed_async_upstream(&upstream)?;
     let price = state
         .billing
-        .price_for(&state.db.pool, &upstream.provider, &model, &auth.user_group)
+        .price_for(
+            &state.db.pool,
+            &upstream.provider,
+            &target_model,
+            &auth.user_group,
+        )
         .await?;
-    let user_key_model_credit_account = auth.model_credit_account(&model).cloned();
+    let user_key_model_credit_account = auth.model_credit_account(&external_model).cloned();
     let hold = reserve_credit(
         &state,
         &auth,
@@ -72,7 +112,7 @@ pub(super) async fn create_background_response(
             &state,
             &auth,
             &upstream,
-            &model,
+            &target_model,
             prepared.body.clone(),
             prepared.image_format,
             &hold,
@@ -96,6 +136,7 @@ pub(super) async fn create_background_response(
             "image_format=url or both is only supported for NeoGate async image tasks".to_string(),
         ));
     }
+    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
     let response = forward_openai(
         &state,
         &upstream,
@@ -110,7 +151,10 @@ pub(super) async fn create_background_response(
         upstream: upstream.clone(),
         protocol: UpstreamProtocol::Openai,
         path: "/v1/responses",
-        model: model.clone(),
+        model: target_model.clone(),
+        external_model: external_model.clone(),
+        upstream_model: target_model.clone(),
+        routing,
         streamed: false,
         price,
         hold: hold.clone(),
@@ -121,7 +165,7 @@ pub(super) async fn create_background_response(
         relay_attempt: 1,
         relay_final: true,
         request_params,
-        _image_sync_permit: None,
+        request_permit: request_permit.take(),
     };
 
     let upstream_response = match response {
@@ -177,7 +221,8 @@ pub(super) async fn create_background_response(
             auth: &auth,
             protocol: UpstreamProtocol::Openai,
             upstream: &upstream,
-            model: Some(&model),
+            model: Some(&external_model),
+            upstream_model: Some(&target_model),
             status: status_text,
             terminal,
             hold: &hold,

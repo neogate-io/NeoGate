@@ -8,8 +8,10 @@ import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
 import { useAsyncData } from '../composables/useAsyncData'
+import { useSiteBrand } from '../composables/useSiteBrand'
 
 const { t } = useLocale()
+const { siteName, logoUrl } = useSiteBrand()
 const route = useRoute()
 const logout = useLogout(t)
 const { data: servicePolicy } = useAsyncData(() => getUserServicePolicy(), null)
@@ -45,7 +47,8 @@ const activeRouteSubtitle = computed(() => {
     <el-aside width="248px">
       <h1 class="shell-logo">
         <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
-          <img class="shell-logo-image" src="/logos/logo.svg" :alt="t('appName')" />
+          <img v-if="logoUrl" class="shell-logo-image" :src="logoUrl" :alt="siteName" />
+          <span class="shell-logo-name">{{ siteName }}</span>
         </RouterLink>
       </h1>
       <el-menu :default-active="activeRoute" mode="vertical" router>

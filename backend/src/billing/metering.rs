@@ -45,8 +45,7 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
     match usage.meter {
         BillingMeter::Token => usage
             .token_usage
-            .map(|token_usage| cost_for_usage(token_usage, price))
-            .unwrap_or(0),
+            .map_or(0, |token_usage| cost_for_usage(token_usage, price)),
         BillingMeter::Image => usage.billable_units.max(0).saturating_mul(
             price
                 .unit_price_usd_micros

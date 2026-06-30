@@ -530,15 +530,14 @@ pub(crate) fn validate_user_password_input(password: &str) -> AppResult<()> {
 }
 
 fn client_rate_key(headers: &HeaderMap) -> String {
-    forwarded_client_ip(headers)
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+    forwarded_client_ip(headers).map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
 }
 
 fn email_error(err: anyhow::Error) -> AppError {
-    smtp_config_error(&err)
-        .map(|(code, message)| AppError::BadRequestWithCode { code, message })
-        .unwrap_or_else(|| AppError::Anyhow(err))
+    smtp_config_error(&err).map_or_else(
+        || AppError::Anyhow(err),
+        |(code, message)| AppError::BadRequestWithCode { code, message },
+    )
 }
 
 fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {

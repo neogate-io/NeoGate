@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub const PAYMENT_SETTING_KEY: &str = "payment";
+const SITE_BRAND_SETTING_KEY: &str = "site_brand";
 
 #[derive(Debug, Serialize)]
 pub struct PaymentSettingRecord {
@@ -44,13 +45,19 @@ struct StoredPaymentSetting {
     zpay_site_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct StoredSiteBrandSetting {
+    site_name: Option<String>,
+}
+
 pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRecord> {
     let Some(row) = sqlx::query("SELECT value, updated_at FROM setting WHERE key = $1")
         .bind(PAYMENT_SETTING_KEY)
         .fetch_optional(&state.db.pool)
         .await?
     else {
-        let config = PaymentConfig::default_for_site(&state.config.site_name);
+        let site_name = payment_default_site_name(state).await?;
+        let config = PaymentConfig::default_for_site(&site_name);
         return Ok(record_from_config(&config, false, None));
     };
 
@@ -70,8 +77,8 @@ pub async fn upsert_payment_setting(
     let zpay_merchant_id = optional_trimmed(req.zpay_merchant_id);
     let zpay_default_pay_type =
         optional_trimmed(Some(req.zpay_default_pay_type)).unwrap_or_else(|| "wxpay".to_string());
-    let zpay_site_name =
-        optional_trimmed(Some(req.zpay_site_name)).unwrap_or_else(|| "NeoGate".to_string());
+    let zpay_site_name = optional_trimmed(Some(req.zpay_site_name))
+        .unwrap_or_else(|| state.config.site_name.clone());
 
     let zpay_secret_key_ciphertext = if req.clear_zpay_secret_key {
         None
@@ -123,7 +130,8 @@ pub async fn upsert_payment_setting(
 
 pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig> {
     let Some(setting) = existing_payment_setting(state).await? else {
-        return Ok(PaymentConfig::default_for_site(&state.config.site_name));
+        let site_name = payment_default_site_name(state).await?;
+        return Ok(PaymentConfig::default_for_site(&site_name));
     };
 
     let secret_key = setting
@@ -146,6 +154,22 @@ pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig
             site_name: setting.zpay_site_name,
         },
     })
+}
+
+async fn payment_default_site_name(state: &AppState) -> AppResult<String> {
+    let Some(row) = sqlx::query("SELECT value FROM setting WHERE key = $1")
+        .bind(SITE_BRAND_SETTING_KEY)
+        .fetch_optional(&state.db.pool)
+        .await?
+    else {
+        return Ok(state.config.site_name.clone());
+    };
+
+    let value: serde_json::Value = row.try_get("value")?;
+    let setting: StoredSiteBrandSetting = serde_json::from_value(value)?;
+    Ok(setting
+        .site_name
+        .unwrap_or_else(|| state.config.site_name.clone()))
 }
 
 async fn existing_payment_setting(state: &AppState) -> AppResult<Option<StoredPaymentSetting>> {

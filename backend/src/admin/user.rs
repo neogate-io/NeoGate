@@ -88,7 +88,6 @@ pub struct UserKeyRecord {
     pub status: String,
     pub last_active_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
-    pub model_limits: Option<Vec<String>>,
     pub balance_micro_usd: i64,
     pub reserved_micro_usd: i64,
     pub available_micro_usd: i64,
@@ -117,7 +116,6 @@ pub struct PublicUserKeyResponse {
 #[derive(Debug, Serialize)]
 pub struct UserKeyVerifyResponse {
     pub ok: bool,
-    pub model_limits: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,14 +155,12 @@ pub struct CreateUserKeyRequest {
     #[serde(default = "default_enabled_status")]
     pub status: String,
     pub expires_at: Option<DateTime<Utc>>,
-    pub model_limits: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserKeyRequest {
     pub status: Option<String>,
     pub expires_at: Option<Option<DateTime<Utc>>>,
-    pub model_limits: Option<Option<Vec<String>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,13 +211,8 @@ async fn claim_public_user_key_handler(
 }
 
 async fn verify_user_key_handler(auth: UserAuth) -> Json<UserKeyVerifyResponse> {
-    Json(UserKeyVerifyResponse {
-        ok: true,
-        model_limits: auth
-            .model_limits
-            .as_ref()
-            .map(|limits| limits.as_ref().clone()),
-    })
+    let _ = auth;
+    Json(UserKeyVerifyResponse { ok: true })
 }
 
 pub async fn create_user(state: &AppState, req: CreateUserRequest) -> AppResult<UserRecord> {
@@ -544,8 +535,8 @@ pub async fn create_user_key(
     let row = sqlx::query(
         r#"
         INSERT INTO user_key
-            (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status, expires_at, model_limits)
-        VALUES ($1, $2, $1, $3, $4, $5, $6, $7, $8)
+            (user_id, project_id, owner_user_id, name, key_prefix, secret_ciphertext, status, expires_at)
+        VALUES ($1, $2, $1, $3, $4, $5, $6, $7)
         RETURNING id
         "#,
     )
@@ -556,7 +547,6 @@ pub async fn create_user_key(
     .bind(secret_ciphertext)
     .bind(req.status)
     .bind(req.expires_at)
-    .bind(req.model_limits)
     .fetch_one(&mut *tx)
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
@@ -640,8 +630,8 @@ pub async fn claim_public_user_key(
     let row = sqlx::query(
         r#"
         INSERT INTO user_key
-            (user_id, project_id, owner_user_id, key_prefix, secret_ciphertext, status, expires_at, model_limits)
-        VALUES ($1, $2, $1, $3, $4, 'enabled', NULL, NULL)
+            (user_id, project_id, owner_user_id, key_prefix, secret_ciphertext, status, expires_at)
+        VALUES ($1, $2, $1, $3, $4, 'enabled', NULL)
         RETURNING id
         "#,
     )
@@ -716,7 +706,7 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
                 p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
-                uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
+                w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
          JOIN project p ON p.id = uk.project_id
@@ -766,9 +756,10 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
 }
 
 fn email_error(err: anyhow::Error) -> AppError {
-    smtp_config_error(&err)
-        .map(|(code, message)| AppError::BadRequestWithCode { code, message })
-        .unwrap_or_else(|| AppError::Anyhow(err))
+    smtp_config_error(&err).map_or_else(
+        || AppError::Anyhow(err),
+        |(code, message)| AppError::BadRequestWithCode { code, message },
+    )
 }
 
 fn push_where_clause<'a>(
@@ -790,7 +781,7 @@ pub async fn update_user_key(
     }
     let disabling = matches!(req.status.as_deref(), Some("disabled"));
     let current = sqlx::query(
-        "SELECT id, expires_at, model_limits
+        "SELECT id, expires_at
          FROM user_key WHERE id = $1",
     )
     .bind(id)
@@ -798,16 +789,13 @@ pub async fn update_user_key(
     .await?
     .ok_or(AppError::NotFound)?;
     let current_expires_at: Option<DateTime<Utc>> = current.try_get("expires_at")?;
-    let current_model_limits: Option<Vec<String>> = current.try_get("model_limits")?;
 
     let expires_at = req.expires_at.unwrap_or(current_expires_at);
-    let model_limits = req.model_limits.unwrap_or(current_model_limits);
 
     let row = sqlx::query(
         "UPDATE user_key
          SET status = COALESCE($2, status),
              expires_at = $3,
-             model_limits = $4,
              updated_at = now()
          WHERE id = $1
          RETURNING id",
@@ -815,7 +803,6 @@ pub async fn update_user_key(
     .bind(id)
     .bind(req.status.as_deref())
     .bind(expires_at)
-    .bind(model_limits)
     .fetch_one(&state.db.pool)
     .await?;
     let user_key_id: DbId = row.try_get("id")?;
@@ -843,7 +830,7 @@ async fn get_user_key(state: &AppState, id: DbId) -> AppResult<UserKeyRecord> {
                 p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
-                uk.model_limits, w.balance_micro_usd, w.reserved_micro_usd,
+                w.balance_micro_usd, w.reserved_micro_usd,
                 uk.created_at, uk.updated_at
          FROM user_key uk
          JOIN project p ON p.id = uk.project_id
@@ -1376,7 +1363,6 @@ pub fn user_key_from_row(
         status: row.try_get("status")?,
         last_active_at: row.try_get("last_active_at")?,
         expires_at: row.try_get("expires_at")?,
-        model_limits: row.try_get("model_limits")?,
         balance_micro_usd: row.try_get("balance_micro_usd")?,
         reserved_micro_usd: row.try_get("reserved_micro_usd")?,
         available_micro_usd: row.try_get::<i64, _>("balance_micro_usd")?

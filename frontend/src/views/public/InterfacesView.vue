@@ -3,9 +3,11 @@ import { computed } from 'vue'
 import { DocumentCopy } from '@element-plus/icons-vue'
 import PublicHeader from '../../components/common/PublicHeader.vue'
 import { useLocale } from '../../composables/useLocale'
+import { useSiteBrand } from '../../composables/useSiteBrand'
 import { useScrollTo, useCopyText } from '../../composables/usePublicPage'
 
 const { locale, t } = useLocale()
+const { siteName } = useSiteBrand()
 const scrollToSection = useScrollTo()
 const copyDocText = useCopyText()
 const siteOrigin = computed(() => window.location.origin)
@@ -342,8 +344,7 @@ const content = computed(() => {
   if (locale.value === 'zh-CN') {
     return {
       title: '接口文档',
-      subtitle:
-        'NeoGate 按 OpenAI / Anthropic 官方 API 组织接口文档。已实现的接口可直接调用，尚未实现的官方接口统一标记为开发中。',
+      subtitle: `${siteName.value} 按 OpenAI / Anthropic 官方 API 组织接口文档。已实现的接口可直接调用，尚未实现的官方接口统一标记为开发中。`,
       menuTitle: '目录',
       menu: [
         ['before-start', '接入前说明', '1. 接入前说明'],
@@ -378,8 +379,7 @@ const content = computed(() => {
           '适合 Claude SDK、Claude Code、Messages 与 Message Batches。'
         ]
       ],
-      beforeIntro:
-        '下游应用只需要使用 NeoGate Base URL 和自己的 NeoGate API Key。上游供应商密钥、渠道健康状态和路由策略由后台统一管理。',
+      beforeIntro: `下游应用只需要使用 ${siteName.value} Base URL 和自己的 ${siteName.value} API Key。上游供应商密钥、渠道健康状态和路由策略由后台统一管理。`,
       beforeItems: [
         ['API Key', '用户可在用户后台创建 API Key，也可在开放注册时从公开首页领取。'],
         ['模型路由', '请求中的 model 会匹配已启用上游服务；多个渠道命中时由网关选择可用渠道。'],
@@ -387,8 +387,7 @@ const content = computed(() => {
         ['用量记录', '网关会记录模型、Token、费用、首字延迟、总延迟和失败摘要。']
       ],
       endpointHeaders: ['模块', '方法', '官方路径', '关键参数', '状态'],
-      openAiIntro:
-        'OpenAI 兼容接口统一使用 Bearer Token 认证。Base URL 填写 NeoGate 的 /v1 地址。下表按 OpenAI 官方 API reference 列出接口族；未实现接口标记为开发中。',
+      openAiIntro: `OpenAI 兼容接口统一使用 Bearer Token 认证。Base URL 填写 ${siteName.value} 的 /v1 地址。下表按 OpenAI 官方 API reference 列出接口族；未实现接口标记为开发中。`,
       openAiAuthItems: [
         ['Base URL', openAiBaseUrl.value],
         ['认证头', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
@@ -663,8 +662,7 @@ const content = computed(() => {
         'Chat Completions 与 Responses 均按 OpenAI 官方请求体转发。本节展示同步和流式文本生成。流式输出会以 text/event-stream 持续返回增量内容，适合边生成边展示。Chat Completions 的 stored completion 查询、更新、删除仍在开发中。',
       streamText: '将 stream 设置为 true，响应会以 text/event-stream 形式返回。',
       textAsyncTitle: '文本生成（异步）',
-      openAiTextAsync:
-        'Responses 后台文本任务按官方 background 参数创建。NeoGate 要求 background=true 时 store 不能为 false；创建后台任务时不支持直接 stream=true，可在查询接口透传 stream=true 恢复流式结果。后台任务只支持 key-backed OpenAI 通道，不走 OpenAI OAuth/Codex 凭证通道。',
+      openAiTextAsync: `Responses 后台文本任务按官方 background 参数创建。${siteName.value} 要求 background=true 时 store 不能为 false；创建后台任务时不支持直接 stream=true，可在查询接口透传 stream=true 恢复流式结果。后台任务只支持 key-backed OpenAI 通道，不走 OpenAI OAuth/Codex 凭证通道。`,
       imageTitle: '图片生成',
       openAiImage:
         'Images 支持文生图、图生图/局部编辑和图片变体。生成接口使用 JSON 请求体，编辑接口支持 JSON images 数组或 multipart/form-data 上传图片，变体接口使用 multipart/form-data；流式输出会以 text/event-stream 返回生成过程中的 partial image，适合展示预览进度。',
@@ -678,7 +676,7 @@ const content = computed(() => {
         [
           'model',
           'string，必填',
-          '模型名称，例如 gpt-5.5；会按 NeoGate 的模型权限、渠道选择和计费策略处理。'
+          `模型名称，例如 gpt-5.5；会按 ${siteName.value} 的模型权限、渠道选择和计费策略处理。`
         ],
         [
           'messages[]',
@@ -717,14 +715,14 @@ const content = computed(() => {
         ['output[].content[].text', 'string', 'Responses 文本输出内容。'],
         ['status', 'string', 'Responses 状态，例如 completed、failed 或 incomplete。'],
         ['error', 'object | null', 'Responses 失败时的错误信息；成功时通常为空。'],
-        ['usage', 'object | null', 'Token 用量，NeoGate 会用于用量记录和结算。']
+        ['usage', 'object | null', `Token 用量，${siteName.value} 会用于用量记录和结算。`]
       ],
       textAsyncRequestParams: [
         ['model', 'string，必填', 'Responses 主模型，例如 gpt-5.5。'],
         ['input', 'string | array，必填', '后台任务的输入内容。'],
         ['instructions', 'string', '系统级指令，适合放置任务要求或输出约束。'],
         ['background', 'boolean，必填 true', '设置为 true 创建后台 Response。'],
-        ['store', 'boolean', 'background=true 时需要保存响应；NeoGate 要求 store 不能为 false。'],
+        ['store', 'boolean', `background=true 时需要保存响应；${siteName.value} 要求 store 不能为 false。`],
         [
           'stream',
           'boolean',
@@ -750,13 +748,13 @@ const content = computed(() => {
         ['output[].content[].type', '"output_text"', '文本内容项类型。'],
         ['output[].content[].text', 'string', '后台任务完成后的文本结果。'],
         ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
-        ['usage', 'object | null', '终态返回的 Token 用量，NeoGate 会用于记录和结算。']
+        ['usage', 'object | null', `终态返回的 Token 用量，${siteName.value} 会用于记录和结算。`]
       ],
       imageRequestParams: [
         [
           'model',
           'string，必填',
-          '图片模型，例如 gpt-image-2；会按 NeoGate 模型权限和渠道能力转发。'
+          `图片模型，例如 gpt-image-2；会按 ${siteName.value} 模型权限和渠道能力转发。`
         ],
         ['prompt', 'string，必填', '用于生成图片的文本描述。'],
         [
@@ -777,7 +775,7 @@ const content = computed(() => {
         ['data[].b64_json', 'string', 'Base64 编码的图片内容，客户端可解码保存或展示。'],
         ['data[].url', 'string', '当上游返回 URL 形式图片时透传。'],
         ['data[].revised_prompt', 'string', '上游可能返回的改写后提示词。'],
-        ['usage', 'object', '上游返回的图片生成用量信息，NeoGate 会用于用量记录和结算。'],
+        ['usage', 'object', `上游返回的图片生成用量信息，${siteName.value} 会用于用量记录和结算。`],
         [
           'stream event',
           'text/event-stream',
@@ -804,9 +802,9 @@ const content = computed(() => {
         [
           'background',
           'boolean',
-          '设置为 true 创建后台 Response；NeoGate 的图片异步任务使用该模式。'
+          `设置为 true 创建后台 Response；${siteName.value} 的图片异步任务使用该模式。`
         ],
-        ['store', 'boolean', 'background=true 时需要保存响应；NeoGate 要求 store 不能为 false。'],
+        ['store', 'boolean', `background=true 时需要保存响应；${siteName.value} 要求 store 不能为 false。`],
         [
           'stream',
           'boolean',
@@ -829,15 +827,13 @@ const content = computed(() => {
         ['output[].result', 'string', '完成时返回 Base64 图片内容；image_format=url 时可省略。'],
         ['output[].url', 'string', '仅在 image_format 为 url 或 both 时返回。'],
         ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
-        ['usage', 'object | null', '终态返回的用量信息，NeoGate 会用于记录和结算。']
+        ['usage', 'object | null', `终态返回的用量信息，${siteName.value} 会用于记录和结算。`]
       ],
       embeddingTitle: '向量嵌入',
-      openAiEmbeddings:
-        'Embeddings 接口按 OpenAI 官方 JSON 请求体转发，适合 RAG、语义搜索、去重和召回场景。请求中的 model 会走 NeoGate 的模型权限、渠道选择、计费和用量记录。',
+      openAiEmbeddings: `Embeddings 接口按 OpenAI 官方 JSON 请求体转发，适合 RAG、语义搜索、去重和召回场景。请求中的 model 会走 ${siteName.value} 的模型权限、渠道选择、计费和用量记录。`,
       modelsTitle: '模型列表',
       sdkTitle: 'SDK 示例',
-      anthropicIntro:
-        'Anthropic 兼容接口使用 x-api-key 认证。Base URL 填写 NeoGate 的 /anthropic 地址；/v1/messages 与 /v1/messages/batches 系列按 Anthropic 官方路径兼容。模型列表当前通过 NeoGate 扩展路径提供。',
+      anthropicIntro: `Anthropic 兼容接口使用 x-api-key 认证。Base URL 填写 ${siteName.value} 的 /anthropic 地址；/v1/messages 与 /v1/messages/batches 系列按 Anthropic 官方路径兼容。模型列表当前通过 NeoGate 扩展路径提供。`,
       anthropicAuthItems: [
         ['Base URL', anthropicBaseUrl.value],
         ['认证头', 'x-api-key: YOUR_NEOGATE_API_KEY'],
@@ -936,7 +932,7 @@ const content = computed(() => {
         ],
         ['429/5xx', '上游限流、超时或返回失败', '稍后重试，或在后台切换/补充上游渠道。']
       ],
-      billingIntro: 'NeoGate 会在转发前预估额度，在响应完成后按实际 Token 和价格结算。',
+      billingIntro: `${siteName.value} 会在转发前预估额度，在响应完成后按实际 Token 和价格结算。`,
       billingItems: [
         ['文本生成', '按输入、输出以及缓存读写 Token 记录用量；价格由后台渠道价格与售价策略决定。'],
         ['流式请求', '流结束后统一结算；如果中途失败，会记录已知用量和失败摘要。'],
@@ -948,8 +944,7 @@ const content = computed(() => {
 
   return {
     title: 'API Reference',
-    subtitle:
-      'NeoGate follows the official OpenAI / Anthropic API structure. Implemented APIs are callable now; official APIs not implemented yet are marked as in development.',
+    subtitle: `${siteName.value} follows the official OpenAI / Anthropic API structure. Implemented APIs are callable now; official APIs not implemented yet are marked as in development.`,
     menuTitle: 'Contents',
     menu: [
       ['before-start', 'Before You Start', '1. Before You Start'],
@@ -984,8 +979,7 @@ const content = computed(() => {
         'For Claude SDKs, Claude Code, Messages, and Message Batches.'
       ]
     ],
-    beforeIntro:
-      'Client apps only need the NeoGate Base URL and their NeoGate API key. Upstream credentials, channel health, and routing are managed in the admin console.',
+    beforeIntro: `Client apps only need the ${siteName.value} Base URL and their ${siteName.value} API key. Upstream credentials, channel health, and routing are managed in the admin console.`,
     beforeItems: [
       [
         'API key',
@@ -1005,8 +999,7 @@ const content = computed(() => {
       ]
     ],
     endpointHeaders: ['Module', 'Method', 'Official path', 'Key parameters', 'Status'],
-    openAiIntro:
-      'OpenAI-compatible APIs use Bearer Token auth. Set the Base URL to the NeoGate /v1 URL. The table follows the official OpenAI API reference; unimplemented official APIs are marked as in development.',
+    openAiIntro: `OpenAI-compatible APIs use Bearer Token auth. Set the Base URL to the ${siteName.value} /v1 URL. The table follows the official OpenAI API reference; unimplemented official APIs are marked as in development.`,
     openAiAuthItems: [
       ['Base URL', openAiBaseUrl.value],
       ['Auth header', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
@@ -1317,8 +1310,7 @@ const content = computed(() => {
       'Chat Completions and Responses are forwarded with the official OpenAI request body. This section shows synchronous and streaming text generation. Streaming returns incremental content over text/event-stream, which is useful when the UI should render while the model is still generating. Stored Chat Completion retrieve, update, message listing, and delete are still in development.',
     streamText: 'Set stream to true to receive a text/event-stream response.',
     textAsyncTitle: 'Text generation async',
-    openAiTextAsync:
-      'Background text Responses follow the official background parameter. NeoGate requires store not to be false when background=true. Create-time streaming is not supported for background tasks; retrieve can pass through stream=true to resume streamed results. Background tasks require key-backed OpenAI channels and do not use OpenAI OAuth/Codex credential channels.',
+    openAiTextAsync: `Background text Responses follow the official background parameter. ${siteName.value} requires store not to be false when background=true. Create-time streaming is not supported for background tasks; retrieve can pass through stream=true to resume streamed results. Background tasks require key-backed OpenAI channels and do not use OpenAI OAuth/Codex credential channels.`,
     imageTitle: 'Image generation',
     openAiImage:
       'Images supports text-to-image, image edits, and image variations. Generations use a JSON body; edits support a JSON images array or multipart/form-data image uploads, while variations use multipart/form-data. Streaming returns partial images over text/event-stream, which is useful for showing generation progress.',
@@ -1332,7 +1324,7 @@ const content = computed(() => {
       [
         'model',
         'string, required',
-        'Model name, for example gpt-5.5. NeoGate applies model permissions, routing, and billing policy.'
+        `Model name, for example gpt-5.5. ${siteName.value} applies model permissions, routing, and billing policy.`
       ],
       [
         'messages[]',
@@ -1403,7 +1395,7 @@ const content = computed(() => {
         'object | null',
         'Responses error information on failure; usually null on success.'
       ],
-      ['usage', 'object | null', 'Token usage used by NeoGate for records and settlement.']
+      ['usage', 'object | null', `Token usage used by ${siteName.value} for records and settlement.`]
     ],
     textAsyncRequestParams: [
       ['model', 'string, required', 'Responses model, for example gpt-5.5.'],
@@ -1417,7 +1409,7 @@ const content = computed(() => {
       [
         'store',
         'boolean',
-        'Required for background responses; NeoGate does not allow store=false.'
+        `Required for background responses; ${siteName.value} does not allow store=false.`
       ],
       [
         'stream',
@@ -1460,13 +1452,17 @@ const content = computed(() => {
       ['output[].content[].type', '"output_text"', 'Text content item type.'],
       ['output[].content[].text', 'string', 'Text result after the background task completes.'],
       ['error', 'object | null', 'On failure, includes code and message; usually null on success.'],
-      ['usage', 'object | null', 'Final token usage used by NeoGate for records and settlement.']
+      [
+        'usage',
+        'object | null',
+        `Final token usage used by ${siteName.value} for records and settlement.`
+      ]
     ],
     imageRequestParams: [
       [
         'model',
         'string, required',
-        'Image model, for example gpt-image-2. NeoGate still applies model permissions and upstream routing.'
+        `Image model, for example gpt-image-2. ${siteName.value} still applies model permissions and upstream routing.`
       ],
       ['prompt', 'string, required', 'Text prompt describing the image to generate.'],
       [
@@ -1494,7 +1490,7 @@ const content = computed(() => {
       [
         'usage',
         'object',
-        'Image generation usage returned by the upstream and used for NeoGate billing records.'
+        `Image generation usage returned by the upstream and used for ${siteName.value} billing records.`
       ],
       [
         'stream event',
@@ -1539,12 +1535,12 @@ const content = computed(() => {
       [
         'background',
         'boolean',
-        'Set true to create a background Response; NeoGate async image tasks use this mode.'
+        `Set true to create a background Response; ${siteName.value} async image tasks use this mode.`
       ],
       [
         'store',
         'boolean',
-        'Required for background responses; NeoGate does not allow store=false.'
+        `Required for background responses; ${siteName.value} does not allow store=false.`
       ],
       [
         'stream',
@@ -1587,15 +1583,13 @@ const content = computed(() => {
         'Returned when image_format is url or both.'
       ],
       ['error', 'object | null', 'On failure, includes code and message; usually null on success.'],
-      ['usage', 'object | null', 'Final usage data used by NeoGate for records and settlement.']
+      ['usage', 'object | null', `Final usage data used by ${siteName.value} for records and settlement.`]
     ],
     embeddingTitle: 'Embeddings',
-    openAiEmbeddings:
-      'Embeddings are forwarded with the official OpenAI JSON request body and are useful for RAG, semantic search, deduplication, and retrieval. The requested model still uses NeoGate model permissions, routing, billing, and usage records.',
+    openAiEmbeddings: `Embeddings are forwarded with the official OpenAI JSON request body and are useful for RAG, semantic search, deduplication, and retrieval. The requested model still uses ${siteName.value} model permissions, routing, billing, and usage records.`,
     modelsTitle: 'Models',
     sdkTitle: 'SDK examples',
-    anthropicIntro:
-      'Anthropic-compatible APIs use x-api-key auth. Set the Base URL to the NeoGate /anthropic URL. /v1/messages and /v1/messages/batches follow official Anthropic paths. Model listing is currently exposed through a NeoGate extension path.',
+    anthropicIntro: `Anthropic-compatible APIs use x-api-key auth. Set the Base URL to the ${siteName.value} /anthropic URL. /v1/messages and /v1/messages/batches follow official Anthropic paths. Model listing is currently exposed through a NeoGate extension path.`,
     anthropicAuthItems: [
       ['Base URL', anthropicBaseUrl.value],
       ['Auth header', 'x-api-key: YOUR_NEOGATE_API_KEY'],
@@ -1707,8 +1701,7 @@ const content = computed(() => {
         'Retry later or add/switch upstream channels in the admin console.'
       ]
     ],
-    billingIntro:
-      'NeoGate estimates credit before forwarding and settles by actual tokens and configured prices after the response completes.',
+    billingIntro: `${siteName.value} estimates credit before forwarding and settles by actual tokens and configured prices after the response completes.`,
     billingItems: [
       [
         'Text generation',

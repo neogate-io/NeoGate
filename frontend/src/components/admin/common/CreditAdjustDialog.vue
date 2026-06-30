@@ -57,7 +57,7 @@ const { t } = useLocale()
           v-model="amount"
           :controls="false"
           :min="-100000"
-          :precision="2"
+          :precision="0"
           :step="1"
         />
         <p class="credit-adjust-hint">{{ hint }}</p>

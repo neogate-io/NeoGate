@@ -84,7 +84,6 @@ impl ModelBlockCache {
 impl RoutingCache {
     pub(super) fn is_fresh(&self, ttl: Duration) -> bool {
         self.loaded_at
-            .map(|loaded_at| loaded_at.elapsed() < ttl)
-            .unwrap_or(false)
+            .is_some_and(|loaded_at| loaded_at.elapsed() < ttl)
     }
 }

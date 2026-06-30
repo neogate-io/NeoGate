@@ -10,7 +10,18 @@ use super::{
 };
 
 pub(super) fn ready_at(cooldown_until: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
-    cooldown_until.map(|value| value <= now).unwrap_or(true)
+    cooldown_until.is_none_or(|value| value <= now)
+}
+
+pub(super) fn channel_keys<'a>(
+    cache: &'a RoutingCache,
+    channel: &ChannelCandidate,
+) -> &'a [KeyCandidate] {
+    cache
+        .keys
+        .get(&channel.id)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
 }
 
 pub(super) fn channel_matches_model(channel: &ChannelCandidate, model: &str) -> bool {
@@ -115,16 +126,10 @@ pub(super) fn channel_is_available(
     channel.protocol == protocol
         && channel_matches_model(channel, model)
         && ready_at(channel.cooldown_until, now)
-        && cache
-            .keys
-            .get(&channel.id)
-            .map(|keys| {
-                keys.iter().any(|key| {
-                    key_is_available(channel, key, model, now, model_blocks)
-                        && !was_attempted(channel, key, attempted)
-                })
-            })
-            .unwrap_or(false)
+        && channel_keys(cache, channel).iter().any(|key| {
+            key_is_available(channel, key, model, now, model_blocks)
+                && !was_attempted(channel, key, attempted)
+        })
 }
 
 pub(super) fn unavailable_channel_message(
@@ -185,14 +190,9 @@ pub(super) fn unavailable_channel_message(
     }
 
     if ready_channels.iter().all(|channel| {
-        cache
-            .keys
-            .get(&channel.id)
-            .map(|keys| {
-                keys.iter()
-                    .all(|key| !key_is_available(channel, key, model, now, model_blocks))
-            })
-            .unwrap_or(true)
+        channel_keys(cache, channel)
+            .iter()
+            .all(|key| !key_is_available(channel, key, model, now, model_blocks))
     }) {
         return format!(
             "no available {protocol_name} channel for model {model}; matching channel(s) have no enabled healthy key ready to use"

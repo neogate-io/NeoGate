@@ -19,7 +19,7 @@ pub(super) async fn finish_bridge_json(
 ) -> AppResult<Response> {
     let (body, trailing_error) =
         read_body_until_error(upstream_response, ctx.state.config.relay.body_limit_bytes).await?;
-    let converted = match convert(&body, &ctx.model) {
+    let converted = match convert(&body, &ctx.external_model) {
         Ok(converted) => {
             if let Some(err) = trailing_error {
                 tracing::debug!(
@@ -97,7 +97,7 @@ pub(super) fn finish_bridge_stream<C: BridgeSseConverter + Send + 'static>(
 ) -> AppResult<Response> {
     let content_length = upstream_response.content_length();
     let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
-    let converter = new_converter(ctx.model.clone());
+    let converter = new_converter(ctx.external_model.clone());
     let upstream_stream = upstream_response.bytes_stream();
     let stream = futures_util::stream::unfold(
         (upstream_stream, converter),

@@ -357,6 +357,7 @@ async fn diagnose_endpoint(
         }
         key_reports.push(report);
     }
+    persist_model_probe_results_best_effort(state, endpoint, &key_reports).await;
 
     discovered_models.sort();
     let missing_configured_models = missing_models(&endpoint.models, &discovered_models);
@@ -774,7 +775,7 @@ fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeReque
     }
 
     let adapter = adapter_for_provider(&endpoint.provider);
-    let route = RelayRoute::OpenAiChatCompletions;
+    let route = RelayRoute::ChatCompletions;
     let mut extra_headers = reqwest::header::HeaderMap::new();
     if endpoint.provider.eq_ignore_ascii_case("qwen") {
         extra_headers.insert("x-dashscope-sse", "enable".parse().expect("valid header"));
@@ -950,6 +951,143 @@ async fn persist_endpoint_health(
     .bind(healthy)
     .bind((!healthy).then_some(summary))
     .bind(cooldown_until)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn persist_model_probe_results_best_effort(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key_reports: &[KeyDiagnosticReport],
+) {
+    if let Err(err) = persist_model_probe_results(state, endpoint, key_reports).await {
+        tracing::warn!(
+            endpoint_id = endpoint.id,
+            provider = %endpoint.provider,
+            error = %err,
+            "failed to persist diagnostic model probe results"
+        );
+    }
+}
+
+#[derive(Clone)]
+struct ModelProbeSummary {
+    status: DiagnosticStatus,
+    message: String,
+    status_code: Option<u16>,
+}
+
+async fn persist_model_probe_results(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key_reports: &[KeyDiagnosticReport],
+) -> AppResult<()> {
+    let mut summaries = std::collections::HashMap::<String, ModelProbeSummary>::new();
+    for step in key_reports
+        .iter()
+        .flat_map(|report| report.steps.iter())
+        .filter(|step| step.name.starts_with("probe:"))
+    {
+        let model = step.name.trim_start_matches("probe:").to_string();
+        summaries
+            .entry(model)
+            .and_modify(|summary| merge_model_probe_summary(summary, step))
+            .or_insert_with(|| ModelProbeSummary {
+                status: step.status,
+                message: step.message.clone(),
+                status_code: step.status_code,
+            });
+    }
+
+    for (model, summary) in summaries {
+        match summary.status {
+            DiagnosticStatus::Ok | DiagnosticStatus::Warning => {
+                persist_model_probe_success(state, endpoint, &model, summary.status_code).await?;
+            }
+            DiagnosticStatus::Failed => {
+                persist_model_probe_failure(state, endpoint, &model, &summary).await?;
+            }
+            DiagnosticStatus::Skipped => {}
+        }
+    }
+    Ok(())
+}
+
+fn merge_model_probe_summary(summary: &mut ModelProbeSummary, step: &DiagnosticStep) {
+    if summary.status == DiagnosticStatus::Ok || step.status == DiagnosticStatus::Skipped {
+        return;
+    }
+    if step.status == DiagnosticStatus::Ok {
+        summary.status = DiagnosticStatus::Ok;
+        summary.message = step.message.clone();
+        summary.status_code = step.status_code;
+        return;
+    }
+    if summary.status != DiagnosticStatus::Failed && step.status == DiagnosticStatus::Failed {
+        summary.status = DiagnosticStatus::Failed;
+        summary.message = step.message.clone();
+        summary.status_code = step.status_code;
+    }
+}
+
+async fn persist_model_probe_success(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    model: &str,
+    status_code: Option<u16>,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_model cm
+         SET runtime_status = 'normal',
+             cooldown_until = NULL,
+             last_error = NULL,
+             last_status_code = $4,
+             last_probe_at = now(),
+             success_count = success_count + 1,
+             updated_at = now()
+         FROM channel_endpoint ce
+         WHERE ce.id = $1
+           AND cm.channel_id = ce.channel_id
+           AND cm.provider = $2
+           AND cm.model = $3",
+    )
+    .bind(endpoint.id)
+    .bind(&endpoint.provider)
+    .bind(model)
+    .bind(status_code.map(i32::from))
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn persist_model_probe_failure(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    model: &str,
+    summary: &ModelProbeSummary,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_model cm
+         SET enabled = FALSE,
+             runtime_status = 'failed',
+             cooldown_until = NULL,
+             last_error = $4,
+             last_status_code = $5,
+             last_probe_at = now(),
+             failure_count = failure_count + 1,
+             updated_at = now()
+         FROM channel_endpoint ce
+         WHERE ce.id = $1
+           AND cm.channel_id = ce.channel_id
+           AND cm.provider = $2
+           AND cm.model = $3",
+    )
+    .bind(endpoint.id)
+    .bind(&endpoint.provider)
+    .bind(model)
+    .bind(summary.message.chars().take(500).collect::<String>())
+    .bind(summary.status_code.map(i32::from))
     .execute(&state.db.pool)
     .await?;
     Ok(())

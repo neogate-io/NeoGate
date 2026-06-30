@@ -193,8 +193,7 @@ pub async fn validate_admin_session_claims(
     }
     let password_changed_at: Option<DateTime<Utc>> = row.try_get("password_changed_at")?;
     if password_changed_at
-        .map(|changed_at| changed_at.timestamp_millis() > claims.issued_at_ms)
-        .unwrap_or(false)
+        .is_some_and(|changed_at| changed_at.timestamp_millis() > claims.issued_at_ms)
     {
         return Err(AppError::Unauthorized);
     }
@@ -282,7 +281,6 @@ pub struct UserAuth {
     pub user_key_credit_account: CreditAccountId,
     pub user_key_model_credit_accounts: Arc<HashMap<String, CreditAccountId>>,
     pub user_group: String,
-    pub model_limits: Option<Arc<Vec<String>>>,
 }
 
 #[derive(Clone)]
@@ -428,7 +426,7 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             r#"
             SELECT uk.id AS user_key_id, uk.user_id, uk.project_id, uk.status AS key_status,
                    p.status AS project_status,
-                   uk.secret_ciphertext, uk.expires_at, uk.model_limits, u.status AS user_status,
+                   uk.secret_ciphertext, uk.expires_at, u.status AS user_status,
                    pw.id AS project_credit_account_id, ukw.id AS user_key_credit_account_id,
                    ug.code AS user_group
             FROM user_key uk
@@ -463,7 +461,7 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             return Err(AppError::Forbidden);
         }
         let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
-        if expires_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+        if expires_at.is_some_and(|value| value <= Utc::now()) {
             return Err(AppError::Forbidden);
         }
 
@@ -482,9 +480,6 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
             )
             .await?,
             user_group: row.try_get("user_group")?,
-            model_limits: row
-                .try_get::<Option<Vec<String>>, _>("model_limits")?
-                .map(Arc::new),
         };
         state
             .user_auth_cache
@@ -505,13 +500,10 @@ impl UserAuth {
         self.user_key_model_credit_accounts.get(model)
     }
 
-    pub fn ensure_model_allowed(&self, model: &str) -> AppResult<()> {
-        if let Some(limits) = &self.model_limits {
-            if !limits.iter().any(|item| item == model) {
-                return Err(AppError::Forbidden);
-            }
-        }
-        Ok(())
+    pub async fn ensure_model_allowed(&self, state: &AppState, model: &str) -> AppResult<()> {
+        crate::project::models::resolve_project_model(&state.db.pool, self.project_id, model)
+            .await
+            .map(|_| ())
     }
 }
 
@@ -523,7 +515,7 @@ pub(crate) async fn user_auth_for_key_id(
         r#"
         SELECT uk.id AS user_key_id, uk.user_id, uk.project_id, uk.status AS key_status,
                p.status AS project_status,
-               uk.expires_at, uk.model_limits, u.status AS user_status,
+               uk.expires_at, u.status AS user_status,
                pw.id AS project_credit_account_id, ukw.id AS user_key_credit_account_id,
                ug.code AS user_group
         FROM user_key uk
@@ -547,7 +539,7 @@ pub(crate) async fn user_auth_for_key_id(
         return Err(AppError::Forbidden);
     }
     let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
-    if expires_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+    if expires_at.is_some_and(|value| value <= Utc::now()) {
         return Err(AppError::Forbidden);
     }
 
@@ -560,9 +552,6 @@ pub(crate) async fn user_auth_for_key_id(
         user_key_model_credit_accounts: fetch_user_key_model_credit_accounts(state, user_key_id)
             .await?,
         user_group: row.try_get("user_group")?,
-        model_limits: row
-            .try_get::<Option<Vec<String>>, _>("model_limits")?
-            .map(Arc::new),
     })
 }
 
@@ -860,22 +849,6 @@ mod tests {
     }
 
     #[test]
-    fn model_limits_reject_unlisted_models() {
-        let auth = UserAuth {
-            user_id: 1,
-            project_id: 1,
-            user_key_id: 1,
-            project_credit_account: CreditAccountId::new(100),
-            user_key_credit_account: CreditAccountId::new(101),
-            user_key_model_credit_accounts: Arc::new(HashMap::new()),
-            user_group: "default".to_string(),
-            model_limits: Some(Arc::new(vec!["gpt-4.1".to_string()])),
-        };
-        assert!(auth.ensure_model_allowed("gpt-4.1").is_ok());
-        assert!(auth.ensure_model_allowed("claude-3-5-sonnet").is_err());
-    }
-
-    #[test]
     fn user_auth_cache_removes_targeted_entries() {
         let cache = UserAuthCache::new(Duration::from_secs(60), 1024);
         cache.insert(
@@ -888,7 +861,6 @@ mod tests {
                 user_key_credit_account: CreditAccountId::new(110),
                 user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
-                model_limits: None,
             },
             None,
         );
@@ -902,7 +874,6 @@ mod tests {
                 user_key_credit_account: CreditAccountId::new(111),
                 user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
-                model_limits: None,
             },
             None,
         );
@@ -916,7 +887,6 @@ mod tests {
                 user_key_credit_account: CreditAccountId::new(120),
                 user_key_model_credit_accounts: Arc::new(HashMap::new()),
                 user_group: "default".to_string(),
-                model_limits: None,
             },
             None,
         );

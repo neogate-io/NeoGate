@@ -19,8 +19,10 @@ import { isMessageKey, type MessageKey } from '../i18n'
 import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
 import { useAsyncData } from '../composables/useAsyncData'
+import { useSiteBrand } from '../composables/useSiteBrand'
 
 const { t } = useLocale()
+const { siteName, logoUrl } = useSiteBrand()
 const route = useRoute()
 const logout = useLogout(t)
 const { data: servicePolicy } = useAsyncData(() => getAdminServicePolicy(), null)
@@ -30,13 +32,14 @@ type SettingNavItem = { path: string; key: MessageKey }
 type AdminNavGroup = { key: MessageKey; items: AdminNavItem[] }
 
 const navGroups = computed(() => {
+  const serviceMode = servicePolicy.value?.service_mode
   const operationItems: AdminNavItem[] = [
     { path: '/admin/channels', key: 'upstreamChannels', icon: Connection }
   ]
-  if (servicePolicy.value?.service_mode === 'internal') {
+  if (serviceMode === 'internal') {
     operationItems.push({ path: '/admin/apps', key: 'apps', icon: Promotion })
   }
-  if (servicePolicy.value?.service_mode !== 'internal') {
+  if (serviceMode === 'paid') {
     operationItems.push({ path: '/admin/credentials', key: 'credentialManagement', icon: Key })
     operationItems.push({ path: '/admin/keys', key: 'userManagement', icon: User })
   }
@@ -48,7 +51,7 @@ const navGroups = computed(() => {
       items: operationItems
     }
   ]
-  if (servicePolicy.value?.service_mode !== 'paid') {
+  if (serviceMode === 'internal') {
     groups.push({
       key: 'adminNavAccounts',
       items: [
@@ -109,9 +112,10 @@ watch(
   <el-container class="app-shell light-sidebar-shell admin-shell">
     <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
-        <RouterLink class="shell-logo-link" to="/" :aria-label="t('home')">
-          <img class="shell-logo-image" src="/logos/logo.svg" :alt="t('appName')" />
-        </RouterLink>
+        <a class="shell-logo-link" href="/" target="_blank" rel="noopener noreferrer" :aria-label="t('home')">
+          <img v-if="logoUrl" class="shell-logo-image" :src="logoUrl" :alt="siteName" />
+          <span class="shell-logo-name">{{ siteName }}</span>
+        </a>
       </h1>
       <el-menu
         :key="settingsOpen ? 'settings-open' : 'settings-closed'"

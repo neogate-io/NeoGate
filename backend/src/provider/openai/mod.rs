@@ -12,6 +12,7 @@ use axum::{
 };
 use bytes::Bytes;
 use serde::Deserialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
@@ -29,6 +30,7 @@ use crate::relay::{
     forward_anthropic, forward_openai_bound, forward_prepared_openai, log_upstream_http_failure,
     prepare_relay_body, read_upstream_error_body, record_upstream_http_failure,
     record_upstream_transport_failure_for_failover, reserve_credit, respond_upstream_http_failure,
+    rewrite_relay_body_model,
     selector::{
         AttemptedUpstream, ModelCooldown, SelectedUpstream, SelectionConstraints, UpstreamProtocol,
     },
@@ -47,6 +49,14 @@ const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 3] = [
     UpstreamProtocol::Openai,
     UpstreamProtocol::Anthropic,
 ];
+
+fn project_model_request_context(
+    body: &Bytes,
+) -> Option<crate::project::models::ProjectModelRequestContext> {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .map(|value| crate::project::models::ProjectModelRequestContext::from_value(&value))
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponseAssetQuery {
@@ -74,7 +84,7 @@ pub(crate) async fn openai_chat_completion_response(
         auth,
         headers,
         body,
-        RelayRoute::OpenAiChatCompletions,
+        RelayRoute::ChatCompletions,
         BodyKind::OpenaiChat,
     )
     .await
@@ -90,7 +100,7 @@ pub(crate) async fn openai_embeddings(
         auth,
         HeaderMap::new(),
         body,
-        RelayRoute::OpenAiEmbeddings,
+        RelayRoute::Embeddings,
         BodyKind::OpenaiJson,
     )
     .await
@@ -106,7 +116,7 @@ pub(crate) async fn openai_moderations(
         auth,
         HeaderMap::new(),
         body,
-        RelayRoute::OpenAiModerations,
+        RelayRoute::Moderations,
         BodyKind::OpenaiJson,
     )
     .await
@@ -123,7 +133,7 @@ pub(crate) async fn openai_responses(
         auth,
         headers,
         body,
-        RelayRoute::OpenAiResponses,
+        RelayRoute::Responses,
         BodyKind::OpenaiResponses,
     )
     .await
@@ -186,8 +196,7 @@ pub(crate) async fn openai_response(
     .await?;
     let path = uri
         .path_and_query()
-        .map(|value| value.as_str())
-        .unwrap_or_else(|| uri.path());
+        .map_or_else(|| uri.path(), |value| value.as_str());
     let response = forward_openai_bound(&state, &upstream, Method::GET, path, None).await?;
     if response_query_streams(path) {
         return background::finish_stream_response(state, auth, task, upstream, response);
@@ -267,7 +276,19 @@ async fn relay_openai(
         meta,
         output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
-    auth.ensure_model_allowed(&meta.model)?;
+    let routing_context = project_model_request_context(&body);
+    let resolved = crate::project::models::resolve_project_model_with_context(
+        &state.db.pool,
+        auth.project_id,
+        &meta.model,
+        routing_context,
+    )
+    .await?;
+    let upstream_body = if resolved.target_model == meta.model {
+        body.clone()
+    } else {
+        rewrite_relay_body_model(body.clone(), body_kind, &resolved.target_model)?
+    };
     if matches!(body_kind, BodyKind::OpenaiResponses) && meta.background {
         if meta.store == Some(false) {
             return Err(AppError::BadRequest(
@@ -280,17 +301,24 @@ async fn relay_openai(
             ));
         }
         return background::create_background_response(
-            state,
-            auth,
-            body,
-            meta.model,
-            output_tokens,
-            meta.request_params,
-            meta.channel_affinity_key,
+            background::CreateBackgroundResponseRequest {
+                state,
+                auth,
+                body: upstream_body,
+                external_model: resolved.external_model,
+                target_model: resolved.target_model,
+                target_channel_id: resolved.target_channel_id,
+                routing: resolved.routing,
+                output_tokens,
+                request_params: meta.request_params,
+                channel_affinity_key: meta.channel_affinity_key,
+            },
         )
         .await;
     }
-    let user_key_model_credit_account = auth.model_credit_account(&meta.model).cloned();
+    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
+    let user_key_model_credit_account =
+        auth.model_credit_account(&resolved.external_model).cloned();
     let channel_affinity_key = meta.channel_affinity_key.clone();
     let relay_trace_id = Uuid::new_v4();
 
@@ -310,7 +338,8 @@ async fn relay_openai(
                 select_upstream_excluding(
                     &state,
                     path,
-                    &meta.model,
+                    &resolved.target_model,
+                    resolved.target_channel_id,
                     channel_affinity_key.as_ref(),
                     &attempted_upstreams,
                 )
@@ -321,14 +350,14 @@ async fn relay_openai(
         // 路径 B：已学习到该 (endpoint, model) 不支持 /v1/responses → 覆写为 chat 降级。
         // reuse 路径的 upstream 已是降级版（responses_chat_fallback=true），此处不重复命中。
         if !upstream.responses_chat_fallback
-            && route == RelayRoute::OpenAiResponses
+            && route == RelayRoute::Responses
             && matches!(
                 protocol,
                 UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
             )
             && state
                 .selector
-                .responses_unsupported(upstream.channel_endpoint_id, &meta.model)
+                .responses_unsupported(upstream.channel_endpoint_id, &resolved.target_model)
                 .await
         {
             tracing::debug!(
@@ -338,6 +367,7 @@ async fn relay_openai(
                 channel_endpoint_id = upstream.channel_endpoint_id,
                 protocol = protocol.as_str(),
                 model = %meta.model,
+                target_model = %resolved.target_model,
                 path,
                 "downgrading responses to chat fallback (learned unsupported for this model)"
             );
@@ -351,7 +381,7 @@ async fn relay_openai(
             .price_for(
                 &state.db.pool,
                 &upstream.provider,
-                &meta.model,
+                &resolved.target_model,
                 &auth.user_group,
             )
             .await?;
@@ -364,7 +394,7 @@ async fn relay_openai(
                 &state,
                 &auth,
                 user_key_model_credit_account.as_ref(),
-                &body,
+                &upstream_body,
                 output_tokens,
                 &price,
             )
@@ -376,7 +406,10 @@ async fn relay_openai(
             upstream,
             protocol,
             path,
-            model: meta.model.clone(),
+            model: resolved.target_model.clone(),
+            external_model: resolved.external_model.clone(),
+            upstream_model: resolved.target_model.clone(),
+            routing: resolved.routing.clone(),
             streamed: meta.stream,
             price,
             hold,
@@ -387,16 +420,16 @@ async fn relay_openai(
             relay_attempt: relay_attempt_counter,
             relay_final: false,
             request_params: meta.request_params.clone(),
-            _image_sync_permit: None,
+            request_permit: None,
         };
         let mut adapter_response_mode = AdapterResponseMode::Passthrough;
         let response = match protocol {
             UpstreamProtocol::Anthropic if path == "/v1/chat/completions" => {
-                let body = bridge::openai_chat_to_anthropic_messages(body.clone())?;
+                let body = bridge::openai_chat_to_anthropic_messages(upstream_body.clone())?;
                 forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
             }
             UpstreamProtocol::Anthropic if path == "/v1/responses" => {
-                let body = bridge::openai_response_to_anthropic_messages(body.clone())?;
+                let body = bridge::openai_response_to_anthropic_messages(upstream_body.clone())?;
                 forward_anthropic(&state, &HeaderMap::new(), &ctx.upstream, body).await
             }
             UpstreamProtocol::Anthropic => Err(AppError::BadRequest(format!(
@@ -408,22 +441,12 @@ async fn relay_openai(
                     &ctx.upstream,
                     protocol,
                     route,
-                    body.clone(),
+                    upstream_body.clone(),
                     &headers,
                     meta.stream,
                 )?;
                 adapter_response_mode = prepared.response_mode;
-                forward_prepared_openai(
-                    &state,
-                    &ctx.upstream,
-                    protocol,
-                    prepared.body,
-                    prepared.url,
-                    &prepared.log_path,
-                    &headers,
-                    prepared.extra_headers,
-                )
-                .await
+                forward_prepared_openai(&state, &ctx.upstream, protocol, &headers, prepared).await
             }
         };
 
@@ -433,7 +456,7 @@ async fn relay_openai(
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
-                    ctx.relay_final = true;
+                    ctx.mark_final_with_permit(&mut request_permit);
                     return finish_openai_relay_success(
                         ctx,
                         status,
@@ -449,7 +472,7 @@ async fn relay_openai(
                 // 不支持 responses，并就地降级为 chat 重试同一 upstream（不重新 select、不写
                 // ModelBlockKey/channel_model，避免误伤该模型的 chat 路径）。chat 重试若再失败，
                 // 落入下方 model-unavailable 逻辑自然区分「不支持 responses 形态」与「model 真不存在」。
-                if route == RelayRoute::OpenAiResponses
+                if route == RelayRoute::Responses
                     && matches!(
                         ctx.protocol,
                         UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
@@ -506,7 +529,7 @@ async fn relay_openai(
                             path = ctx.path,
                             "skipping upstream model cooldown because this model has no alternate channel"
                         );
-                        ctx.relay_final = true;
+                        ctx.mark_final_with_permit(&mut request_permit);
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     if model_unavailable_reroutes >= MODEL_UNAVAILABLE_MAX_REROUTES {
@@ -523,7 +546,7 @@ async fn relay_openai(
                             max_reroutes = MODEL_UNAVAILABLE_MAX_REROUTES,
                             "upstream model unavailable reroute limit reached"
                         );
-                        ctx.relay_final = true;
+                        ctx.mark_final_with_permit(&mut request_permit);
                         return respond_upstream_http_failure(ctx, status, failure).await;
                     }
                     model_unavailable_reroutes += 1;
@@ -582,7 +605,7 @@ async fn relay_openai(
                     continue;
                 }
 
-                ctx.relay_final = true;
+                ctx.mark_final_with_permit(&mut request_permit);
                 return respond_upstream_http_failure(ctx, status, failure).await;
             }
             Err(err) => {
@@ -601,7 +624,7 @@ async fn relay_openai(
                     record_upstream_transport_failure_for_failover(&ctx, summary).await;
                     continue;
                 }
-                ctx.relay_final = true;
+                ctx.mark_final_with_permit(&mut request_permit);
                 return finish_relay(ctx, Err(err)).await;
             }
         }
@@ -645,18 +668,18 @@ fn response_subresource_path(response_id: &str, uri: &Uri, subresource: &str) ->
 fn response_query_streams(path: &str) -> bool {
     path.split_once('?')
         .and_then(|(_, query)| serde_urlencoded::from_str::<Vec<(String, String)>>(query).ok())
-        .map(|pairs| {
+        .is_some_and(|pairs| {
             pairs
                 .iter()
                 .any(|(key, value)| key == "stream" && value == "true")
         })
-        .unwrap_or(false)
 }
 
 async fn select_upstream_excluding(
     state: &AppState,
     path: &'static str,
     model: &str,
+    target_channel_id: Option<i64>,
     affinity_key: Option<&ChannelAffinityKey>,
     attempted: &[AttemptedUpstream],
 ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
@@ -665,6 +688,20 @@ async fn select_upstream_excluding(
         "/v1/responses" => &OPENAI_RESPONSES_PROTOCOLS[..],
         _ => &OPENAI_PROTOCOLS[..],
     };
+
+    if let Some(channel_id) = target_channel_id {
+        return state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                protocols,
+                model,
+                channel_id,
+                attempted,
+            )
+            .await;
+    }
 
     state
         .selector

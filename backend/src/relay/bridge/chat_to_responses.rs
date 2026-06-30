@@ -510,8 +510,7 @@ impl OpenAiChatSseToOpenAiResponse {
         let index = tool_call
             .get("index")
             .and_then(Value::as_u64)
-            .map(|value| value as usize)
-            .unwrap_or(0);
+            .map_or(0, |value| value as usize);
         if self.current_tool_calls.len() <= index {
             self.current_tool_calls.resize_with(index + 1, || None);
         }

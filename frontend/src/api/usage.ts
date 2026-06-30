@@ -208,6 +208,11 @@ export function downloadAdminUsageStatisticsCsv(
   return adminFileRequest(`/api/admin/usage/statistics/export.csv?${params}`)
 }
 
+export function downloadAdminUsageCsv(query: AdminUsageQuery = {}) {
+  const params = adminUsageParams(query)
+  return adminFileRequest(`/api/admin/usage/export.csv?${params}`)
+}
+
 export function getUserUsage(page = 1, limit = 20, start?: string, end?: string, cursor?: string) {
   const params = new URLSearchParams({
     page: String(page),
@@ -217,6 +222,16 @@ export function getUserUsage(page = 1, limit = 20, start?: string, end?: string,
   if (end) params.set('end', end)
   if (cursor) params.set('cursor', cursor)
   return userRequest<UsagePage>(`/api/user/usage?${params}`)
+}
+
+function adminUsageParams(query: AdminUsageQuery) {
+  const params = new URLSearchParams()
+  if (query.start) params.set('start', query.start)
+  if (query.end) params.set('end', query.end)
+  if (query.query) params.set('query', query.query)
+  if (query.model) params.set('model', query.model)
+  if (query.status && query.status !== 'all') params.set('status', query.status)
+  return params
 }
 
 function usageStatisticsParams(query: UsageStatisticsQuery) {

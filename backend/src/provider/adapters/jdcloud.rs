@@ -39,9 +39,9 @@ impl ProviderAdapter for JdcloudAdapter {
         if streamed {
             extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
-        let (route, body, response_mode) = if route == RelayRoute::OpenAiResponses {
+        let (route, body, response_mode) = if route == RelayRoute::Responses {
             (
-                RelayRoute::OpenAiChatCompletions,
+                RelayRoute::ChatCompletions,
                 jdcloud_chat_cache_body(bridge::openai_response_to_openai_chat(body)?, route)?,
                 AdapterResponseMode::OpenAiChatAsOpenAiResponse,
             )
@@ -72,7 +72,7 @@ fn jdcloud_chat_cache_body(body: Bytes, route: RelayRoute) -> AppResult<Bytes> {
     let Some(object) = value.as_object_mut() else {
         return Ok(body);
     };
-    if route == RelayRoute::OpenAiChatCompletions {
+    if route == RelayRoute::ChatCompletions {
         reorder_system_cache_prefix(object.get_mut("messages"));
     }
     let has_session_id = object
@@ -192,14 +192,14 @@ mod tests {
         assert_eq!(
             JDCLOUD_ADAPTER.resolve_url(
                 "https://agentrs.jd.com/api/saas/openai-u/v1",
-                RelayRoute::OpenAiResponses
+                RelayRoute::Responses
             ),
             "https://agentrs.jd.com/api/saas/openai-u/v1/responses"
         );
         assert_eq!(
             JDCLOUD_ADAPTER.resolve_url(
                 "https://agentrs.jd.com/api/saas/openai-u/v1",
-                RelayRoute::OpenAiChatCompletions
+                RelayRoute::ChatCompletions
             ),
             "https://agentrs.jd.com/api/saas/openai-u/v1/chat/completions"
         );
@@ -214,7 +214,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiResponses,
+                RelayRoute::Responses,
                 body,
                 &HeaderMap::new(),
                 false,
@@ -233,7 +233,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiResponses,
+                RelayRoute::Responses,
                 body,
                 &HeaderMap::new(),
                 false,
@@ -262,7 +262,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiResponses,
+                RelayRoute::Responses,
                 body,
                 &HeaderMap::new(),
                 true,
@@ -284,7 +284,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiChatCompletions,
+                RelayRoute::ChatCompletions,
                 body,
                 &HeaderMap::new(),
                 false,
@@ -305,7 +305,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiChatCompletions,
+                RelayRoute::ChatCompletions,
                 body,
                 &HeaderMap::new(),
                 false,
@@ -326,7 +326,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiChatCompletions,
+                RelayRoute::ChatCompletions,
                 body,
                 &HeaderMap::new(),
                 false,
@@ -352,7 +352,7 @@ mod tests {
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
-                RelayRoute::OpenAiChatCompletions,
+                RelayRoute::ChatCompletions,
                 body,
                 &HeaderMap::new(),
                 false,

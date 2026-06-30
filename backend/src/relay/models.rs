@@ -113,6 +113,19 @@ async fn available_models(
     auth: &UserAuth,
     protocols: Option<&[UpstreamProtocol]>,
 ) -> AppResult<Vec<AvailableModel>> {
+    let project_models =
+        crate::project::models::list_project_models(&state.db.pool, auth.project_id).await?;
+    if !project_models.is_empty() {
+        return Ok(project_models
+            .into_iter()
+            .filter(|model| model.enabled)
+            .map(|model| AvailableModel {
+                id: model.model,
+                owned_by: "project".to_string(),
+            })
+            .collect());
+    }
+
     let protocols = protocols.map(|items| {
         items
             .iter()
@@ -151,7 +164,6 @@ async fn available_models(
                   cm.runtime_status = 'normal'
                   OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
               )
-              AND ($2::TEXT[] IS NULL OR cm.model = ANY($2))
               AND (
                   (
                       c.use_credentials = FALSE
@@ -183,7 +195,6 @@ async fn available_models(
         "#
     )))
     .bind(protocols.as_deref())
-    .bind(auth.model_limits.as_ref().map(|limits| limits.as_slice()))
     .fetch_all(&state.db.pool)
     .await?;
 

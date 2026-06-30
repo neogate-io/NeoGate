@@ -118,12 +118,13 @@ async fn finalize_loaded(
             fail_settled_task_billing(state, task.id, hold, "async task missing model").await?;
             return Ok(());
         };
+        let upstream_model = task.upstream_model.as_deref().unwrap_or(model);
         let price = match state
             .billing
             .price_for(
                 &state.db.pool,
                 &task.provider,
-                model,
+                upstream_model,
                 &billing_context.user_group,
             )
             .await
@@ -176,6 +177,9 @@ async fn finalize_loaded(
             relay_final: true,
             provider: upstream.provider.clone(),
             model: Some(model.to_string()),
+            upstream_model: Some(upstream_model.to_string()),
+            routing_phase: "relay".to_string(),
+            routing: None,
             status_code: Some(200),
             streamed: false,
             latency_ms: 0,

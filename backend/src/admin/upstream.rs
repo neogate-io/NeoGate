@@ -16,10 +16,8 @@ use crate::{
 };
 
 use super::{
-    credentials::runtime_secret_from_enabled_credential, ensure_custom_provider,
-    ensure_newapi_provider, ensure_sub2api_provider, invalidate_cache, provider_default_endpoints,
-    record_provider_models, CUSTOM_PROVIDER_CODE, NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL,
-    SUB2API_PROVIDER_CODE,
+    credentials::runtime_secret_from_enabled_credential, ensure_builtin_manual_provider_by_code,
+    invalidate_cache, provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Deserialize)]
@@ -49,15 +47,7 @@ pub(super) async fn upstream_models(
     if provider_code.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
     }
-    if provider_code == CUSTOM_PROVIDER_CODE {
-        ensure_custom_provider(&state).await?;
-    }
-    if provider_code == NEWAPI_PROVIDER_CODE {
-        ensure_newapi_provider(&state).await?;
-    }
-    if provider_code == SUB2API_PROVIDER_CODE {
-        ensure_sub2api_provider(&state).await?;
-    }
+    ensure_builtin_manual_provider_by_code(&state, provider_code).await?;
 
     let defaults = provider_default_endpoints(&state, provider_code)
         .await?
@@ -165,15 +155,40 @@ async fn sync_channel_models_from_upstream(
     }
 
     let mut seen = std::collections::HashSet::new();
-    let models: Vec<String> = models
+    let upstream_models: Vec<String> = models
         .iter()
         .map(|model| model.trim())
         .filter(|model| !model.is_empty())
         .filter(|model| seen.insert((*model).to_string()))
         .map(str::to_string)
         .collect();
+    let upstream_model_set: std::collections::HashSet<&str> =
+        upstream_models.iter().map(String::as_str).collect();
 
-    for model in &models {
+    let configured_rows = sqlx::query(
+        "SELECT DISTINCT btrim(endpoint_model.model) AS model
+         FROM channel_endpoint ce
+         CROSS JOIN unnest(ce.models) AS endpoint_model(model)
+         WHERE ce.channel_id = $1
+           AND ce.protocol = $2
+           AND ce.base_url = $3
+           AND btrim(endpoint_model.model) <> ''
+         ORDER BY model ASC",
+    )
+    .bind(channel_id)
+    .bind(protocol)
+    .bind(base_url)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let configured_models: Vec<String> = configured_rows
+        .iter()
+        .map(|row| row.try_get("model"))
+        .collect::<Result<_, _>>()?;
+
+    for model in configured_models
+        .iter()
+        .filter(|model| upstream_model_set.contains(model.as_str()))
+    {
         sqlx::query(
             "INSERT INTO channel_model
              (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
@@ -207,11 +222,28 @@ async fn sync_channel_models_from_upstream(
              missing_since = COALESCE(missing_since, now()),
              updated_at = now()
          WHERE channel_id = $1
+           AND model = ANY($2)
            AND status = 'available'
-           AND NOT (model = ANY($2))",
+           AND NOT (model = ANY($3))",
     )
     .bind(channel_id)
-    .bind(&models)
+    .bind(&configured_models)
+    .bind(&upstream_models)
+    .execute(&state.db.pool)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM channel_model cm
+         WHERE cm.channel_id = $1
+           AND NOT EXISTS (
+               SELECT 1
+               FROM channel_endpoint ce
+               CROSS JOIN unnest(ce.models) AS endpoint_model(model)
+               WHERE ce.channel_id = cm.channel_id
+                 AND btrim(endpoint_model.model) = cm.model
+           )",
+    )
+    .bind(channel_id)
     .execute(&state.db.pool)
     .await?;
 

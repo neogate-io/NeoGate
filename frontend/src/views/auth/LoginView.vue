@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { Lock, User } from '@element-plus/icons-vue'
 import { ElMessage, type InputInstance } from 'element-plus'
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { login as loginAccount, requestLoginVerificationCode } from '../../api/auth'
 import type { LoginRole } from '../../api/auth'
 import LocaleToggleButton from '../../components/common/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { useSiteBrand } from '../../composables/useSiteBrand'
 import { useAuthStore } from '../../stores/auth'
 import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
@@ -15,6 +16,8 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const { locale, t } = useLocale()
+const { siteName } = useSiteBrand()
+const loginTitle = computed(() => t('loginTitle', { siteName: siteName.value }))
 const username = ref('')
 const password = ref('')
 const verificationCode = ref('')
@@ -147,7 +150,7 @@ function readRedirectPath(role: LoginRole) {
     <section class="login-stage">
       <el-form class="login-panel" @submit.prevent="login">
         <div class="login-panel-heading">
-          <h1>{{ t('loginTitle') }}</h1>
+          <h1>{{ loginTitle }}</h1>
           <p>{{ t('loginEmailHint') }}</p>
         </div>
         <div class="login-fields">

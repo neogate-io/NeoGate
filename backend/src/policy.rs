@@ -21,8 +21,8 @@ use crate::{
             UpsertProviderPriceRequest,
         },
         provider::{
-            ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider,
-            list_providers, provider_default_endpoints, record_provider_models,
+            ensure_builtin_manual_provider_by_code, list_providers, provider_default_endpoints,
+            record_provider_models,
         },
         setting::{
             test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,
@@ -429,15 +429,7 @@ pub async fn setup_upstream_models_for_state(
             "upstream api key is required".to_string(),
         ));
     }
-    if provider == "custom" {
-        ensure_custom_provider(state).await?;
-    }
-    if provider == "newapi" {
-        ensure_newapi_provider(state).await?;
-    }
-    if provider == "sub2api" {
-        ensure_sub2api_provider(state).await?;
-    }
+    ensure_builtin_manual_provider_by_code(state, provider).await?;
     provider_default_endpoints(state, provider)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider}")))?;
@@ -861,14 +853,11 @@ fn record_from_stored(
 ) -> ServicePolicyRecord {
     let stored = normalize_stored_policy(stored);
     let probe = RuntimeProbe::from_env().ok();
-    let runtime_mode = probe
-        .as_ref()
-        .map(|probe| probe.runtime_mode.as_str().to_string())
-        .unwrap_or_else(|| "standalone".to_string());
-    let redis_configured = probe
-        .as_ref()
-        .map(|probe| probe.redis_configured())
-        .unwrap_or(false);
+    let runtime_mode = probe.as_ref().map_or_else(
+        || "standalone".to_string(),
+        |probe| probe.runtime_mode.as_str().to_string(),
+    );
+    let redis_configured = probe.as_ref().is_some_and(|probe| probe.redis_configured());
     let is_distributed = runtime_mode == "distributed";
     ServicePolicyRecord {
         runtime_mode,

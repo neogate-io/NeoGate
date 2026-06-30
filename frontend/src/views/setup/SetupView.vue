@@ -1212,7 +1212,7 @@ onMounted(load)
           <li :class="{ ok: status?.secrets_configured }">
             ADMIN_TOKEN_SECRET / UPSTREAM_SECRET_KEY
           </li>
-          <li :class="{ ok: status?.site_configured }">SITE_NAME / PUBLIC_BASE_URL</li>
+          <li :class="{ ok: status?.site_configured }">PUBLIC_BASE_URL</li>
         </ul>
         <el-button :loading="generatingTemplate" @click="generateClusterTemplate">
           {{ t('generateEnvTemplate') }}

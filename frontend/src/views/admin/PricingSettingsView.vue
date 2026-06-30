@@ -126,22 +126,22 @@ onMounted(load)
         :data="pricingRows"
         stripe
       >
-        <el-table-column :label="t('userGroup')" min-width="220">
+        <el-table-column :label="t('userGroup')" min-width="180">
           <template #default="{ row }">
             {{ userGroupName(row.user_group) }}
           </template>
         </el-table-column>
-        <el-table-column :label="t('userCount')" min-width="120">
+        <el-table-column :label="t('userCount')" min-width="96">
           <template #default="{ row }">
             {{ userGroupUserCount(row.user_group) }}
           </template>
         </el-table-column>
-        <el-table-column :label="t('pricingPolicyMultiplier')" min-width="160">
+        <el-table-column :label="t('pricingPolicyMultiplier')" min-width="140">
           <template #default="{ row }">
             {{ formatPercent(multiplierPercent(row)) }}
           </template>
         </el-table-column>
-        <el-table-column :label="t('status')" width="120">
+        <el-table-column :label="t('status')" min-width="96">
           <template #default="{ row }">
             <el-tag class="static-state-tag" :type="row.enabled ? 'success' : 'info'">
               {{ row.enabled ? t('enabled') : t('disabled') }}
@@ -150,15 +150,19 @@ onMounted(load)
         </el-table-column>
         <el-table-column
           :label="t('actions')"
-          width="120"
-          fixed="right"
+          min-width="64"
           align="center"
           header-align="center"
         >
           <template #default="{ row }">
             <div class="table-row-actions">
-              <el-button class="admin-action-button" :icon="Edit" @click="openEditDialog(row)">
-                {{ t('edit') }}
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('edit')"
+                :icon="Edit"
+                @click="openEditDialog(row)"
+              >
+                {{ t('actionEdit') }}
               </el-button>
             </div>
           </template>

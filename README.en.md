@@ -462,6 +462,10 @@ Check by scenario:
       <td>For 504s on long image edits, increase <code>UPSTREAM_TIMEOUT_SECONDS</code>; it defaults to 600 seconds, and the old <code>REQUEST_TIMEOUT_SECONDS</code> name remains a compatibility alias.</td>
     </tr>
     <tr>
+      <td>🚦 User concurrency</td>
+      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 10 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
+    </tr>
+    <tr>
       <td>🔀 Upstream failover</td>
       <td>When an upstream returns 429, 5xx, 529, or a timeout/connection error occurs, NeoGate retries another selectable upstream up to 5 times by default; tune <code>MAX_UPSTREAM_FAILOVERS</code>, or set it to 0 to disable failover.</td>
     </tr>

@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::{
     billing::{BillingCharge, BillingMeter, TokenUsage},
     id::DbId,
+    project::models::UsageRoutingSnapshot,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,9 @@ pub struct UsageInsert {
     pub relay_final: bool,
     pub provider: String,
     pub model: Option<String>,
+    pub upstream_model: Option<String>,
+    pub routing_phase: String,
+    pub routing: Option<UsageRoutingSnapshot>,
     pub status_code: Option<i32>,
     pub streamed: bool,
     pub latency_ms: i64,

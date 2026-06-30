@@ -7,15 +7,21 @@ use crate::{
     config::RuntimeProbe,
     email::{smtp_test_error, EmailConfig, EmailService, SMTP_SETTING_KEY},
     error::{AppError, AppResult},
+    id::DbId,
     input::trimmed_non_empty_owned,
-    setup::bootstrap::save_site_config,
+    setup::bootstrap::{save_public_base_url_config, validate_public_base_url},
     AppState,
 };
+
+const SITE_BRAND_SETTING_KEY: &str = "site_brand";
+pub const ADMIN_MODEL_SETTING_KEY: &str = "admin_model";
+const DEFAULT_LOGO_URL: &str = "/logos/logo.svg";
 
 #[derive(Debug, Serialize)]
 pub struct SiteSettingRecord {
     pub site_name: String,
     pub public_base_url: Option<String>,
+    pub logo_url: Option<String>,
     pub env_write_supported: bool,
 }
 
@@ -23,6 +29,7 @@ pub struct SiteSettingRecord {
 pub struct UpsertSiteSettingRequest {
     pub site_name: String,
     pub public_base_url: String,
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +72,20 @@ pub struct TestSmtpSettingResponse {
     pub ok: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminModelSettingRecord {
+    pub default_text_model: Option<String>,
+    pub default_text_channel_id: Option<DbId>,
+    pub default_text_channel_name: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertAdminModelSettingRequest {
+    pub default_text_model: Option<String>,
+    pub default_text_channel_id: Option<DbId>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct StoredSmtpSetting {
     smtp_host: String,
@@ -77,24 +98,509 @@ struct StoredSmtpSetting {
     subject_prefix: Option<String>,
 }
 
-pub fn get_site_setting() -> AppResult<SiteSettingRecord> {
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredSiteBrandSetting {
+    site_name: Option<String>,
+    logo_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredAdminModelSetting {
+    default_text_model: Option<String>,
+    default_text_channel_id: Option<DbId>,
+}
+
+pub async fn get_site_setting(state: &AppState) -> AppResult<SiteSettingRecord> {
     let probe = RuntimeProbe::from_env()?;
     let env_write_supported = !probe.runtime_mode.is_distributed();
+    let brand = existing_site_brand_setting(state).await?;
+    let site_name = brand
+        .as_ref()
+        .and_then(|setting| setting.site_name.clone())
+        .or(probe.site_name)
+        .unwrap_or_else(|| "NeoGate".to_string());
+    let logo_url = brand.map_or_else(
+        || Some(DEFAULT_LOGO_URL.to_string()),
+        |setting| setting.logo_url,
+    );
     Ok(SiteSettingRecord {
-        site_name: probe.site_name.unwrap_or_else(|| "NeoGate".to_string()),
+        site_name,
         public_base_url: probe.public_base_url,
+        logo_url,
         env_write_supported,
     })
 }
 
 pub async fn upsert_site_setting(
+    state: &AppState,
     req: UpsertSiteSettingRequest,
 ) -> AppResult<UpsertSiteSettingResponse> {
-    save_site_config(req.site_name, req.public_base_url).await?;
+    let probe = RuntimeProbe::from_env()?;
+    let site_name = required_trimmed(req.site_name, "SITE_NAME is required")?;
+    let public_base_url = required_trimmed(req.public_base_url, "PUBLIC_BASE_URL is required")?
+        .trim_end_matches('/')
+        .to_string();
+    validate_public_base_url(&public_base_url)?;
+    let logo_url = normalize_logo_url(req.logo_url)?;
+    upsert_site_brand_setting(state, site_name, logo_url).await?;
+
+    let env_changed = probe.public_base_url.as_deref() != Some(public_base_url.as_str());
+    if env_changed {
+        save_public_base_url_config(public_base_url).await?;
+    }
+
     Ok(UpsertSiteSettingResponse {
         ok: true,
-        restart_required: true,
-        setting: get_site_setting()?,
+        restart_required: env_changed,
+        setting: get_site_setting(state).await?,
+    })
+}
+
+async fn existing_site_brand_setting(
+    state: &AppState,
+) -> AppResult<Option<StoredSiteBrandSetting>> {
+    let Some(row) = sqlx::query("SELECT value FROM setting WHERE key = $1")
+        .bind(SITE_BRAND_SETTING_KEY)
+        .fetch_optional(&state.db.pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = row.try_get("value")?;
+    Ok(Some(serde_json::from_value(value)?))
+}
+
+async fn upsert_site_brand_setting(
+    state: &AppState,
+    site_name: String,
+    logo_url: Option<String>,
+) -> AppResult<()> {
+    let value = serde_json::to_value(StoredSiteBrandSetting {
+        site_name: Some(site_name),
+        logo_url,
+    })?;
+    sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        "#,
+    )
+    .bind(SITE_BRAND_SETTING_KEY)
+    .bind(value)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+fn normalize_logo_url(value: Option<String>) -> AppResult<Option<String>> {
+    let Some(value) = optional_trimmed(value) else {
+        return Ok(None);
+    };
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return Ok(Some(value));
+    }
+    Err(AppError::BadRequest(
+        "logo URL must be a complete http(s) URL".to_string(),
+    ))
+}
+
+pub async fn get_admin_model_setting(state: &AppState) -> AppResult<AdminModelSettingRecord> {
+    let Some(row) = sqlx::query("SELECT value, updated_at FROM setting WHERE key = $1")
+        .bind(ADMIN_MODEL_SETTING_KEY)
+        .fetch_optional(&state.db.pool)
+        .await?
+    else {
+        return Ok(AdminModelSettingRecord {
+            default_text_model: None,
+            default_text_channel_id: None,
+            default_text_channel_name: None,
+            updated_at: None,
+        });
+    };
+    let value: serde_json::Value = row.try_get("value")?;
+    let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
+    let setting: StoredAdminModelSetting = serde_json::from_value(value)?;
+    admin_model_record_from_stored(state, setting, Some(updated_at)).await
+}
+
+pub async fn upsert_admin_model_setting(
+    state: &AppState,
+    req: UpsertAdminModelSettingRequest,
+) -> AppResult<AdminModelSettingRecord> {
+    let model = req
+        .default_text_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    match (&model, req.default_text_channel_id) {
+        (Some(model), Some(channel_id)) => {
+            ensure_callable_text_model(state, channel_id, model).await?
+        }
+        (None, None) => {}
+        _ => {
+            return Err(AppError::BadRequest(
+                "default text model and channel must be set together".to_string(),
+            ))
+        }
+    }
+    let value = serde_json::to_value(StoredAdminModelSetting {
+        default_text_model: model,
+        default_text_channel_id: req.default_text_channel_id,
+    })?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        RETURNING value, updated_at
+        "#,
+    )
+    .bind(ADMIN_MODEL_SETTING_KEY)
+    .bind(value)
+    .fetch_one(&state.db.pool)
+    .await?;
+    let value: serde_json::Value = row.try_get("value")?;
+    let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
+    let setting: StoredAdminModelSetting = serde_json::from_value(value)?;
+    admin_model_record_from_stored(state, setting, Some(updated_at)).await
+}
+
+pub async fn ensure_default_text_model_setting(state: &AppState) -> AppResult<()> {
+    let setting = get_admin_model_setting(state).await?;
+    if let (Some(model), Some(channel_id)) = (
+        setting.default_text_model.as_deref(),
+        setting.default_text_channel_id,
+    ) {
+        if ensure_callable_text_model(state, channel_id, model)
+            .await
+            .is_ok()
+        {
+            tracing::debug!(
+                model,
+                channel_id,
+                "admin default text model setting is already callable"
+            );
+            return Ok(());
+        }
+        tracing::info!(
+            model,
+            channel_id,
+            "admin default text model setting is not callable; searching replacement"
+        );
+    }
+    let Some(candidate) = first_callable_text_model(state).await? else {
+        log_default_text_model_candidate_summary(state).await?;
+        return Ok(());
+    };
+    let model = candidate.model;
+    let channel_id = candidate.channel_id;
+    let value = serde_json::to_value(StoredAdminModelSetting {
+        default_text_model: Some(model.clone()),
+        default_text_channel_id: Some(channel_id),
+    })?;
+    sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        "#,
+    )
+    .bind(ADMIN_MODEL_SETTING_KEY)
+    .bind(value)
+    .execute(&state.db.pool)
+    .await?;
+    tracing::info!(
+        model,
+        channel_id,
+        "admin default text model setting initialized"
+    );
+    Ok(())
+}
+
+pub async fn resolve_default_text_model(
+    state: &AppState,
+) -> AppResult<Option<(String, DbId, String)>> {
+    let setting = get_admin_model_setting(state).await?;
+    let Some(model) = setting.default_text_model else {
+        return Ok(None);
+    };
+    let Some(channel_id) = setting.default_text_channel_id else {
+        return Ok(None);
+    };
+    ensure_callable_text_model(state, channel_id, &model).await?;
+    Ok(Some((
+        model,
+        channel_id,
+        setting.default_text_channel_name.unwrap_or_default(),
+    )))
+}
+
+struct TextModelCandidate {
+    model: String,
+    channel_id: DbId,
+}
+
+async fn first_callable_text_model(state: &AppState) -> AppResult<Option<TextModelCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT cm.model, c.id AS channel_id
+        FROM channel_model cm
+        JOIN channel c ON c.id = cm.channel_id
+        JOIN provider p ON p.code = c.provider
+        WHERE p.enabled = TRUE
+          AND c.enabled = TRUE
+          AND cm.enabled = TRUE
+          AND cm.status = 'available'
+          AND (
+              cm.runtime_status = 'normal'
+              OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+          )
+          AND EXISTS (
+              SELECT 1 FROM channel_endpoint ce
+              WHERE ce.channel_id = c.id
+                AND ce.enabled = TRUE
+                AND ce.protocol IN ('openai', 'anthropic')
+                AND (
+                    EXISTS (
+                        SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                        WHERE btrim(endpoint_model.model) = cm.model
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                        WHERE btrim(endpoint_model.model) <> ''
+                    )
+                )
+          )
+          AND (
+              (
+                  c.use_credentials = FALSE
+                  AND EXISTS (
+                      SELECT 1 FROM channel_key ck
+                      WHERE ck.channel_id = c.id
+                        AND ck.enabled = TRUE
+                  )
+              )
+              OR (
+                  c.use_credentials = TRUE
+                  AND EXISTS (
+                      SELECT 1 FROM credential cr
+                      WHERE cr.provider = c.provider
+                        AND cr.enabled = TRUE
+                  )
+              )
+          )
+        ORDER BY c.priority DESC, cm.updated_at DESC, cm.model ASC
+        LIMIT 1
+        "#,
+    )
+    .fetch_all(&state.db.pool)
+    .await?;
+    rows.into_iter()
+        .next()
+        .map(|row| {
+            Ok(TextModelCandidate {
+                model: row.try_get("model")?,
+                channel_id: row.try_get("channel_id")?,
+            })
+        })
+        .transpose()
+}
+
+async fn ensure_callable_text_model(
+    state: &AppState,
+    channel_id: DbId,
+    model: &str,
+) -> AppResult<()> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM channel_model cm
+            JOIN channel c ON c.id = cm.channel_id
+            JOIN provider p ON p.code = c.provider
+            WHERE c.id = $1
+              AND cm.model = $2
+              AND p.enabled = TRUE
+              AND c.enabled = TRUE
+              AND cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND EXISTS (
+                  SELECT 1 FROM channel_endpoint ce
+                  WHERE ce.channel_id = c.id
+                    AND ce.enabled = TRUE
+                    AND ce.protocol IN ('openai', 'anthropic')
+                    AND (
+                        EXISTS (
+                            SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                            WHERE btrim(endpoint_model.model) = cm.model
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                            WHERE btrim(endpoint_model.model) <> ''
+                        )
+                    )
+              )
+              AND (
+                  (
+                      c.use_credentials = FALSE
+                      AND EXISTS (
+                          SELECT 1 FROM channel_key ck
+                          WHERE ck.channel_id = c.id
+                            AND ck.enabled = TRUE
+                      )
+                  )
+                  OR (
+                      c.use_credentials = TRUE
+                      AND EXISTS (
+                          SELECT 1 FROM credential cr
+                          WHERE cr.provider = c.provider
+                            AND cr.enabled = TRUE
+                      )
+                  )
+              )
+        )
+        "#,
+    )
+    .bind(channel_id)
+    .bind(model)
+    .fetch_one(&state.db.pool)
+    .await?;
+    if !exists {
+        return Err(AppError::BadRequest(
+            "default text model is not currently callable".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn log_default_text_model_candidate_summary(state: &AppState) -> AppResult<()> {
+    let row = sqlx::query(
+        r#"
+        WITH base AS (
+            SELECT cm.id, cm.model, c.id AS channel_id, c.use_credentials,
+                   p.enabled AS provider_enabled,
+                   c.enabled AS channel_enabled,
+                   cm.enabled AS model_enabled,
+                   cm.status AS model_status,
+                   cm.runtime_status,
+                   cm.cooldown_until
+            FROM channel_model cm
+            JOIN channel c ON c.id = cm.channel_id
+            JOIN provider p ON p.code = c.provider
+        ),
+        eligible_model AS (
+            SELECT *
+            FROM base
+            WHERE provider_enabled = TRUE
+              AND channel_enabled = TRUE
+              AND model_enabled = TRUE
+              AND model_status = 'available'
+              AND (
+                  runtime_status = 'normal'
+                  OR (runtime_status = 'cooldown' AND cooldown_until <= now())
+              )
+        ),
+        endpoint_ready AS (
+            SELECT em.*
+            FROM eligible_model em
+            WHERE EXISTS (
+                SELECT 1 FROM channel_endpoint ce
+                WHERE ce.channel_id = em.channel_id
+                  AND ce.enabled = TRUE
+                  AND ce.protocol IN ('openai', 'anthropic')
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                          WHERE btrim(endpoint_model.model) = em.model
+                      )
+                      OR NOT EXISTS (
+                          SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                          WHERE btrim(endpoint_model.model) <> ''
+                      )
+                  )
+            )
+        ),
+        secret_ready AS (
+            SELECT er.*
+            FROM endpoint_ready er
+            WHERE (
+                er.use_credentials = FALSE
+                AND EXISTS (
+                    SELECT 1 FROM channel_key ck
+                    WHERE ck.channel_id = er.channel_id
+                      AND ck.enabled = TRUE
+                )
+            )
+            OR (
+                er.use_credentials = TRUE
+                AND EXISTS (
+                    SELECT 1 FROM credential cr
+                    JOIN channel c ON c.id = er.channel_id
+                    WHERE cr.provider = c.provider
+                      AND cr.enabled = TRUE
+                )
+            )
+        )
+        SELECT
+            (SELECT count(*) FROM base) AS total_models,
+            (SELECT count(*) FROM eligible_model) AS eligible_models,
+            (SELECT count(*) FROM endpoint_ready) AS endpoint_ready_models,
+            (SELECT count(*) FROM secret_ready) AS callable_models
+        "#,
+    )
+    .fetch_one(&state.db.pool)
+    .await?;
+    let total_models: i64 = row.try_get("total_models")?;
+    let eligible_models: i64 = row.try_get("eligible_models")?;
+    let endpoint_ready_models: i64 = row.try_get("endpoint_ready_models")?;
+    let callable_models: i64 = row.try_get("callable_models")?;
+    let blocked_at = if total_models == 0 {
+        "no_channel_models"
+    } else if eligible_models == 0 {
+        "model_or_channel_disabled"
+    } else if endpoint_ready_models == 0 {
+        "no_enabled_matching_endpoint"
+    } else {
+        "no_enabled_key_or_credential"
+    };
+    tracing::info!(
+        total_models,
+        eligible_models,
+        endpoint_ready_models,
+        callable_models,
+        blocked_at,
+        "no callable admin default text model candidate found"
+    );
+    Ok(())
+}
+
+async fn admin_model_record_from_stored(
+    state: &AppState,
+    setting: StoredAdminModelSetting,
+    updated_at: Option<DateTime<Utc>>,
+) -> AppResult<AdminModelSettingRecord> {
+    let channel_name = if let Some(channel_id) = setting.default_text_channel_id {
+        sqlx::query_scalar::<_, String>("SELECT name FROM channel WHERE id = $1")
+            .bind(channel_id)
+            .fetch_optional(&state.db.pool)
+            .await?
+    } else {
+        None
+    };
+    Ok(AdminModelSettingRecord {
+        default_text_model: setting.default_text_model,
+        default_text_channel_id: setting.default_text_channel_id,
+        default_text_channel_name: channel_name,
+        updated_at,
     })
 }
 

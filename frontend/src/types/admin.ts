@@ -39,7 +39,6 @@ export type UserKey = CreditBalance & {
   status: UserKeyStatus
   last_active_at?: string | null
   expires_at?: string | null
-  model_limits?: string[] | null
   month_cost_micro_usd: number
   created_at: string
   updated_at: string
@@ -83,6 +82,7 @@ export type Project = CreditBalance & {
   is_default: boolean
   member_count: number
   user_key_count: number
+  project_model_count: number
   created_at: string
   updated_at: string
 }
@@ -100,6 +100,135 @@ export type ProjectMember = {
   last_active_at?: string | null
   created_at: string
   updated_at: string
+}
+
+export type ProjectModelRoutingTaskType =
+  | 'chat'
+  | 'code'
+  | 'reasoning'
+  | 'translation'
+  | 'summarization'
+  | 'extraction'
+  | 'structured_output'
+  | 'tool_use'
+  | 'vision'
+  | 'long_context'
+  | 'unknown'
+
+export type RoutingMatchedRule = {
+  id: string
+  category: string
+  weight: number
+  reason: string
+}
+
+export type RoutingCandidateScore = {
+  candidate_id: number
+  target_model: string
+  tier: ProjectModelCandidateTier
+  priority: number
+  weight: number
+  score: number
+  reason: string
+}
+
+export type RoutingDecision = {
+  id: number
+  project_id: number
+  project_model_id?: number | null
+  requested_model: string
+  selected_model: string
+  selected_channel_id?: number | null
+  decision_source: 'rules' | 'classifier' | 'fallback' | string
+  tier: ProjectModelCandidateTier
+  task_type: ProjectModelRoutingTaskType | string
+  confidence: number
+  reason: string
+  matched_rules: RoutingMatchedRule[]
+  candidate_scores: RoutingCandidateScore[]
+  fallback_reason?: string | null
+  classifier_model?: string | null
+  latency_ms: number
+  created_at: string
+}
+
+export type UsageRouting = {
+  id: number
+  project_id: number
+  project_model_id?: number | null
+  requested_model: string
+  selected_model: string
+  selected_channel_id?: number | null
+  decision_source: 'rules' | 'classifier' | 'fallback' | string
+  tier: ProjectModelCandidateTier
+  task_type: ProjectModelRoutingTaskType | string
+  confidence: number
+  reason_code: string
+  matched_rule_ids: string[]
+  candidate_summary: Array<{
+    target_model: string
+    tier: ProjectModelCandidateTier
+    priority: number
+    weight: number
+  }>
+  fallback_reason?: string | null
+  classifier_model?: string | null
+  latency_ms: number
+  created_at: string
+}
+
+export type ProjectModel = {
+  id: number
+  project_id: number
+  model: string
+  target_model: string
+  target_channel_id?: number | null
+  target_channel_name?: string | null
+  route_mode: 'direct' | 'smart'
+  routing_config: ProjectModelRoutingConfig
+  candidates: ProjectModelCandidate[]
+  enabled: boolean
+  description: string
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectModelRoutingConfig = {
+  smart_model_name: string
+  default_tier: ProjectModelCandidateTier
+  low_confidence_threshold: number
+  classifier_enabled: boolean
+  classifier_model?: string | null
+}
+
+export type ProjectModelCandidateTier = 'simple' | 'standard' | 'advanced'
+
+export type ProjectModelCandidate = {
+  id: number
+  project_model_id: number
+  target_model: string
+  target_channel_id?: number | null
+  target_channel_name?: string | null
+  tier: ProjectModelCandidateTier
+  priority: number
+  weight: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type AutoSuggestion = {
+  tier: ProjectModelCandidateTier
+  target_model: string
+  target_channel_id?: number | null
+  target_channel_name?: string | null
+  reason: string
+}
+
+export type AutoConfigResponse = {
+  suggestions: AutoSuggestion[]
+  warnings: string[]
+  source: 'llm' | 'rules' | string
 }
 
 export type Channel = {
@@ -182,7 +311,7 @@ export type ChannelKey = {
   id: number
   channel_id: number
   name: string
-  key_prefix: string
+  masked_key: string
   enabled: boolean
   healthy: boolean
   cooldown_until?: string | null
@@ -252,6 +381,7 @@ export type UsageRecord = {
   user_username?: string | null
   user_key_id?: number | null
   channel_id?: number | null
+  channel_name?: string | null
   channel_key_id?: number | null
   credential_id?: number | null
   relay_trace_id?: string | null
@@ -261,6 +391,7 @@ export type UsageRecord = {
   relay_path_index?: number | null
   provider: string
   model?: string | null
+  upstream_model?: string | null
   status_code?: number | null
   streamed: boolean
   error_summary?: string | null
@@ -281,6 +412,7 @@ export type UsageRecord = {
   billable_units: number
   cost_micro_usd?: number | null
   billing_status: string
+  routing?: UsageRouting | null
   created_at: string
 }
 

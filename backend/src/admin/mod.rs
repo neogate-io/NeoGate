@@ -15,8 +15,11 @@ pub(crate) mod version;
 use std::{convert::Infallible, sync::Arc};
 
 use axum::{
+    body::Body,
     extract::{Multipart, Path, Query, State},
+    http::{header, HeaderMap, HeaderValue},
     response::sse::{Event, KeepAlive, Sse},
+    response::{IntoResponse, Response},
     routing::{get, patch, post},
     Json, Router,
 };
@@ -34,6 +37,12 @@ use crate::{
     id::DbId,
     input::{bounded_limit, trimmed_non_empty},
     pagination::{created_id_cursor_page, parse_created_id_cursor},
+    project::models::{
+        auto_configure_project_model, create_project_model, delete_project_model,
+        list_project_models, update_project_model, AutoConfigureProjectModelRequest,
+        AutoConfigureResponse, ProjectModelRecord, UpdateProjectModelRequest,
+        UpsertProjectModelRequest, UsageRoutingCandidateSummary,
+    },
     AppState,
 };
 
@@ -69,14 +78,15 @@ use self::{
         UpdateProjectRequest, UpsertProjectMemberRequest,
     },
     provider::{
-        ensure_custom_provider, ensure_newapi_provider, ensure_sub2api_provider, list_providers,
-        provider_default_endpoints, record_provider_models, ProviderRecord, CUSTOM_PROVIDER_CODE,
-        NEWAPI_PROVIDER_CODE, OPENAI_OAUTH_PROTOCOL, SUB2API_PROVIDER_CODE,
+        ensure_builtin_manual_provider_by_code, list_providers, provider_default_endpoints,
+        record_provider_models, ProviderRecord, OPENAI_OAUTH_PROTOCOL,
     },
     setting::{
-        get_site_setting, get_smtp_setting, test_smtp_setting, upsert_site_setting,
-        upsert_smtp_setting, SiteSettingRecord, SmtpSettingRecord, TestSmtpSettingResponse,
-        UpsertSiteSettingRequest, UpsertSiteSettingResponse, UpsertSmtpSettingRequest,
+        ensure_default_text_model_setting, get_admin_model_setting, get_site_setting,
+        get_smtp_setting, test_smtp_setting, upsert_admin_model_setting, upsert_site_setting,
+        upsert_smtp_setting, AdminModelSettingRecord, SiteSettingRecord, SmtpSettingRecord,
+        TestSmtpSettingResponse, UpsertAdminModelSettingRequest, UpsertSiteSettingRequest,
+        UpsertSiteSettingResponse, UpsertSmtpSettingRequest,
     },
     upstream::upstream_models,
     user::{
@@ -93,8 +103,14 @@ use crate::payment::settings::{
     get_payment_setting, upsert_payment_setting, PaymentSettingRecord, UpsertPaymentSettingRequest,
 };
 
+const ADMIN_RUNTIME_RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+const USAGE_EXPORT_LIMIT: i64 = 100_000;
+
 pub(crate) use upstream::fetch_upstream_models;
-pub use user::public_router;
+
+pub fn public_router() -> Router<Arc<AppState>> {
+    user::public_router().route("/api/public/site", get(public_site_setting))
+}
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -133,6 +149,18 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/projects/{id}/members",
             get(project_members).post(add_project_member_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/models",
+            get(project_models_handler).post(create_project_model_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/models/auto-configure",
+            post(auto_configure_project_model_handler),
+        )
+        .route(
+            "/api/admin/projects/{id}/models/{model}",
+            patch(update_project_model_handler).delete(delete_project_model_handler),
         )
         .route(
             "/api/admin/projects/{id}/members/{member_id}",
@@ -174,6 +202,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/settings/site",
             get(site_setting).post(upsert_site_setting_handler),
+        )
+        .route(
+            "/api/admin/settings/admin-model",
+            get(admin_model_setting).post(upsert_admin_model_setting_handler),
         )
         .route(
             "/api/admin/settings/admin-password",
@@ -243,6 +275,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(reveal_channel_key_secret_handler),
         )
         .route("/api/admin/usage", get(usage))
+        .route("/api/admin/usage/export.csv", get(export_usage_csv))
         .route("/api/admin/health", get(health))
 }
 
@@ -487,6 +520,70 @@ async fn delete_project_member_handler(
     Ok(Json(json!({ "ok": true })))
 }
 
+async fn project_models_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+) -> AppResult<Json<Vec<ProjectModelRecord>>> {
+    Ok(Json(list_project_models(&state.db.pool, id).await?))
+}
+
+async fn create_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<UpsertProjectModelRequest>,
+) -> AppResult<Json<ProjectModelRecord>> {
+    let record = create_project_model(&state.db.pool, id, req).await?;
+    invalidate_project_auth(&state, id).await?;
+    Ok(Json(record))
+}
+
+async fn auto_configure_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<AutoConfigureProjectModelRequest>,
+) -> AppResult<Json<AutoConfigureResponse>> {
+    Ok(Json(auto_configure_project_model(&state, id, req).await?))
+}
+
+async fn update_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, model)): Path<(DbId, String)>,
+    Json(req): Json<UpdateProjectModelRequest>,
+) -> AppResult<Json<ProjectModelRecord>> {
+    let record = update_project_model(&state.db.pool, id, &model, req).await?;
+    invalidate_project_auth(&state, id).await?;
+    Ok(Json(record))
+}
+
+async fn delete_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path((id, model)): Path<(DbId, String)>,
+) -> AppResult<Json<Value>> {
+    delete_project_model(&state.db.pool, id, &model).await?;
+    invalidate_project_auth(&state, id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn invalidate_project_auth(state: &AppState, project_id: DbId) -> AppResult<()> {
+    let rows = sqlx::query("SELECT id FROM user_key WHERE project_id = $1")
+        .bind(project_id)
+        .fetch_all(&state.db.pool)
+        .await?;
+    for row in rows {
+        let id: DbId = row.try_get("id")?;
+        state
+            .cache_invalidator
+            .invalidate(state, InvalidationEvent::UserKey { id })
+            .await;
+    }
+    Ok(())
+}
+
 async fn channels(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
@@ -567,8 +664,11 @@ async fn upsert_payment_setting_handler(
     Ok(Json(upsert_payment_setting(&state, req).await?))
 }
 
-async fn site_setting(_admin: AdminAuth) -> AppResult<Json<SiteSettingRecord>> {
-    Ok(Json(get_site_setting()?))
+async fn site_setting(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<SiteSettingRecord>> {
+    Ok(Json(get_site_setting(&state).await?))
 }
 
 async fn upsert_site_setting_handler(
@@ -576,14 +676,37 @@ async fn upsert_site_setting_handler(
     _admin: AdminAuth,
     Json(req): Json<UpsertSiteSettingRequest>,
 ) -> AppResult<Json<UpsertSiteSettingResponse>> {
-    let result = upsert_site_setting(req).await?;
-    schedule_admin_runtime_restart(state.runtime_restart_tx.clone());
+    let result = upsert_site_setting(&state, req).await?;
+    if result.restart_required {
+        schedule_admin_runtime_restart(state.runtime_restart_tx.clone());
+    }
     Ok(Json(result))
+}
+
+async fn admin_model_setting(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<AdminModelSettingRecord>> {
+    Ok(Json(get_admin_model_setting(&state).await?))
+}
+
+async fn upsert_admin_model_setting_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpsertAdminModelSettingRequest>,
+) -> AppResult<Json<AdminModelSettingRecord>> {
+    Ok(Json(upsert_admin_model_setting(&state, req).await?))
+}
+
+async fn public_site_setting(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<SiteSettingRecord>> {
+    Ok(Json(get_site_setting(&state).await?))
 }
 
 fn schedule_admin_runtime_restart(restart_tx: tokio::sync::watch::Sender<bool>) {
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(ADMIN_RUNTIME_RESTART_DELAY).await;
         let _ = restart_tx.send(true);
     });
 }
@@ -688,6 +811,7 @@ async fn upsert_provider_price_handler(
         },
     )
     .await;
+    ensure_default_text_model_setting(&state).await?;
     Ok(Json(price))
 }
 
@@ -707,6 +831,7 @@ async fn create_channel_handler(
     Json(req): Json<CreateChannelRequest>,
 ) -> AppResult<Json<ChannelRecord>> {
     let channel = create_channel(&state, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(channel))
 }
@@ -718,6 +843,7 @@ async fn update_channel_handler(
     Json(req): Json<UpdateChannelRequest>,
 ) -> AppResult<Json<ChannelRecord>> {
     let channel = update_channel(&state, id, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(channel))
 }
@@ -729,6 +855,7 @@ async fn update_channel_model_handler(
     Json(req): Json<UpdateChannelModelRequest>,
 ) -> AppResult<Json<ChannelModelRecord>> {
     let model = update_channel_model(&state, id, &model, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(model))
 }
@@ -818,6 +945,7 @@ async fn upload_credentials_handler(
     multipart: Multipart,
 ) -> AppResult<Json<CredentialUploadResult>> {
     let result = upload_credentials(&state, multipart).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(result))
 }
@@ -856,6 +984,7 @@ async fn enable_credential_handler(
     Path(id): Path<DbId>,
 ) -> AppResult<Json<CredentialRecord>> {
     let credential = enable_credential(&state, id).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(credential))
 }
@@ -887,6 +1016,7 @@ async fn create_channel_key_handler(
     Json(req): Json<CreateChannelKeyRequest>,
 ) -> AppResult<Json<ChannelKeyRecord>> {
     let key = create_channel_key(&state, channel_id, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(key))
 }
@@ -898,6 +1028,7 @@ async fn update_channel_key_handler(
     Json(req): Json<UpdateChannelKeyRequest>,
 ) -> AppResult<Json<ChannelKeyRecord>> {
     let key = update_channel_key(&state, key_id, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::ChannelKeySecret { id: key_id }).await;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(key))
@@ -957,6 +1088,7 @@ struct UsageRecord {
     user_username: Option<String>,
     user_key_id: Option<DbId>,
     channel_id: Option<DbId>,
+    channel_name: Option<String>,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
     relay_trace_id: Option<Uuid>,
@@ -966,6 +1098,7 @@ struct UsageRecord {
     relay_path_index: Option<i32>,
     provider: String,
     model: Option<String>,
+    upstream_model: Option<String>,
     status_code: Option<i32>,
     streamed: bool,
     latency_ms: i64,
@@ -986,6 +1119,28 @@ struct UsageRecord {
     cost_micro_usd: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
+    routing: Option<UsageRouting>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct UsageRouting {
+    id: DbId,
+    project_id: DbId,
+    project_model_id: Option<DbId>,
+    requested_model: String,
+    selected_model: String,
+    selected_channel_id: Option<DbId>,
+    decision_source: String,
+    tier: String,
+    task_type: String,
+    confidence: f64,
+    reason_code: String,
+    matched_rule_ids: Vec<String>,
+    candidate_summary: Vec<UsageRoutingCandidateSummary>,
+    fallback_reason: Option<String>,
+    classifier_model: Option<String>,
+    latency_ms: i64,
     created_at: DateTime<Utc>,
 }
 
@@ -996,82 +1151,8 @@ async fn usage(
 ) -> AppResult<Json<UsagePage>> {
     let page = params.page.unwrap_or(1).max(1);
     let limit = bounded_limit(params.limit, 20, 500);
-    let start = params.start;
-    let end = params.end;
-    let query =
-        trimmed_non_empty(params.query.as_deref().or(params.model.as_deref())).map(str::to_string);
-    let status = match params.status.as_deref() {
-        Some("success") => Some("success"),
-        Some("failed") => Some("failed"),
-        _ => None,
-    };
-    let (cursor_created_at, cursor_id) =
-        parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?
-            .map(|cursor| (Some(cursor.0), Some(cursor.1)))
-            .unwrap_or((None, None));
-    let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
-    let query_pattern = query_pattern.as_deref();
-    let rows = sqlx::query(
-        r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
-                u.username AS user_username,
-                usage_record.user_key_id, usage_record.channel_id, usage_record.channel_key_id,
-                usage_record.credential_id, usage_record.relay_trace_id,
-                usage_record.relay_attempt, usage_record.relay_final,
-                usage_record.provider, usage_record.model,
-                usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
-                usage_record.first_response_ms, usage_record.output_tokens_per_second,
-                usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
-                usage_record.cache_in_tokens, usage_record.cache_create_in_tokens,
-                usage_record.cache_create_5m_in_tokens, usage_record.cache_create_1h_in_tokens,
-                usage_record.reason_out_tokens, usage_record.audio_in_tokens,
-                usage_record.audio_out_tokens, usage_record.billing_meter,
-                usage_record.billable_units, usage_record.cost_micro_usd,
-                usage_record.billing_status, usage_record.error_summary, usage_record.created_at,
-                rp.relay_path, rp.relay_path_index
-         FROM usage AS usage_record
-         LEFT JOIN "user" u ON u.id = usage_record.user_id
-         LEFT JOIN LATERAL (
-           SELECT
-             string_agg('#' || sibling.channel_id::text, ' → '
-                        ORDER BY sibling.relay_attempt ASC, sibling.id ASC) AS relay_path,
-             (
-               SELECT count(*)::int
-               FROM usage prev
-               WHERE prev.relay_trace_id = usage_record.relay_trace_id
-                 AND (prev.relay_attempt, prev.id)
-                     < (usage_record.relay_attempt, usage_record.id)
-             ) AS relay_path_index
-           FROM usage sibling
-           WHERE sibling.relay_trace_id = usage_record.relay_trace_id
-         ) rp ON usage_record.relay_trace_id IS NOT NULL
-         WHERE ($1::timestamptz IS NULL OR usage_record.created_at >= $1)
-           AND ($2::timestamptz IS NULL OR usage_record.created_at <= $2)
-           AND (
-             $3::text IS NULL
-             OR usage_record.provider ILIKE $3
-             OR usage_record.model ILIKE $3
-             OR usage_record.relay_trace_id::text ILIKE $3
-             OR usage_record.user_id::text ILIKE $3
-             OR u.email::text ILIKE $3
-           )
-           AND (
-             $4::text IS NULL
-             OR ($4 = 'success' AND usage_record.status_code >= 200 AND usage_record.status_code < 400)
-             OR ($4 = 'failed' AND (usage_record.status_code >= 400 OR usage_record.error_summary IS NOT NULL))
-           )
-           AND ($5::timestamptz IS NULL OR (usage_record.created_at, usage_record.id) < ($5, $6))
-         ORDER BY usage_record.created_at DESC, usage_record.id DESC
-         LIMIT $7"#,
-    )
-    .bind(start)
-    .bind(end)
-    .bind(query_pattern)
-    .bind(status)
-    .bind(cursor_created_at)
-    .bind(cursor_id)
-    .bind(limit + 1)
-    .fetch_all(&state.db.pool)
-    .await?;
+    let cursor = parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?;
+    let rows = usage_rows(&state, &params, limit + 1, cursor).await?;
     let (rows, next_cursor, has_more) = created_id_cursor_page(rows, limit)?;
     Ok(Json(UsagePage {
         items: rows.iter().map(usage_from_row).collect::<Result<_, _>>()?,
@@ -1081,6 +1162,29 @@ async fn usage(
         next_cursor,
         has_more,
     }))
+}
+
+async fn export_usage_csv(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Query(params): Query<ListUsageParams>,
+) -> AppResult<Response> {
+    let rows = usage_rows(&state, &params, USAGE_EXPORT_LIMIT + 1, None).await?;
+    if rows.len() > USAGE_EXPORT_LIMIT as usize {
+        return Err(AppError::BadRequestWithCode {
+            code: "export_limit_exceeded",
+            message: "export result exceeds 100000 rows; narrow the filters",
+        });
+    }
+
+    let records = rows
+        .iter()
+        .map(usage_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    csv_response(
+        &usage_export_filename(params.start, params.end),
+        usage_csv_rows(records),
+    )
 }
 
 async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppResult<Json<Value>> {
@@ -1111,6 +1215,112 @@ async fn health(State(state): State<Arc<AppState>>, _admin: AdminAuth) -> AppRes
     })))
 }
 
+async fn usage_rows(
+    state: &AppState,
+    params: &ListUsageParams,
+    limit: i64,
+    cursor: Option<(DateTime<Utc>, DbId)>,
+) -> AppResult<Vec<sqlx::postgres::PgRow>> {
+    let query =
+        trimmed_non_empty(params.query.as_deref().or(params.model.as_deref())).map(str::to_string);
+    let status = match params.status.as_deref() {
+        Some("success") => Some("success"),
+        Some("failed") => Some("failed"),
+        _ => None,
+    };
+    let (cursor_created_at, cursor_id) = cursor.map_or((None, None), |(created_at, id)| {
+        (Some(created_at), Some(id))
+    });
+    let query_pattern = query.as_deref().map(|value| format!("%{value}%"));
+    let query_pattern = query_pattern.as_deref();
+
+    let rows = sqlx::query(
+        r#"SELECT usage_record.id, usage_record.user_id, u.email::text AS user_email,
+                u.username AS user_username,
+                usage_record.user_key_id, usage_record.channel_id,
+                current_channel.name AS channel_name, usage_record.channel_key_id,
+                usage_record.credential_id, usage_record.relay_trace_id,
+                usage_record.relay_attempt, usage_record.relay_final,
+                usage_record.provider, usage_record.model, usage_record.upstream_model,
+                usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
+                usage_record.first_response_ms, usage_record.output_tokens_per_second,
+                usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
+                usage_record.cache_in_tokens, usage_record.cache_create_in_tokens,
+                usage_record.cache_create_5m_in_tokens, usage_record.cache_create_1h_in_tokens,
+                usage_record.reason_out_tokens, usage_record.audio_in_tokens,
+                usage_record.audio_out_tokens, usage_record.billing_meter,
+                usage_record.billable_units, usage_record.cost_micro_usd,
+                usage_record.billing_status, usage_record.error_summary, usage_record.created_at,
+                usage_routing.id AS routing_id,
+                usage_routing.project_id AS routing_project_id,
+                usage_routing.project_model_id AS routing_project_model_id,
+                usage_routing.requested_model AS routing_requested_model,
+                usage_routing.selected_model AS routing_selected_model,
+                usage_routing.selected_channel_id AS routing_selected_channel_id,
+                usage_routing.decision_source AS routing_decision_source,
+                usage_routing.tier AS routing_tier,
+                usage_routing.task_type AS routing_task_type,
+                usage_routing.confidence AS routing_confidence,
+                usage_routing.reason_code AS routing_reason_code,
+                usage_routing.matched_rule_ids AS routing_matched_rule_ids,
+                usage_routing.candidate_summary AS routing_candidate_summary,
+                usage_routing.fallback_reason AS routing_fallback_reason,
+                usage_routing.classifier_model AS routing_classifier_model,
+                usage_routing.latency_ms AS routing_latency_ms,
+                usage_routing.created_at AS routing_created_at,
+                rp.relay_path, rp.relay_path_index
+         FROM usage AS usage_record
+         LEFT JOIN "user" u ON u.id = usage_record.user_id
+         LEFT JOIN channel current_channel ON current_channel.id = usage_record.channel_id
+         LEFT JOIN usage_routing ON usage_routing.usage_id = usage_record.id
+         LEFT JOIN LATERAL (
+           SELECT
+             string_agg('#' || sibling.channel_id::text, ' → '
+                        ORDER BY sibling.relay_attempt ASC, sibling.id ASC) AS relay_path,
+             (
+               SELECT count(*)::int
+               FROM usage prev
+               WHERE prev.relay_trace_id = usage_record.relay_trace_id
+                 AND (prev.relay_attempt, prev.id)
+                     < (usage_record.relay_attempt, usage_record.id)
+             ) AS relay_path_index
+           FROM usage sibling
+           WHERE sibling.relay_trace_id = usage_record.relay_trace_id
+         ) rp ON usage_record.relay_trace_id IS NOT NULL
+         WHERE ($1::timestamptz IS NULL OR usage_record.created_at >= $1)
+           AND ($2::timestamptz IS NULL OR usage_record.created_at <= $2)
+           AND (
+             $3::text IS NULL
+             OR usage_record.provider ILIKE $3
+             OR usage_record.model ILIKE $3
+             OR usage_record.upstream_model ILIKE $3
+             OR usage_record.relay_trace_id::text ILIKE $3
+             OR usage_record.user_id::text ILIKE $3
+             OR u.email::text ILIKE $3
+             OR current_channel.name ILIKE $3
+           )
+           AND (
+             $4::text IS NULL
+             OR ($4 = 'success' AND usage_record.status_code >= 200 AND usage_record.status_code < 400)
+             OR ($4 = 'failed' AND (usage_record.status_code >= 400 OR usage_record.error_summary IS NOT NULL))
+           )
+           AND ($5::timestamptz IS NULL OR (usage_record.created_at, usage_record.id) < ($5, $6))
+         ORDER BY usage_record.created_at DESC, usage_record.id DESC
+         LIMIT $7"#,
+    )
+    .bind(params.start)
+    .bind(params.end)
+    .bind(query_pattern)
+    .bind(status)
+    .bind(cursor_created_at)
+    .bind(cursor_id)
+    .bind(limit)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    Ok(rows)
+}
+
 fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Error> {
     Ok(UsageRecord {
         id: row.try_get("id")?,
@@ -1119,6 +1329,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         user_username: row.try_get("user_username")?,
         user_key_id: row.try_get("user_key_id")?,
         channel_id: row.try_get("channel_id")?,
+        channel_name: row.try_get("channel_name")?,
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
         relay_trace_id: row.try_get("relay_trace_id")?,
@@ -1128,6 +1339,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         relay_path_index: row.try_get("relay_path_index")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
+        upstream_model: row.try_get("upstream_model")?,
         status_code: row.try_get("status_code")?,
         streamed: row.try_get("streamed")?,
         latency_ms: row.try_get("latency_ms")?,
@@ -1148,6 +1360,228 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         cost_micro_usd: row.try_get("cost_micro_usd")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,
+        routing: usage_routing_from_row(row)?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn usage_routing_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<UsageRouting>, sqlx::Error> {
+    let Some(id) = row.try_get::<Option<DbId>, _>("routing_id")? else {
+        return Ok(None);
+    };
+    Ok(Some(UsageRouting {
+        id,
+        project_id: row.try_get("routing_project_id")?,
+        project_model_id: row.try_get("routing_project_model_id")?,
+        requested_model: row.try_get("routing_requested_model")?,
+        selected_model: row.try_get("routing_selected_model")?,
+        selected_channel_id: row.try_get("routing_selected_channel_id")?,
+        decision_source: row.try_get("routing_decision_source")?,
+        tier: row.try_get("routing_tier")?,
+        task_type: row.try_get("routing_task_type")?,
+        confidence: row.try_get("routing_confidence")?,
+        reason_code: row.try_get("routing_reason_code")?,
+        matched_rule_ids: row
+            .try_get::<sqlx::types::Json<Vec<String>>, _>("routing_matched_rule_ids")?
+            .0,
+        candidate_summary: row
+            .try_get::<sqlx::types::Json<Vec<UsageRoutingCandidateSummary>>, _>(
+                "routing_candidate_summary",
+            )?
+            .0,
+        fallback_reason: row.try_get("routing_fallback_reason")?,
+        classifier_model: row.try_get("routing_classifier_model")?,
+        latency_ms: row.try_get("routing_latency_ms")?,
+        created_at: row.try_get("routing_created_at")?,
+    }))
+}
+
+fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
+    let mut rows = vec![vec![
+        "id".into(),
+        "created_at".into(),
+        "user_id".into(),
+        "user_email".into(),
+        "user_username".into(),
+        "user_key_id".into(),
+        "channel_id".into(),
+        "channel_key_id".into(),
+        "credential_id".into(),
+        "relay_trace_id".into(),
+        "relay_attempt".into(),
+        "relay_final".into(),
+        "relay_path".into(),
+        "provider".into(),
+        "model".into(),
+        "upstream_model".into(),
+        "routing_requested_model".into(),
+        "routing_selected_model".into(),
+        "routing_tier".into(),
+        "routing_task_type".into(),
+        "routing_reason_code".into(),
+        "routing_fallback_reason".into(),
+        "status_code".into(),
+        "streamed".into(),
+        "latency_ms".into(),
+        "first_response_ms".into(),
+        "output_tokens_per_second".into(),
+        "input_tokens".into(),
+        "output_tokens".into(),
+        "total_tokens".into(),
+        "cache_in_tokens".into(),
+        "cache_create_in_tokens".into(),
+        "cache_create_5m_in_tokens".into(),
+        "cache_create_1h_in_tokens".into(),
+        "reason_out_tokens".into(),
+        "audio_in_tokens".into(),
+        "audio_out_tokens".into(),
+        "billing_meter".into(),
+        "billable_units".into(),
+        "cost_micro_usd".into(),
+        "billing_status".into(),
+        "error_summary".into(),
+    ]];
+
+    rows.extend(records.into_iter().map(|record| {
+        vec![
+            record.id.to_string(),
+            record.created_at.to_rfc3339(),
+            optional_id(record.user_id),
+            record.user_email.unwrap_or_default(),
+            record.user_username.unwrap_or_default(),
+            optional_id(record.user_key_id),
+            optional_id(record.channel_id),
+            optional_id(record.channel_key_id),
+            optional_id(record.credential_id),
+            record
+                .relay_trace_id
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            record.relay_attempt.to_string(),
+            record.relay_final.to_string(),
+            record.relay_path.unwrap_or_default(),
+            record.provider,
+            record.model.unwrap_or_default(),
+            record.upstream_model.unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.requested_model.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.selected_model.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.tier.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.task_type.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.reason_code.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.fallback_reason.clone())
+                .unwrap_or_default(),
+            optional_i32(record.status_code),
+            record.streamed.to_string(),
+            record.latency_ms.to_string(),
+            optional_i64(record.first_response_ms),
+            optional_f64(record.output_tokens_per_second),
+            optional_i64(record.input_tokens),
+            optional_i64(record.output_tokens),
+            optional_i64(record.total_tokens),
+            optional_i64(record.cache_in_tokens),
+            optional_i64(record.cache_create_in_tokens),
+            optional_i64(record.cache_create_5m_in_tokens),
+            optional_i64(record.cache_create_1h_in_tokens),
+            optional_i64(record.reason_out_tokens),
+            optional_i64(record.audio_in_tokens),
+            optional_i64(record.audio_out_tokens),
+            record.billing_meter,
+            record.billable_units.to_string(),
+            optional_i64(record.cost_micro_usd),
+            record.billing_status,
+            record.error_summary.unwrap_or_default(),
+        ]
+    }));
+
+    rows
+}
+
+fn usage_export_filename(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> String {
+    let start = start.map_or_else(
+        || "all".to_string(),
+        |value| value.format("%Y%m%d%H%M%S").to_string(),
+    );
+    let end = end.map_or_else(
+        || "all".to_string(),
+        |value| value.format("%Y%m%d%H%M%S").to_string(),
+    );
+    format!("usage-details-{start}-{end}.csv")
+}
+
+fn optional_id(value: Option<DbId>) -> String {
+    value.map(|id| id.to_string()).unwrap_or_default()
+}
+
+fn optional_i32(value: Option<i32>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn optional_i64(value: Option<i64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn optional_f64(value: Option<f64>) -> String {
+    value.map(|value| format!("{value:.2}")).unwrap_or_default()
+}
+
+fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> AppResult<Response> {
+    let mut body = String::from('\u{FEFF}');
+    body.push_str(
+        &rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| escape_csv(value))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    body.push('\n');
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|_| AppError::BadRequest("invalid export filename".to_string()))?,
+    );
+    Ok((headers, Body::from(body)).into_response())
+}
+
+fn escape_csv(value: &str) -> String {
+    if value.contains('"') || value.contains(',') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
 }

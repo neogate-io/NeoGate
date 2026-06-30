@@ -121,12 +121,11 @@ pub(crate) fn has_image_generation_tool(body: &[u8]) -> bool {
     value
         .get("tools")
         .and_then(Value::as_array)
-        .map(|tools| {
+        .is_some_and(|tools| {
             tools
                 .iter()
                 .any(|tool| tool.get("type").and_then(Value::as_str) == Some("image_generation"))
         })
-        .unwrap_or(false)
 }
 
 pub(crate) fn prepare_request_body(body: Bytes) -> AppResult<PreparedNeogateResponseRequest> {
@@ -175,6 +174,7 @@ pub(crate) async fn create(
             protocol: UpstreamProtocol::Openai,
             upstream,
             model: Some(model),
+            upstream_model: Some(model),
             status: STATUS_QUEUED,
             terminal: false,
             hold,
@@ -314,6 +314,8 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
         }
         return Ok(());
     }
+
+    let _request_permit = state.user_request_limiter.try_acquire(task.user_id).await?;
 
     if !update_metadata(
         &state.db.pool,
@@ -742,8 +744,7 @@ fn outputs_without_results(outputs: &[Value]) -> Vec<Value> {
                 "id": output
                     .get("id")
                     .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("ig_{index}")),
+                    .map_or_else(|| format!("ig_{index}"), str::to_string),
                 "type": "image_generation_call",
                 "status": output
                     .get("status")
@@ -800,11 +801,7 @@ async fn update_metadata(
     expected_status: Option<&str>,
 ) -> AppResult<bool> {
     metadata.response["status"] = Value::String(status.to_string());
-    let usage_summary = usage
-        .map(UsageSummary::from_usage)
-        .map(serde_json::to_value)
-        .transpose()?
-        .unwrap_or_else(|| json!({}));
+    let usage_summary = UsageSummary::value_from_usage(usage)?;
     let next_poll_at = (!terminal && status == STATUS_QUEUED).then(Utc::now);
     let result = sqlx::query(
         r#"

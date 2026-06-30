@@ -79,12 +79,12 @@ export function isManualBaseUrlProvider(provider: ChannelProvider) {
   return isCustomProvider(provider) || isNewapiProvider(provider) || isSub2apiProvider(provider)
 }
 
-export function withManualProvidersFirst(providers: ChannelProviderOption[]) {
+export function withCustomProviderLast(providers: ChannelProviderOption[]) {
   return [
-    customProviderOption,
+    ...providers.filter((provider) => !isManualBaseUrlProvider(provider.value)),
     newapiProviderOption,
     sub2apiProviderOption,
-    ...providers.filter((provider) => !isManualBaseUrlProvider(provider.value))
+    customProviderOption
   ]
 }
 

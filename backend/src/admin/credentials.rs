@@ -164,8 +164,7 @@ pub async fn upload_credentials(
         saw_file = true;
         let filename = field
             .file_name()
-            .map(str::to_string)
-            .unwrap_or_else(|| "credential.json".to_string());
+            .map_or_else(|| "credential.json".to_string(), str::to_string);
         let bytes = field
             .bytes()
             .await

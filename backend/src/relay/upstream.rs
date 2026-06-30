@@ -6,6 +6,7 @@ use crate::{
     admin::credentials::refresh_openai_runtime_credential,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind, UpstreamRequestError},
+    provider::adapters::PreparedUpstreamRequest,
     AppState,
 };
 
@@ -75,27 +76,24 @@ pub(crate) async fn forward_prepared_openai(
     state: &AppState,
     upstream: &SelectedUpstream,
     protocol: UpstreamProtocol,
-    body: Bytes,
-    url: String,
-    log_path: &str,
     headers: &HeaderMap,
-    extra_headers: HeaderMap,
+    prepared: PreparedUpstreamRequest,
 ) -> AppResult<reqwest::Response> {
     if protocol == UpstreamProtocol::OpenAiOauth {
-        return forward_openai_oauth(state, upstream, body, log_path).await;
+        return forward_openai_oauth(state, upstream, prepared.body, &prepared.log_path).await;
     }
     ensure_openai_protocol(protocol)?;
-    send_upstream_request(state, upstream, protocol, log_path, || {
+    send_upstream_request(state, upstream, protocol, &prepared.log_path, || {
         let mut request = state
             .http
-            .post(url.clone())
+            .post(prepared.url.clone())
             .bearer_auth(&upstream.secret)
             .header("content-type", "application/json")
-            .body(body.clone());
-        for (name, value) in &extra_headers {
+            .body(prepared.body.clone());
+        for (name, value) in &prepared.extra_headers {
             request = request.header(name, value.clone());
         }
-        apply_openai_codex_passthrough_headers(request, headers, &body)
+        apply_openai_codex_passthrough_headers(request, headers, &prepared.body)
     })
     .await
 }

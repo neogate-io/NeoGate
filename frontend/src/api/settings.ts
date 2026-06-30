@@ -1,10 +1,22 @@
 import type { PaymentSetting, SmtpSetting, VersionCheckResult } from '../types/admin'
-import { adminRequest } from './request'
+import { adminRequest, publicRequest } from './request'
 
 export type SiteSetting = {
   site_name: string
   public_base_url?: string | null
+  logo_url?: string | null
   env_write_supported: boolean
+}
+
+export type AdminModelSetting = {
+  default_text_model?: string | null
+  default_text_channel_id?: number | null
+  default_text_channel_name?: string | null
+  updated_at?: string | null
+}
+
+export function getPublicSiteSetting() {
+  return publicRequest<SiteSetting>('/api/public/site')
 }
 
 export function getSiteSetting() {
@@ -14,12 +26,27 @@ export function getSiteSetting() {
 export function saveSiteSetting(input: {
   site_name: string
   public_base_url: string
+  logo_url?: string | null
 }) {
   return adminRequest<{
     ok: boolean
     restart_required: boolean
     setting: SiteSetting
   }>('/api/admin/settings/site', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function getAdminModelSetting() {
+  return adminRequest<AdminModelSetting>('/api/admin/settings/admin-model')
+}
+
+export function saveAdminModelSetting(input: {
+  default_text_model?: string | null
+  default_text_channel_id?: number | null
+}) {
+  return adminRequest<AdminModelSetting>('/api/admin/settings/admin-model', {
     method: 'POST',
     body: JSON.stringify(input)
   })

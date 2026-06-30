@@ -35,6 +35,7 @@ use crate::{
 };
 
 const SERVICE_POLICY_SETUP_COMPLETED_KEY: &str = "setup_completed";
+const SITE_BRAND_SETTING_KEY: &str = "site_brand";
 
 #[derive(Clone)]
 pub struct BootstrapState {
@@ -212,7 +213,7 @@ async fn write_bootstrap_config(
 
 pub async fn save_runtime_config(req: BootstrapConfigInput) -> AppResult<BootstrapConfigResult> {
     let runtime_config = prepare_runtime_config(req).await?;
-    save_prepared_runtime_config(&runtime_config, None)
+    save_prepared_runtime_config(&runtime_config, None).await
 }
 
 pub async fn prepare_runtime_config(req: BootstrapConfigInput) -> AppResult<PreparedRuntimeConfig> {
@@ -231,8 +232,7 @@ pub async fn prepare_runtime_config(req: BootstrapConfigInput) -> AppResult<Prep
         database_url.ok_or_else(|| AppError::BadRequest("DATABASE_URL is required".to_string()))?;
     let public_base_url = public_base_url
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
-    let site_name =
-        site_name.ok_or_else(|| AppError::BadRequest("SITE_NAME is required".to_string()))?;
+    let site_name = site_name.unwrap_or_else(|| "NeoGate".to_string());
     validate_public_base_url(&public_base_url)?;
     test_database(&database_url).await?;
 
@@ -263,7 +263,7 @@ pub async fn prepare_runtime_config(req: BootstrapConfigInput) -> AppResult<Prep
     })
 }
 
-pub fn save_prepared_runtime_config(
+pub async fn save_prepared_runtime_config(
     runtime_config: &PreparedRuntimeConfig,
     service_mode: Option<ServiceMode>,
 ) -> AppResult<BootstrapConfigResult> {
@@ -275,6 +275,7 @@ pub fn save_prepared_runtime_config(
         &runtime_config.env_file,
         &runtime_config.env_values(service_mode),
     )?;
+    save_site_brand_to_database(&runtime_config.database_url, &runtime_config.site_name).await?;
     Ok(BootstrapConfigResult {
         ok: true,
         env_file: runtime_config.env_file.display().to_string(),
@@ -285,7 +286,6 @@ pub fn save_prepared_runtime_config(
 impl PreparedRuntimeConfig {
     fn env_values(&self, service_mode: Option<ServiceMode>) -> Vec<(String, String)> {
         let mut values = vec![
-            ("SITE_NAME".to_string(), self.site_name.clone()),
             ("PUBLIC_BASE_URL".to_string(), self.public_base_url.clone()),
             ("DATABASE_URL".to_string(), self.database_url.clone()),
         ];
@@ -333,7 +333,41 @@ pub fn apply_service_mode_env(service_mode: ServiceMode) {
     std::env::set_var("SERVICE_MODE", service_mode.as_str());
 }
 
-pub async fn save_site_config(site_name: String, public_base_url: String) -> AppResult<()> {
+async fn save_site_brand_to_database(database_url: &str, site_name: &str) -> AppResult<()> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(database_url)
+        .await
+        .map_err(database_connection_error)?;
+    let value = serde_json::json!({
+        "site_name": site_name,
+        "logo_url": null,
+    });
+    sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = jsonb_set(
+            setting.value,
+            '{site_name}',
+            to_jsonb($3::text),
+            true
+        ),
+        updated_at = now()
+        "#,
+    )
+    .bind(SITE_BRAND_SETTING_KEY)
+    .bind(value)
+    .bind(site_name)
+    .execute(&pool)
+    .await?;
+    pool.close().await;
+    Ok(())
+}
+
+pub async fn save_public_base_url_config(public_base_url: String) -> AppResult<()> {
     let probe = RuntimeProbe::from_env()?;
     if probe.runtime_mode.is_distributed() {
         return Err(AppError::BadRequest(
@@ -341,19 +375,13 @@ pub async fn save_site_config(site_name: String, public_base_url: String) -> App
         ));
     }
 
-    let site_name = optional_trimmed(Some(site_name))
-        .ok_or_else(|| AppError::BadRequest("SITE_NAME is required".to_string()))?;
     let public_base_url = optional_trimmed(Some(public_base_url))
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
     validate_public_base_url(&public_base_url)?;
-    std::env::set_var("SITE_NAME", &site_name);
     std::env::set_var("PUBLIC_BASE_URL", &public_base_url);
     upsert_env_file(
         &probe.env_file,
-        &[
-            ("SITE_NAME".to_string(), site_name),
-            ("PUBLIC_BASE_URL".to_string(), public_base_url),
-        ],
+        &[("PUBLIC_BASE_URL".to_string(), public_base_url)],
     )
 }
 
@@ -412,7 +440,7 @@ async fn cluster_env_template() -> AppResult<Json<ClusterEnvTemplateResult>> {
     };
 
     let env_text = format!(
-        "RUNTIME_MODE=distributed\nSERVICE_MODE={}\nDATABASE_URL={}\nREDIS_URL={}\nPUBLIC_BASE_URL={}\nSITE_NAME={}\nADMIN_TOKEN_SECRET={}\nUPSTREAM_SECRET_KEY={}\n",
+        "RUNTIME_MODE=distributed\nSERVICE_MODE={}\nDATABASE_URL={}\nREDIS_URL={}\nPUBLIC_BASE_URL={}\nADMIN_TOKEN_SECRET={}\nUPSTREAM_SECRET_KEY={}\n",
         probe.service_mode.unwrap_or(ServiceMode::Internal).as_str(),
         probe
             .database_url
@@ -423,7 +451,6 @@ async fn cluster_env_template() -> AppResult<Json<ClusterEnvTemplateResult>> {
         probe
             .public_base_url
             .unwrap_or_else(|| "https://neogate.example.com".to_string()),
-        probe.site_name.unwrap_or_else(|| "NeoGate".to_string()),
         generated_admin_token_secret
             .clone()
             .or(probe.admin_token_secret)
@@ -487,7 +514,8 @@ async fn complete_setup(
     let service_mode = req.service_mode;
     let runtime_app = prepared_runtime_app(&state).await?;
     let record = policy::complete_setup_for_state(runtime_app.state.clone(), req).await?;
-    let result = save_prepared_runtime_config(&runtime_app.runtime_config, Some(service_mode))?;
+    let result =
+        save_prepared_runtime_config(&runtime_app.runtime_config, Some(service_mode)).await?;
     state.restart_required.store(true, Ordering::SeqCst);
     schedule_bootstrap_restart(state.restart_tx.clone());
     tracing::info!(
@@ -799,7 +827,7 @@ fn quote_env_value(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn validate_public_base_url(value: &str) -> AppResult<()> {
+pub fn validate_public_base_url(value: &str) -> AppResult<()> {
     let value = value.trim();
     if !(value.starts_with("http://") || value.starts_with("https://")) {
         return Err(AppError::BadRequest(

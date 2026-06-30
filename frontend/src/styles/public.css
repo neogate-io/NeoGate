@@ -225,6 +225,7 @@
 .home-brand {
   align-items: center;
   display: inline-flex;
+  gap: 6px;
   height: 44px;
   justify-self: start;
   min-width: 0;
@@ -232,11 +233,25 @@
 }
 
 .home-brand-logo {
+  flex: 0 0 auto;
   display: block;
   height: auto;
-  max-height: 34px;
+  max-height: 32px;
   object-fit: contain;
-  width: 138px;
+  width: 32px;
+}
+
+.home-brand-name {
+  color: var(--public-text);
+  display: block;
+  font-size: 18px;
+  font-weight: 820;
+  line-height: 1.2;
+  max-width: min(220px, 42vw);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-nav {
@@ -1245,7 +1260,11 @@
   }
 
   .home-brand-logo {
-    width: 122px;
+    width: 30px;
+  }
+
+  .home-brand-name {
+    max-width: 38vw;
   }
 
   .home-header-actions {

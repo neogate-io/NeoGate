@@ -19,6 +19,34 @@ const SUB2API_PROVIDER_DISPLAY_NAME: &str = "Sub2API";
 const SUB2API_PROVIDER_NAME: &str = "Sub2API";
 pub const OPENAI_OAUTH_PROTOCOL: &str = "openai_oauth";
 
+struct BuiltinManualProvider {
+    code: &'static str,
+    display_name: &'static str,
+    name: &'static str,
+    sort_order: i32,
+}
+
+const BUILTIN_MANUAL_PROVIDERS: &[BuiltinManualProvider] = &[
+    BuiltinManualProvider {
+        code: CUSTOM_PROVIDER_CODE,
+        display_name: CUSTOM_PROVIDER_DISPLAY_NAME,
+        name: CUSTOM_PROVIDER_NAME,
+        sort_order: 0,
+    },
+    BuiltinManualProvider {
+        code: NEWAPI_PROVIDER_CODE,
+        display_name: NEWAPI_PROVIDER_DISPLAY_NAME,
+        name: NEWAPI_PROVIDER_NAME,
+        sort_order: 1,
+    },
+    BuiltinManualProvider {
+        code: SUB2API_PROVIDER_CODE,
+        display_name: SUB2API_PROVIDER_DISPLAY_NAME,
+        name: SUB2API_PROVIDER_NAME,
+        sort_order: 2,
+    },
+];
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderRecord {
     pub id: i64,
@@ -40,9 +68,7 @@ pub struct ProviderDefaultEndpointRecord {
 }
 
 pub async fn list_providers(state: &AppState) -> AppResult<Vec<ProviderRecord>> {
-    ensure_custom_provider(state).await?;
-    ensure_newapi_provider(state).await?;
-    ensure_sub2api_provider(state).await?;
+    ensure_builtin_manual_providers(state).await?;
 
     let rows = sqlx::query(
         "SELECT id, code, display_name, name, default_models,
@@ -120,45 +146,27 @@ pub async fn provider_default_models(
         .map_err(Into::into)
 }
 
-pub async fn ensure_newapi_provider(state: &AppState) -> AppResult<()> {
-    ensure_builtin_manual_provider(
-        state,
-        NEWAPI_PROVIDER_CODE,
-        NEWAPI_PROVIDER_DISPLAY_NAME,
-        NEWAPI_PROVIDER_NAME,
-        1,
-    )
-    .await
+pub async fn ensure_builtin_manual_provider_by_code(state: &AppState, code: &str) -> AppResult<()> {
+    let Some(provider) = BUILTIN_MANUAL_PROVIDERS
+        .iter()
+        .find(|provider| provider.code == code)
+    else {
+        return Ok(());
+    };
+
+    ensure_builtin_manual_provider_record(state, provider).await
 }
 
-pub async fn ensure_sub2api_provider(state: &AppState) -> AppResult<()> {
-    ensure_builtin_manual_provider(
-        state,
-        SUB2API_PROVIDER_CODE,
-        SUB2API_PROVIDER_DISPLAY_NAME,
-        SUB2API_PROVIDER_NAME,
-        2,
-    )
-    .await
+async fn ensure_builtin_manual_providers(state: &AppState) -> AppResult<()> {
+    for provider in BUILTIN_MANUAL_PROVIDERS {
+        ensure_builtin_manual_provider_record(state, provider).await?;
+    }
+    Ok(())
 }
 
-pub async fn ensure_custom_provider(state: &AppState) -> AppResult<()> {
-    ensure_builtin_manual_provider(
-        state,
-        CUSTOM_PROVIDER_CODE,
-        CUSTOM_PROVIDER_DISPLAY_NAME,
-        CUSTOM_PROVIDER_NAME,
-        0,
-    )
-    .await
-}
-
-async fn ensure_builtin_manual_provider(
+async fn ensure_builtin_manual_provider_record(
     state: &AppState,
-    code: &str,
-    display_name: &str,
-    name: &str,
-    sort_order: i32,
+    provider: &BuiltinManualProvider,
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO provider
@@ -176,10 +184,10 @@ async fn ensure_builtin_manual_provider(
              sort_order = EXCLUDED.sort_order,
              updated_at = now()",
     )
-    .bind(code)
-    .bind(display_name)
-    .bind(name)
-    .bind(sort_order)
+    .bind(provider.code)
+    .bind(provider.display_name)
+    .bind(provider.name)
+    .bind(provider.sort_order)
     .execute(&state.db.pool)
     .await?;
 

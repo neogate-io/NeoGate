@@ -3,15 +3,18 @@ import { computed } from 'vue'
 import { DocumentCopy, Key, Link, Money } from '@element-plus/icons-vue'
 import PublicHeader from '../../components/common/PublicHeader.vue'
 import { useLocale } from '../../composables/useLocale'
+import { useSiteBrand } from '../../composables/useSiteBrand'
 import { useScrollTo, useCopyText } from '../../composables/usePublicPage'
 
 const { locale, t } = useLocale()
+const { siteName } = useSiteBrand()
 const scrollToSection = useScrollTo()
 const copyDocText = useCopyText()
 const apiBaseUrl = computed(() => `${window.location.origin}/v1`)
 const anthropicBaseUrl = computed(() => `${window.location.origin}/anthropic`)
 const shellInstallScript = computed(() => `curl -fsSL ${window.location.origin}/install | bash`)
 const powershellInstallScript = computed(() => `irm ${window.location.origin}/install.ps1 | iex`)
+const codexProviderName = computed(() => JSON.stringify(siteName.value))
 
 const claudeInstall = `npm install -g @anthropic-ai/claude-code
 claude`
@@ -40,7 +43,7 @@ const codexConfig = computed(
 model_provider = "neogate"
 
 [model_providers.neogate]
-name = "NeoGate"
+name = ${codexProviderName.value}
 base_url = "${apiBaseUrl.value}"
 wire_api = "responses"
 requires_openai_auth = false
@@ -57,8 +60,7 @@ const content = computed(() => {
   if (locale.value === 'zh-CN') {
     return {
       title: '帮助文档',
-      subtitle:
-        '用 NeoGate 统一管理 API 密钥、余额、用量和上游模型，并通过 OpenAI / Anthropic 兼容接口接入。',
+      subtitle: `用 ${siteName.value} 统一管理 API 密钥、余额、用量和上游模型，并通过 OpenAI / Anthropic 兼容接口接入。`,
       menuTitle: '目录',
       menu: [
         ['start', '准备工作', '1. 准备工作'],
@@ -70,8 +72,7 @@ const content = computed(() => {
         ['faq', '常见问题', '5. 常见问题']
       ],
       startTitle: '准备工作',
-      startIntro:
-        '第一次使用先取得 NeoGate API Key，并确认要接入的本机工具。准备完成后，可以选择自动配置或手动配置。',
+      startIntro: `第一次使用先取得 ${siteName.value} API Key，并确认要接入的本机工具。准备完成后，可以选择自动配置或手动配置。`,
       startCards: [
         [
           '获取 API 密钥',
@@ -83,13 +84,11 @@ const content = computed(() => {
         ]
       ],
       installShellTitle: 'Linux / macOS / WSL 自动配置',
-      installShellText:
-        '在 bash、zsh 或 WSL 终端中运行下面的命令。脚本会先验证 NeoGate API Key，再选择客户端和模型，并询问是否检查 Node.js、Codex、Claude Code 等依赖。',
+      installShellText: `在 bash、zsh 或 WSL 终端中运行下面的命令。脚本会先验证 ${siteName.value} API Key，再选择客户端和模型，并询问是否检查 Node.js、Codex、Claude Code 等依赖。`,
       installWindowsTitle: 'Windows PowerShell 自动配置',
       installWindowsText:
         '在 Windows PowerShell 中运行 install.ps1；如果在 WSL 里使用，请运行上面的 shell 命令。',
-      autoConfigIntro:
-        '自动配置会从当前 NeoGate 服务获取安装脚本。脚本验证密钥后会读取可用模型、展示配置摘要，并在你确认后把 Base URL、API Key 和模型名写入本机工具配置。',
+      autoConfigIntro: `自动配置会从当前 ${siteName.value} 服务获取安装脚本。脚本验证密钥后会读取可用模型、展示配置摘要，并在你确认后把 Base URL、API Key 和模型名写入本机工具配置。`,
       autoConfigCommandTitle: '2.1 安装命令',
       autoConfigStepsTitle: '2.2 配置步骤',
       autoConfigSteps: [
@@ -97,11 +96,11 @@ const content = computed(() => {
           '1) 复制并运行安装命令',
           '从首页或本页复制对应系统的安装命令，在终端中执行。',
           '/assets/auto-config-run-command.png',
-          '运行 NeoGate 安装命令的终端截图'
+          `运行 ${siteName.value} 安装命令的终端截图`
         ],
         [
           '2) 按提示确认配置',
-          '输入 NeoGate API Key 并通过验证后，选择 Codex CLI 或 Claude Code，再从可用模型列表中选择模型。',
+          `输入 ${siteName.value} API Key 并通过验证后，选择 Codex CLI 或 Claude Code，再从可用模型列表中选择模型。`,
           '/assets/auto-config-answer-prompts.png',
           '验证 API Key 并选择客户端和模型的终端截图'
         ],
@@ -113,8 +112,7 @@ const content = computed(() => {
         ]
       ],
       switchModelTitle: '2.3 切换模型',
-      switchModelIntro:
-        '如果本机已经配置过 NeoGate，再次运行安装命令会尝试读取上次的 API Key、模型和客户端，并提示你切换模型还是重新安装。选择切换模型时，只会重新选择模型、写入配置并做一次转发测试，无需重装依赖。',
+      switchModelIntro: `如果本机已经配置过 ${siteName.value}，再次运行安装命令会尝试读取上次的 API Key、模型和客户端，并提示你切换模型还是重新安装。选择切换模型时，只会重新选择模型、写入配置并做一次转发测试，无需重装依赖。`,
       switchModelStepsTitle: '切换步骤',
       switchModelSteps: [
         '再次运行与首次配置相同的安装命令（Linux/macOS/WSL 用 curl，Windows 用 PowerShell）。',
@@ -122,10 +120,8 @@ const content = computed(() => {
         '回车进入切换流程：确认或自动推断客户端，从可用模型列表中选择新模型（默认高亮上次使用的模型）。',
         '脚本写入新模型配置并执行一次网关转发测试，通过即完成切换；如果要完整重装，选择 2。'
       ],
-      manualConfigIntro:
-        '手动配置不依赖安装脚本。先安装目标客户端，再把 NeoGate 的 Base URL、API Key 和模型名写入对应配置文件。',
-      endpointIntro:
-        '下游应用只需要使用 NeoGate 地址和自己的 NeoGate API Key；上游密钥由后台统一管理。',
+      manualConfigIntro: `手动配置不依赖安装脚本。先安装目标客户端，再把 ${siteName.value} 的 Base URL、API Key 和模型名写入对应配置文件。`,
+      endpointIntro: `下游应用只需要使用 ${siteName.value} 地址和自己的 ${siteName.value} API Key；上游密钥由后台统一管理。`,
       routes: [
         ['OpenAI 模型列表', 'GET', '/v1/models'],
         ['OpenAI Chat Completions', 'POST', '/v1/chat/completions'],
@@ -137,8 +133,7 @@ const content = computed(() => {
       requestTitle: '发送一次对话请求',
       pythonTitle: 'Python SDK',
       claudeCodeTitle: 'Claude Code',
-      claudeCodeIntro:
-        '如果你准备使用 Claude Code，先安装 Claude Code，再修改用户级 settings.json。这里使用 NeoGate 的 Anthropic 兼容网关和模型名。',
+      claudeCodeIntro: `如果你准备使用 Claude Code，先安装 Claude Code，再修改用户级 settings.json。这里使用 ${siteName.value} 的 Anthropic 兼容网关和模型名。`,
       installClaudeTitle: '安装 Claude Code',
       openClaudeConfigTitle: '打开或创建配置文件',
       claudeConfigPathText:
@@ -152,7 +147,7 @@ const content = computed(() => {
       claudeVerifyText:
         '重新运行 claude，进入 Claude Code 后发送一条测试消息；如果能正常回复，说明配置完成。',
       codexTitle: 'Codex',
-      codexIntro: '如果你准备使用 Codex，推荐通过 OpenAI 兼容方式接入 NeoGate。',
+      codexIntro: `如果你准备使用 Codex，推荐通过 OpenAI 兼容方式接入 ${siteName.value}。`,
       installCodexTitle: '安装 Codex',
       codexConfigFileTitle: '打开配置文件',
       codexConfigFileText:
@@ -193,8 +188,7 @@ const content = computed(() => {
 
   return {
     title: 'Help Docs',
-    subtitle:
-      'Use NeoGate to manage API keys, balance, usage, and upstream models behind OpenAI / Anthropic-compatible APIs.',
+    subtitle: `Use ${siteName.value} to manage API keys, balance, usage, and upstream models behind OpenAI / Anthropic-compatible APIs.`,
     menuTitle: 'Contents',
     menu: [
       ['start', 'Preparation', '1. Preparation'],
@@ -206,8 +200,7 @@ const content = computed(() => {
       ['faq', 'FAQ', '5. FAQ']
     ],
     startTitle: 'Preparation',
-    startIntro:
-      'First get a NeoGate API key and confirm which local tool you want to connect. After preparation, choose automatic or manual configuration.',
+    startIntro: `First get a ${siteName.value} API key and confirm which local tool you want to connect. After preparation, choose automatic or manual configuration.`,
     startCards: [
       [
         'Get an API key',
@@ -219,13 +212,11 @@ const content = computed(() => {
       ]
     ],
     installShellTitle: 'Linux / macOS / WSL automatic config',
-    installShellText:
-      'Run this command in bash, zsh, or a WSL terminal. The script verifies the NeoGate API key first, then asks for the client and model, and can check dependencies such as Node.js, Codex, and Claude Code.',
+    installShellText: `Run this command in bash, zsh, or a WSL terminal. The script verifies the ${siteName.value} API key first, then asks for the client and model, and can check dependencies such as Node.js, Codex, and Claude Code.`,
     installWindowsTitle: 'Windows PowerShell automatic config',
     installWindowsText:
       'Run install.ps1 in Windows PowerShell. If you are using WSL, use the shell command above.',
-    autoConfigIntro:
-      'Automatic configuration downloads the install script from this NeoGate service. After verifying the key, the script loads available models, shows a config summary, and writes the Base URL, API key, and model name after you confirm.',
+    autoConfigIntro: `Automatic configuration downloads the install script from this ${siteName.value} service. After verifying the key, the script loads available models, shows a config summary, and writes the Base URL, API key, and model name after you confirm.`,
     autoConfigCommandTitle: '2.1 Install Commands',
     autoConfigStepsTitle: '2.2 Steps',
     autoConfigSteps: [
@@ -233,11 +224,11 @@ const content = computed(() => {
         '1) Copy and run the install command',
         'Copy the command for your operating system from the home page or this page, then run it in a terminal.',
         '/assets/auto-config-run-command.png',
-        'Terminal screenshot running the NeoGate install command'
+        `Terminal screenshot running the ${siteName.value} install command`
       ],
       [
         '2) Confirm the config',
-        'Enter the NeoGate API key, pass verification, select Codex CLI or Claude Code, then choose a model from the available list.',
+        `Enter the ${siteName.value} API key, pass verification, select Codex CLI or Claude Code, then choose a model from the available list.`,
         '/assets/auto-config-answer-prompts.png',
         'Terminal screenshot verifying API key and selecting client and model'
       ],
@@ -249,8 +240,7 @@ const content = computed(() => {
       ]
     ],
     switchModelTitle: '2.3 Switch Model',
-    switchModelIntro:
-      'If your machine is already configured for NeoGate, running the install command again tries to reuse the previous API key, model, and client, then asks whether to switch model or reinstall. Switching only reselects a model, writes it back, and runs a relay test, with no dependency reinstall needed.',
+    switchModelIntro: `If your machine is already configured for ${siteName.value}, running the install command again tries to reuse the previous API key, model, and client, then asks whether to switch model or reinstall. Switching only reselects a model, writes it back, and runs a relay test, with no dependency reinstall needed.`,
     switchModelStepsTitle: 'Switch steps',
     switchModelSteps: [
       'Run the same install command you used for the first-time setup (curl on Linux/macOS/WSL, PowerShell on Windows).',
@@ -258,10 +248,8 @@ const content = computed(() => {
       'Press Enter to enter the switch flow: confirm or infer the client, then pick a new model from the available list (the previously used model is highlighted as the default).',
       'The script writes the new model config and runs a gateway relay test; passing the test completes the switch. Choose 2 for a full reinstall.'
     ],
-    manualConfigIntro:
-      'Manual configuration does not use the install script. Install the target client first, then write the NeoGate Base URL, API key, and model name into the matching config file.',
-    endpointIntro:
-      'Apps use NeoGate URLs and a NeoGate API key. Upstream credentials are managed in the admin console.',
+    manualConfigIntro: `Manual configuration does not use the install script. Install the target client first, then write the ${siteName.value} Base URL, API key, and model name into the matching config file.`,
+    endpointIntro: `Apps use ${siteName.value} URLs and a ${siteName.value} API key. Upstream credentials are managed in the admin console.`,
     routes: [
       ['OpenAI models', 'GET', '/v1/models'],
       ['OpenAI Chat Completions', 'POST', '/v1/chat/completions'],
@@ -273,8 +261,7 @@ const content = computed(() => {
     requestTitle: 'Send one chat request',
     pythonTitle: 'Python SDK',
     claudeCodeTitle: 'Claude Code',
-    claudeCodeIntro:
-      'To use Claude Code, install it first, then edit the user-level settings.json file. This uses the NeoGate Anthropic-compatible gateway and model name.',
+    claudeCodeIntro: `To use Claude Code, install it first, then edit the user-level settings.json file. This uses the ${siteName.value} Anthropic-compatible gateway and model name.`,
     installClaudeTitle: 'Install Claude Code',
     openClaudeConfigTitle: 'Open or create the config file',
     claudeConfigPathText:

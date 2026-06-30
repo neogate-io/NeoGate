@@ -464,6 +464,10 @@ sudo systemctl reload nginx
       <td>图片编辑等长耗时请求如果出现 504，可调大 <code>UPSTREAM_TIMEOUT_SECONDS</code>（默认 600 秒；旧的 <code>REQUEST_TIMEOUT_SECONDS</code> 仍作为兼容别名）。</td>
     </tr>
     <tr>
+      <td>🚦 用户并发</td>
+      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 10 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
+    </tr>
+    <tr>
       <td>🔀 上游故障切换</td>
       <td>上游返回 429、5xx、529 或发生超时/连接类错误时，NeoGate 默认最多切换其他可用上游 5 次；可通过 <code>MAX_UPSTREAM_FAILOVERS</code> 调整，设为 0 可关闭。</td>
     </tr>

@@ -283,7 +283,6 @@ verify_api_key() {
       success "$(message key_verified)"
       ;;
     401|403)
-      print_response_hint "$body_file"
       warn "$(message key_rejected)"
       return 1
       ;;

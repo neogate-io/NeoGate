@@ -96,6 +96,8 @@ struct GatewayNotification {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Payment providers may report explicit failed states even if the current ZPAY
+// adapter only emits paid or pending.
 #[allow(dead_code)]
 enum PaymentStatus {
     Paid,
@@ -478,13 +480,11 @@ fn checkout_notify_url_matches(checkout_url: &str, notify_url: &str) -> bool {
     let Some((_, query)) = checkout_url.split_once('?') else {
         return false;
     };
-    serde_urlencoded::from_str::<Vec<(String, String)>>(query)
-        .map(|pairs| {
-            pairs
-                .iter()
-                .any(|(key, value)| key == "notify_url" && value == notify_url)
-        })
-        .unwrap_or(false)
+    serde_urlencoded::from_str::<Vec<(String, String)>>(query).is_ok_and(|pairs| {
+        pairs
+            .iter()
+            .any(|(key, value)| key == "notify_url" && value == notify_url)
+    })
 }
 
 fn micro_usd_to_cny_minor_units(amount_micro_usd: i64) -> i64 {
@@ -512,8 +512,7 @@ fn form_or_json_payload(headers: &HeaderMap, body: &Bytes) -> AppResult<HashMap<
             .map(|(key, value)| {
                 let value = value
                     .as_str()
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| value.to_string());
+                    .map_or_else(|| value.to_string(), ToOwned::to_owned);
                 (key.clone(), value)
             })
             .collect());

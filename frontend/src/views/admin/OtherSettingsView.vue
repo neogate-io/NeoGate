@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
 import {
+  ChatDotRound,
   Coin,
   Link as LinkIcon,
   Monitor,
@@ -11,12 +12,20 @@ import {
   View
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { getChannels } from '../../api/channels'
 import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
-import { checkLatestVersion, getSiteSetting, saveSiteSetting } from '../../api/settings'
+import {
+  checkLatestVersion,
+  getAdminModelSetting,
+  getSiteSetting,
+  saveAdminModelSetting,
+  saveSiteSetting
+} from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
-import type { ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
+import { setSiteBrand } from '../../composables/useSiteBrand'
+import type { Channel, ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
@@ -29,11 +38,18 @@ const servicePolicy = ref<ServicePolicy | null>(null)
 const siteSettingSaving = ref(false)
 const siteForm = ref({
   siteName: '',
+  logoUrl: '',
   publicBaseUrl: '',
   envWriteSupported: false
 })
+const adminModelForm = ref({
+  defaultTextModel: '',
+  defaultTextChannelId: null as number | null
+})
+const channels = ref<Channel[]>([])
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
 const servicePolicySaving = ref(false)
+const adminModelSaving = ref(false)
 const syncingTemplates = ref(false)
 const checkingVersion = ref(false)
 const versionCheck = ref<VersionCheckResult | null>(null)
@@ -85,6 +101,44 @@ const siteSettingDescription = computed(() => {
   return siteForm.value.envWriteSupported
     ? t('siteSettingsDescription')
     : t('siteSettingsReadOnlyDescription')
+})
+const textModelOptions = computed(() => {
+  const options: Array<{ value: string; label: string; model: string; channelId: number }> = []
+  const seen = new Set<string>()
+  for (const channel of channels.value) {
+    if (!channel.enabled) continue
+    for (const model of channel.models) {
+      if (
+        !model.enabled ||
+        model.status !== 'available' ||
+        model.runtime_status === 'failed'
+      ) {
+        continue
+      }
+      const key = `${channel.id}:${model.model}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      options.push({
+        value: key,
+        label: `${model.model} / ${channel.name}`,
+        model: model.model,
+        channelId: channel.id
+      })
+    }
+  }
+  return options.sort((left, right) => left.label.localeCompare(right.label))
+})
+const selectedAdminTextModelValue = computed({
+  get() {
+    const model = adminModelForm.value.defaultTextModel
+    const channelId = adminModelForm.value.defaultTextChannelId
+    return model && channelId ? `${channelId}:${model}` : ''
+  },
+  set(value: string) {
+    const option = textModelOptions.value.find((item) => item.value === value)
+    adminModelForm.value.defaultTextModel = option?.model ?? ''
+    adminModelForm.value.defaultTextChannelId = option?.channelId ?? null
+  }
 })
 const versionStatusLabel = computed(() => {
   if (!versionCheck.value) return t('versionNotChecked')
@@ -163,21 +217,33 @@ function readReferenceSyncError(err: unknown) {
 function applySiteSetting(setting: Awaited<ReturnType<typeof getSiteSetting>>) {
   siteForm.value = {
     siteName: setting.site_name || 'NeoGate',
+    logoUrl: setting.logo_url ?? '',
     publicBaseUrl: setting.public_base_url ?? '',
     envWriteSupported: setting.env_write_supported
+  }
+}
+
+function applyAdminModelSetting(setting: Awaited<ReturnType<typeof getAdminModelSetting>>) {
+  adminModelForm.value = {
+    defaultTextModel: setting.default_text_model ?? '',
+    defaultTextChannelId: setting.default_text_channel_id ?? null
   }
 }
 
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [policy, siteSetting, catalog] = await Promise.all([
+      const [policy, siteSetting, adminModelSetting, fetchedChannels, catalog] = await Promise.all([
         getAdminServicePolicy(),
         getSiteSetting(),
+        getAdminModelSetting(),
+        getChannels(),
         getModelReferenceCatalog()
       ])
       servicePolicy.value = policy
       applySiteSetting(siteSetting)
+      applyAdminModelSetting(adminModelSetting)
+      channels.value = fetchedChannels
       modelReferenceCatalog.value = catalog
     } catch (err) {
       ElMessage.error(readError(err))
@@ -187,6 +253,7 @@ async function load() {
 
 async function saveSiteConfig() {
   const siteName = siteForm.value.siteName.trim()
+  const logoUrl = siteForm.value.logoUrl.trim()
   const publicBaseUrl = siteForm.value.publicBaseUrl.trim()
   if (!siteName) {
     ElMessage.error(t('siteNameRequired'))
@@ -196,7 +263,6 @@ async function saveSiteConfig() {
     ElMessage.error(t('publicBaseUrlRequired'))
     return
   }
-
   try {
     const url = new URL(publicBaseUrl)
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
@@ -204,18 +270,50 @@ async function saveSiteConfig() {
     ElMessage.error(t('publicBaseUrlInvalid'))
     return
   }
+  if (logoUrl) {
+    try {
+      const url = new URL(logoUrl)
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
+    } catch {
+      ElMessage.error(t('siteLogoUrlInvalid'))
+      return
+    }
+  }
 
   await withLoading(siteSettingSaving, async () => {
     try {
       const result = await saveSiteSetting({
         site_name: siteName,
-        public_base_url: publicBaseUrl
+        public_base_url: publicBaseUrl,
+        logo_url: logoUrl || null
       })
       applySiteSetting(result.setting)
+      setSiteBrand(result.setting)
       servicePolicy.value = await getAdminServicePolicy(true).catch(() => servicePolicy.value)
       ElMessage.success(
         result.restart_required ? t('siteSettingsSavedRestartRequired') : t('siteSettingsSaved')
       )
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+async function saveAdminModelConfig() {
+  const model = adminModelForm.value.defaultTextModel.trim()
+  const channelId = adminModelForm.value.defaultTextChannelId
+  if (!model || !channelId) {
+    ElMessage.error(t('adminDefaultTextModelRequired'))
+    return
+  }
+  await withLoading(adminModelSaving, async () => {
+    try {
+      const setting = await saveAdminModelSetting({
+        default_text_model: model,
+        default_text_channel_id: channelId
+      })
+      applyAdminModelSetting(setting)
+      ElMessage.success(t('adminDefaultTextModelSaved'))
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -294,8 +392,15 @@ onMounted(load)
           <el-form-item :label="t('siteNameLabel')">
             <el-input
               v-model="siteForm.siteName"
-              :disabled="!siteForm.envWriteSupported || siteSettingSaving"
+              :disabled="siteSettingSaving"
               :placeholder="t('siteNamePlaceholder')"
+            />
+          </el-form-item>
+          <el-form-item :label="t('siteLogoUrlLabel')">
+            <el-input
+              v-model="siteForm.logoUrl"
+              :disabled="siteSettingSaving"
+              :placeholder="t('siteLogoUrlPlaceholder')"
             />
           </el-form-item>
           <el-form-item :label="t('publicBaseUrlLabel')">
@@ -310,7 +415,6 @@ onMounted(load)
           <el-button
             class="admin-action-button"
             type="primary"
-            :disabled="!siteForm.envWriteSupported"
             :loading="siteSettingSaving"
             @click="saveSiteConfig"
           >
@@ -428,6 +532,43 @@ onMounted(load)
             @click="syncReferencePrices"
           >
             {{ t('syncReferencePrices') }}
+          </el-button>
+        </div>
+      </section>
+
+      <section class="other-settings-card admin-model-settings-card">
+        <header class="admin-settings-section-header other-settings-card-header">
+          <el-icon class="admin-settings-panel-icon"><ChatDotRound /></el-icon>
+          <div class="other-settings-card-copy">
+            <h3>{{ t('adminDefaultTextModel') }}</h3>
+            <p>{{ t('adminDefaultTextModelDescription') }}</p>
+            <el-form class="admin-model-settings-form" @submit.prevent="saveAdminModelConfig">
+              <el-form-item :label="t('adminTextModel')">
+                <el-select
+                  v-model="selectedAdminTextModelValue"
+                  filterable
+                  :disabled="adminModelSaving"
+                  :placeholder="t('adminTextModelPlaceholder')"
+                >
+                  <el-option
+                    v-for="option in textModelOptions"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-form>
+          </div>
+        </header>
+        <div class="other-settings-actions">
+          <el-button
+            class="admin-action-button admin-model-save-button"
+            type="primary"
+            :loading="adminModelSaving"
+            @click="saveAdminModelConfig"
+          >
+            {{ t('save') }}
           </el-button>
         </div>
       </section>
@@ -590,7 +731,8 @@ onMounted(load)
 .site-settings-inline-form {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  margin-left: 38px;
 }
 
 .site-settings-inline-form :deep(.el-form-item) {
@@ -603,6 +745,45 @@ onMounted(load)
   font-weight: 700;
   line-height: 1.3;
   margin-bottom: 6px;
+}
+
+.admin-model-settings-card {
+  gap: 14px;
+}
+
+.admin-model-settings-form {
+  margin-top: 8px;
+}
+
+.admin-model-settings-form :deep(.el-form-item) {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 320px);
+  justify-content: start;
+  margin-bottom: 0;
+}
+
+.admin-model-settings-form :deep(.el-form-item__label) {
+  color: var(--admin-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  justify-self: start;
+  line-height: 1.3;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.admin-model-settings-form :deep(.el-select) {
+  width: 100%;
+}
+
+.admin-model-settings-form :deep(.el-form-item__content) {
+  min-width: 0;
+}
+
+.admin-model-save-button {
+  min-width: 88px;
 }
 
 .other-settings-actions {
@@ -730,6 +911,28 @@ onMounted(load)
 
   .site-settings-inline-form {
     grid-template-columns: minmax(0, 1fr);
+    margin-left: 0;
+  }
+
+  .admin-model-settings-form :deep(.el-form-item) {
+    align-items: stretch;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-model-settings-form :deep(.el-form-item__label) {
+    justify-self: start;
+    text-align: left;
+  }
+
+  .admin-model-settings-form :deep(.el-select),
+  .admin-model-settings-form :deep(.el-form-item__content) {
+    width: 100%;
+  }
+
+  .admin-model-save-button {
+    width: 100%;
   }
 }
 </style>

@@ -38,8 +38,10 @@ use crate::{
     input::{bounded_limit, trimmed_non_empty},
     pagination::{created_id_cursor_page, parse_created_id_cursor},
     project::models::{
-        create_project_model, delete_project_model, list_project_models, update_project_model,
-        ProjectModelRecord, UpdateProjectModelRequest, UpsertProjectModelRequest,
+        auto_configure_project_model, create_project_model, delete_project_model,
+        list_project_models, update_project_model, AutoConfigureProjectModelRequest,
+        AutoConfigureResponse, ProjectModelRecord, UpdateProjectModelRequest,
+        UpsertProjectModelRequest,
     },
     AppState,
 };
@@ -80,9 +82,11 @@ use self::{
         record_provider_models, ProviderRecord, OPENAI_OAUTH_PROTOCOL,
     },
     setting::{
-        get_site_setting, get_smtp_setting, test_smtp_setting, upsert_site_setting,
-        upsert_smtp_setting, SiteSettingRecord, SmtpSettingRecord, TestSmtpSettingResponse,
-        UpsertSiteSettingRequest, UpsertSiteSettingResponse, UpsertSmtpSettingRequest,
+        ensure_default_text_model_setting, get_admin_model_setting, get_site_setting,
+        get_smtp_setting, test_smtp_setting, upsert_admin_model_setting, upsert_site_setting,
+        upsert_smtp_setting, AdminModelSettingRecord, SiteSettingRecord, SmtpSettingRecord,
+        TestSmtpSettingResponse, UpsertAdminModelSettingRequest, UpsertSiteSettingRequest,
+        UpsertSiteSettingResponse, UpsertSmtpSettingRequest,
     },
     upstream::upstream_models,
     user::{
@@ -151,6 +155,10 @@ pub fn router() -> Router<Arc<AppState>> {
             get(project_models_handler).post(create_project_model_handler),
         )
         .route(
+            "/api/admin/projects/{id}/models/auto-configure",
+            post(auto_configure_project_model_handler),
+        )
+        .route(
             "/api/admin/projects/{id}/models/{model}",
             patch(update_project_model_handler).delete(delete_project_model_handler),
         )
@@ -194,6 +202,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/settings/site",
             get(site_setting).post(upsert_site_setting_handler),
+        )
+        .route(
+            "/api/admin/settings/admin-model",
+            get(admin_model_setting).post(upsert_admin_model_setting_handler),
         )
         .route(
             "/api/admin/settings/admin-password",
@@ -527,6 +539,15 @@ async fn create_project_model_handler(
     Ok(Json(record))
 }
 
+async fn auto_configure_project_model_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Path(id): Path<DbId>,
+    Json(req): Json<AutoConfigureProjectModelRequest>,
+) -> AppResult<Json<AutoConfigureResponse>> {
+    Ok(Json(auto_configure_project_model(&state, id, req).await?))
+}
+
 async fn update_project_model_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
@@ -662,6 +683,21 @@ async fn upsert_site_setting_handler(
     Ok(Json(result))
 }
 
+async fn admin_model_setting(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<AdminModelSettingRecord>> {
+    Ok(Json(get_admin_model_setting(&state).await?))
+}
+
+async fn upsert_admin_model_setting_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Json(req): Json<UpsertAdminModelSettingRequest>,
+) -> AppResult<Json<AdminModelSettingRecord>> {
+    Ok(Json(upsert_admin_model_setting(&state, req).await?))
+}
+
 async fn public_site_setting(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<SiteSettingRecord>> {
@@ -775,6 +811,7 @@ async fn upsert_provider_price_handler(
         },
     )
     .await;
+    ensure_default_text_model_setting(&state).await?;
     Ok(Json(price))
 }
 
@@ -794,6 +831,7 @@ async fn create_channel_handler(
     Json(req): Json<CreateChannelRequest>,
 ) -> AppResult<Json<ChannelRecord>> {
     let channel = create_channel(&state, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(channel))
 }
@@ -805,6 +843,7 @@ async fn update_channel_handler(
     Json(req): Json<UpdateChannelRequest>,
 ) -> AppResult<Json<ChannelRecord>> {
     let channel = update_channel(&state, id, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(channel))
 }
@@ -816,6 +855,7 @@ async fn update_channel_model_handler(
     Json(req): Json<UpdateChannelModelRequest>,
 ) -> AppResult<Json<ChannelModelRecord>> {
     let model = update_channel_model(&state, id, &model, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(model))
 }
@@ -905,6 +945,7 @@ async fn upload_credentials_handler(
     multipart: Multipart,
 ) -> AppResult<Json<CredentialUploadResult>> {
     let result = upload_credentials(&state, multipart).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(result))
 }
@@ -943,6 +984,7 @@ async fn enable_credential_handler(
     Path(id): Path<DbId>,
 ) -> AppResult<Json<CredentialRecord>> {
     let credential = enable_credential(&state, id).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(credential))
 }
@@ -974,6 +1016,7 @@ async fn create_channel_key_handler(
     Json(req): Json<CreateChannelKeyRequest>,
 ) -> AppResult<Json<ChannelKeyRecord>> {
     let key = create_channel_key(&state, channel_id, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(key))
 }
@@ -985,6 +1028,7 @@ async fn update_channel_key_handler(
     Json(req): Json<UpdateChannelKeyRequest>,
 ) -> AppResult<Json<ChannelKeyRecord>> {
     let key = update_channel_key(&state, key_id, req).await?;
+    ensure_default_text_model_setting(&state).await?;
     invalidate_cache(&state, InvalidationEvent::ChannelKeySecret { id: key_id }).await;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(key))
@@ -1054,6 +1098,7 @@ struct UsageRecord {
     relay_path_index: Option<i32>,
     provider: String,
     model: Option<String>,
+    upstream_model: Option<String>,
     status_code: Option<i32>,
     streamed: bool,
     latency_ms: i64,
@@ -1174,7 +1219,7 @@ async fn usage_rows(
                 current_channel.name AS channel_name, usage_record.channel_key_id,
                 usage_record.credential_id, usage_record.relay_trace_id,
                 usage_record.relay_attempt, usage_record.relay_final,
-                usage_record.provider, usage_record.model,
+                usage_record.provider, usage_record.model, usage_record.upstream_model,
                 usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
                 usage_record.first_response_ms, usage_record.output_tokens_per_second,
                 usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
@@ -1208,6 +1253,7 @@ async fn usage_rows(
              $3::text IS NULL
              OR usage_record.provider ILIKE $3
              OR usage_record.model ILIKE $3
+             OR usage_record.upstream_model ILIKE $3
              OR usage_record.relay_trace_id::text ILIKE $3
              OR usage_record.user_id::text ILIKE $3
              OR u.email::text ILIKE $3
@@ -1253,6 +1299,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         relay_path_index: row.try_get("relay_path_index")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
+        upstream_model: row.try_get("upstream_model")?,
         status_code: row.try_get("status_code")?,
         streamed: row.try_get("streamed")?,
         latency_ms: row.try_get("latency_ms")?,
@@ -1294,6 +1341,7 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
         "relay_path".into(),
         "provider".into(),
         "model".into(),
+        "upstream_model".into(),
         "status_code".into(),
         "streamed".into(),
         "latency_ms".into(),
@@ -1336,6 +1384,7 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
             record.relay_path.unwrap_or_default(),
             record.provider,
             record.model.unwrap_or_default(),
+            record.upstream_model.unwrap_or_default(),
             optional_i32(record.status_code),
             record.streamed.to_string(),
             record.latency_ms.to_string(),

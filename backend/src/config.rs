@@ -297,11 +297,11 @@ impl Config {
             billing: BillingConfig {
                 credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000)?,
                 credit_allocation_recovery_after: Duration::from_secs(parse_u64(
-                    "CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS",
+                    "CREDIT_RELEASE_AFTER_SECONDS",
                     900,
                 )?),
                 credit_allocation_recovery_interval: Duration::from_secs(parse_u64(
-                    "CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS",
+                    "CREDIT_RELEASE_INTERVAL_SECONDS",
                     60,
                 )?),
                 default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 2048)?,
@@ -356,10 +356,10 @@ impl Config {
             anyhow::bail!("CREDIT_PREFETCH_MICRO_USD must be positive");
         }
         if self.billing.credit_allocation_recovery_after.is_zero() {
-            anyhow::bail!("CREDIT_ALLOCATION_RECOVERY_AFTER_SECONDS must be positive");
+            anyhow::bail!("CREDIT_RELEASE_AFTER_SECONDS must be positive");
         }
         if self.billing.credit_allocation_recovery_interval.is_zero() {
-            anyhow::bail!("CREDIT_ALLOCATION_RECOVERY_INTERVAL_SECONDS must be positive");
+            anyhow::bail!("CREDIT_RELEASE_INTERVAL_SECONDS must be positive");
         }
         if self.billing.default_output_tokens <= 0 {
             anyhow::bail!("DEFAULT_OUTPUT_TOKENS must be positive");

@@ -8,6 +8,7 @@ import {
   Edit,
   FolderOpened,
   Link,
+  MagicStick,
   Money,
   Plus,
   Search,
@@ -20,6 +21,7 @@ import { ElMessage } from 'element-plus'
 import CreditAdjustDialog from '../../components/admin/common/CreditAdjustDialog.vue'
 import {
   addProjectMember,
+  autoConfigureProjectModel,
   createProjectModel,
   createProject,
   deleteProject,
@@ -47,6 +49,7 @@ import type {
   Project,
   ProjectMember,
   ProjectModel,
+  AutoSuggestion,
   ProjectModelCandidateTier,
   ProjectStatus,
   User
@@ -131,6 +134,8 @@ const projectModelsLoading = ref(false)
 const memberSaving = ref(false)
 const projectModelSaving = ref(false)
 const smartRouteSaving = ref(false)
+const smartAutoConfiguring = ref(false)
+const smartAutoDialogVisible = ref(false)
 const deletingProjectModelName = ref<string | null>(null)
 const memberUserOptions = ref<User[]>([])
 const memberUserSearchLoading = ref(false)
@@ -141,6 +146,9 @@ const selectedProject = ref<Project | null>(null)
 const selectedMembers = ref<ProjectMember[]>([])
 const selectedProjectModels = ref<ProjectModel[]>([])
 const editingSmartRoute = ref<ProjectModel | null>(null)
+const smartAutoSuggestions = ref<AutoSuggestion[]>([])
+const smartAutoWarnings = ref<string[]>([])
+const smartAutoSource = ref('')
 const channelOptions = ref<Channel[]>([])
 const ownerOptions = ref<User[]>([])
 const ownerSearchLoading = ref(false)
@@ -438,7 +446,7 @@ function hydrateSmartModelForm() {
 }
 
 function channelLabel(channel: Channel) {
-  return `${channel.name} / ${channel.provider}`
+  return channel.name
 }
 
 function defaultSmartRoutingConfig() {
@@ -475,6 +483,13 @@ function candidateChannelLabel(candidate: ProjectModelCandidateForm) {
   if (candidate.targetChannelName) return candidate.targetChannelName
   if (!candidate.targetChannelId) return '自动选择'
   const channel = channelOptions.value.find((item) => item.id === candidate.targetChannelId)
+  return channel ? channelLabel(channel) : '自动选择'
+}
+
+function suggestionChannelLabel(suggestion: AutoSuggestion) {
+  if (suggestion.target_channel_name) return suggestion.target_channel_name
+  if (!suggestion.target_channel_id) return '自动选择'
+  const channel = channelOptions.value.find((item) => item.id === suggestion.target_channel_id)
   return channel ? channelLabel(channel) : '自动选择'
 }
 
@@ -548,6 +563,64 @@ async function addSmartRouteCandidate() {
   ]
   const saved = await persistSmartRouteCandidates(nextCandidates, '候选模型已添加')
   if (saved) resetSmartCandidateForm()
+}
+
+async function requestSmartAutoConfig() {
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  await withLoading(smartAutoConfiguring, async () => {
+    try {
+      const result = await autoConfigureProjectModel(projectId, {
+        mode: smartRouteCandidates.value.length > 0 ? 'fill_missing' : 'replace',
+        max_candidates_per_tier: 1
+      })
+      smartAutoSuggestions.value = result.suggestions
+      smartAutoWarnings.value = result.warnings
+      smartAutoSource.value = result.source
+      if (result.suggestions.length === 0) {
+        ElMessage.info(result.warnings[0] || '暂无需要自动配置的候选模型')
+        return
+      }
+      smartAutoDialogVisible.value = true
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+function autoSuggestionToCandidate(suggestion: AutoSuggestion): ProjectModelCandidateForm {
+  return {
+    targetModel: suggestion.target_model,
+    targetChannelId: suggestion.target_channel_id ?? null,
+    targetChannelName: suggestion.target_channel_name ?? null,
+    createdAt: null,
+    tier: suggestion.tier,
+    priority: 0,
+    weight: 1,
+    enabled: true
+  }
+}
+
+async function applySmartAutoConfig() {
+  const existingTiers = new Set(smartRouteCandidates.value.map((candidate) => candidate.tier))
+  const nextCandidates = [
+    ...smartRouteCandidates.value,
+    ...smartAutoSuggestions.value
+      .filter((suggestion) => !existingTiers.has(suggestion.tier))
+      .map(autoSuggestionToCandidate)
+  ]
+  if (nextCandidates.length === smartRouteCandidates.value.length) {
+    ElMessage.info('当前候选模型已包含建议档位')
+    smartAutoDialogVisible.value = false
+    return
+  }
+  const saved = await persistSmartRouteCandidates(nextCandidates, '自动配置已应用')
+  if (saved) {
+    smartAutoDialogVisible.value = false
+    smartAutoSuggestions.value = []
+    smartAutoWarnings.value = []
+    smartAutoSource.value = ''
+  }
 }
 
 async function removeSmartRouteCandidate(index: number) {
@@ -1273,7 +1346,7 @@ onMounted(loadServicePolicy)
           <el-tab-pane label="智能模型" name="smart">
             <div class="smart-route-panel">
               <p class="project-model-help">
-                配置虚拟模型 auto。客户端请求 model=auto 时，NeoGate 会按内容复杂度从候选模型中选择实际模型；至少添加一个候选后才会启用。
+                添加 auto 智能模型后，用户在客户端选择 auto 模型即可使用智能选择。系统会根据请求内容，在下方候选模型中自动选择一个实际模型；未添加候选时，auto 不会生效。
               </p>
               <el-form
                 class="smart-model-form"
@@ -1330,6 +1403,14 @@ onMounted(loadServicePolicy)
                     @click="addSmartRouteCandidate"
                   >
                     添加候选
+                  </el-button>
+                  <el-button
+                    type="primary"
+                    :icon="MagicStick"
+                    :loading="smartAutoConfiguring"
+                    @click="requestSmartAutoConfig"
+                  >
+                    自动配置
                   </el-button>
                 </div>
               </el-form>
@@ -1390,6 +1471,63 @@ onMounted(loadServicePolicy)
           </el-tab-pane>
         </el-tabs>
       </div>
+    </el-dialog>
+
+    <el-dialog
+      v-model="smartAutoDialogVisible"
+      class="user-admin-dialog smart-auto-dialog"
+      title="自动配置建议"
+      width="680px"
+    >
+      <div class="smart-auto-panel">
+        <p class="project-model-help">
+          以下建议由{{ smartAutoSource === 'llm' ? '自动配置模型' : '本地规则' }}生成。应用后只会补全当前缺失的档位，不会覆盖已有候选。
+        </p>
+        <el-alert
+          v-for="warning in smartAutoWarnings"
+          :key="warning"
+          :title="warning"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+        <div class="service-table-panel smart-auto-table-panel">
+          <el-table
+            class="admin-table service-table"
+            :data="smartAutoSuggestions"
+            max-height="42vh"
+            stripe
+          >
+            <el-table-column label="档位" width="72">
+              <template #default="{ row }">
+                <span>{{ tierLabel(row.tier) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="推荐模型"
+              prop="target_model"
+              min-width="190"
+              show-overflow-tooltip
+            />
+            <el-table-column label="指定通道" width="130" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span>{{ suggestionChannelLabel(row) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="推荐理由" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span>{{ row.reason }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="smartAutoDialogVisible = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="smartRouteSaving" @click="applySmartAutoConfig">
+          应用配置
+        </el-button>
+      </template>
     </el-dialog>
 
     <el-dialog
@@ -1637,7 +1775,7 @@ onMounted(loadServicePolicy)
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(190px, 1.3fr) minmax(150px, 1fr) minmax(120px, 0.8fr) auto;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(120px, 0.8fr) auto;
 }
 
 .project-model-form :deep(.el-form-item) {
@@ -1648,10 +1786,11 @@ onMounted(loadServicePolicy)
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  white-space: nowrap;
 }
 
 .project-model-actions .el-button {
-  min-width: 82px;
+  min-width: 78px;
 }
 
 .project-model-table-panel {
@@ -1675,11 +1814,20 @@ onMounted(loadServicePolicy)
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: 78px minmax(220px, 1.4fr) minmax(160px, 1fr) auto;
+  grid-template-columns: 76px minmax(160px, 1fr) minmax(160px, 1fr) auto;
 }
 
 .smart-model-form :deep(.el-form-item) {
   margin-bottom: 0;
+}
+
+.smart-auto-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.smart-auto-table-panel {
+  margin: 0;
 }
 
 .project-table :deep(.project-row-is-disabled td) {
@@ -1810,6 +1958,15 @@ onMounted(loadServicePolicy)
 }
 
 :global(.project-create-dialog .el-dialog__body) {
+  padding-top: 8px;
+}
+
+:global(.project-models-dialog .el-dialog__header) {
+  border-bottom: 0;
+  padding-bottom: 10px;
+}
+
+:global(.project-models-dialog .el-dialog__body) {
   padding-top: 8px;
 }
 

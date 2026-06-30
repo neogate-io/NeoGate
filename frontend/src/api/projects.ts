@@ -2,6 +2,7 @@ import type {
   CursorPage,
   Project,
   ProjectMember,
+  AutoConfigResponse,
   ProjectModel,
   ProjectModelCandidateTier,
   ProjectModelRoutingConfig,
@@ -109,6 +110,23 @@ export function deleteProjectMember(projectId: number, memberId: number) {
 
 export function getProjectModels(projectId: number) {
   return adminRequest<ProjectModel[]>(`/api/admin/projects/${projectId}/models`)
+}
+
+export function autoConfigureProjectModel(
+  projectId: number,
+  payload: {
+    mode?: 'fill_missing' | 'replace' | 'keep'
+    classifier_model?: string | null
+    max_candidates_per_tier?: number
+  } = {}
+) {
+  return adminRequest<AutoConfigResponse>(
+    `/api/admin/projects/${projectId}/models/auto-configure`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  )
 }
 
 export function createProjectModel(

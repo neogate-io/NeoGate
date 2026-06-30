@@ -1,14 +1,24 @@
-use std::time::Instant;
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
 use crate::{
+    admin::setting::resolve_default_text_model,
+    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
+    config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult},
     id::DbId,
+    relay::{
+        read_upstream_error_body,
+        selector::{SelectedUpstream, UpstreamProtocol},
+        upstream_url,
+    },
+    AppState,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +127,64 @@ pub struct UpdateProjectModelRequest {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AutoConfigureProjectModelRequest {
+    #[serde(default = "default_auto_configure_mode")]
+    pub mode: String,
+    pub classifier_model: Option<String>,
+    #[serde(default = "default_max_candidates_per_tier")]
+    pub max_candidates_per_tier: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AutoConfigureResponse {
+    pub suggestions: Vec<AutoSuggestion>,
+    pub warnings: Vec<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoSuggestion {
+    pub tier: String,
+    pub target_model: String,
+    pub target_channel_id: Option<DbId>,
+    pub target_channel_name: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AutoConfigureAvailableModel {
+    model: String,
+    provider: String,
+    channel_id: DbId,
+    channel_name: String,
+    protocol: String,
+    input_price_usd_micros: Option<i64>,
+    output_price_usd_micros: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmAutoConfigureResponse {
+    simple: Option<LlmAutoConfigureItem>,
+    standard: Option<LlmAutoConfigureItem>,
+    advanced: Option<LlmAutoConfigureItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmAutoConfigureItem {
+    model: String,
+    channel_id: Option<DbId>,
+    reason: Option<String>,
+}
+
+fn default_auto_configure_mode() -> String {
+    "fill_missing".to_string()
+}
+
+fn default_max_candidates_per_tier() -> usize {
+    1
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -176,6 +244,76 @@ pub async fn project_has_models(pool: &PgPool, project_id: DbId) -> AppResult<bo
     .fetch_one(pool)
     .await?;
     Ok(exists)
+}
+
+pub async fn auto_configure_project_model(
+    state: &Arc<AppState>,
+    project_id: DbId,
+    req: AutoConfigureProjectModelRequest,
+) -> AppResult<AutoConfigureResponse> {
+    ensure_project_exists(&state.db.pool, project_id).await?;
+    let mode = normalize_auto_configure_mode(&req.mode)?;
+    let max_candidates_per_tier = req.max_candidates_per_tier.clamp(1, 3);
+    let available = list_auto_configure_available_models(&state.db.pool).await?;
+    if available.is_empty() {
+        return Err(AppError::BadRequest(
+            "没有可用于自动配置的上游模型".to_string(),
+        ));
+    }
+    let existing_tiers = existing_smart_candidate_tiers(&state.db.pool, project_id).await?;
+    let mut warnings = Vec::new();
+    let configured_model = req
+        .classifier_model
+        .as_deref()
+        .map(normalize_model)
+        .transpose()?;
+    state.selector.invalidate().await;
+    let configured_classifier = if let Some(model) = configured_model {
+        resolve_admin_text_model(state, &model, None).await
+    } else if let Some((model, channel_id, _)) = resolve_default_text_model(state).await? {
+        resolve_admin_text_model(state, &model, Some(channel_id)).await
+    } else {
+        Ok(None)
+    }?;
+    let Some((classifier_model, classifier_protocol, upstream)) = configured_classifier else {
+        return Err(AppError::BadRequest(
+            "请先在其他设置中配置一个可调用的默认文本大模型，再使用自动配置。".to_string(),
+        ));
+    };
+    let mut suggestions = match llm_auto_configure_suggestions(
+        state,
+        classifier_protocol,
+        &classifier_model,
+        &upstream,
+        &available,
+        &existing_tiers,
+        &mode,
+        max_candidates_per_tier,
+    )
+    .await
+    {
+        Ok(items) if !items.is_empty() => items,
+        Ok(_) => {
+            return Err(AppError::BadRequest(
+                "默认文本大模型没有返回可用建议，请调整默认文本大模型后重试。".to_string(),
+            ))
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "smart model auto-configure LLM failed");
+            return Err(AppError::UpstreamUnavailable(
+                "默认文本大模型暂时不可用，请检查其他设置中的默认文本大模型。".to_string(),
+            ));
+        }
+    };
+    suggestions = filter_auto_configure_mode(suggestions, &existing_tiers, &mode);
+    if suggestions.is_empty() && mode == "fill_missing" && !existing_tiers.is_empty() {
+        warnings.push("当前智能模型已包含简单、标准、高级档位，无需补全。".to_string());
+    }
+    Ok(AutoConfigureResponse {
+        suggestions,
+        warnings,
+        source: "llm".to_string(),
+    })
 }
 
 pub async fn resolve_project_model(
@@ -923,4 +1061,458 @@ fn routing_config_from_value(value: Value) -> AppResult<ProjectModelRoutingConfi
         return Ok(ProjectModelRoutingConfig::default());
     }
     serde_json::from_value(value).map_err(AppError::Json)
+}
+
+fn normalize_auto_configure_mode(value: &str) -> AppResult<String> {
+    match value.trim() {
+        "fill_missing" | "replace" | "keep" => Ok(value.trim().to_string()),
+        other => Err(AppError::BadRequest(format!(
+            "invalid auto configure mode: {other}"
+        ))),
+    }
+}
+
+async fn existing_smart_candidate_tiers(
+    pool: &PgPool,
+    project_id: DbId,
+) -> AppResult<HashSet<String>> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT pmc.tier
+         FROM project_model_candidate pmc
+         JOIN project_model pm ON pm.id = pmc.project_model_id
+         WHERE pm.project_id = $1
+           AND pm.route_mode = 'smart'
+           AND pmc.enabled = TRUE",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.try_get::<String, _>("tier").ok())
+        .collect())
+}
+
+async fn list_auto_configure_available_models(
+    pool: &PgPool,
+) -> AppResult<Vec<AutoConfigureAvailableModel>> {
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        r#"
+        SELECT DISTINCT ON (cm.model, c.id)
+               cm.model, c.provider, c.id AS channel_id, c.name AS channel_name, ce.protocol,
+               pp.input_price_usd_micros, pp.output_price_usd_micros
+        FROM channel_model cm
+        JOIN channel c ON c.id = cm.channel_id
+        JOIN provider p ON p.code = c.provider
+        JOIN channel_endpoint ce ON ce.channel_id = c.id
+            AND ce.enabled = TRUE
+            AND ce.healthy = TRUE
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM unnest(ce.models) AS endpoint_model(model)
+                    WHERE btrim(endpoint_model.model) = cm.model
+                )
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(ce.models) AS endpoint_model(model)
+                    WHERE btrim(endpoint_model.model) <> ''
+                )
+            )
+        JOIN provider_price pp ON pp.provider = c.provider
+                              AND pp.model = cm.model
+                              AND pp.enabled = TRUE
+                              AND pp.billing_meter = 'token'
+                              AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+        WHERE p.enabled = TRUE
+          AND c.enabled = TRUE
+          AND cm.enabled = TRUE
+          AND cm.status = 'available'
+          AND (
+              cm.runtime_status = 'normal'
+              OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+          )
+          AND (
+              (
+                  c.use_credentials = FALSE
+                  AND EXISTS (
+                      SELECT 1 FROM channel_key ck
+                      WHERE ck.channel_id = c.id
+                        AND ck.enabled = TRUE
+                        AND ck.healthy = TRUE
+                  )
+              )
+              OR (
+                  c.use_credentials = TRUE
+                  AND EXISTS (
+                      SELECT 1 FROM credential cr
+                      WHERE cr.provider = c.provider
+                        AND cr.enabled = TRUE
+                  )
+              )
+          )
+        ORDER BY cm.model ASC, c.id ASC, c.priority DESC,
+                 CASE ce.protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END
+        "#,
+    )))
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(AutoConfigureAvailableModel {
+                model: row.try_get("model")?,
+                provider: row.try_get("provider")?,
+                channel_id: row.try_get("channel_id")?,
+                channel_name: row.try_get("channel_name")?,
+                protocol: row
+                    .try_get::<Option<String>, _>("protocol")?
+                    .unwrap_or_else(|| "openai".to_string()),
+                input_price_usd_micros: row.try_get("input_price_usd_micros")?,
+                output_price_usd_micros: row.try_get("output_price_usd_micros")?,
+            })
+        })
+        .collect()
+}
+
+async fn resolve_admin_text_model(
+    state: &Arc<AppState>,
+    model: &str,
+    channel_id: Option<DbId>,
+) -> AppResult<Option<(String, UpstreamProtocol, SelectedUpstream)>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT ce.protocol, c.id AS channel_id
+        FROM channel c
+        JOIN channel_endpoint ce ON ce.channel_id = c.id
+        JOIN channel_model cm ON cm.channel_id = c.id
+        WHERE cm.model = $1
+          AND ($2::BIGINT IS NULL OR c.id = $2)
+          AND ce.enabled = TRUE
+          AND ce.healthy = TRUE
+          AND ce.protocol IN ('openai', 'anthropic')
+          AND (
+              EXISTS (
+                  SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                  WHERE btrim(endpoint_model.model) = cm.model
+              )
+              OR NOT EXISTS (
+                  SELECT 1 FROM unnest(ce.models) AS endpoint_model(model)
+                  WHERE btrim(endpoint_model.model) <> ''
+              )
+          )
+        ORDER BY c.priority DESC,
+                 CASE ce.protocol WHEN 'openai' THEN 0 WHEN 'anthropic' THEN 1 ELSE 2 END
+        "#,
+    )
+    .bind(model)
+    .bind(channel_id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    for row in rows {
+        let protocol: String = row.try_get("protocol")?;
+        let protocol = match protocol.as_str() {
+            "openai" => UpstreamProtocol::Openai,
+            "anthropic" => UpstreamProtocol::Anthropic,
+            _ => continue,
+        };
+        let channel_id: DbId = row.try_get("channel_id")?;
+        match state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                &[protocol],
+                model,
+                channel_id,
+                &[],
+            )
+            .await
+        {
+            Ok((_, upstream)) => return Ok(Some((model.to_string(), protocol, upstream))),
+            Err(err) => {
+                tracing::debug!(
+                    model,
+                    protocol = protocol.as_str(),
+                    channel_id,
+                    error = %err,
+                    "configured admin text model is not currently callable"
+                );
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn llm_auto_configure_suggestions(
+    state: &Arc<AppState>,
+    protocol: UpstreamProtocol,
+    classifier_model: &str,
+    upstream: &SelectedUpstream,
+    available: &[AutoConfigureAvailableModel],
+    existing_tiers: &HashSet<String>,
+    mode: &str,
+    max_candidates_per_tier: usize,
+) -> AppResult<Vec<AutoSuggestion>> {
+    let prompt = auto_configure_prompt(available, existing_tiers, mode, max_candidates_per_tier);
+    let content = match protocol {
+        UpstreamProtocol::Openai => {
+            openai_auto_configure_content(state, classifier_model, upstream, prompt).await?
+        }
+        UpstreamProtocol::Anthropic => {
+            anthropic_auto_configure_content(state, classifier_model, upstream, prompt).await?
+        }
+        UpstreamProtocol::OpenAiOauth => {
+            return Err(AppError::BadRequest(
+                "openai_oauth cannot be used as an auto configure classifier".to_string(),
+            ))
+        }
+    };
+    let parsed: LlmAutoConfigureResponse = match serde_json::from_str(&content) {
+        Ok(value) => value,
+        Err(_) => serde_json::from_value(extract_json_object(&content)?)?,
+    };
+    validate_llm_auto_configure_response(parsed, available)
+}
+
+async fn openai_auto_configure_content(
+    state: &Arc<AppState>,
+    classifier_model: &str,
+    upstream: &SelectedUpstream,
+    prompt: String,
+) -> AppResult<String> {
+    let body = json!({
+        "model": classifier_model,
+        "temperature": 0,
+        "response_format": { "type": "json_object" },
+        "messages": [
+            {
+                "role": "system",
+                "content": "You configure smart model routing. Return only valid JSON. Pick only models and channel IDs from the provided list."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    });
+    let response = state
+        .http
+        .post(upstream_url(&upstream.base_url, "/v1/chat/completions"))
+        .bearer_auth(&upstream.secret)
+        .header("content-type", "application/json")
+        .body(Bytes::from(serde_json::to_vec(&body)?))
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::UpstreamRequest(crate::error::UpstreamRequestError::from_reqwest(
+                upstream.provider.clone(),
+                &err,
+            ))
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = read_upstream_error_body(response).await;
+        return Err(AppError::UpstreamUnavailable(format!(
+            "auto configure model returned HTTP {}: {}",
+            status.as_u16(),
+            String::from_utf8_lossy(&body)
+                .chars()
+                .take(200)
+                .collect::<String>()
+        )));
+    }
+    let value: Value = response.json().await?;
+    value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::BadRequest("auto configure model response has no content".to_string())
+        })
+        .map(str::to_string)
+}
+
+async fn anthropic_auto_configure_content(
+    state: &Arc<AppState>,
+    classifier_model: &str,
+    upstream: &SelectedUpstream,
+    prompt: String,
+) -> AppResult<String> {
+    let body = json!({
+        "model": classifier_model,
+        "temperature": 0,
+        "max_tokens": 1200,
+        "system": "You configure smart model routing. Return only valid JSON. Pick only models and channel IDs from the provided list.",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    });
+    let response = state
+        .http
+        .post(upstream_url(&upstream.base_url, "/v1/messages"))
+        .header("x-api-key", &upstream.secret)
+        .header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
+        .header("content-type", "application/json")
+        .body(Bytes::from(serde_json::to_vec(&body)?))
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::UpstreamRequest(crate::error::UpstreamRequestError::from_reqwest(
+                upstream.provider.clone(),
+                &err,
+            ))
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = read_upstream_error_body(response).await;
+        return Err(AppError::UpstreamUnavailable(format!(
+            "auto configure model returned HTTP {}: {}",
+            status.as_u16(),
+            String::from_utf8_lossy(&body)
+                .chars()
+                .take(200)
+                .collect::<String>()
+        )));
+    }
+    let value: Value = response.json().await?;
+    let content = value
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("auto configure model response has no content".to_string())
+        })?;
+    Ok(content)
+}
+
+fn auto_configure_prompt(
+    available: &[AutoConfigureAvailableModel],
+    existing_tiers: &HashSet<String>,
+    mode: &str,
+    max_candidates_per_tier: usize,
+) -> String {
+    let models = available
+        .iter()
+        .map(|item| {
+            json!({
+                "model": item.model,
+                "provider": item.provider,
+                "protocol": item.protocol,
+                "channel_id": item.channel_id,
+                "channel_name": item.channel_name,
+                "input_price_usd_micros": item.input_price_usd_micros,
+                "output_price_usd_micros": item.output_price_usd_micros
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "goal": "Recommend smart model routing candidates for simple, standard, and advanced tiers.",
+        "rules": [
+            "simple: low cost, fast, good for short common questions",
+            "standard: balanced quality and cost, good for coding and structured output",
+            "advanced: strongest reasoning, good for complex analysis, architecture, hard debugging, and math",
+            "Use only provided model names and channel_id values.",
+            "Prefer different models for different tiers when possible.",
+            "Return at most one candidate per tier unless requested otherwise."
+        ],
+        "mode": mode,
+        "existing_tiers": existing_tiers.iter().cloned().collect::<Vec<_>>(),
+        "max_candidates_per_tier": max_candidates_per_tier,
+        "available_models": models,
+        "output_schema": {
+            "simple": { "model": "string", "channel_id": "number_or_null", "reason": "string" },
+            "standard": { "model": "string", "channel_id": "number_or_null", "reason": "string" },
+            "advanced": { "model": "string", "channel_id": "number_or_null", "reason": "string" }
+        }
+    });
+    payload.to_string()
+}
+
+fn extract_json_object(content: &str) -> AppResult<Value> {
+    let start = content
+        .find('{')
+        .ok_or_else(|| AppError::BadRequest("auto configure output is not JSON".to_string()))?;
+    let end = content
+        .rfind('}')
+        .ok_or_else(|| AppError::BadRequest("auto configure output is not JSON".to_string()))?;
+    serde_json::from_str(&content[start..=end]).map_err(AppError::Json)
+}
+
+fn validate_llm_auto_configure_response(
+    response: LlmAutoConfigureResponse,
+    available: &[AutoConfigureAvailableModel],
+) -> AppResult<Vec<AutoSuggestion>> {
+    let mut suggestions = Vec::new();
+    for (tier, item) in [
+        ("simple", response.simple),
+        ("standard", response.standard),
+        ("advanced", response.advanced),
+    ] {
+        let Some(item) = item else {
+            continue;
+        };
+        let model = normalize_model(&item.model)?;
+        let available_item = find_available_auto_config_model(available, &model, item.channel_id)
+            .ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "auto configure suggested unavailable model {model}"
+            ))
+        })?;
+        suggestions.push(AutoSuggestion {
+            tier: tier.to_string(),
+            target_model: available_item.model.clone(),
+            target_channel_id: item.channel_id,
+            target_channel_name: item
+                .channel_id
+                .and(Some(available_item.channel_name.clone())),
+            reason: item.reason.unwrap_or_else(|| tier_default_reason(tier)),
+        });
+    }
+    Ok(suggestions)
+}
+
+fn find_available_auto_config_model<'a>(
+    available: &'a [AutoConfigureAvailableModel],
+    model: &str,
+    channel_id: Option<DbId>,
+) -> Option<&'a AutoConfigureAvailableModel> {
+    available.iter().find(|item| {
+        item.model == model && channel_id.map(|id| id == item.channel_id).unwrap_or(true)
+    })
+}
+
+fn filter_auto_configure_mode(
+    suggestions: Vec<AutoSuggestion>,
+    existing_tiers: &HashSet<String>,
+    mode: &str,
+) -> Vec<AutoSuggestion> {
+    match mode {
+        "fill_missing" => suggestions
+            .into_iter()
+            .filter(|item| !existing_tiers.contains(&item.tier))
+            .collect(),
+        "keep" => Vec::new(),
+        _ => suggestions,
+    }
+}
+
+fn tier_default_reason(tier: &str) -> String {
+    match tier {
+        "simple" => "适合简单问答和低成本请求".to_string(),
+        "advanced" => "适合复杂推理、架构设计和疑难问题".to_string(),
+        _ => "适合日常代码、结构化输出和中等复杂任务".to_string(),
+    }
 }

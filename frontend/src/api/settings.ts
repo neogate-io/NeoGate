@@ -8,6 +8,13 @@ export type SiteSetting = {
   env_write_supported: boolean
 }
 
+export type AdminModelSetting = {
+  default_text_model?: string | null
+  default_text_channel_id?: number | null
+  default_text_channel_name?: string | null
+  updated_at?: string | null
+}
+
 export function getPublicSiteSetting() {
   return publicRequest<SiteSetting>('/api/public/site')
 }
@@ -26,6 +33,20 @@ export function saveSiteSetting(input: {
     restart_required: boolean
     setting: SiteSetting
   }>('/api/admin/settings/site', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function getAdminModelSetting() {
+  return adminRequest<AdminModelSetting>('/api/admin/settings/admin-model')
+}
+
+export function saveAdminModelSetting(input: {
+  default_text_model?: string | null
+  default_text_channel_id?: number | null
+}) {
+  return adminRequest<AdminModelSetting>('/api/admin/settings/admin-model', {
     method: 'POST',
     body: JSON.stringify(input)
   })

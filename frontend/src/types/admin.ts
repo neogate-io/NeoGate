@@ -142,6 +142,20 @@ export type ProjectModelCandidate = {
   updated_at: string
 }
 
+export type AutoSuggestion = {
+  tier: ProjectModelCandidateTier
+  target_model: string
+  target_channel_id?: number | null
+  target_channel_name?: string | null
+  reason: string
+}
+
+export type AutoConfigResponse = {
+  suggestions: AutoSuggestion[]
+  warnings: string[]
+  source: 'llm' | 'rules' | string
+}
+
 export type Channel = {
   id: number
   provider: ChannelProvider
@@ -302,6 +316,7 @@ export type UsageRecord = {
   relay_path_index?: number | null
   provider: string
   model?: string | null
+  upstream_model?: string | null
   status_code?: number | null
   streamed: boolean
   error_summary?: string | null

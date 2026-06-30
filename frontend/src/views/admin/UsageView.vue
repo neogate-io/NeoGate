@@ -148,6 +148,13 @@ function usageUserDisplay(row: UsageRecord) {
   return '-'
 }
 
+function usageModelDisplay(row: UsageRecord) {
+  const model = row.model?.trim()
+  const upstreamModel = row.upstream_model?.trim()
+  if (model && upstreamModel && model !== upstreamModel) return `${model} / ${upstreamModel}`
+  return model || upstreamModel || '-'
+}
+
 async function handleSearch() {
   await resetUsageAndReload()
 }
@@ -265,9 +272,9 @@ async function exportUsage() {
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('model')" min-width="120">
+        <el-table-column :label="t('model')" min-width="170">
           <template #default="{ row }">
-            <span class="usage-model-name">{{ row.model || '-' }}</span>
+            <span class="usage-model-name">{{ usageModelDisplay(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('latencyColumnHint')" min-width="170">

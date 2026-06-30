@@ -659,7 +659,7 @@ onMounted(() => {
           <template #default="{ row }">
             <el-tooltip :content="accountBalanceTooltip(row)" placement="top" :show-after="600">
               <span class="user-credit-cell" :class="creditCellClass(row)">
-                {{ formatMicroUsd(row.available_micro_usd, 2) }}
+                {{ formatMicroUsd(row.balance_micro_usd, 2) }}
               </span>
             </el-tooltip>
           </template>
@@ -879,7 +879,7 @@ onMounted(() => {
       v-model:open="creditDialogVisible"
       :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
       :confirm-text="t('confirmRecharge')"
-      :current-balance-micro-usd="selectedUser.available_micro_usd"
+      :current-balance-micro-usd="selectedUser.balance_micro_usd"
       :hint="t('accountCreditAdjustHint')"
       :saving="creditSaving"
       :title="t('accountRecharge')"

@@ -187,8 +187,8 @@ function Verify-ApiKey {
   $result = Invoke-NeoGateRequest -Uri "$ApiRoot/api/user-key/verify" -Headers @{ authorization = "Bearer $ApiKey" }
   switch ($result.Status) {
     200 { Success (Get-Message key_verified); return $true }
-    401 { Warn (Get-Message key_rejected); $msg = Get-ResponseErrorMessage $result.Body; if ($msg) { Detail $msg }; return $false }
-    403 { Warn (Get-Message key_rejected); $msg = Get-ResponseErrorMessage $result.Body; if ($msg) { Detail $msg }; return $false }
+    401 { Warn (Get-Message key_rejected); return $false }
+    403 { Warn (Get-Message key_rejected); return $false }
     404 { Fail (Get-Message verify_not_found) }
     0 { Fail "$(Get-Message connect_failed $ApiRoot). $($result.Body)" }
     default { Fail "$(Get-Message verify_failed $result.Status). $($result.Body)" }

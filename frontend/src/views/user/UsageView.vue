@@ -92,6 +92,69 @@ function statusLabel(statusCode?: number | null) {
   return statusCode && statusCode >= 400 ? String(statusCode) : t('success')
 }
 
+function routingTierLabel(tier?: string | null) {
+  if (tier === 'simple') return t('routingTier_simple')
+  if (tier === 'standard') return t('routingTier_standard')
+  if (tier === 'advanced') return t('routingTier_advanced')
+  return tier || '-'
+}
+
+function routingReasonText(row: (typeof usagePage.value.items)[number]) {
+  const code = row.routing?.reason_code
+  if (code === 'selected_priority_weight') return t('routingReason_selected_priority_weight')
+  if (code === 'fallback_no_candidate') return t('routingReason_fallback_no_candidate')
+  if (code === 'missing_context') return t('routingReason_missing_context')
+  if (code === 'complex_signal') return t('routingReason_complex_signal')
+  if (code === 'medium_signal') return t('routingReason_medium_signal')
+  if (code === 'simple_signal') return t('routingReason_simple_signal')
+  return code || '-'
+}
+
+function routingTaskText(taskType?: string | null) {
+  if (taskType === 'vision') return t('routingTask_vision')
+  if (taskType === 'tool_use') return t('routingTask_tool_use')
+  if (taskType === 'structured_output') return t('routingTask_structured_output')
+  if (taskType === 'reasoning') return t('routingTask_reasoning')
+  if (taskType === 'code') return t('routingTask_code')
+  if (taskType === 'translation') return t('routingTask_translation')
+  if (taskType === 'summarization') return t('routingTask_summarization')
+  if (taskType === 'extraction') return t('routingTask_extraction')
+  if (taskType === 'long_context') return t('routingTask_long_context')
+  if (taskType === 'chat') return t('routingTask_chat')
+  if (taskType === 'unknown') return t('routingTask_unknown')
+  return taskType || '-'
+}
+
+function routingRuleText(ruleId: string) {
+  if (ruleId === 'missing_context') return t('routingRule_missing_context')
+  if (ruleId === 'has_images') return t('routingRule_has_images')
+  if (ruleId === 'reasoning_effort') return t('routingRule_reasoning_effort')
+  if (ruleId === 'reasoning_keywords') return t('routingRule_reasoning_keywords')
+  if (ruleId === 'very_long_context') return t('routingRule_very_long_context')
+  if (ruleId === 'long_context') return t('routingRule_long_context')
+  if (ruleId === 'has_tools') return t('routingRule_has_tools')
+  if (ruleId === 'has_response_format') return t('routingRule_has_response_format')
+  if (ruleId === 'code_signal') return t('routingRule_code_signal')
+  if (ruleId === 'multi_turn_context') return t('routingRule_multi_turn_context')
+  if (ruleId === 'translation_signal') return t('routingRule_translation_signal')
+  if (ruleId === 'summarization_signal') return t('routingRule_summarization_signal')
+  if (ruleId === 'extraction_signal') return t('routingRule_extraction_signal')
+  if (ruleId === 'short_plain_text') return t('routingRule_short_plain_text')
+  return ruleId
+}
+
+function routingRulesText(row: (typeof usagePage.value.items)[number]) {
+  return row.routing?.matched_rule_ids.map(routingRuleText).join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+}
+
+function routingCandidatesText(row: (typeof usagePage.value.items)[number]) {
+  return (
+    row.routing?.candidate_summary
+      .map((candidate) => `${candidate.target_model} P${candidate.priority}/W${candidate.weight}`)
+      .join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  )
+}
+
 function closeOtherUsageRows(current: HTMLDetailsElement) {
   current
     .closest('.usage-list')
@@ -256,6 +319,35 @@ async function exportUsage() {
                       {{ statusLabel(row.status_code) }}
                     </span>
                   </dd>
+                </div>
+              </dl>
+            </section>
+            <section v-if="row.routing" class="usage-detail-section">
+              <h4>{{ t('autoRouting') }}</h4>
+              <dl class="usage-detail-list">
+                <div>
+                  <dt>{{ t('model') }}</dt>
+                  <dd>{{ row.routing.requested_model }} -> {{ row.routing.selected_model }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('routingTier') }}</dt>
+                  <dd>{{ routingTierLabel(row.routing.tier) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('routingTask') }}</dt>
+                  <dd>{{ routingTaskText(row.routing.task_type) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('routingReason') }}</dt>
+                  <dd>{{ routingReasonText(row) }}</dd>
+                </div>
+                <div v-if="row.routing.matched_rule_ids.length" class="usage-detail-wide">
+                  <dt>{{ t('routingRules') }}</dt>
+                  <dd>{{ routingRulesText(row) }}</dd>
+                </div>
+                <div v-if="row.routing.candidate_summary.length" class="usage-detail-wide">
+                  <dt>{{ t('routingCandidates') }}</dt>
+                  <dd>{{ routingCandidatesText(row) }}</dd>
                 </div>
               </dl>
             </section>

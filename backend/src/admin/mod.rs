@@ -41,7 +41,7 @@ use crate::{
         auto_configure_project_model, create_project_model, delete_project_model,
         list_project_models, update_project_model, AutoConfigureProjectModelRequest,
         AutoConfigureResponse, ProjectModelRecord, UpdateProjectModelRequest,
-        UpsertProjectModelRequest,
+        UpsertProjectModelRequest, UsageRoutingCandidateSummary,
     },
     AppState,
 };
@@ -1119,6 +1119,28 @@ struct UsageRecord {
     cost_micro_usd: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
+    routing: Option<UsageRouting>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct UsageRouting {
+    id: DbId,
+    project_id: DbId,
+    project_model_id: Option<DbId>,
+    requested_model: String,
+    selected_model: String,
+    selected_channel_id: Option<DbId>,
+    decision_source: String,
+    tier: String,
+    task_type: String,
+    confidence: f64,
+    reason_code: String,
+    matched_rule_ids: Vec<String>,
+    candidate_summary: Vec<UsageRoutingCandidateSummary>,
+    fallback_reason: Option<String>,
+    classifier_model: Option<String>,
+    latency_ms: i64,
     created_at: DateTime<Utc>,
 }
 
@@ -1229,10 +1251,28 @@ async fn usage_rows(
                 usage_record.audio_out_tokens, usage_record.billing_meter,
                 usage_record.billable_units, usage_record.cost_micro_usd,
                 usage_record.billing_status, usage_record.error_summary, usage_record.created_at,
+                usage_routing.id AS routing_id,
+                usage_routing.project_id AS routing_project_id,
+                usage_routing.project_model_id AS routing_project_model_id,
+                usage_routing.requested_model AS routing_requested_model,
+                usage_routing.selected_model AS routing_selected_model,
+                usage_routing.selected_channel_id AS routing_selected_channel_id,
+                usage_routing.decision_source AS routing_decision_source,
+                usage_routing.tier AS routing_tier,
+                usage_routing.task_type AS routing_task_type,
+                usage_routing.confidence AS routing_confidence,
+                usage_routing.reason_code AS routing_reason_code,
+                usage_routing.matched_rule_ids AS routing_matched_rule_ids,
+                usage_routing.candidate_summary AS routing_candidate_summary,
+                usage_routing.fallback_reason AS routing_fallback_reason,
+                usage_routing.classifier_model AS routing_classifier_model,
+                usage_routing.latency_ms AS routing_latency_ms,
+                usage_routing.created_at AS routing_created_at,
                 rp.relay_path, rp.relay_path_index
          FROM usage AS usage_record
          LEFT JOIN "user" u ON u.id = usage_record.user_id
          LEFT JOIN channel current_channel ON current_channel.id = usage_record.channel_id
+         LEFT JOIN usage_routing ON usage_routing.usage_id = usage_record.id
          LEFT JOIN LATERAL (
            SELECT
              string_agg('#' || sibling.channel_id::text, ' → '
@@ -1320,8 +1360,42 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         cost_micro_usd: row.try_get("cost_micro_usd")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,
+        routing: usage_routing_from_row(row)?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn usage_routing_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<UsageRouting>, sqlx::Error> {
+    let Some(id) = row.try_get::<Option<DbId>, _>("routing_id")? else {
+        return Ok(None);
+    };
+    Ok(Some(UsageRouting {
+        id,
+        project_id: row.try_get("routing_project_id")?,
+        project_model_id: row.try_get("routing_project_model_id")?,
+        requested_model: row.try_get("routing_requested_model")?,
+        selected_model: row.try_get("routing_selected_model")?,
+        selected_channel_id: row.try_get("routing_selected_channel_id")?,
+        decision_source: row.try_get("routing_decision_source")?,
+        tier: row.try_get("routing_tier")?,
+        task_type: row.try_get("routing_task_type")?,
+        confidence: row.try_get("routing_confidence")?,
+        reason_code: row.try_get("routing_reason_code")?,
+        matched_rule_ids: row
+            .try_get::<sqlx::types::Json<Vec<String>>, _>("routing_matched_rule_ids")?
+            .0,
+        candidate_summary: row
+            .try_get::<sqlx::types::Json<Vec<UsageRoutingCandidateSummary>>, _>(
+                "routing_candidate_summary",
+            )?
+            .0,
+        fallback_reason: row.try_get("routing_fallback_reason")?,
+        classifier_model: row.try_get("routing_classifier_model")?,
+        latency_ms: row.try_get("routing_latency_ms")?,
+        created_at: row.try_get("routing_created_at")?,
+    }))
 }
 
 fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
@@ -1342,6 +1416,12 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
         "provider".into(),
         "model".into(),
         "upstream_model".into(),
+        "routing_requested_model".into(),
+        "routing_selected_model".into(),
+        "routing_tier".into(),
+        "routing_task_type".into(),
+        "routing_reason_code".into(),
+        "routing_fallback_reason".into(),
         "status_code".into(),
         "streamed".into(),
         "latency_ms".into(),
@@ -1385,6 +1465,36 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
             record.provider,
             record.model.unwrap_or_default(),
             record.upstream_model.unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.requested_model.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.selected_model.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.tier.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.task_type.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .map(|routing| routing.reason_code.clone())
+                .unwrap_or_default(),
+            record
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.fallback_reason.clone())
+                .unwrap_or_default(),
             optional_i32(record.status_code),
             record.streamed.to_string(),
             record.latency_ms.to_string(),

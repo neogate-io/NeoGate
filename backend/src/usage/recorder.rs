@@ -276,11 +276,18 @@ pub(crate) async fn flush_usage(
     for item in usages {
         if let Some(billing) = &item.billing {
             if billing.parts.is_empty() && billing.returned_parts.is_empty() {
-                pending_usage.push(item);
+                if item.routing.is_some() {
+                    let row = insert_usage(tx, item).await?;
+                    let usage_id: DbId = row.try_get("id")?;
+                    insert_usage_routing(tx, usage_id, item).await?;
+                } else {
+                    pending_usage.push(item);
+                }
                 continue;
             }
             let row = insert_usage(tx, item).await?;
             let usage_id: DbId = row.try_get("id")?;
+            insert_usage_routing(tx, usage_id, item).await?;
             let billing_parts = coalesce_debit_parts(&billing.parts);
             for part in &billing_parts {
                 flush_billing_part(tx, usage_id, billing, part).await?;
@@ -289,11 +296,56 @@ pub(crate) async fn flush_usage(
                 flush_returned_billing_part(tx, part).await?;
             }
         } else {
-            pending_usage.push(item);
+            if item.routing.is_some() {
+                let row = insert_usage(tx, item).await?;
+                let usage_id: DbId = row.try_get("id")?;
+                insert_usage_routing(tx, usage_id, item).await?;
+            } else {
+                pending_usage.push(item);
+            }
         }
     }
 
     flush_unbilled_usage(tx, &pending_usage).await?;
+    Ok(())
+}
+
+async fn insert_usage_routing(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    usage_id: DbId,
+    item: &UsageInsert,
+) -> AppResult<()> {
+    let Some(routing) = &item.routing else {
+        return Ok(());
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO usage_routing
+            (usage_id, project_id, project_model_id, requested_model, selected_model,
+             selected_channel_id, decision_source, tier, task_type, confidence, reason_code,
+             matched_rule_ids, candidate_summary, fallback_reason, classifier_model, latency_ms)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        ON CONFLICT (usage_id) DO NOTHING
+        "#,
+    )
+    .bind(usage_id)
+    .bind(routing.project_id)
+    .bind(routing.project_model_id)
+    .bind(&routing.requested_model)
+    .bind(&routing.selected_model)
+    .bind(routing.selected_channel_id)
+    .bind(&routing.decision_source)
+    .bind(&routing.tier)
+    .bind(&routing.task_type)
+    .bind(routing.confidence)
+    .bind(&routing.reason_code)
+    .bind(sqlx::types::Json(&routing.matched_rule_ids))
+    .bind(sqlx::types::Json(&routing.candidate_summary))
+    .bind(routing.fallback_reason.as_deref())
+    .bind(routing.classifier_model.as_deref())
+    .bind(routing.latency_ms)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -547,6 +599,7 @@ pub(super) mod tests {
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
+            routing: None,
             status_code: Some(200),
             streamed: false,
             latency_ms: 123,
@@ -585,6 +638,7 @@ pub(super) mod tests {
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
+            routing: None,
             status_code: Some(200),
             streamed: false,
             latency_ms: 123,

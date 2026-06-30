@@ -10,6 +10,7 @@ use crate::{
         parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
         BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
+    project::models::UsageRoutingSnapshot,
     AppState,
 };
 use serde_json::Value;
@@ -32,6 +33,7 @@ pub(crate) struct RelayContext {
     pub(crate) model: String,
     pub(crate) external_model: String,
     pub(crate) upstream_model: String,
+    pub(crate) routing: Option<UsageRoutingSnapshot>,
     pub(crate) streamed: bool,
     pub(crate) price: Price,
     pub(crate) hold: DebitHold,

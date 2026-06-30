@@ -571,6 +571,7 @@ pub(crate) fn usage_from_context(
         model: Some(ctx.external_model.clone()),
         upstream_model: Some(ctx.upstream_model.clone()),
         routing_phase: "relay".to_string(),
+        routing: ctx.routing.clone(),
         status_code,
         streamed: ctx.streamed,
         latency_ms,

@@ -21,6 +21,10 @@ use crate::{
     AppState,
 };
 
+const ROUTING_LABEL_LIMIT: usize = 80;
+const ROUTING_MATCHED_RULE_LIMIT: usize = 5;
+const ROUTING_CANDIDATE_SUMMARY_LIMIT: usize = 3;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectModelRecord {
     pub id: DbId,
@@ -43,6 +47,95 @@ pub struct ResolvedProjectModel {
     pub external_model: String,
     pub target_model: String,
     pub target_channel_id: Option<DbId>,
+    pub routing: Option<UsageRoutingSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageRoutingMatchedRule {
+    pub id: String,
+    pub category: String,
+    pub weight: i32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageRoutingCandidateScore {
+    pub candidate_id: DbId,
+    pub target_model: String,
+    pub tier: String,
+    pub priority: i32,
+    pub weight: i32,
+    pub score: i32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageRoutingCandidateSummary {
+    pub target_model: String,
+    pub tier: String,
+    pub priority: i32,
+    pub weight: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageRoutingSnapshot {
+    pub project_id: DbId,
+    pub project_model_id: DbId,
+    pub requested_model: String,
+    pub selected_model: String,
+    pub selected_channel_id: Option<DbId>,
+    pub decision_source: String,
+    pub tier: String,
+    pub task_type: String,
+    pub confidence: f64,
+    pub reason_code: String,
+    pub matched_rule_ids: Vec<String>,
+    pub candidate_summary: Vec<UsageRoutingCandidateSummary>,
+    pub fallback_reason: Option<String>,
+    pub classifier_model: Option<String>,
+    pub latency_ms: i64,
+}
+
+impl UsageRoutingSnapshot {
+    fn compact(mut self) -> Self {
+        self.requested_model = truncate_chars(self.requested_model, ROUTING_LABEL_LIMIT);
+        self.selected_model = truncate_chars(self.selected_model, ROUTING_LABEL_LIMIT);
+        self.decision_source = truncate_chars(self.decision_source, ROUTING_LABEL_LIMIT);
+        self.tier = truncate_chars(self.tier, ROUTING_LABEL_LIMIT);
+        self.task_type = truncate_chars(self.task_type, ROUTING_LABEL_LIMIT);
+        self.fallback_reason = self
+            .fallback_reason
+            .map(|value| truncate_chars(value, ROUTING_LABEL_LIMIT));
+        self.classifier_model = self
+            .classifier_model
+            .map(|value| truncate_chars(value, ROUTING_LABEL_LIMIT));
+        self.reason_code = truncate_chars(self.reason_code, ROUTING_LABEL_LIMIT);
+        self.matched_rule_ids = self
+            .matched_rule_ids
+            .into_iter()
+            .take(ROUTING_MATCHED_RULE_LIMIT)
+            .map(|id| truncate_chars(id, ROUTING_LABEL_LIMIT))
+            .collect();
+        self.candidate_summary = self
+            .candidate_summary
+            .into_iter()
+            .take(ROUTING_CANDIDATE_SUMMARY_LIMIT)
+            .map(|candidate| UsageRoutingCandidateSummary {
+                target_model: truncate_chars(candidate.target_model, ROUTING_LABEL_LIMIT),
+                tier: truncate_chars(candidate.tier, ROUTING_LABEL_LIMIT),
+                priority: candidate.priority,
+                weight: candidate.weight,
+            })
+            .collect();
+        self
+    }
+}
+
+fn truncate_chars(value: String, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value;
+    }
+    value.chars().take(limit).collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,6 +525,7 @@ pub async fn resolve_project_model_with_context(
             external_model: row.try_get("model")?,
             target_model: row.try_get("target_model")?,
             target_channel_id: row.try_get("target_channel_id")?,
+            routing: None,
         });
     }
 
@@ -443,6 +537,7 @@ pub async fn resolve_project_model_with_context(
         external_model: requested_model.clone(),
         target_model: requested_model,
         target_channel_id: None,
+        routing: None,
     })
 }
 
@@ -461,96 +556,82 @@ async fn resolve_smart_project_model(
     let mut decision = classify_request(context.as_ref(), &config);
     let candidates = list_project_model_candidates(pool, project_model_id).await?;
     let selection = choose_smart_candidate(&candidates, &decision.tier);
-    let (target_model, target_channel_id, reason) = if let Some(selection) = selection {
+    let (target_model, target_channel_id, reason_code) = if let Some(selection) = selection {
         decision.candidate_scores = selection.scores;
         (
             selection.candidate.target_model,
             selection.candidate.target_channel_id,
-            selection.reason,
+            selection.reason_code,
         )
     } else {
         decision.decision_source = "fallback".to_string();
         decision.fallback_reason = Some(format!("no_enabled_candidate_for_{}", decision.tier));
-        (
-            fallback_model,
-            fallback_channel_id,
-            format!(
-                "no enabled candidate for tier {}; using fallback model",
-                decision.tier
-            ),
-        )
+        (fallback_model, fallback_channel_id, "fallback_no_candidate")
     };
     validate_target(pool, project_id, target_channel_id, &target_model).await?;
-    record_routing_decision(
-        pool,
-        RoutingDecisionInsert {
-            project_id,
-            project_model_id,
-            requested_model: &requested_model,
-            selected_model: &target_model,
-            selected_channel_id: target_channel_id,
-            decision_source: &decision.decision_source,
-            tier: &decision.tier,
-            task_type: &decision.task_type,
-            confidence: decision.confidence,
-            reason: if reason.is_empty() {
-                &decision.reason
-            } else {
-                &reason
-            },
-            matched_rules: &decision.matched_rules,
-            candidate_scores: &decision.candidate_scores,
-            fallback_reason: decision.fallback_reason.as_deref(),
-            classifier_model: config.classifier_model.as_deref(),
-            latency_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-        },
-    )
-    .await?;
+    let routing_reason_code = if reason_code.is_empty() {
+        decision.reason_code.clone()
+    } else {
+        reason_code.to_string()
+    };
+    let routing = UsageRoutingSnapshot {
+        project_id,
+        project_model_id,
+        requested_model: requested_model.clone(),
+        selected_model: target_model.clone(),
+        selected_channel_id: target_channel_id,
+        decision_source: decision.decision_source,
+        tier: decision.tier,
+        task_type: decision.task_type,
+        confidence: decision.confidence,
+        reason_code: routing_reason_code,
+        matched_rule_ids: decision
+            .matched_rules
+            .into_iter()
+            .map(|rule| rule.id)
+            .collect(),
+        candidate_summary: decision
+            .candidate_scores
+            .into_iter()
+            .map(|score| UsageRoutingCandidateSummary {
+                target_model: score.target_model,
+                tier: score.tier,
+                priority: score.priority,
+                weight: score.weight,
+            })
+            .collect(),
+        fallback_reason: decision.fallback_reason,
+        classifier_model: config.classifier_model,
+        latency_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+    }
+    .compact();
     Ok(ResolvedProjectModel {
         external_model: requested_model,
         target_model,
         target_channel_id,
+        routing: Some(routing),
     })
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoutingMatchedRule {
-    id: String,
-    category: String,
-    weight: i32,
-    reason: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoutingCandidateScore {
-    candidate_id: DbId,
-    target_model: String,
-    tier: String,
-    priority: i32,
-    weight: i32,
-    score: i32,
-    reason: String,
 }
 
 struct RoutingDecision {
     tier: String,
     task_type: String,
     confidence: f64,
-    reason: String,
-    matched_rules: Vec<RoutingMatchedRule>,
-    candidate_scores: Vec<RoutingCandidateScore>,
+    reason_code: String,
+    matched_rules: Vec<UsageRoutingMatchedRule>,
+    candidate_scores: Vec<UsageRoutingCandidateScore>,
     decision_source: String,
     fallback_reason: Option<String>,
 }
 
 struct SmartCandidateSelection {
     candidate: ProjectModelCandidateRecord,
-    reason: String,
-    scores: Vec<RoutingCandidateScore>,
+    reason_code: &'static str,
+    scores: Vec<UsageRoutingCandidateScore>,
 }
 
-fn routing_rule(id: &str, category: &str, weight: i32, reason: &str) -> RoutingMatchedRule {
-    RoutingMatchedRule {
+fn routing_rule(id: &str, category: &str, weight: i32, reason: &str) -> UsageRoutingMatchedRule {
+    UsageRoutingMatchedRule {
         id: id.to_string(),
         category: category.to_string(),
         weight,
@@ -571,7 +652,7 @@ fn classify_request(
             tier: config.default_tier.clone(),
             task_type: "unknown".to_string(),
             confidence: 0.4,
-            reason: "missing request context".to_string(),
+            reason_code: "missing_context".to_string(),
             matched_rules: vec![routing_rule(
                 "missing_context",
                 "fallback",
@@ -752,24 +833,16 @@ fn classify_request(
     }
     .to_string();
 
-    let (tier, confidence, reason) =
+    let (tier, confidence, reason_code) =
         if context.has_images || reasoning_high || has_reasoning_keywords || text_chars > 12_000 {
-            (
-                "advanced".to_string(),
-                0.9,
-                "complex request signal".to_string(),
-            )
+            ("advanced".to_string(), 0.9, "complex_signal".to_string())
         } else if context.has_tools
             || context.has_response_format
             || has_code
             || context.message_count > 4
             || text_chars > 2_000
         {
-            (
-                "standard".to_string(),
-                0.82,
-                "structured or medium complexity request".to_string(),
-            )
+            ("standard".to_string(), 0.82, "medium_signal".to_string())
         } else {
             if matched_rules.is_empty() {
                 matched_rules.push(routing_rule(
@@ -779,18 +852,14 @@ fn classify_request(
                     "short request without advanced routing signals",
                 ));
             }
-            (
-                "simple".to_string(),
-                0.86,
-                "short plain text request".to_string(),
-            )
+            ("simple".to_string(), 0.86, "simple_signal".to_string())
         };
 
     RoutingDecision {
         tier,
         task_type,
         confidence,
-        reason,
+        reason_code,
         matched_rules,
         candidate_scores: Vec::new(),
         decision_source: "rules".to_string(),
@@ -812,7 +881,7 @@ fn choose_smart_candidate(
     }
     let scores: Vec<_> = tier_candidates
         .iter()
-        .map(|candidate| RoutingCandidateScore {
+        .map(|candidate| UsageRoutingCandidateScore {
             candidate_id: candidate.id,
             target_model: candidate.target_model.clone(),
             tier: candidate.tier.clone(),
@@ -844,60 +913,12 @@ fn choose_smart_candidate(
         if slot < 0 {
             return Some(SmartCandidateSelection {
                 candidate,
-                reason: format!("selected {tier} candidate by priority and weight"),
+                reason_code: "selected_priority_weight",
                 scores,
             });
         }
     }
     None
-}
-
-struct RoutingDecisionInsert<'a> {
-    project_id: DbId,
-    project_model_id: DbId,
-    requested_model: &'a str,
-    selected_model: &'a str,
-    selected_channel_id: Option<DbId>,
-    decision_source: &'a str,
-    tier: &'a str,
-    task_type: &'a str,
-    confidence: f64,
-    reason: &'a str,
-    matched_rules: &'a [RoutingMatchedRule],
-    candidate_scores: &'a [RoutingCandidateScore],
-    fallback_reason: Option<&'a str>,
-    classifier_model: Option<&'a str>,
-    latency_ms: i64,
-}
-
-async fn record_routing_decision(pool: &PgPool, item: RoutingDecisionInsert<'_>) -> AppResult<()> {
-    sqlx::query(
-        r#"
-        INSERT INTO routing_decision
-            (project_id, project_model_id, requested_model, selected_model, selected_channel_id,
-             decision_source, tier, task_type, confidence, reason, matched_rules, candidate_scores,
-             fallback_reason, classifier_model, latency_ms)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-        "#,
-    )
-    .bind(item.project_id)
-    .bind(item.project_model_id)
-    .bind(item.requested_model)
-    .bind(item.selected_model)
-    .bind(item.selected_channel_id)
-    .bind(item.decision_source)
-    .bind(item.tier)
-    .bind(item.task_type)
-    .bind(item.confidence)
-    .bind(item.reason)
-    .bind(sqlx::types::Json(item.matched_rules))
-    .bind(sqlx::types::Json(item.candidate_scores))
-    .bind(item.fallback_reason)
-    .bind(item.classifier_model)
-    .bind(item.latency_ms)
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub async fn create_project_model(
@@ -1772,6 +1793,57 @@ mod tests {
 
     fn classify(context: ProjectModelRequestContext) -> RoutingDecision {
         classify_request(Some(&context), &ProjectModelRoutingConfig::default())
+    }
+
+    #[test]
+    fn usage_routing_snapshot_is_compacted() {
+        let long = "x".repeat(400);
+        let snapshot = UsageRoutingSnapshot {
+            project_id: 1,
+            project_model_id: 2,
+            requested_model: long.clone(),
+            selected_model: long.clone(),
+            selected_channel_id: Some(3),
+            decision_source: long.clone(),
+            tier: "advanced".to_string(),
+            task_type: long.clone(),
+            confidence: 0.9,
+            reason_code: long.clone(),
+            matched_rule_ids: (0..10)
+                .map(|index| format!("rule-{index}-{long}"))
+                .collect(),
+            candidate_summary: (0..12)
+                .map(|index| UsageRoutingCandidateSummary {
+                    target_model: long.clone(),
+                    tier: "advanced".to_string(),
+                    priority: index,
+                    weight: 1,
+                })
+                .collect(),
+            fallback_reason: Some(long.clone()),
+            classifier_model: Some(long),
+            latency_ms: 12,
+        }
+        .compact();
+
+        assert_eq!(
+            snapshot.requested_model.chars().count(),
+            ROUTING_LABEL_LIMIT
+        );
+        assert_eq!(snapshot.reason_code.chars().count(), ROUTING_LABEL_LIMIT);
+        assert_eq!(snapshot.matched_rule_ids.len(), ROUTING_MATCHED_RULE_LIMIT);
+        assert_eq!(
+            snapshot.candidate_summary.len(),
+            ROUTING_CANDIDATE_SUMMARY_LIMIT
+        );
+        assert_eq!(
+            snapshot.matched_rule_ids[0].chars().count(),
+            ROUTING_LABEL_LIMIT
+        );
+        assert_eq!(
+            snapshot.candidate_summary[0].target_model.chars().count(),
+            ROUTING_LABEL_LIMIT
+        );
     }
 
     #[test]

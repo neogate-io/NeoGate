@@ -155,6 +155,69 @@ function usageModelDisplay(row: UsageRecord) {
   return model || upstreamModel || '-'
 }
 
+function routingTierLabel(tier?: string | null) {
+  if (tier === 'simple') return t('routingTier_simple')
+  if (tier === 'standard') return t('routingTier_standard')
+  if (tier === 'advanced') return t('routingTier_advanced')
+  return tier || '-'
+}
+
+function routingReasonText(row: UsageRecord) {
+  const code = row.routing?.reason_code
+  if (code === 'selected_priority_weight') return t('routingReason_selected_priority_weight')
+  if (code === 'fallback_no_candidate') return t('routingReason_fallback_no_candidate')
+  if (code === 'missing_context') return t('routingReason_missing_context')
+  if (code === 'complex_signal') return t('routingReason_complex_signal')
+  if (code === 'medium_signal') return t('routingReason_medium_signal')
+  if (code === 'simple_signal') return t('routingReason_simple_signal')
+  return code || '-'
+}
+
+function routingTaskText(taskType?: string | null) {
+  if (taskType === 'vision') return t('routingTask_vision')
+  if (taskType === 'tool_use') return t('routingTask_tool_use')
+  if (taskType === 'structured_output') return t('routingTask_structured_output')
+  if (taskType === 'reasoning') return t('routingTask_reasoning')
+  if (taskType === 'code') return t('routingTask_code')
+  if (taskType === 'translation') return t('routingTask_translation')
+  if (taskType === 'summarization') return t('routingTask_summarization')
+  if (taskType === 'extraction') return t('routingTask_extraction')
+  if (taskType === 'long_context') return t('routingTask_long_context')
+  if (taskType === 'chat') return t('routingTask_chat')
+  if (taskType === 'unknown') return t('routingTask_unknown')
+  return taskType || '-'
+}
+
+function routingRuleText(ruleId: string) {
+  if (ruleId === 'missing_context') return t('routingRule_missing_context')
+  if (ruleId === 'has_images') return t('routingRule_has_images')
+  if (ruleId === 'reasoning_effort') return t('routingRule_reasoning_effort')
+  if (ruleId === 'reasoning_keywords') return t('routingRule_reasoning_keywords')
+  if (ruleId === 'very_long_context') return t('routingRule_very_long_context')
+  if (ruleId === 'long_context') return t('routingRule_long_context')
+  if (ruleId === 'has_tools') return t('routingRule_has_tools')
+  if (ruleId === 'has_response_format') return t('routingRule_has_response_format')
+  if (ruleId === 'code_signal') return t('routingRule_code_signal')
+  if (ruleId === 'multi_turn_context') return t('routingRule_multi_turn_context')
+  if (ruleId === 'translation_signal') return t('routingRule_translation_signal')
+  if (ruleId === 'summarization_signal') return t('routingRule_summarization_signal')
+  if (ruleId === 'extraction_signal') return t('routingRule_extraction_signal')
+  if (ruleId === 'short_plain_text') return t('routingRule_short_plain_text')
+  return ruleId
+}
+
+function routingRulesText(row: UsageRecord) {
+  return row.routing?.matched_rule_ids.map(routingRuleText).join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+}
+
+function routingCandidatesText(row: UsageRecord) {
+  return (
+    row.routing?.candidate_summary
+      .map((candidate) => `${candidate.target_model} P${candidate.priority}/W${candidate.weight}`)
+      .join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  )
+}
+
 async function handleSearch() {
   await resetUsageAndReload()
 }
@@ -353,7 +416,7 @@ async function exportUsage() {
           <template #default="{ row }">
             <el-tooltip :disabled="!row.relay_trace_id" placement="top" :show-after="400" popper-class="usage-trace-tip-popper">
               <template #content>
-                <div class="usage-trace-tip">
+                <div class="usage-trace-tip" :class="{ 'is-zh': locale === 'zh-CN' }">
                   <div class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('relayTipPath') }}</span>
                     <span class="usage-trace-tip-value is-mono">{{ row.relay_path || relayChannelLabel(row) }}</span>
@@ -378,6 +441,34 @@ async function exportUsage() {
                     <span class="usage-trace-tip-label">{{ t('relayTipError') }}</span>
                     <span class="usage-trace-tip-value is-error">{{ row.error_summary }}</span>
                   </div>
+                  <template v-if="row.routing">
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('autoRouting') }}</span>
+                      <span class="usage-trace-tip-value">
+                        {{ row.routing.requested_model }} -> {{ row.routing.selected_model }}
+                      </span>
+                    </div>
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingTier') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingTierLabel(row.routing.tier) }}</span>
+                    </div>
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingTask') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingTaskText(row.routing.task_type) }}</span>
+                    </div>
+                    <div class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingReason') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingReasonText(row) }}</span>
+                    </div>
+                    <div v-if="row.routing.matched_rule_ids.length" class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingRules') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingRulesText(row) }}</span>
+                    </div>
+                    <div v-if="row.routing.candidate_summary.length" class="usage-trace-tip-row">
+                      <span class="usage-trace-tip-label">{{ t('routingCandidates') }}</span>
+                      <span class="usage-trace-tip-value">{{ routingCandidatesText(row) }}</span>
+                    </div>
+                  </template>
                   <div class="usage-trace-tip-row">
                     <span class="usage-trace-tip-label">{{ t('status') }}</span>
                     <span
@@ -712,7 +803,7 @@ async function exportUsage() {
 
 <style>
 .usage-trace-tip-popper {
-  max-width: 420px;
+  max-width: min(640px, calc(100vw - 48px));
   padding: 4px 2px;
 }
 
@@ -720,29 +811,39 @@ async function exportUsage() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 240px;
+  min-width: min(520px, calc(100vw - 72px));
+}
+
+.usage-trace-tip.is-zh {
+  min-width: min(420px, calc(100vw - 72px));
 }
 
 .usage-trace-tip-row {
   align-items: flex-start;
-  display: flex;
-  gap: 10px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 132px minmax(0, 1fr);
   line-height: 1.45;
+}
+
+.usage-trace-tip.is-zh .usage-trace-tip-row {
+  grid-template-columns: 78px minmax(0, 1fr);
 }
 
 .usage-trace-tip-label {
   color: #98a2b3;
-  flex: 0 0 64px;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .usage-trace-tip-value {
   color: #f2f4f7;
-  flex: 1;
   font-size: 12px;
   font-weight: 600;
-  word-break: break-all;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .usage-trace-tip-value.is-mono {

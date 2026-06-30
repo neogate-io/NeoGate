@@ -806,6 +806,7 @@ mod tests {
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
+            routing: None,
             status_code: Some(200),
             streamed: false,
             latency_ms: 1,

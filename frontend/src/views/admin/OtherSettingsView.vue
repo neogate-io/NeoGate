@@ -303,7 +303,7 @@ async function saveAdminModelConfig() {
   const model = adminModelForm.value.defaultTextModel.trim()
   const channelId = adminModelForm.value.defaultTextChannelId
   if (!model || !channelId) {
-    ElMessage.error('请选择默认文本大模型')
+    ElMessage.error(t('adminDefaultTextModelRequired'))
     return
   }
   await withLoading(adminModelSaving, async () => {
@@ -313,7 +313,7 @@ async function saveAdminModelConfig() {
         default_text_channel_id: channelId
       })
       applyAdminModelSetting(setting)
-      ElMessage.success('默认文本大模型已保存')
+      ElMessage.success(t('adminDefaultTextModelSaved'))
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -540,15 +540,15 @@ onMounted(load)
         <header class="admin-settings-section-header other-settings-card-header">
           <el-icon class="admin-settings-panel-icon"><ChatDotRound /></el-icon>
           <div class="other-settings-card-copy">
-            <h3>默认文本大模型</h3>
-            <p>后台管理中需要调用大模型的功能会优先使用这个模型。</p>
+            <h3>{{ t('adminDefaultTextModel') }}</h3>
+            <p>{{ t('adminDefaultTextModelDescription') }}</p>
             <el-form class="admin-model-settings-form" @submit.prevent="saveAdminModelConfig">
-              <el-form-item label="文本大模型">
+              <el-form-item :label="t('adminTextModel')">
                 <el-select
                   v-model="selectedAdminTextModelValue"
                   filterable
                   :disabled="adminModelSaving"
-                  placeholder="选择文本大模型"
+                  :placeholder="t('adminTextModelPlaceholder')"
                 >
                   <el-option
                     v-for="option in textModelOptions"

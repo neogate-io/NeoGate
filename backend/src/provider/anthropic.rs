@@ -147,6 +147,7 @@ pub(crate) async fn anthropic_messages(
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),
             upstream_model: resolved.target_model.clone(),
+            routing: resolved.routing.clone(),
             streamed: meta.stream,
             price,
             hold,

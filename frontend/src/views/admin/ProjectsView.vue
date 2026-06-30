@@ -471,26 +471,51 @@ function smartCandidatePayload(items: ProjectModelCandidateForm[]) {
 }
 
 function tierLabel(tier: ProjectModelCandidateTier) {
-  const labels: Record<ProjectModelCandidateTier, string> = {
-    simple: '简单',
-    standard: '标准',
-    advanced: '高级'
-  }
-  return labels[tier]
+  if (tier === 'simple') return t('projectModelTierSimple')
+  if (tier === 'advanced') return t('projectModelTierAdvanced')
+  return t('projectModelTierStandard')
+}
+
+function autoSelectChannelLabel() {
+  return t('projectModelAutoSelectChannel')
 }
 
 function candidateChannelLabel(candidate: ProjectModelCandidateForm) {
   if (candidate.targetChannelName) return candidate.targetChannelName
-  if (!candidate.targetChannelId) return '自动选择'
+  if (!candidate.targetChannelId) return autoSelectChannelLabel()
   const channel = channelOptions.value.find((item) => item.id === candidate.targetChannelId)
-  return channel ? channelLabel(channel) : '自动选择'
+  return channel ? channelLabel(channel) : autoSelectChannelLabel()
 }
 
 function suggestionChannelLabel(suggestion: AutoSuggestion) {
   if (suggestion.target_channel_name) return suggestion.target_channel_name
-  if (!suggestion.target_channel_id) return '自动选择'
+  if (!suggestion.target_channel_id) return autoSelectChannelLabel()
   const channel = channelOptions.value.find((item) => item.id === suggestion.target_channel_id)
-  return channel ? channelLabel(channel) : '自动选择'
+  return channel ? channelLabel(channel) : autoSelectChannelLabel()
+}
+
+function autoConfigSourceLabel(source: string) {
+  return source === 'llm' ? t('projectModelAutoConfigSourceLlm') : t('projectModelAutoConfigSourceRules')
+}
+
+function autoConfigWarningText(warning: string) {
+  if (warning === '当前智能模型已包含简单、标准、高级档位，无需补全。') {
+    return t('projectModelAutoConfigAllTiersExist')
+  }
+  return warning
+}
+
+function autoSuggestionReasonText(suggestion: AutoSuggestion) {
+  if (suggestion.reason === '适合简单问答和低成本请求') {
+    return t('projectModelSuggestionReasonSimple')
+  }
+  if (suggestion.reason === '适合复杂推理、架构设计和疑难问题') {
+    return t('projectModelSuggestionReasonAdvanced')
+  }
+  if (suggestion.reason === '适合日常代码、结构化输出和中等复杂任务') {
+    return t('projectModelSuggestionReasonStandard')
+  }
+  return suggestion.reason
 }
 
 function smartRouteFallbackCandidate(items: ProjectModelCandidateForm[]) {
@@ -502,12 +527,12 @@ async function persistSmartRouteCandidates(items: ProjectModelCandidateForm[], s
   if (!projectId) return false
   const fallback = smartRouteFallbackCandidate(items)
   if (!fallback) {
-    ElMessage.error('至少配置一个候选模型')
+    ElMessage.error(t('projectModelAtLeastOneCandidate'))
     return false
   }
   const candidates = smartCandidatePayload(items)
   if (candidates.some((candidate) => !candidate.target_model)) {
-    ElMessage.error('候选模型必填')
+    ElMessage.error(t('projectModelCandidateRequired'))
     return false
   }
   let saved = false
@@ -545,7 +570,7 @@ async function persistSmartRouteCandidates(items: ProjectModelCandidateForm[], s
 async function addSmartRouteCandidate() {
   const targetModel = smartCandidateForm.targetModel.trim()
   if (!targetModel) {
-    ElMessage.error('实际模型必填')
+    ElMessage.error(t('projectModelTargetRequired'))
     return
   }
   const nextCandidates = [
@@ -561,7 +586,7 @@ async function addSmartRouteCandidate() {
       enabled: true
     }
   ]
-  const saved = await persistSmartRouteCandidates(nextCandidates, '候选模型已添加')
+  const saved = await persistSmartRouteCandidates(nextCandidates, t('projectModelCandidateAdded'))
   if (saved) resetSmartCandidateForm()
 }
 
@@ -578,7 +603,11 @@ async function requestSmartAutoConfig() {
       smartAutoWarnings.value = result.warnings
       smartAutoSource.value = result.source
       if (result.suggestions.length === 0) {
-        ElMessage.info(result.warnings[0] || '暂无需要自动配置的候选模型')
+        ElMessage.info(
+          result.warnings[0]
+            ? autoConfigWarningText(result.warnings[0])
+            : t('projectModelAutoConfigNoSuggestions')
+        )
         return
       }
       smartAutoDialogVisible.value = true
@@ -610,11 +639,11 @@ async function applySmartAutoConfig() {
       .map(autoSuggestionToCandidate)
   ]
   if (nextCandidates.length === smartRouteCandidates.value.length) {
-    ElMessage.info('当前候选模型已包含建议档位')
+    ElMessage.info(t('projectModelSuggestedTiersExist'))
     smartAutoDialogVisible.value = false
     return
   }
-  const saved = await persistSmartRouteCandidates(nextCandidates, '自动配置已应用')
+  const saved = await persistSmartRouteCandidates(nextCandidates, t('projectModelAutoConfigApplied'))
   if (saved) {
     smartAutoDialogVisible.value = false
     smartAutoSuggestions.value = []
@@ -631,8 +660,8 @@ async function removeSmartRouteCandidate(index: number) {
   const nextCandidates = smartRouteCandidates.value.filter((_, candidateIndex) => candidateIndex !== index)
   const message =
     nextCandidates.length === 0
-      ? '删除最后一个候选后，将删除智能模型 auto？'
-      : `删除候选模型 ${candidate.targetModel}？`
+      ? t('projectModelDeleteLastCandidateConfirm')
+      : t('projectModelDeleteCandidateConfirm', { model: candidate.targetModel })
   const confirmed = await confirmDialog(message, t('confirmDelete'), {
     confirmText: t('delete'),
     danger: true,
@@ -652,7 +681,7 @@ async function removeSmartRouteCandidate(index: number) {
     })
     return
   }
-  await persistSmartRouteCandidates(nextCandidates, '候选模型已删除')
+  await persistSmartRouteCandidates(nextCandidates, t('projectModelCandidateDeleted'))
 }
 
 async function submitProjectModelForm() {
@@ -661,7 +690,7 @@ async function submitProjectModelForm() {
   const targetModel = projectModelForm.targetModel.trim()
   const model = projectModelForm.model.trim() || targetModel
   if (!targetModel) {
-    ElMessage.error('实际模型必填')
+    ElMessage.error(t('projectModelTargetRequired'))
     return
   }
   await withLoading(projectModelSaving, async () => {
@@ -685,7 +714,7 @@ async function submitProjectModelForm() {
 async function confirmDeleteProjectModel(row: ProjectModel) {
   const projectId = selectedProject.value?.id
   if (!projectId) return
-  const confirmed = await confirmDialog(`删除项目模型 ${row.model}？`, t('confirmDelete'), {
+  const confirmed = await confirmDialog(t('projectModelDeleteConfirm', { model: row.model }), t('confirmDelete'), {
     confirmText: t('delete'),
     danger: true,
     type: 'warning'
@@ -1075,7 +1104,7 @@ onMounted(loadServicePolicy)
               </el-button>
               <el-button
                 class="admin-action-button compact-row-action"
-                aria-label="项目模型"
+                :aria-label="t('projectModels')"
                 :icon="Link"
                 @click="openModelsDialog(row)"
               >
@@ -1232,28 +1261,28 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="modelsDialogVisible"
       class="user-admin-dialog project-models-dialog"
-      title="项目模型"
+      :title="t('projectModels')"
       width="720px"
     >
       <div class="project-model-panel">
         <el-tabs v-model="projectModelActiveTab" class="project-model-tabs">
-          <el-tab-pane label="指定模型" name="models">
+          <el-tab-pane :label="t('projectModelDirectTab')" name="models">
             <p class="project-model-help">
-              用来限制这个项目能调用哪些模型。不添加指定模型时，项目可以使用全部已启用模型；添加后，只能使用这里列出的模型或别名。
+              {{ t('projectModelDirectHelp') }}
             </p>
             <el-form
               class="project-model-form"
               label-position="top"
               @submit.prevent="submitProjectModelForm"
             >
-              <el-form-item label="实际模型">
+              <el-form-item :label="t('projectModelTargetModel')">
                 <el-select
                   v-model="projectModelForm.targetModel"
                   class="project-model-wide-select"
                   filterable
                   allow-create
                   default-first-option
-                  placeholder="选择实际上游模型"
+                  :placeholder="t('projectModelTargetModelPlaceholder')"
                 >
                   <el-option
                     v-for="model in channelModelOptions"
@@ -1263,12 +1292,12 @@ onMounted(loadServicePolicy)
                   />
                 </el-select>
               </el-form-item>
-              <el-form-item label="指定上游通道（可选）">
+              <el-form-item :label="t('projectModelTargetChannelOptional')">
                 <el-select
                   v-model="projectModelForm.targetChannelId"
                   clearable
                   filterable
-                  placeholder="自动选择可用通道"
+                  :placeholder="t('projectModelAutoChannelPlaceholder')"
                 >
                   <el-option
                     v-for="channel in channelOptions"
@@ -1278,8 +1307,11 @@ onMounted(loadServicePolicy)
                   />
                 </el-select>
               </el-form-item>
-              <el-form-item label="模型别名（可选）">
-                <el-input v-model="projectModelForm.model" placeholder="例如 company-chat" />
+              <el-form-item :label="t('projectModelAliasOptional')">
+                <el-input
+                  v-model="projectModelForm.model"
+                  :placeholder="t('projectModelAliasPlaceholder')"
+                />
               </el-form-item>
               <div class="project-model-actions">
                 <el-button
@@ -1304,16 +1336,25 @@ onMounted(loadServicePolicy)
                 row-key="id"
                 stripe
               >
-                <el-table-column label="项目模型" prop="model" min-width="120" show-overflow-tooltip />
                 <el-table-column
-                  label="实际模型"
+                  :label="t('projectModelAlias')"
+                  prop="model"
+                  min-width="120"
+                  show-overflow-tooltip
+                />
+                <el-table-column
+                  :label="t('projectModelTargetModel')"
                   prop="target_model"
                   min-width="180"
                   show-overflow-tooltip
                 />
-                <el-table-column label="指定通道" width="118" show-overflow-tooltip>
+                <el-table-column
+                  :label="t('projectModelTargetChannel')"
+                  width="118"
+                  show-overflow-tooltip
+                >
                   <template #default="{ row }">
-                    <span>{{ row.target_channel_name || '自动选择' }}</span>
+                    <span>{{ row.target_channel_name || autoSelectChannelLabel() }}</span>
                   </template>
                 </el-table-column>
                 <el-table-column :label="t('createdAt')" width="104">
@@ -1343,34 +1384,34 @@ onMounted(loadServicePolicy)
             </div>
           </el-tab-pane>
 
-          <el-tab-pane label="自动选择模型" name="smart">
+          <el-tab-pane :label="t('projectModelSmartTab')" name="smart">
             <div class="smart-route-panel">
               <p class="project-model-help">
-                添加候选模型后，用户在客户端选择 auto 模型即可实现自动选择。系统会在候选模型中按优先级和权重选择实际模型。未添加候选模型时，自动选择功能不生效。
+                {{ t('projectModelSmartHelp') }}
               </p>
               <el-form
                 class="smart-model-form"
                 label-position="top"
                 @submit.prevent="addSmartRouteCandidate"
               >
-                <el-form-item label="档位">
+                <el-form-item :label="t('projectModelTier')">
                   <el-select
                     v-model="smartCandidateForm.tier"
-                    placeholder="选择档位"
+                    :placeholder="t('projectModelTierPlaceholder')"
                   >
-                    <el-option label="简单" value="simple" />
-                    <el-option label="标准" value="standard" />
-                    <el-option label="高级" value="advanced" />
+                    <el-option :label="t('projectModelTierSimple')" value="simple" />
+                    <el-option :label="t('projectModelTierStandard')" value="standard" />
+                    <el-option :label="t('projectModelTierAdvanced')" value="advanced" />
                   </el-select>
                 </el-form-item>
-                <el-form-item label="实际模型">
+                <el-form-item :label="t('projectModelTargetModel')">
                   <el-select
                     v-model="smartCandidateForm.targetModel"
                     class="project-model-wide-select"
                     filterable
                     allow-create
                     default-first-option
-                    placeholder="选择实际模型"
+                    :placeholder="t('projectModelSelectTargetModel')"
                   >
                     <el-option
                       v-for="model in channelModelOptions"
@@ -1380,12 +1421,12 @@ onMounted(loadServicePolicy)
                     />
                   </el-select>
                 </el-form-item>
-                <el-form-item label="指定上游通道（可选）">
+                <el-form-item :label="t('projectModelTargetChannelOptional')">
                   <el-select
                     v-model="smartCandidateForm.targetChannelId"
                     clearable
                     filterable
-                    placeholder="自动选择可用通道"
+                    :placeholder="t('projectModelAutoChannelPlaceholder')"
                   >
                     <el-option
                       v-for="channel in channelOptions"
@@ -1402,7 +1443,7 @@ onMounted(loadServicePolicy)
                     :loading="smartRouteSaving"
                     @click="addSmartRouteCandidate"
                   >
-                    添加候选
+                    {{ t('projectModelAddCandidate') }}
                   </el-button>
                   <el-button
                     type="primary"
@@ -1410,7 +1451,7 @@ onMounted(loadServicePolicy)
                     :loading="smartAutoConfiguring"
                     @click="requestSmartAutoConfig"
                   >
-                    自动配置
+                    {{ t('projectModelAutoConfigure') }}
                   </el-button>
                 </div>
               </el-form>
@@ -1426,28 +1467,32 @@ onMounted(loadServicePolicy)
                   max-height="46vh"
                   stripe
                 >
-                  <el-table-column label="档位" width="64">
+                  <el-table-column :label="t('projectModelTier')" width="64">
                     <template #default="{ row }">
                       <span>{{ tierLabel(row.tier) }}</span>
                     </template>
                   </el-table-column>
                   <el-table-column
-                    label="实际模型"
+                    :label="t('projectModelTargetModel')"
                     prop="targetModel"
                     width="168"
                     show-overflow-tooltip
                   />
-                  <el-table-column label="指定通道" width="132" show-overflow-tooltip>
+                  <el-table-column
+                    :label="t('projectModelTargetChannel')"
+                    width="132"
+                    show-overflow-tooltip
+                  >
                     <template #default="{ row }">
                       <span>{{ candidateChannelLabel(row) }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="优先级" width="64" align="center">
+                  <el-table-column :label="t('projectModelPriority')" width="64" align="center">
                     <template #default="{ row }">
                       <span>{{ row.priority }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="权重" width="56" align="center">
+                  <el-table-column :label="t('projectModelWeight')" width="56" align="center">
                     <template #default="{ row }">
                       <span>{{ row.weight }}</span>
                     </template>
@@ -1486,17 +1531,17 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="smartAutoDialogVisible"
       class="user-admin-dialog smart-auto-dialog"
-      title="自动配置建议"
+      :title="t('projectModelAutoConfigSuggestions')"
       width="680px"
     >
       <div class="smart-auto-panel">
         <p class="project-model-help">
-          以下建议由{{ smartAutoSource === 'llm' ? '自动配置模型' : '本地规则' }}生成。应用后只会补全当前缺失的档位，不会覆盖已有候选。
+          {{ t('projectModelAutoConfigHelp', { source: autoConfigSourceLabel(smartAutoSource) }) }}
         </p>
         <el-alert
           v-for="warning in smartAutoWarnings"
           :key="warning"
-          :title="warning"
+          :title="autoConfigWarningText(warning)"
           type="warning"
           show-icon
           :closable="false"
@@ -1508,25 +1553,33 @@ onMounted(loadServicePolicy)
             max-height="42vh"
             stripe
           >
-            <el-table-column label="档位" width="72">
+            <el-table-column :label="t('projectModelTier')" width="72">
               <template #default="{ row }">
                 <span>{{ tierLabel(row.tier) }}</span>
               </template>
             </el-table-column>
             <el-table-column
-              label="推荐模型"
+              :label="t('projectModelRecommendedModel')"
               prop="target_model"
               min-width="160"
               show-overflow-tooltip
             />
-            <el-table-column label="指定通道" width="112" show-overflow-tooltip>
+            <el-table-column
+              :label="t('projectModelTargetChannel')"
+              width="112"
+              show-overflow-tooltip
+            >
               <template #default="{ row }">
                 <span>{{ suggestionChannelLabel(row) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="推荐理由" min-width="180" show-overflow-tooltip>
+            <el-table-column
+              :label="t('projectModelRecommendationReason')"
+              min-width="180"
+              show-overflow-tooltip
+            >
               <template #default="{ row }">
-                <span>{{ row.reason }}</span>
+                <span>{{ autoSuggestionReasonText(row) }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -1535,7 +1588,7 @@ onMounted(loadServicePolicy)
       <template #footer>
         <el-button @click="smartAutoDialogVisible = false">{{ t('cancel') }}</el-button>
         <el-button type="primary" :loading="smartRouteSaving" @click="applySmartAutoConfig">
-          应用配置
+          {{ t('projectModelApplyConfig') }}
         </el-button>
       </template>
     </el-dialog>

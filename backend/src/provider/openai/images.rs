@@ -125,6 +125,7 @@ pub(super) async fn relay_openai_image(
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),
             upstream_model: resolved.target_model.clone(),
+            routing: None,
             streamed: meta.stream,
             price,
             hold,

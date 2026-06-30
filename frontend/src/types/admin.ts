@@ -152,6 +152,31 @@ export type RoutingDecision = {
   created_at: string
 }
 
+export type UsageRouting = {
+  id: number
+  project_id: number
+  project_model_id?: number | null
+  requested_model: string
+  selected_model: string
+  selected_channel_id?: number | null
+  decision_source: 'rules' | 'classifier' | 'fallback' | string
+  tier: ProjectModelCandidateTier
+  task_type: ProjectModelRoutingTaskType | string
+  confidence: number
+  reason_code: string
+  matched_rule_ids: string[]
+  candidate_summary: Array<{
+    target_model: string
+    tier: ProjectModelCandidateTier
+    priority: number
+    weight: number
+  }>
+  fallback_reason?: string | null
+  classifier_model?: string | null
+  latency_ms: number
+  created_at: string
+}
+
 export type ProjectModel = {
   id: number
   project_id: number
@@ -387,6 +412,7 @@ export type UsageRecord = {
   billable_units: number
   cost_micro_usd?: number | null
   billing_status: string
+  routing?: UsageRouting | null
   created_at: string
 }
 

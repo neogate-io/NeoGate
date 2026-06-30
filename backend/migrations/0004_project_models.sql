@@ -36,8 +36,9 @@ CREATE TABLE project_model_candidate (
 CREATE INDEX idx_project_model_candidate_parent
     ON project_model_candidate(project_model_id, enabled, tier, priority DESC, id ASC);
 
-CREATE TABLE routing_decision (
+CREATE TABLE usage_routing (
     id BIGSERIAL PRIMARY KEY,
+    usage_id BIGINT NOT NULL UNIQUE REFERENCES usage(id) ON DELETE CASCADE,
     project_id BIGINT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     project_model_id BIGINT REFERENCES project_model(id) ON DELETE SET NULL,
     requested_model TEXT NOT NULL,
@@ -47,23 +48,23 @@ CREATE TABLE routing_decision (
     tier TEXT NOT NULL CHECK (tier IN ('simple', 'standard', 'advanced')),
     task_type TEXT NOT NULL DEFAULT 'unknown',
     confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
-    reason TEXT NOT NULL DEFAULT '',
-    matched_rules JSONB NOT NULL DEFAULT '[]'::JSONB,
-    candidate_scores JSONB NOT NULL DEFAULT '[]'::JSONB,
+    reason_code TEXT NOT NULL DEFAULT '',
+    matched_rule_ids JSONB NOT NULL DEFAULT '[]'::JSONB,
+    candidate_summary JSONB NOT NULL DEFAULT '[]'::JSONB,
     fallback_reason TEXT,
     classifier_model TEXT,
     latency_ms BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_routing_decision_project_created
-    ON routing_decision(project_id, created_at DESC, id DESC);
+CREATE INDEX idx_usage_routing_project_created
+    ON usage_routing(project_id, created_at DESC, id DESC);
 
-CREATE INDEX idx_routing_decision_task_type_created
-    ON routing_decision(project_id, task_type, created_at DESC, id DESC);
+CREATE INDEX idx_usage_routing_task_type_created
+    ON usage_routing(project_id, task_type, created_at DESC, id DESC);
 
-CREATE INDEX idx_routing_decision_tier_created
-    ON routing_decision(project_id, tier, created_at DESC, id DESC);
+CREATE INDEX idx_usage_routing_tier_created
+    ON usage_routing(project_id, tier, created_at DESC, id DESC);
 
 ALTER TABLE usage
     ADD COLUMN upstream_model TEXT,

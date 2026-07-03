@@ -257,7 +257,7 @@ async fn record_provider_models(
 async fn sync_channel_models(
     context: &AppContext,
     channel_id: DbId,
-    provider: &str,
+    _provider: &str,
     configured_models: &[String],
     models: &[String],
 ) -> Result<bool> {
@@ -272,8 +272,8 @@ async fn sync_channel_models(
     {
         let result = sqlx::query(
             "INSERT INTO channel_model
-             (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
-             VALUES ($1, $2, $3, FALSE, 'available', 'normal', now())
+             (channel_id, model, enabled, status, runtime_status, last_seen_at)
+             VALUES ($1, $2, FALSE, 'available', 'normal', now())
              ON CONFLICT (channel_id, model)
              DO UPDATE SET
                  status = 'available',
@@ -286,7 +286,6 @@ async fn sync_channel_models(
                  updated_at = now()",
         )
         .bind(channel_id)
-        .bind(provider)
         .bind(model)
         .execute(&context.db)
         .await?;

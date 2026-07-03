@@ -96,7 +96,7 @@ function showCreatedAppDetail() {
             >
               <div class="app-model-option">
                 <span>{{ item.model }}</span>
-                <small>{{ item.providers.join(', ') }} · {{ item.channel_count }} 个渠道</small>
+                <small>{{ item.channel_count }} 个渠道</small>
               </div>
             </el-option>
             <template #empty>

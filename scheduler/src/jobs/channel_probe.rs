@@ -69,7 +69,6 @@ struct DiagnosticStep {
 struct ProbeOutcome {
     endpoint_id: Option<DbId>,
     key_id: Option<DbId>,
-    provider: String,
     protocol: String,
     model: String,
     status: ProbeStatus,
@@ -287,7 +286,6 @@ async fn run_channel_probe(
         return ProbeOutcome {
             endpoint_id: None,
             key_id: None,
-            provider: channel.provider.clone(),
             protocol: String::new(),
             model: String::new(),
             status: ProbeStatus::Skipped,
@@ -301,7 +299,6 @@ async fn run_channel_probe(
         return ProbeOutcome {
             endpoint_id: Some(endpoint.id),
             key_id: None,
-            provider: channel.provider.clone(),
             protocol: endpoint.protocol.clone(),
             model: probe_model(endpoint).unwrap_or_default(),
             status: ProbeStatus::Skipped,
@@ -315,7 +312,6 @@ async fn run_channel_probe(
         return ProbeOutcome {
             endpoint_id: Some(endpoint.id),
             key_id: None,
-            provider: channel.provider.clone(),
             protocol: endpoint.protocol.clone(),
             model: probe_model(endpoint).unwrap_or_default(),
             status: ProbeStatus::Failed,
@@ -330,7 +326,6 @@ async fn run_channel_probe(
     ProbeOutcome {
         endpoint_id: Some(endpoint.id),
         key_id: key.id,
-        provider: channel.provider.clone(),
         protocol: endpoint.protocol.clone(),
         model,
         status: if step.status == DiagnosticStatus::Ok {
@@ -528,14 +523,13 @@ async fn persist_probe_sample(
     sqlx::query(
         r#"
         INSERT INTO channel_probe
-            (channel_id, channel_key_id, provider, protocol, model,
+            (channel_id, channel_key_id, protocol, model,
              status, latency_ms, status_code, error_summary)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(channel_id)
     .bind(outcome.key_id)
-    .bind(&outcome.provider)
     .bind(&outcome.protocol)
     .bind(&outcome.model)
     .bind(outcome.status.as_str())

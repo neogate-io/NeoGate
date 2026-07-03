@@ -906,11 +906,10 @@ async fn sync_channel_models_for_channel(
             active_models.push(model.to_string());
             sqlx::query(
                 "INSERT INTO channel_model
-                 (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
-                 VALUES ($1, $2, $3, $4, 'available', 'normal', now())
+                 (channel_id, model, enabled, status, runtime_status, last_seen_at)
+                 VALUES ($1, $2, $3, 'available', 'normal', now())
                  ON CONFLICT (channel_id, model)
                  DO UPDATE SET
-                     provider = EXCLUDED.provider,
                      enabled = EXCLUDED.enabled,
                      status = 'available',
                      missing_since = NULL,
@@ -918,7 +917,6 @@ async fn sync_channel_models_for_channel(
                      updated_at = now()",
             )
             .bind(channel_id)
-            .bind(provider)
             .bind(model)
             .bind(price_configured)
             .execute(&mut **tx)
@@ -1048,7 +1046,7 @@ async fn models_by_channel(
     }
 
     let rows = sqlx::query(AssertSqlSafe(format!(
-        "SELECT cm.id, cm.channel_id, cm.provider, cm.model, cm.enabled,
+        "SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.enabled,
                 cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
                 cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
                 cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
@@ -1063,8 +1061,9 @@ async fn models_by_channel(
                 pp.billing_meter,
                 pp.unit_price_usd_micros
          FROM channel_model cm
+         JOIN channel c ON c.id = cm.channel_id
          LEFT JOIN provider_price pp
-           ON pp.provider = cm.provider
+           ON pp.provider = c.provider
           AND pp.model = cm.model
          WHERE cm.channel_id = ANY($1)
          ORDER BY cm.model ASC"
@@ -1089,8 +1088,9 @@ async fn ensure_channel_model_has_enabled_price(
     let row = sqlx::query(AssertSqlSafe(format!(
         "SELECT 1
          FROM channel_model cm
+         JOIN channel c ON c.id = cm.channel_id
          JOIN provider_price pp
-          ON pp.provider = cm.provider
+          ON pp.provider = c.provider
          AND pp.model = cm.model
          AND pp.enabled = TRUE
          AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}

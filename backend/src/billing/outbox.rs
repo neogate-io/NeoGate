@@ -802,7 +802,6 @@ mod tests {
             relay_trace_id: None,
             relay_attempt: 1,
             relay_final: true,
-            provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),

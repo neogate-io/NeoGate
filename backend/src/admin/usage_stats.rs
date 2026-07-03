@@ -27,6 +27,7 @@ const EXPORT_LIMIT: i64 = 100_000;
 pub(crate) fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/admin/usage/statistics/summary", get(summary))
+        .route("/api/admin/usage/statistics/timeseries", get(timeseries))
         .route("/api/admin/usage/statistics/users", get(users))
         .route("/api/admin/usage/statistics/user-models", get(user_models))
         .route("/api/admin/usage/statistics/models", get(models))
@@ -40,12 +41,13 @@ pub(crate) struct UsageStatsParams {
     end: Option<NaiveDate>,
     user_id: Option<DbId>,
     user_query: Option<String>,
-    provider: Option<String>,
     model: Option<String>,
     billing_meter: Option<String>,
     page: Option<i64>,
     limit: Option<i64>,
+    series_limit: Option<i64>,
     sort: Option<String>,
+    granularity: Option<String>,
     scope: Option<String>,
 }
 
@@ -55,7 +57,6 @@ struct UsageStatsFilter {
     end: NaiveDate,
     user_id: Option<DbId>,
     user_query_pattern: Option<String>,
-    provider: Option<String>,
     model: Option<String>,
     billing_meter: Option<String>,
 }
@@ -68,7 +69,15 @@ struct UsageStatsSummary {
     daily: Vec<DailyUsageStats>,
     top_users: Vec<UserUsageStats>,
     top_models: Vec<ModelUsageStats>,
-    providers: Vec<ProviderUsageStats>,
+}
+
+#[derive(Debug, Serialize)]
+struct UsageStatsTimeSeries {
+    start: String,
+    end: String,
+    granularity: String,
+    points: Vec<UsageTimeSeriesPoint>,
+    model_points: Vec<ModelUsageTimeSeriesPoint>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +115,22 @@ struct DailyUsageStats {
 }
 
 #[derive(Debug, Serialize)]
+struct UsageTimeSeriesPoint {
+    bucket: String,
+    request_count: i64,
+    success_count: i64,
+    error_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    total_tokens: i64,
+    billable_units: i64,
+    cost_micro_usd: i64,
+    avg_latency_ms: Option<f64>,
+    avg_first_response_ms: Option<f64>,
+    avg_output_tokens_per_second: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
 struct UserUsageStats {
     user_id: Option<DbId>,
     user_email: Option<String>,
@@ -125,7 +150,7 @@ struct UserUsageStats {
 
 #[derive(Debug, Serialize)]
 struct ModelUsageStats {
-    provider: String,
+    channel_name: String,
     model: String,
     billing_meter: String,
     request_count: i64,
@@ -141,12 +166,31 @@ struct ModelUsageStats {
 }
 
 #[derive(Debug, Serialize)]
+struct ModelUsageTimeSeriesPoint {
+    bucket: String,
+    channel_name: String,
+    model: String,
+    billing_meter: String,
+    request_count: i64,
+    success_count: i64,
+    error_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    total_tokens: i64,
+    billable_units: i64,
+    cost_micro_usd: i64,
+    avg_latency_ms: Option<f64>,
+    avg_first_response_ms: Option<f64>,
+    avg_output_tokens_per_second: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
 struct UserModelUsageStats {
     user_id: Option<DbId>,
     user_email: Option<String>,
     user_username: Option<String>,
     user_display_name: String,
-    provider: String,
+    channel_name: String,
     model: String,
     billing_meter: String,
     request_count: i64,
@@ -161,15 +205,6 @@ struct UserModelUsageStats {
 }
 
 #[derive(Debug, Serialize)]
-struct ProviderUsageStats {
-    provider: String,
-    request_count: i64,
-    total_tokens: i64,
-    billable_units: i64,
-    cost_micro_usd: i64,
-}
-
-#[derive(Debug, Serialize)]
 struct UsageStatsPage<T> {
     items: Vec<T>,
     total: i64,
@@ -179,14 +214,13 @@ struct UsageStatsPage<T> {
 
 #[derive(Debug, Serialize)]
 struct UsageStatsOptions {
-    providers: Vec<String>,
     models: Vec<ModelOption>,
     users: Vec<UserOption>,
 }
 
 #[derive(Debug, Serialize)]
 struct ModelOption {
-    provider: String,
+    channel_name: String,
     model: String,
 }
 
@@ -208,7 +242,6 @@ async fn summary(
     let daily = daily_stats(&state.db.pool, &filter).await?;
     let top_users = user_stats(&state.db.pool, &filter, 1, 10, SortMode::Cost).await?;
     let top_models = model_stats(&state.db.pool, &filter, 10, SortMode::Cost).await?;
-    let providers = provider_stats(&state.db.pool, &filter).await?;
 
     Ok(Json(UsageStatsSummary {
         start: filter.start.to_string(),
@@ -217,7 +250,27 @@ async fn summary(
         daily,
         top_users: top_users.items,
         top_models,
-        providers,
+    }))
+}
+
+async fn timeseries(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+    Query(params): Query<UsageStatsParams>,
+) -> AppResult<Json<UsageStatsTimeSeries>> {
+    let filter = UsageStatsFilter::from_params(&params)?;
+    let granularity = TimeGranularity::from_params(&filter, params.granularity.as_deref())?;
+    let series_limit = bounded_limit(params.series_limit, 8, 20);
+    let points = usage_timeseries(&state.db.pool, &filter, granularity).await?;
+    let model_points =
+        model_usage_timeseries(&state.db.pool, &filter, granularity, series_limit).await?;
+
+    Ok(Json(UsageStatsTimeSeries {
+        start: filter.start.to_string(),
+        end: filter.end.to_string(),
+        granularity: granularity.as_str().to_string(),
+        points,
+        model_points,
     }))
 }
 
@@ -269,14 +322,9 @@ async fn options(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Json<UsageStatsOptions>> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let providers = option_providers(&state.db.pool, &filter).await?;
     let models = option_models(&state.db.pool, &filter).await?;
     let users = option_users(&state.db.pool, &filter).await?;
-    Ok(Json(UsageStatsOptions {
-        providers,
-        models,
-        users,
-    }))
+    Ok(Json(UsageStatsOptions { models, users }))
 }
 
 async fn export_csv(
@@ -327,7 +375,6 @@ impl UsageStatsFilter {
             user_id: params.user_id,
             user_query_pattern: trimmed_non_empty(params.user_query.as_deref())
                 .map(|value| format!("%{value}%")),
-            provider: trimmed_non_empty(params.provider.as_deref()).map(str::to_string),
             model: trimmed_non_empty(params.model.as_deref()).map(str::to_string),
             billing_meter,
         })
@@ -341,6 +388,43 @@ enum SortMode {
     Requests,
 }
 
+#[derive(Clone, Copy)]
+enum TimeGranularity {
+    Hour,
+    Day,
+}
+
+impl TimeGranularity {
+    fn from_params(filter: &UsageStatsFilter, value: Option<&str>) -> AppResult<Self> {
+        match value.unwrap_or("auto") {
+            "hour" => Ok(Self::Hour),
+            "day" => Ok(Self::Day),
+            "auto" => {
+                if filter.end.signed_duration_since(filter.start).num_days() <= 14 {
+                    Ok(Self::Hour)
+                } else {
+                    Ok(Self::Day)
+                }
+            }
+            _ => Err(AppError::BadRequest("invalid granularity".to_string())),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hour => "hour",
+            Self::Day => "day",
+        }
+    }
+
+    fn bucket_format(self) -> &'static str {
+        match self {
+            Self::Hour => "YYYY-MM-DD\"T\"HH24:00:00\"Z\"",
+            Self::Day => "YYYY-MM-DD",
+        }
+    }
+}
+
 impl SortMode {
     fn from_param(value: Option<&str>) -> Self {
         match value {
@@ -352,9 +436,11 @@ impl SortMode {
 
     fn model_order_by(self) -> &'static str {
         match self {
-            Self::Cost => "cost_micro_usd DESC, request_count DESC, provider ASC, model ASC",
-            Self::Tokens => "total_tokens DESC, cost_micro_usd DESC, provider ASC, model ASC",
-            Self::Requests => "request_count DESC, cost_micro_usd DESC, provider ASC, model ASC",
+            Self::Cost => "cost_micro_usd DESC, request_count DESC, channel_name ASC, model ASC",
+            Self::Tokens => "total_tokens DESC, cost_micro_usd DESC, channel_name ASC, model ASC",
+            Self::Requests => {
+                "request_count DESC, cost_micro_usd DESC, channel_name ASC, model ASC"
+            }
         }
     }
 
@@ -410,21 +496,20 @@ async fn aggregate_totals(
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms,
           SUM(ud.first_response_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.first_response_count), 0)::DOUBLE PRECISION AS avg_first_response_ms
         FROM usage_daily ud
+        LEFT JOIN channel c ON c.id = ud.channel_id
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
         "#,
     )
     .bind(filter.start)
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_one(pool)
@@ -448,14 +533,14 @@ async fn daily_stats(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<
           COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
         FROM usage_daily ud
+        LEFT JOIN channel c ON c.id = ud.channel_id
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
         GROUP BY ud.day
         ORDER BY ud.day ASC
         "#,
@@ -464,7 +549,6 @@ async fn daily_stats(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_all(pool)
@@ -489,6 +573,145 @@ async fn daily_stats(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<
         .map_err(AppError::from)
 }
 
+async fn usage_timeseries(
+    pool: &PgPool,
+    filter: &UsageStatsFilter,
+    granularity: TimeGranularity,
+) -> AppResult<Vec<UsageTimeSeriesPoint>> {
+    let sql = format!(
+        r#"
+        SELECT
+          to_char(date_trunc('{bucket}', usage_record.created_at AT TIME ZONE 'UTC'), '{format}') AS bucket,
+          COUNT(*)::BIGINT AS request_count,
+          COALESCE(SUM(CASE WHEN CASE WHEN usage_record.status_code IS NULL THEN usage_record.error_summary IS NULL ELSE usage_record.status_code >= 200 AND usage_record.status_code < 400 END THEN 1 ELSE 0 END), 0)::BIGINT AS success_count,
+          COALESCE(SUM(CASE WHEN CASE WHEN usage_record.status_code IS NULL THEN usage_record.error_summary IS NULL ELSE usage_record.status_code >= 200 AND usage_record.status_code < 400 END THEN 0 ELSE 1 END), 0)::BIGINT AS error_count,
+          COALESCE(SUM(usage_record.input_tokens), 0)::BIGINT AS input_tokens,
+          COALESCE(SUM(usage_record.output_tokens), 0)::BIGINT AS output_tokens,
+          COALESCE(SUM(usage_record.total_tokens), 0)::BIGINT AS total_tokens,
+          COALESCE(SUM(usage_record.billable_units), 0)::BIGINT AS billable_units,
+          COALESCE(SUM(usage_record.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          AVG(usage_record.latency_ms)::DOUBLE PRECISION AS avg_latency_ms,
+          AVG(usage_record.first_response_ms)::DOUBLE PRECISION AS avg_first_response_ms,
+          AVG(usage_record.output_tokens_per_second)::DOUBLE PRECISION AS avg_output_tokens_per_second
+        FROM usage AS usage_record
+        LEFT JOIN "user" u ON u.id = usage_record.user_id
+        WHERE usage_record.created_at >= $1::DATE
+          AND usage_record.created_at < ($2::DATE + INTERVAL '1 day')
+          AND ($3::BIGINT IS NULL OR usage_record.user_id = $3)
+          AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR usage_record.user_id::TEXT ILIKE $4)
+          AND ($5::TEXT IS NULL OR COALESCE(usage_record.model, '') = $5)
+          AND ($6::TEXT IS NULL OR usage_record.billing_meter = $6)
+        GROUP BY date_trunc('{bucket}', usage_record.created_at AT TIME ZONE 'UTC')
+        ORDER BY date_trunc('{bucket}', usage_record.created_at AT TIME ZONE 'UTC') ASC
+        "#,
+        bucket = granularity.as_str(),
+        format = granularity.bucket_format()
+    );
+
+    let rows = sqlx::query(AssertSqlSafe(sql))
+        .bind(filter.start)
+        .bind(filter.end)
+        .bind(filter.user_id)
+        .bind(filter.user_query_pattern.as_deref())
+        .bind(filter.model.as_deref())
+        .bind(filter.billing_meter.as_deref())
+        .fetch_all(pool)
+        .await?;
+
+    rows.iter()
+        .map(usage_timeseries_point_from_row)
+        .collect::<Result<_, sqlx::Error>>()
+        .map_err(AppError::from)
+}
+
+async fn model_usage_timeseries(
+    pool: &PgPool,
+    filter: &UsageStatsFilter,
+    granularity: TimeGranularity,
+    series_limit: i64,
+) -> AppResult<Vec<ModelUsageTimeSeriesPoint>> {
+    let sql = format!(
+        r#"
+        WITH top_series AS (
+          SELECT
+            COALESCE(usage_record.channel_id, -1) AS channel_id_key,
+            COALESCE(c.name, '') AS channel_name,
+            COALESCE(usage_record.model, '') AS model,
+            usage_record.billing_meter,
+            COALESCE(SUM(usage_record.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+            COUNT(*)::BIGINT AS request_count
+          FROM usage AS usage_record
+          LEFT JOIN channel c ON c.id = usage_record.channel_id
+          LEFT JOIN "user" u ON u.id = usage_record.user_id
+          WHERE usage_record.created_at >= $1::DATE
+            AND usage_record.created_at < ($2::DATE + INTERVAL '1 day')
+            AND ($3::BIGINT IS NULL OR usage_record.user_id = $3)
+            AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR usage_record.user_id::TEXT ILIKE $4)
+          AND ($5::TEXT IS NULL OR COALESCE(usage_record.model, '') = $5)
+          AND ($6::TEXT IS NULL OR usage_record.billing_meter = $6)
+          GROUP BY COALESCE(usage_record.channel_id, -1), COALESCE(c.name, ''), COALESCE(usage_record.model, ''), usage_record.billing_meter
+          ORDER BY cost_micro_usd DESC, request_count DESC, channel_name ASC, model ASC
+          LIMIT $7
+        )
+        SELECT
+          to_char(date_trunc('{bucket}', usage_record.created_at AT TIME ZONE 'UTC'), '{format}') AS bucket,
+          COALESCE(c.name, '') AS channel_name,
+          COALESCE(usage_record.model, '') AS model,
+          usage_record.billing_meter,
+          COUNT(*)::BIGINT AS request_count,
+          COALESCE(SUM(CASE WHEN CASE WHEN usage_record.status_code IS NULL THEN usage_record.error_summary IS NULL ELSE usage_record.status_code >= 200 AND usage_record.status_code < 400 END THEN 1 ELSE 0 END), 0)::BIGINT AS success_count,
+          COALESCE(SUM(CASE WHEN CASE WHEN usage_record.status_code IS NULL THEN usage_record.error_summary IS NULL ELSE usage_record.status_code >= 200 AND usage_record.status_code < 400 END THEN 0 ELSE 1 END), 0)::BIGINT AS error_count,
+          COALESCE(SUM(usage_record.input_tokens), 0)::BIGINT AS input_tokens,
+          COALESCE(SUM(usage_record.output_tokens), 0)::BIGINT AS output_tokens,
+          COALESCE(SUM(usage_record.total_tokens), 0)::BIGINT AS total_tokens,
+          COALESCE(SUM(usage_record.billable_units), 0)::BIGINT AS billable_units,
+          COALESCE(SUM(usage_record.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          AVG(usage_record.latency_ms)::DOUBLE PRECISION AS avg_latency_ms,
+          AVG(usage_record.first_response_ms)::DOUBLE PRECISION AS avg_first_response_ms,
+          AVG(usage_record.output_tokens_per_second)::DOUBLE PRECISION AS avg_output_tokens_per_second
+        FROM usage AS usage_record
+        LEFT JOIN channel c ON c.id = usage_record.channel_id
+        JOIN top_series
+          ON top_series.channel_id_key = COALESCE(usage_record.channel_id, -1)
+         AND top_series.model = COALESCE(usage_record.model, '')
+         AND top_series.billing_meter = usage_record.billing_meter
+        LEFT JOIN "user" u ON u.id = usage_record.user_id
+        WHERE usage_record.created_at >= $1::DATE
+          AND usage_record.created_at < ($2::DATE + INTERVAL '1 day')
+          AND ($3::BIGINT IS NULL OR usage_record.user_id = $3)
+          AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR usage_record.user_id::TEXT ILIKE $4)
+          AND ($5::TEXT IS NULL OR COALESCE(usage_record.model, '') = $5)
+          AND ($6::TEXT IS NULL OR usage_record.billing_meter = $6)
+        GROUP BY date_trunc('{bucket}', usage_record.created_at AT TIME ZONE 'UTC'),
+                 COALESCE(usage_record.channel_id, -1),
+                 COALESCE(c.name, ''),
+                 COALESCE(usage_record.model, ''),
+                 usage_record.billing_meter
+        ORDER BY date_trunc('{bucket}', usage_record.created_at AT TIME ZONE 'UTC') ASC,
+                 channel_name ASC,
+                 model ASC
+        "#,
+        bucket = granularity.as_str(),
+        format = granularity.bucket_format()
+    );
+
+    let rows = sqlx::query(AssertSqlSafe(sql))
+        .bind(filter.start)
+        .bind(filter.end)
+        .bind(filter.user_id)
+        .bind(filter.user_query_pattern.as_deref())
+        .bind(filter.model.as_deref())
+        .bind(filter.billing_meter.as_deref())
+        .bind(series_limit)
+        .fetch_all(pool)
+        .await?;
+
+    rows.iter()
+        .map(model_usage_timeseries_point_from_row)
+        .collect::<Result<_, sqlx::Error>>()
+        .map_err(AppError::from)
+}
+
 async fn user_stats(
     pool: &PgPool,
     filter: &UsageStatsFilter,
@@ -507,9 +730,8 @@ async fn user_stats(
             AND ud.day <= $2
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
             AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-            AND ($5::TEXT IS NULL OR ud.provider = $5)
-            AND ($6::TEXT IS NULL OR ud.model = $6)
-            AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
           GROUP BY ud.user_id
         ) grouped
         "#,
@@ -518,7 +740,6 @@ async fn user_stats(
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_one(pool)
@@ -539,20 +760,20 @@ async fn user_stats(
           COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
           COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms,
-          COUNT(DISTINCT NULLIF(ud.provider || '/' || ud.model, '/'))::BIGINT AS model_count
+          COUNT(DISTINCT NULLIF(COALESCE(c.name, '') || '/' || ud.model, '/'))::BIGINT AS model_count
         FROM usage_daily ud
+        LEFT JOIN channel c ON c.id = ud.channel_id
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
         GROUP BY ud.user_id, u.email, u.username
         ORDER BY {}
-        OFFSET $8
-        LIMIT $9
+        OFFSET $7
+        LIMIT $8
         "#,
         sort.user_order_by()
     );
@@ -562,7 +783,6 @@ async fn user_stats(
         .bind(filter.end)
         .bind(filter.user_id)
         .bind(filter.user_query_pattern.as_deref())
-        .bind(filter.provider.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
         .bind(offset)
@@ -592,17 +812,17 @@ async fn user_model_stats(
         r#"
         SELECT COUNT(*)::BIGINT
         FROM (
-          SELECT ud.user_id, ud.provider, ud.model, ud.billing_meter
+          SELECT ud.user_id, COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
           FROM usage_daily ud
+          LEFT JOIN channel c ON c.id = ud.channel_id
           LEFT JOIN "user" u ON u.id = ud.user_id
           WHERE ud.day >= $1
             AND ud.day <= $2
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
             AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-            AND ($5::TEXT IS NULL OR ud.provider = $5)
-            AND ($6::TEXT IS NULL OR ud.model = $6)
-            AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
-          GROUP BY ud.user_id, ud.provider, ud.model, ud.billing_meter
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
+          GROUP BY ud.user_id, COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
         ) grouped
         "#,
     )
@@ -610,7 +830,6 @@ async fn user_model_stats(
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_one(pool)
@@ -622,7 +841,7 @@ async fn user_model_stats(
           ud.user_id,
           u.email::TEXT AS user_email,
           u.username AS user_username,
-          ud.provider,
+          COALESCE(c.name, '') AS channel_name,
           ud.model,
           ud.billing_meter,
           COALESCE(SUM(ud.request_count), 0)::BIGINT AS request_count,
@@ -635,18 +854,18 @@ async fn user_model_stats(
           COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
         FROM usage_daily ud
+        LEFT JOIN channel c ON c.id = ud.channel_id
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
-        GROUP BY ud.user_id, u.email, u.username, ud.provider, ud.model, ud.billing_meter
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
+        GROUP BY ud.user_id, u.email, u.username, COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
         ORDER BY {}
-        OFFSET $8
-        LIMIT $9
+        OFFSET $7
+        LIMIT $8
         "#,
         sort.model_order_by()
     );
@@ -656,7 +875,6 @@ async fn user_model_stats(
         .bind(filter.end)
         .bind(filter.user_id)
         .bind(filter.user_query_pattern.as_deref())
-        .bind(filter.provider.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
         .bind(offset)
@@ -695,17 +913,17 @@ async fn model_stats_page(
         r#"
         SELECT COUNT(*)::BIGINT
         FROM (
-          SELECT ud.provider, ud.model, ud.billing_meter
+          SELECT COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
           FROM usage_daily ud
+          LEFT JOIN channel c ON c.id = ud.channel_id
           LEFT JOIN "user" u ON u.id = ud.user_id
           WHERE ud.day >= $1
             AND ud.day <= $2
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
             AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-            AND ($5::TEXT IS NULL OR ud.provider = $5)
-            AND ($6::TEXT IS NULL OR ud.model = $6)
-            AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
-          GROUP BY ud.provider, ud.model, ud.billing_meter
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
+          GROUP BY COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
         ) grouped
         "#,
     )
@@ -713,7 +931,6 @@ async fn model_stats_page(
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_one(pool)
@@ -722,7 +939,7 @@ async fn model_stats_page(
     let sql = format!(
         r#"
         SELECT
-          ud.provider,
+          COALESCE(c.name, '') AS channel_name,
           ud.model,
           ud.billing_meter,
           COALESCE(SUM(ud.request_count), 0)::BIGINT AS request_count,
@@ -736,18 +953,18 @@ async fn model_stats_page(
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms,
           COUNT(DISTINCT ud.user_id)::BIGINT AS user_count
         FROM usage_daily ud
+        LEFT JOIN channel c ON c.id = ud.channel_id
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
-        GROUP BY ud.provider, ud.model, ud.billing_meter
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
+        GROUP BY COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
         ORDER BY {}
-        OFFSET $8
-        LIMIT $9
+        OFFSET $7
+        LIMIT $8
         "#,
         sort.model_order_by()
     );
@@ -757,7 +974,6 @@ async fn model_stats_page(
         .bind(filter.end)
         .bind(filter.user_id)
         .bind(filter.user_query_pattern.as_deref())
-        .bind(filter.provider.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
         .bind(offset)
@@ -776,100 +992,21 @@ async fn model_stats_page(
     })
 }
 
-async fn provider_stats(
-    pool: &PgPool,
-    filter: &UsageStatsFilter,
-) -> AppResult<Vec<ProviderUsageStats>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT
-          ud.provider,
-          COALESCE(SUM(ud.request_count), 0)::BIGINT AS request_count,
-          COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
-          COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd
-        FROM usage_daily ud
-        LEFT JOIN "user" u ON u.id = ud.user_id
-        WHERE ud.day >= $1
-          AND ud.day <= $2
-          AND ($3::BIGINT IS NULL OR ud.user_id = $3)
-          AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
-        GROUP BY ud.provider
-        ORDER BY cost_micro_usd DESC, request_count DESC, provider ASC
-        "#,
-    )
-    .bind(filter.start)
-    .bind(filter.end)
-    .bind(filter.user_id)
-    .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
-    .bind(filter.model.as_deref())
-    .bind(filter.billing_meter.as_deref())
-    .fetch_all(pool)
-    .await?;
-
-    rows.iter()
-        .map(|row| {
-            Ok(ProviderUsageStats {
-                provider: row.try_get("provider")?,
-                request_count: row.try_get("request_count")?,
-                total_tokens: row.try_get("total_tokens")?,
-                billable_units: row.try_get("billable_units")?,
-                cost_micro_usd: row.try_get("cost_micro_usd")?,
-            })
-        })
-        .collect::<Result<_, sqlx::Error>>()
-        .map_err(AppError::from)
-}
-
-async fn option_providers(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<String>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT ud.provider
-        FROM usage_daily ud
-        LEFT JOIN "user" u ON u.id = ud.user_id
-        WHERE ud.day >= $1
-          AND ud.day <= $2
-          AND ($3::BIGINT IS NULL OR ud.user_id = $3)
-          AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.billing_meter = $5)
-        GROUP BY ud.provider
-        ORDER BY ud.provider ASC
-        LIMIT 100
-        "#,
-    )
-    .bind(filter.start)
-    .bind(filter.end)
-    .bind(filter.user_id)
-    .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.billing_meter.as_deref())
-    .fetch_all(pool)
-    .await?;
-
-    rows.iter()
-        .map(|row| row.try_get("provider"))
-        .collect::<Result<_, sqlx::Error>>()
-        .map_err(AppError::from)
-}
-
 async fn option_models(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<ModelOption>> {
     let rows = sqlx::query(
         r#"
-        SELECT ud.provider, ud.model
+        SELECT COALESCE(c.name, '') AS channel_name, ud.model
         FROM usage_daily ud
+        LEFT JOIN channel c ON c.id = ud.channel_id
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ud.model <> ''
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
-        GROUP BY ud.provider, ud.model
-        ORDER BY ud.provider ASC, ud.model ASC
+          AND ($5::TEXT IS NULL OR ud.billing_meter = $5)
+        GROUP BY COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model
+        ORDER BY channel_name ASC, ud.model ASC
         LIMIT 500
         "#,
     )
@@ -877,7 +1014,6 @@ async fn option_models(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Ve
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_all(pool)
     .await?;
@@ -885,7 +1021,7 @@ async fn option_models(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Ve
     rows.iter()
         .map(|row| {
             Ok(ModelOption {
-                provider: row.try_get("provider")?,
+                channel_name: row.try_get("channel_name")?,
                 model: row.try_get("model")?,
             })
         })
@@ -909,9 +1045,8 @@ async fn option_users(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec
           AND ud.user_id IS NOT NULL
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
           AND ($4::TEXT IS NULL OR u.email::TEXT ILIKE $4 OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
-          AND ($5::TEXT IS NULL OR ud.provider = $5)
-          AND ($6::TEXT IS NULL OR ud.model = $6)
-          AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          AND ($5::TEXT IS NULL OR ud.model = $5)
+          AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
         GROUP BY ud.user_id, u.email, u.username
         ORDER BY last_day DESC, cost_micro_usd DESC, ud.user_id ASC
         LIMIT 50
@@ -921,7 +1056,6 @@ async fn option_users(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec
     .bind(filter.end)
     .bind(filter.user_id)
     .bind(filter.user_query_pattern.as_deref())
-    .bind(filter.provider.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
     .fetch_all(pool)
@@ -996,7 +1130,7 @@ async fn export_user_models(
         "user_id".into(),
         "user_email".into(),
         "user_username".into(),
-        "provider".into(),
+        "channel_name".into(),
         "model".into(),
         "billing_meter".into(),
         "request_count".into(),
@@ -1014,7 +1148,7 @@ async fn export_user_models(
             optional_id(item.user_id),
             item.user_email.unwrap_or_default(),
             item.user_username.unwrap_or_default(),
-            item.provider,
+            item.channel_name,
             item.model,
             item.billing_meter,
             item.request_count.to_string(),
@@ -1074,7 +1208,7 @@ async fn export_models(
     let items = model_stats(pool, filter, EXPORT_LIMIT + 1, sort).await?;
     ensure_export_limit(items.len())?;
     let mut rows = vec![vec![
-        "provider".into(),
+        "channel_name".into(),
         "model".into(),
         "billing_meter".into(),
         "request_count".into(),
@@ -1090,7 +1224,7 @@ async fn export_models(
     ]];
     rows.extend(items.into_iter().map(|item| {
         vec![
-            item.provider,
+            item.channel_name,
             item.model,
             item.billing_meter,
             item.request_count.to_string(),
@@ -1129,6 +1263,25 @@ fn aggregate_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageStatsAggregate
     })
 }
 
+fn usage_timeseries_point_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<UsageTimeSeriesPoint, sqlx::Error> {
+    Ok(UsageTimeSeriesPoint {
+        bucket: row.try_get("bucket")?,
+        request_count: row.try_get("request_count")?,
+        success_count: row.try_get("success_count")?,
+        error_count: row.try_get("error_count")?,
+        input_tokens: row.try_get("input_tokens")?,
+        output_tokens: row.try_get("output_tokens")?,
+        total_tokens: row.try_get("total_tokens")?,
+        billable_units: row.try_get("billable_units")?,
+        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        avg_first_response_ms: row.try_get("avg_first_response_ms")?,
+        avg_output_tokens_per_second: row.try_get("avg_output_tokens_per_second")?,
+    })
+}
+
 fn user_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<UserUsageStats, sqlx::Error> {
     let user_id = row.try_get("user_id")?;
     let user_email = row.try_get("user_email")?;
@@ -1153,7 +1306,7 @@ fn user_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<UserUsageStats, sq
 
 fn model_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ModelUsageStats, sqlx::Error> {
     Ok(ModelUsageStats {
-        provider: row.try_get("provider")?,
+        channel_name: row.try_get("channel_name")?,
         model: row.try_get("model")?,
         billing_meter: row.try_get("billing_meter")?,
         request_count: row.try_get("request_count")?,
@@ -1169,6 +1322,28 @@ fn model_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ModelUsageStats, 
     })
 }
 
+fn model_usage_timeseries_point_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ModelUsageTimeSeriesPoint, sqlx::Error> {
+    Ok(ModelUsageTimeSeriesPoint {
+        bucket: row.try_get("bucket")?,
+        channel_name: row.try_get("channel_name")?,
+        model: row.try_get("model")?,
+        billing_meter: row.try_get("billing_meter")?,
+        request_count: row.try_get("request_count")?,
+        success_count: row.try_get("success_count")?,
+        error_count: row.try_get("error_count")?,
+        input_tokens: row.try_get("input_tokens")?,
+        output_tokens: row.try_get("output_tokens")?,
+        total_tokens: row.try_get("total_tokens")?,
+        billable_units: row.try_get("billable_units")?,
+        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        avg_first_response_ms: row.try_get("avg_first_response_ms")?,
+        avg_output_tokens_per_second: row.try_get("avg_output_tokens_per_second")?,
+    })
+}
+
 fn user_model_stats_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<UserModelUsageStats, sqlx::Error> {
@@ -1180,7 +1355,7 @@ fn user_model_stats_from_row(
         user_display_name: user_display_name(user_id, &user_email, &user_username),
         user_email,
         user_username,
-        provider: row.try_get("provider")?,
+        channel_name: row.try_get("channel_name")?,
         model: row.try_get("model")?,
         billing_meter: row.try_get("billing_meter")?,
         request_count: row.try_get("request_count")?,
@@ -1293,16 +1468,49 @@ mod tests {
             end: Some(end),
             user_id: None,
             user_query: None,
-            provider: None,
             model: None,
             billing_meter: None,
             page: None,
             limit: None,
+            series_limit: None,
             sort: None,
+            granularity: None,
             scope: None,
         };
         let filter = UsageStatsFilter::from_params(&params).unwrap();
         assert_eq!(filter.start, NaiveDate::from_ymd_opt(2026, 5, 28).unwrap());
         assert_eq!(filter.end, end);
+    }
+
+    #[test]
+    fn automatic_timeseries_granularity_prefers_hour_for_short_ranges() {
+        let filter = UsageStatsFilter {
+            start: NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 6, 14).unwrap(),
+            user_id: None,
+            user_query_pattern: None,
+            model: None,
+            billing_meter: None,
+        };
+        assert!(matches!(
+            TimeGranularity::from_params(&filter, Some("auto")).unwrap(),
+            TimeGranularity::Hour
+        ));
+    }
+
+    #[test]
+    fn automatic_timeseries_granularity_prefers_day_for_long_ranges() {
+        let filter = UsageStatsFilter {
+            start: NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
+            user_id: None,
+            user_query_pattern: None,
+            model: None,
+            billing_meter: None,
+        };
+        assert!(matches!(
+            TimeGranularity::from_params(&filter, Some("auto")).unwrap(),
+            TimeGranularity::Day
+        ));
     }
 }

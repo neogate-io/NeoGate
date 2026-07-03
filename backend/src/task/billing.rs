@@ -175,7 +175,6 @@ async fn finalize_loaded(
             relay_trace_id: None,
             relay_attempt: 1,
             relay_final: true,
-            provider: upstream.provider.clone(),
             model: Some(model.to_string()),
             upstream_model: Some(upstream_model.to_string()),
             routing_phase: "relay".to_string(),

@@ -1042,18 +1042,16 @@ async fn persist_model_probe_success(
          SET runtime_status = 'normal',
              cooldown_until = NULL,
              last_error = NULL,
-             last_status_code = $4,
+             last_status_code = $3,
              last_probe_at = now(),
              success_count = success_count + 1,
              updated_at = now()
          FROM channel_endpoint ce
          WHERE ce.id = $1
            AND cm.channel_id = ce.channel_id
-           AND cm.provider = $2
-           AND cm.model = $3",
+           AND cm.model = $2",
     )
     .bind(endpoint.id)
-    .bind(&endpoint.provider)
     .bind(model)
     .bind(status_code.map(i32::from))
     .execute(&state.db.pool)
@@ -1072,19 +1070,17 @@ async fn persist_model_probe_failure(
          SET enabled = FALSE,
              runtime_status = 'failed',
              cooldown_until = NULL,
-             last_error = $4,
-             last_status_code = $5,
+             last_error = $3,
+             last_status_code = $4,
              last_probe_at = now(),
              failure_count = failure_count + 1,
              updated_at = now()
          FROM channel_endpoint ce
          WHERE ce.id = $1
            AND cm.channel_id = ce.channel_id
-           AND cm.provider = $2
-           AND cm.model = $3",
+           AND cm.model = $2",
     )
     .bind(endpoint.id)
-    .bind(&endpoint.provider)
     .bind(model)
     .bind(summary.message.chars().take(500).collect::<String>())
     .bind(summary.status_code.map(i32::from))

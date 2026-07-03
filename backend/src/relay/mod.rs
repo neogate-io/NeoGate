@@ -567,7 +567,6 @@ pub(crate) fn usage_from_context(
         relay_trace_id: Some(ctx.relay_trace_id),
         relay_attempt: ctx.relay_attempt,
         relay_final: ctx.relay_final,
-        provider: ctx.upstream.provider.clone(),
         model: Some(ctx.external_model.clone()),
         upstream_model: Some(ctx.upstream_model.clone()),
         routing_phase: "relay".to_string(),
@@ -656,7 +655,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_field(&mut detail, "user_id", usage.user_id);
     push_field(&mut detail, "project_id", usage.project_id);
     push_field(&mut detail, "user_key_id", usage.user_key_id);
-    push_field(&mut detail, "provider", &usage.provider);
+    push_field(&mut detail, "provider", &ctx.upstream.provider);
     push_field(&mut detail, "protocol", ctx.protocol.as_str());
     push_field(
         &mut detail,

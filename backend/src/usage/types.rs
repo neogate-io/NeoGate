@@ -19,7 +19,6 @@ pub struct UsageInsert {
     pub relay_trace_id: Option<Uuid>,
     pub relay_attempt: i32,
     pub relay_final: bool,
-    pub provider: String,
     pub model: Option<String>,
     pub upstream_model: Option<String>,
     pub routing_phase: String,

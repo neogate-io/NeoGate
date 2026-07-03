@@ -32,7 +32,6 @@ const SYSTEM_APPS_PROJECT_NAME: &str = "系统应用";
 #[derive(Debug, Serialize)]
 struct AppModelOption {
     model: String,
-    providers: Vec<String>,
     channel_count: i64,
 }
 
@@ -120,10 +119,6 @@ async fn project_app_model_options(
     let rows = sqlx::query(AssertSqlSafe(format!(
         r#"
         SELECT pm.model,
-               COALESCE(
-                   array_remove(array_agg(DISTINCT c.provider ORDER BY c.provider), NULL),
-                   ARRAY[]::TEXT[]
-               ) AS providers,
                COUNT(DISTINCT c.id)::BIGINT AS channel_count
         FROM project_model pm
         LEFT JOIN channel_model cm
@@ -151,7 +146,7 @@ async fn project_app_model_options(
              WHERE btrim(endpoint_model.model) = pm.target_model
          )
         LEFT JOIN provider_price pp
-          ON pp.provider = cm.provider
+          ON pp.provider = c.provider
          AND pp.model = cm.model
          AND pp.enabled = TRUE
          AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
@@ -198,7 +193,6 @@ async fn project_app_model_options(
         .map(|row| {
             Ok(AppModelOption {
                 model: row.try_get("model")?,
-                providers: row.try_get("providers")?,
                 channel_count: row.try_get("channel_count")?,
             })
         })
@@ -209,14 +203,13 @@ async fn global_app_model_options(state: &AppState) -> AppResult<Vec<AppModelOpt
     let rows = sqlx::query(AssertSqlSafe(format!(
         r#"
         SELECT cm.model,
-               array_agg(DISTINCT c.provider ORDER BY c.provider) AS providers,
                COUNT(DISTINCT c.id)::BIGINT AS channel_count
         FROM channel_model cm
         JOIN channel c ON c.id = cm.channel_id
         JOIN provider p ON p.code = c.provider
         JOIN channel_endpoint ce ON ce.channel_id = c.id
         JOIN provider_price pp
-         ON pp.provider = cm.provider
+         ON pp.provider = c.provider
          AND pp.model = cm.model
          AND pp.enabled = TRUE
          AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
@@ -267,7 +260,6 @@ async fn global_app_model_options(state: &AppState) -> AppResult<Vec<AppModelOpt
         .map(|row| {
             Ok(AppModelOption {
                 model: row.try_get("model")?,
-                providers: row.try_get("providers")?,
                 channel_count: row.try_get("channel_count")?,
             })
         })

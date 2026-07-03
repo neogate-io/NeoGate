@@ -21,18 +21,20 @@ export type AdminUsageQuery = {
 
 export type UsageStatisticsSort = 'cost_desc' | 'tokens_desc' | 'requests_desc'
 export type UsageStatisticsExportScope = 'users' | 'user_models' | 'daily' | 'models'
+export type UsageStatisticsGranularity = 'auto' | 'hour' | 'day'
 
 export type UsageStatisticsQuery = {
   start?: string
   end?: string
   user_id?: number
   user_query?: string
-  provider?: string
   model?: string
   billing_meter?: 'token' | 'image'
   page?: number
   limit?: number
   sort?: UsageStatisticsSort
+  granularity?: UsageStatisticsGranularity
+  series_limit?: number
 }
 
 export type UsageStatisticsAggregate = {
@@ -67,6 +69,21 @@ export type DailyUsageStatistics = {
   avg_latency_ms?: number | null
 }
 
+export type UsageTimeSeriesPoint = {
+  bucket: string
+  request_count: number
+  success_count: number
+  error_count: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  billable_units: number
+  cost_micro_usd: number
+  avg_latency_ms?: number | null
+  avg_first_response_ms?: number | null
+  avg_output_tokens_per_second?: number | null
+}
+
 export type UserUsageStatistics = {
   user_id?: number | null
   user_email?: string | null
@@ -85,7 +102,7 @@ export type UserUsageStatistics = {
 }
 
 export type ModelUsageStatistics = {
-  provider: string
+  channel_name: string
   model: string
   billing_meter: 'token' | 'image'
   request_count: number
@@ -100,12 +117,18 @@ export type ModelUsageStatistics = {
   user_count: number
 }
 
+export type ModelUsageTimeSeriesPoint = UsageTimeSeriesPoint & {
+  channel_name: string
+  model: string
+  billing_meter: 'token' | 'image'
+}
+
 export type UserModelUsageStatistics = {
   user_id?: number | null
   user_email?: string | null
   user_username?: string | null
   user_display_name: string
-  provider: string
+  channel_name: string
   model: string
   billing_meter: 'token' | 'image'
   request_count: number
@@ -119,14 +142,6 @@ export type UserModelUsageStatistics = {
   avg_latency_ms?: number | null
 }
 
-export type ProviderUsageStatistics = {
-  provider: string
-  request_count: number
-  total_tokens: number
-  billable_units: number
-  cost_micro_usd: number
-}
-
 export type UsageStatisticsSummary = {
   start: string
   end: string
@@ -134,7 +149,14 @@ export type UsageStatisticsSummary = {
   daily: DailyUsageStatistics[]
   top_users: UserUsageStatistics[]
   top_models: ModelUsageStatistics[]
-  providers: ProviderUsageStatistics[]
+}
+
+export type UsageStatisticsTimeSeries = {
+  start: string
+  end: string
+  granularity: 'hour' | 'day'
+  points: UsageTimeSeriesPoint[]
+  model_points: ModelUsageTimeSeriesPoint[]
 }
 
 export type UsageStatisticsPage<T> = {
@@ -145,8 +167,7 @@ export type UsageStatisticsPage<T> = {
 }
 
 export type UsageStatisticsOptions = {
-  providers: string[]
-  models: Array<{ provider: string; model: string }>
+  models: Array<{ channel_name: string; model: string }>
   users: Array<{
     user_id: number
     user_email?: string | null
@@ -199,6 +220,12 @@ export function getAdminUsageStatisticsOptions(query: UsageStatisticsQuery = {})
   )
 }
 
+export function getAdminUsageStatisticsTimeSeries(query: UsageStatisticsQuery = {}) {
+  return adminRequest<UsageStatisticsTimeSeries>(
+    `/api/admin/usage/statistics/timeseries?${usageStatisticsParams(query)}`
+  )
+}
+
 export function downloadAdminUsageStatisticsCsv(
   scope: UsageStatisticsExportScope,
   query: UsageStatisticsQuery = {}
@@ -240,11 +267,12 @@ function usageStatisticsParams(query: UsageStatisticsQuery) {
   if (query.end) params.set('end', query.end)
   if (query.user_id != null) params.set('user_id', String(query.user_id))
   if (query.user_query) params.set('user_query', query.user_query)
-  if (query.provider) params.set('provider', query.provider)
   if (query.model) params.set('model', query.model)
   if (query.billing_meter) params.set('billing_meter', query.billing_meter)
   if (query.page) params.set('page', String(query.page))
   if (query.limit) params.set('limit', String(query.limit))
   if (query.sort) params.set('sort', query.sort)
+  if (query.granularity) params.set('granularity', query.granularity)
+  if (query.series_limit) params.set('series_limit', String(query.series_limit))
   return params
 }

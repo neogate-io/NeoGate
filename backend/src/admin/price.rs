@@ -347,8 +347,9 @@ async fn sync_channel_model_enabled_for_price(
              SET enabled = TRUE,
                  updated_at = now()
              FROM channel_endpoint ce
+             JOIN channel c ON c.id = ce.channel_id
              WHERE cm.channel_id = ce.channel_id
-               AND cm.provider = $1
+               AND c.provider = $1
                AND cm.model = $2
                AND cm.model = ANY(ce.models)
                AND cm.status = 'available'",
@@ -359,11 +360,13 @@ async fn sync_channel_model_enabled_for_price(
         .await?;
     } else {
         sqlx::query(
-            "UPDATE channel_model
+            "UPDATE channel_model cm
              SET enabled = FALSE,
                  updated_at = now()
-             WHERE provider = $1
-               AND model = $2",
+             FROM channel c
+             WHERE c.id = cm.channel_id
+               AND c.provider = $1
+               AND cm.model = $2",
         )
         .bind(&price.provider)
         .bind(&price.model)

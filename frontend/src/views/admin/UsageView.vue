@@ -250,7 +250,7 @@ async function exportUsage() {
           />
         </label>
         <label class="admin-filter-field">
-          <span>{{ t('providerOrModel') }}</span>
+          <span>{{ t('channelOrModel') }}</span>
           <el-input
             v-model="filters.query"
             class="usage-search-input"
@@ -633,7 +633,6 @@ async function exportUsage() {
   gap: 4px;
 }
 
-.usage-provider,
 .usage-muted {
   color: #86909c;
   font-size: 12px;

@@ -1096,7 +1096,6 @@ struct UsageRecord {
     relay_final: bool,
     relay_path: Option<String>,
     relay_path_index: Option<i32>,
-    provider: String,
     model: Option<String>,
     upstream_model: Option<String>,
     status_code: Option<i32>,
@@ -1241,7 +1240,7 @@ async fn usage_rows(
                 current_channel.name AS channel_name, usage_record.channel_key_id,
                 usage_record.credential_id, usage_record.relay_trace_id,
                 usage_record.relay_attempt, usage_record.relay_final,
-                usage_record.provider, usage_record.model, usage_record.upstream_model,
+                usage_record.model, usage_record.upstream_model,
                 usage_record.status_code, usage_record.streamed, usage_record.latency_ms,
                 usage_record.first_response_ms, usage_record.output_tokens_per_second,
                 usage_record.input_tokens, usage_record.output_tokens, usage_record.total_tokens,
@@ -1291,7 +1290,6 @@ async fn usage_rows(
            AND ($2::timestamptz IS NULL OR usage_record.created_at <= $2)
            AND (
              $3::text IS NULL
-             OR usage_record.provider ILIKE $3
              OR usage_record.model ILIKE $3
              OR usage_record.upstream_model ILIKE $3
              OR usage_record.relay_trace_id::text ILIKE $3
@@ -1337,7 +1335,6 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         relay_final: row.try_get("relay_final")?,
         relay_path: row.try_get("relay_path")?,
         relay_path_index: row.try_get("relay_path_index")?,
-        provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         upstream_model: row.try_get("upstream_model")?,
         status_code: row.try_get("status_code")?,
@@ -1413,7 +1410,6 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
         "relay_attempt".into(),
         "relay_final".into(),
         "relay_path".into(),
-        "provider".into(),
         "model".into(),
         "upstream_model".into(),
         "routing_requested_model".into(),
@@ -1462,7 +1458,6 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
             record.relay_attempt.to_string(),
             record.relay_final.to_string(),
             record.relay_path.unwrap_or_default(),
-            record.provider,
             record.model.unwrap_or_default(),
             record.upstream_model.unwrap_or_default(),
             record

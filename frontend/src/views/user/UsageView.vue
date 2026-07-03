@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
-import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
@@ -186,7 +185,6 @@ async function exportUsage() {
   const headers = [
     t('time'),
     t('model'),
-    t('provider'),
     t('inputShort'),
     t('outputShort'),
     t('tokens'),
@@ -201,7 +199,6 @@ async function exportUsage() {
   const rows = exportPage.items.map((row) => [
     formatFullTime(row.created_at),
     row.model || '',
-    row.provider,
     row.input_tokens ?? '',
     row.output_tokens ?? '',
     row.total_tokens ?? '',
@@ -261,7 +258,6 @@ async function exportUsage() {
             <span class="usage-time">{{ formatFullTime(row.created_at) }}</span>
             <span class="usage-model-cell">
               <span class="usage-model-pill">
-                <ProviderIcon :provider="row.provider" />
                 <span>{{ row.model || '-' }}</span>
               </span>
             </span>
@@ -293,10 +289,6 @@ async function exportUsage() {
             <section class="usage-detail-section">
               <h4>调用信息</h4>
               <dl class="usage-detail-list">
-                <div>
-                  <dt>{{ t('provider') }}</dt>
-                  <dd>{{ row.provider }}</dd>
-                </div>
                 <div>
                   <dt>{{ t('model') }}</dt>
                   <dd>{{ row.model || '-' }}</dd>
@@ -697,22 +689,6 @@ async function exportUsage() {
   justify-self: start;
   max-width: 100%;
   min-height: 30px;
-}
-
-.usage-model-pill :deep(.provider-icon) {
-  height: 28px;
-  min-width: 28px;
-  width: 28px;
-}
-
-.usage-model-pill :deep(.provider-icon.has-image img) {
-  height: 24px;
-  width: 24px;
-}
-
-.usage-model-pill :deep(.provider-icon-symbol) {
-  height: 20px;
-  width: 20px;
 }
 
 .usage-model-pill > span {

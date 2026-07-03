@@ -389,7 +389,6 @@ export type UsageRecord = {
   relay_final: boolean
   relay_path?: string | null
   relay_path_index?: number | null
-  provider: string
   model?: string | null
   upstream_model?: string | null
   status_code?: number | null

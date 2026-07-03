@@ -108,7 +108,7 @@ async fn flush_usage_daily_aggregates(
 
     let mut query_builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO usage_daily
-         (day, user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
+         (day, user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, model,
           request_count, success_count, error_count, streamed_count,
           latency_ms_total, first_response_ms_total, first_response_count,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
@@ -125,7 +125,6 @@ async fn flush_usage_daily_aggregates(
             .push_bind(item.key.channel_id)
             .push_bind(item.key.channel_key_id)
             .push_bind(item.key.credential_id)
-            .push_bind(&item.key.provider)
             .push_bind(&item.key.model)
             .push_bind(item.request_count)
             .push_bind(item.success_count)
@@ -157,7 +156,6 @@ async fn flush_usage_daily_aggregates(
               COALESCE(channel_id, '-1'::BIGINT),
               COALESCE(channel_key_id, '-1'::BIGINT),
               COALESCE(credential_id, '-1'::BIGINT),
-              provider,
               model,
               billing_meter
           )
@@ -196,7 +194,6 @@ struct DailyUsageKey {
     channel_id: DbId,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
-    provider: String,
     model: String,
     billing_meter: BillingMeter,
 }
@@ -271,7 +268,6 @@ impl DailyUsageAggregate {
             channel_id: item.channel_id,
             channel_key_id: item.channel_key_id,
             credential_id: item.credential_id,
-            provider: item.provider.clone(),
             model: item.model.clone().unwrap_or_default(),
             billing_meter: fields.billing_meter,
         };

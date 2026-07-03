@@ -370,7 +370,7 @@ async fn flush_unbilled_usage(
         "INSERT INTO usage
          (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
           relay_trace_id, relay_attempt, relay_final,
-          provider, model, upstream_model, routing_phase, status_code,
+          model, upstream_model, routing_phase, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -390,7 +390,6 @@ async fn flush_unbilled_usage(
             .push_bind(item.relay_trace_id)
             .push_bind(item.relay_attempt)
             .push_bind(item.relay_final)
-            .push_bind(&item.provider)
             .push_bind(item.model.as_deref())
             .push_bind(item.upstream_model.as_deref())
             .push_bind(&item.routing_phase)
@@ -441,7 +440,7 @@ async fn insert_usage(
         "INSERT INTO usage
          (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
           relay_trace_id, relay_attempt, relay_final,
-          provider, model, upstream_model, routing_phase, status_code,
+          model, upstream_model, routing_phase, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
@@ -451,7 +450,7 @@ async fn insert_usage(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-                 $31, $32, $33, $34)
+                 $31, $32, $33)
          RETURNING id",
     )
     .bind(item.user_id)
@@ -463,7 +462,6 @@ async fn insert_usage(
     .bind(item.relay_trace_id)
     .bind(item.relay_attempt)
     .bind(item.relay_final)
-    .bind(&item.provider)
     .bind(item.model.as_deref())
     .bind(item.upstream_model.as_deref())
     .bind(&item.routing_phase)
@@ -595,7 +593,6 @@ pub(super) mod tests {
             relay_trace_id: None,
             relay_attempt: 1,
             relay_final: true,
-            provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
@@ -634,7 +631,6 @@ pub(super) mod tests {
             relay_trace_id: None,
             relay_attempt: 1,
             relay_final: true,
-            provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
@@ -668,7 +664,6 @@ pub(super) mod tests {
             decoded.billing.unwrap().transaction_id,
             charge.transaction_id
         );
-        assert_eq!(decoded.provider, "openai");
         assert_eq!(decoded.channel_key_id, Some(4));
     }
 

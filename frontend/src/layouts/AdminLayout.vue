@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
 import {
   Connection,
   DataAnalysis,

@@ -281,14 +281,12 @@ function creditCellClass(row: Project): CreditClass {
 }
 
 function formatAvailableUsd(row: Project) {
-  if (!isCreditRequired.value && row.available_micro_usd === 0) return t('unlimitedCredit')
+  if (!isCreditRequired.value && row.available_micro_usd === 0) return '-'
   return formatMicroUsd(row.available_micro_usd, 2)
 }
 
 function formatProjectModelCount(row: Project) {
-  return row.project_model_count === 0
-    ? t('unlimitedModels')
-    : row.project_model_count.toLocaleString(locale.value)
+  return row.project_model_count === 0 ? '-' : row.project_model_count.toLocaleString(locale.value)
 }
 
 function memberRoleText(role: ProjectMember['role']) {

@@ -71,7 +71,9 @@ const settingItems = computed(() => {
   if (servicePolicy.value?.service_mode === 'paid') {
     items.push({ path: '/admin/settings/payment', key: 'paymentSettings' })
   }
-  items.push({ path: '/admin/settings/pricing-policies', key: 'pricingPolicy' })
+  if (servicePolicy.value?.service_mode !== 'internal') {
+    items.push({ path: '/admin/settings/pricing-policies', key: 'pricingPolicy' })
+  }
   items.push({ path: '/admin/settings/other', key: 'otherSettings' })
   return items
 })

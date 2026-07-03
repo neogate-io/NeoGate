@@ -985,10 +985,10 @@ function chartNumericValue(value: unknown) {
                   :loading="statisticsModelsLoading"
                   :empty="statisticsModels.items.length === 0"
                   :empty-text="t('noStatisticsData')"
-                  height="320px"
+                  height="340px"
                 />
               </section>
-              <section class="statistics-panel is-wide">
+              <section class="statistics-panel">
                 <header>{{ t('modelLatencyRank') }}</header>
                 <AdminUsageChart
                   :option="modelLatencyRankOption"
@@ -1111,10 +1111,11 @@ function chartNumericValue(value: unknown) {
                 :row-key="modelStatisticsRowKey"
                 stripe
               >
-                <el-table-column :label="t('channelOrModel')" min-width="220">
+                <el-table-column :label="t('channelAndModel')" min-width="220">
                   <template #default="{ row }">
                     <div class="usage-model">
                       <span class="usage-provider">{{ row.channel_name || '-' }}</span>
+                      <span class="usage-separator">/</span>
                       <span>{{ row.model || '-' }}</span>
                     </div>
                   </template>
@@ -1360,11 +1361,11 @@ function chartNumericValue(value: unknown) {
 .usage-model {
   align-items: center;
   display: flex;
-  gap: 7px;
+  gap: 4px;
   min-width: 0;
 }
 
-.usage-model > span:last-child {
+.usage-model > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

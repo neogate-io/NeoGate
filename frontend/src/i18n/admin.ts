@@ -371,6 +371,7 @@ export const adminMessages = {
     modelsFetchUpstreamDnsError: '无法解析上游服务域名，请检查 Base URL 是否正确。',
     modelsFetchUpstreamTlsError: '上游服务 TLS 握手失败，请检查 Base URL 的 HTTPS 配置。',
     channelOrModel: '通道或模型',
+    channelAndModel: '通道/模型',
     usageStatistics: '消费统计',
     userSearch: '用户',
     userSearchPlaceholder: '搜索用户名、邮箱或用户 ID',
@@ -890,6 +891,7 @@ export const adminMessages = {
     modelsFetchUpstreamTlsError:
       'The upstream TLS handshake failed. Check the HTTPS configuration for the Base URL.',
     channelOrModel: 'Channel or model',
+    channelAndModel: 'Channel / model',
     usageStatistics: 'Analytics',
     userSearch: 'User',
     userSearchPlaceholder: 'Search username, email, or user ID',

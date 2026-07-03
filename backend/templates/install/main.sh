@@ -18,26 +18,33 @@ main() {
 
   log "$(message installer_title "$APP_NAME")"
 
-  step "$(message step_verify_key)"
-  prompt_and_verify_api_key
+  step "$(message step_choose_client)"
+  select_client
+  success "$(selected_client_name)"
 
-  # Existing-config users get a fast path: switch model, change key, or full reinstall.
-  # Only offered when config was detected and the caller did not already pin
-  # behavior via --yes / explicit client (those mean "just do the full flow").
-  if [[ "$HAS_EXISTING_CONFIG" == "1" && "$ASSUME_YES" == "0" && "$CLIENT_EXPLICIT" == "0" ]]; then
-    choose_existing_config_action
-    case "$EXISTING_CONFIG_ACTION" in
-      switch_model)
-        run_switch_model_flow
-        return 0
-        ;;
-      change_key)
-        run_change_key_flow
-        return 0
-        ;;
-      reinstall)
-        ;;
-    esac
+  step "$(message step_verify_key)"
+  use_api_key_for_selected_client
+
+  if [[ -n "$API_KEY" ]] && verify_api_key; then
+    if [[ "$ASSUME_YES" == "0" ]]; then
+      choose_existing_config_action
+      case "$EXISTING_CONFIG_ACTION" in
+        switch_model)
+          run_switch_model_flow
+          return 0
+          ;;
+        change_key)
+          run_change_key_flow
+          return 0
+          ;;
+        reinstall)
+          ;;
+      esac
+    fi
+  else
+    [[ -n "$API_KEY" ]] && warn "$(message reenter_api_key)"
+    API_KEY=""
+    prompt_and_verify_api_key 1
   fi
 
   run_full_flow
@@ -75,13 +82,6 @@ choose_existing_config_action() {
 }
 
 run_switch_model_flow() {
-  local client_name
-
-  step "$(message step_choose_client)"
-  select_client
-  client_name="$(selected_client_name)"
-  success "$client_name"
-
   step "$(message switch_model)"
   select_model
 
@@ -103,16 +103,9 @@ run_switch_model_flow() {
 }
 
 run_change_key_flow() {
-  local client_name
-
   step "$(message change_api_key)"
   API_KEY=""
   prompt_and_verify_api_key 1
-
-  step "$(message step_choose_client)"
-  select_client
-  client_name="$(selected_client_name)"
-  success "$client_name"
 
   if ! keep_loaded_model_for_selected_client; then
     step "$(message step_choose_model)"
@@ -139,10 +132,7 @@ run_change_key_flow() {
 run_full_flow() {
   local client_name
 
-  step "$(message step_choose_client)"
-  select_client
   client_name="$(selected_client_name)"
-  success "$client_name"
 
   step "$(message step_choose_model)"
   select_model

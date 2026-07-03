@@ -39,20 +39,21 @@ impl ProviderAdapter for JdcloudAdapter {
         if streamed {
             extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
-        let (route, body, response_mode) = if route == RelayRoute::Responses {
-            let route = RelayRoute::ChatCompletions;
-            (
-                route,
-                jdcloud_chat_body(bridge::openai_response_to_openai_chat(body)?, route)?,
-                AdapterResponseMode::OpenAiChatAsOpenAiResponse,
-            )
-        } else {
-            (
-                route,
-                jdcloud_chat_body(body, route)?,
-                AdapterResponseMode::Passthrough,
-            )
-        };
+        let (route, body, response_mode) =
+            if route == RelayRoute::Responses && upstream.responses_chat_fallback {
+                let route = RelayRoute::ChatCompletions;
+                (
+                    route,
+                    jdcloud_chat_body(bridge::openai_response_to_openai_chat(body)?, route)?,
+                    AdapterResponseMode::OpenAiChatAsOpenAiResponse,
+                )
+            } else {
+                (
+                    route,
+                    jdcloud_chat_body(body, route)?,
+                    AdapterResponseMode::Passthrough,
+                )
+            };
         if let Some(session_id) = session_id_from_body(&body)? {
             if let Ok(value) = HeaderValue::from_str(&session_id) {
                 extra_headers.insert(HeaderName::from_static("session_id"), value);
@@ -250,6 +251,10 @@ mod tests {
     use crate::relay::selector::SelectedUpstream;
 
     fn upstream() -> SelectedUpstream {
+        upstream_with_fallback(false)
+    }
+
+    fn upstream_with_fallback(responses_chat_fallback: bool) -> SelectedUpstream {
         SelectedUpstream {
             channel_id: 1,
             channel_endpoint_id: 2,
@@ -258,7 +263,7 @@ mod tests {
             provider: "jdcloud".to_string(),
             channel_name: "jdcloud".to_string(),
             base_url: "https://agentrs.jd.com/api/saas/openai-u/v1".to_string(),
-            responses_chat_fallback: false,
+            responses_chat_fallback,
             secret: "sk-test".to_string(),
             account_id: None,
         }
@@ -283,11 +288,11 @@ mod tests {
     }
 
     #[test]
-    fn jdcloud_responses_use_chat_fallback() {
+    fn jdcloud_responses_use_native_api_by_default() {
         let body = Bytes::from_static(
             br#"{"model":"deepseek-v3.2","input":"hi","max_output_tokens":16,"previous_response_id":"resp_1","store":true,"instructions":"keep"}"#,
         );
-        let err = JDCLOUD_ADAPTER
+        let prepared = JDCLOUD_ADAPTER
             .prepare_openai_request(
                 &upstream(),
                 UpstreamProtocol::Openai,
@@ -296,19 +301,26 @@ mod tests {
                 &HeaderMap::new(),
                 false,
             )
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("responses chat fallback does not support previous_response_id"));
+            .unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert_eq!(prepared.response_mode, AdapterResponseMode::Passthrough);
+        assert_eq!(prepared.log_path, "/v1/responses");
+        assert!(prepared.url.ends_with("/openai-u/v1/responses"));
+        assert_eq!(value["input"], "hi");
+        assert_eq!(value["max_output_tokens"], 16);
+        assert_eq!(value["previous_response_id"], "resp_1");
+        assert_eq!(value["store"], true);
+        assert_eq!(value["instructions"], "keep");
     }
 
     #[test]
-    fn jdcloud_simple_responses_convert_to_chat_completions() {
+    fn jdcloud_responses_chat_fallback_converts_to_chat_completions() {
         let body =
             Bytes::from_static(br#"{"model":"deepseek-v3.2","input":"hi","max_output_tokens":16}"#);
         let prepared = JDCLOUD_ADAPTER
             .prepare_openai_request(
-                &upstream(),
+                &upstream_with_fallback(true),
                 UpstreamProtocol::Openai,
                 RelayRoute::Responses,
                 body,
@@ -522,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn jdcloud_responses_fallback_sanitizes_chat_request_body() {
+    fn jdcloud_responses_copies_prompt_cache_key_to_session_id() {
         let body = Bytes::from_static(
             br#"{"model":"deepseek-v3.2","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}],"max_output_tokens":16,"prompt_cache_key":"trace-1","stream":true}"#,
         );
@@ -538,12 +550,13 @@ mod tests {
             .unwrap();
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
 
-        assert_eq!(prepared.log_path, "/v1/chat/completions");
-        assert!(prepared.url.ends_with("/openai-u/v1/chat/completions"));
-        assert_eq!(value["messages"][0]["content"], "hi");
+        assert_eq!(prepared.response_mode, AdapterResponseMode::Passthrough);
+        assert_eq!(prepared.log_path, "/v1/responses");
+        assert!(prepared.url.ends_with("/openai-u/v1/responses"));
+        assert_eq!(value["input"][0]["content"][0]["text"], "hi");
+        assert_eq!(value["max_output_tokens"], 16);
         assert_eq!(value["session_id"], "trace-1");
         assert_eq!(prepared.extra_headers.get("session_id").unwrap(), "trace-1");
         assert!(value.get("prompt_cache_key").is_none());
-        assert!(value.get("stream_options").is_none());
     }
 }

@@ -149,8 +149,7 @@ json_field() {
 }
 
 # Reads existing Codex ~/.codex/auth.json + config.toml and Claude ~/.claude/settings.json
-# to prefill API_KEY (client-agnostic) and remember previously-used models. Also infers
-# the client when exactly one side is configured and --client was not given.
+# and remembers previously-used API keys/models.
 load_existing_credentials() {
   local codex_home claude_home codex_auth codex_config claude_config
   codex_home="${CODEX_HOME:-$HOME/.codex}"
@@ -159,22 +158,13 @@ load_existing_credentials() {
   codex_config="$codex_home/config.toml"
   claude_config="$claude_home/settings.json"
 
-  if [[ -z "$API_KEY" && -f "$codex_auth" ]]; then
+  if [[ -f "$codex_auth" ]]; then
     LOADED_CODEX_KEY="$(json_field OPENAI_API_KEY <"$codex_auth")"
   fi
-  if [[ -z "$API_KEY" && -f "$claude_config" ]]; then
+  if [[ -f "$claude_config" ]]; then
     LOADED_CLAUDE_KEY="$(node -e '
       try{var s=require("fs").readFileSync(process.argv[1],"utf8");var o=JSON.parse(s.trim()||"{}");var e=o&&o.env&&o.env.ANTHROPIC_AUTH_TOKEN;if(e)process.stdout.write(String(e))}catch(x){}
     ' "$claude_config" 2>/dev/null || true)"
-  fi
-
-  if [[ -z "$API_KEY" ]]; then
-    if [[ -n "$LOADED_CODEX_KEY" ]]; then
-      API_KEY="$LOADED_CODEX_KEY"
-    elif [[ -n "$LOADED_CLAUDE_KEY" ]]; then
-      API_KEY="$LOADED_CLAUDE_KEY"
-    fi
-    [[ -n "$API_KEY" ]] && detail "$(message key_loaded)"
   fi
 
   if [[ -f "$codex_config" ]]; then
@@ -187,21 +177,34 @@ load_existing_credentials() {
     ' "$claude_config" 2>/dev/null || true)"
   fi
 
-  # Infer client only when not explicitly chosen and exactly one side is configured.
-  if [[ -z "$CLIENT" ]]; then
-    local codex_present claude_present
-    codex_present=0
-    claude_present=0
-    [[ -n "$LOADED_CODEX_KEY" || -n "$LOADED_CODEX_MODEL" ]] && codex_present=1
-    [[ -n "$LOADED_CLAUDE_KEY" || -n "$LOADED_CLAUDE_MODEL" ]] && claude_present=1
-    [[ "$codex_present" == "1" || "$claude_present" == "1" ]] && HAS_EXISTING_CONFIG=1
-    if [[ "$codex_present" == "1" && "$claude_present" == "0" ]]; then
-      CLIENT="codex"
-      success "$(message client_inferred "Codex CLI")"
-    elif [[ "$codex_present" == "0" && "$claude_present" == "1" ]]; then
-      CLIENT="claude"
-      success "$(message client_inferred "Claude Code")"
-    fi
+  local codex_present claude_present
+  codex_present=0
+  claude_present=0
+  [[ -n "$LOADED_CODEX_KEY" || -n "$LOADED_CODEX_MODEL" ]] && codex_present=1
+  [[ -n "$LOADED_CLAUDE_KEY" || -n "$LOADED_CLAUDE_MODEL" ]] && claude_present=1
+  [[ "$codex_present" == "1" || "$claude_present" == "1" ]] && HAS_EXISTING_CONFIG=1
+}
+
+loaded_api_key_for_selected_client() {
+  case "$CLIENT" in
+    claude)
+      printf '%s' "$LOADED_CLAUDE_KEY"
+      ;;
+    *)
+      printf '%s' "$LOADED_CODEX_KEY"
+      ;;
+  esac
+}
+
+use_api_key_for_selected_client() {
+  local loaded_key
+
+  [[ -n "$API_KEY" ]] && return 0
+
+  loaded_key="$(loaded_api_key_for_selected_client)"
+  if [[ -n "$loaded_key" ]]; then
+    API_KEY="$loaded_key"
+    detail "$(message key_loaded)"
   fi
 }
 

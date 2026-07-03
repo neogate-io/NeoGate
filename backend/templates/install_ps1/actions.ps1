@@ -21,8 +21,7 @@ function Read-JsonEnvField([string]$Path, [string]$Field) {
 }
 
 # Reads existing Codex ~/.codex/auth.json + config.toml and Claude ~/.claude/settings.json
-# to prefill $ApiKey (client-agnostic) and remember previously-used models. Also infers
-# $Client when exactly one side is configured and -Client was not given.
+# and remembers previously-used API keys/models.
 function Load-ExistingCredentials {
   $script:LoadedCodexKey = $null
   $script:LoadedClaudeKey = $null
@@ -36,20 +35,11 @@ function Load-ExistingCredentials {
   $codexConfig = Join-Path $codexHome 'config.toml'
   $claudeConfig = Join-Path $claudeHome 'settings.json'
 
-  if (-not $ApiKey -and (Test-Path $codexAuth)) {
+  if (Test-Path $codexAuth) {
     $script:LoadedCodexKey = Read-JsonField $codexAuth 'OPENAI_API_KEY'
   }
-  if (-not $ApiKey -and (Test-Path $claudeConfig)) {
+  if (Test-Path $claudeConfig) {
     $script:LoadedClaudeKey = Read-JsonEnvField $claudeConfig 'ANTHROPIC_AUTH_TOKEN'
-  }
-
-  if (-not $ApiKey) {
-    if ($LoadedCodexKey) {
-      $script:ApiKey = $LoadedCodexKey
-    } elseif ($LoadedClaudeKey) {
-      $script:ApiKey = $LoadedClaudeKey
-    }
-    if ($ApiKey) { Detail (Get-Message key_loaded) }
   }
 
   if (Test-Path $codexConfig) {
@@ -61,18 +51,23 @@ function Load-ExistingCredentials {
     $script:LoadedClaudeModel = Read-JsonField $claudeConfig 'model'
   }
 
-  # Infer client only when not explicitly chosen and exactly one side is configured.
-  if (-not $Client) {
-    $codexPresent = [bool]($LoadedCodexKey) -or [bool]($LoadedCodexModel)
-    $claudePresent = [bool]($LoadedClaudeKey) -or [bool]($LoadedClaudeModel)
-    if ($codexPresent -or $claudePresent) { $script:HasExistingConfig = $true }
-    if ($codexPresent -and -not $claudePresent) {
-      $script:Client = 'codex'
-      Success (Get-Message client_inferred 'Codex CLI')
-    } elseif ($claudePresent -and -not $codexPresent) {
-      $script:Client = 'claude'
-      Success (Get-Message client_inferred 'Claude Code')
-    }
+  $codexPresent = [bool]($LoadedCodexKey) -or [bool]($LoadedCodexModel)
+  $claudePresent = [bool]($LoadedClaudeKey) -or [bool]($LoadedClaudeModel)
+  if ($codexPresent -or $claudePresent) { $script:HasExistingConfig = $true }
+}
+
+function Get-LoadedApiKeyForSelectedClient {
+  if ($Client -eq 'claude') { return $LoadedClaudeKey }
+  return $LoadedCodexKey
+}
+
+function Use-ApiKeyForSelectedClient {
+  if ($ApiKey) { return }
+
+  $loadedKey = Get-LoadedApiKeyForSelectedClient
+  if ($loadedKey) {
+    $script:ApiKey = $loadedKey
+    Detail (Get-Message key_loaded)
   }
 }
 
@@ -594,10 +589,6 @@ function Choose-SwitchModel {
 }
 
 function Invoke-SwitchModelFlow {
-  Step (Get-Message step_choose_client)
-  Select-Client
-  Success (Selected-ClientName)
-
   Step (Get-Message switch_model)
   Select-Model
 
@@ -620,10 +611,6 @@ function Invoke-ChangeKeyFlow {
   $script:ApiKey = $null
   Read-AndVerifyApiKey -ForcePrompt
 
-  Step (Get-Message step_choose_client)
-  Select-Client
-  Success (Selected-ClientName)
-
   if (-not (Use-LoadedModelForSelectedClient)) {
     Step (Get-Message step_choose_model)
     Select-Model
@@ -644,10 +631,6 @@ function Invoke-ChangeKeyFlow {
 }
 
 function Invoke-FullFlow {
-  Step (Get-Message step_choose_client)
-  Select-Client
-  Success (Selected-ClientName)
-
   Step (Get-Message step_choose_model)
   Select-Model
 

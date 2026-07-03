@@ -11,24 +11,31 @@ try {
 
   Write-Host "$AppName $(Get-Message installer_title_win)"
 
-  Step (Get-Message step_verify_key)
-  Read-AndVerifyApiKey
+  Step (Get-Message step_choose_client)
+  Select-Client
+  Success (Selected-ClientName)
 
-  # Existing-config users get a fast path: switch model, change key, or full reinstall.
-  # Only offered when config was detected and the caller did not already pin
-  # behavior via -Yes / explicit client (those mean "just do the full flow").
-  if ($HasExistingConfig -and -not $Yes -and -not $ClientExplicit) {
-    switch (Choose-SwitchModel) {
-      'switch_model' {
-        Invoke-SwitchModelFlow
-        return
+  Step (Get-Message step_verify_key)
+  Use-ApiKeyForSelectedClient
+
+  if ($ApiKey -and (Verify-ApiKey)) {
+    if (-not $Yes) {
+      switch (Choose-SwitchModel) {
+        'switch_model' {
+          Invoke-SwitchModelFlow
+          return
+        }
+        'change_key' {
+          Invoke-ChangeKeyFlow
+          return
+        }
+        'reinstall' {}
       }
-      'change_key' {
-        Invoke-ChangeKeyFlow
-        return
-      }
-      'reinstall' {}
     }
+  } else {
+    if ($ApiKey) { Warn (Get-Message reenter_api_key) }
+    $script:ApiKey = $null
+    Read-AndVerifyApiKey -ForcePrompt
   }
 
   Invoke-FullFlow

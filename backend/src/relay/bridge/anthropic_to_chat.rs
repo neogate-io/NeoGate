@@ -913,6 +913,10 @@ impl BridgeSseConverter for AnthropicSseToOpenAiChat {
         Self::push(self, chunk)
     }
 
+    fn finish(&mut self, out: &mut Vec<u8>) {
+        Self::finish(self, out);
+    }
+
     fn stopped(&self) -> bool {
         self.stopped
     }

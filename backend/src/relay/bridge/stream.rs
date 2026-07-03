@@ -85,6 +85,7 @@ async fn read_body_until_error(
 
 pub(super) trait BridgeSseConverter {
     fn push(&mut self, chunk: &[u8]) -> Bytes;
+    fn finish(&mut self, out: &mut Vec<u8>);
     fn stopped(&self) -> bool;
 }
 
@@ -116,7 +117,11 @@ pub(super) fn finish_bridge_stream<C: BridgeSseConverter + Send + 'static>(
                     None
                 }
                 Some(Err(err)) => Some((Err(err.to_string()), (upstream_stream, converter))),
-                None => None,
+                None => {
+                    let mut out = Vec::new();
+                    converter.finish(&mut out);
+                    (!out.is_empty()).then(|| (Ok(Bytes::from(out)), (upstream_stream, converter)))
+                }
             }
         },
     )

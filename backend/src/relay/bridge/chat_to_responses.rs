@@ -819,7 +819,41 @@ impl BridgeSseConverter for OpenAiChatSseToOpenAiResponse {
         Self::push(self, chunk)
     }
 
+    fn finish(&mut self, out: &mut Vec<u8>) {
+        Self::finish(self, out);
+    }
+
     fn stopped(&self) -> bool {
         self.stopped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_response_stream_finishes_incomplete_on_eof_without_done() {
+        let mut converter = OpenAiChatSseToOpenAiResponse::new("NEO-GLM".to_string());
+
+        converter.push(
+            br#"data: {"id":"chatcmpl_1","model":"GLM-5.2","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}
+
+"#,
+        );
+        converter.push(
+            br#"data: {"id":"chatcmpl_1","model":"GLM-5.2","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}
+
+"#,
+        );
+
+        let mut output = Vec::new();
+        <OpenAiChatSseToOpenAiResponse as BridgeSseConverter>::finish(&mut converter, &mut output);
+        let output = std::str::from_utf8(&output).unwrap();
+
+        assert!(output.contains("event: response.incomplete"));
+        assert!(output.contains(r#""status":"incomplete""#));
+        assert!(output.contains(r#""reason":"max_output_tokens""#));
+        assert!(converter.stopped());
     }
 }

@@ -137,6 +137,8 @@ pub(super) async fn relay_openai_image(
             relay_final: false,
             request_params: meta.request_params.clone(),
             request_permit: None,
+            upstream_request_path: Some(path.to_string()),
+            upstream_response_mode: None,
         };
         let response = forward_openai_with_content_type(
             &state,

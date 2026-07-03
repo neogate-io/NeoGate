@@ -45,6 +45,8 @@ pub(crate) struct RelayContext {
     pub(crate) relay_final: bool,
     pub(crate) request_params: RelayRequestParams,
     pub(crate) request_permit: Option<UserRequestPermit>,
+    pub(crate) upstream_request_path: Option<String>,
+    pub(crate) upstream_response_mode: Option<&'static str>,
 }
 
 impl RelayContext {

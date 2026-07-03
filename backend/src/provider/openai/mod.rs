@@ -421,6 +421,8 @@ async fn relay_openai(
             relay_final: false,
             request_params: meta.request_params.clone(),
             request_permit: None,
+            upstream_request_path: None,
+            upstream_response_mode: None,
         };
         let mut adapter_response_mode = AdapterResponseMode::Passthrough;
         let response = match protocol {
@@ -445,6 +447,8 @@ async fn relay_openai(
                     &headers,
                     meta.stream,
                 )?;
+                ctx.upstream_request_path = Some(prepared.log_path.clone());
+                ctx.upstream_response_mode = Some(prepared.response_mode.as_str());
                 adapter_response_mode = prepared.response_mode;
                 forward_prepared_openai(&state, &ctx.upstream, protocol, &headers, prepared).await
             }

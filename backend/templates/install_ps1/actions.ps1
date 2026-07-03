@@ -196,9 +196,11 @@ function Verify-ApiKey {
 }
 
 function Read-AndVerifyApiKey {
+  param([switch]$ForcePrompt)
   while ($true) {
-    if (-not $ApiKey) {
+    if ($ForcePrompt -or -not $ApiKey) {
       $script:ApiKey = Read-SecretText (Get-Message api_key_prompt)
+      $ForcePrompt = $false
     }
     if (-not $ApiKey) {
       Warn (Get-Message empty_api_key)
@@ -211,6 +213,23 @@ function Read-AndVerifyApiKey {
     Warn (Get-Message reenter_api_key)
     $script:ApiKey = $null
   }
+}
+
+function Get-LoadedModelForSelectedClient {
+  if ($Client -eq 'claude') { return $LoadedClaudeModel }
+  return $LoadedCodexModel
+}
+
+function Use-LoadedModelForSelectedClient {
+  $loadedModel = Get-LoadedModelForSelectedClient
+  if (-not $loadedModel) { return $false }
+  if ($Client -eq 'claude') {
+    $script:ClaudeModel = $loadedModel
+  } else {
+    $script:CodexModel = $loadedModel
+  }
+  Detail (Get-Message keeping_model $loadedModel)
+  return $true
 }
 
 function Normalize-Client([string]$Value) {
@@ -561,10 +580,17 @@ function Test-ClaudeRelay {
 
 function Choose-SwitchModel {
   Write-Host (Get-Message switch_option)
+  Write-Host (Get-Message change_key_option)
   Write-Host (Get-Message reinstall_option)
   $answer = Read-Host (Get-Message switch_or_reinstall_prompt)
-  # Default (empty) and "1" => switch model; "2" => reinstall.
-  return $answer -ne '2'
+  # Default (empty) and "1" => switch model; "2" => change API key; "3" => reinstall.
+  switch ($answer) {
+    '' { return 'switch_model' }
+    '1' { return 'switch_model' }
+    '2' { return 'change_key' }
+    '3' { return 'reinstall' }
+    default { return 'switch_model' }
+  }
 }
 
 function Invoke-SwitchModelFlow {
@@ -587,6 +613,34 @@ function Invoke-SwitchModelFlow {
   }
 
   Success (Get-Message model_switched (Selected-Model))
+}
+
+function Invoke-ChangeKeyFlow {
+  Step (Get-Message change_api_key)
+  $script:ApiKey = $null
+  Read-AndVerifyApiKey -ForcePrompt
+
+  Step (Get-Message step_choose_client)
+  Select-Client
+  Success (Selected-ClientName)
+
+  if (-not (Use-LoadedModelForSelectedClient)) {
+    Step (Get-Message step_choose_model)
+    Select-Model
+  }
+
+  Step (Get-Message step_write_config)
+  if ($Client -eq 'claude') {
+    Write-ClaudeConfig
+    Step (Get-Message step_test_gateway)
+    Test-ClaudeRelay
+  } else {
+    Write-CodexConfig
+    Step (Get-Message step_test_gateway)
+    Test-CodexRelay
+  }
+
+  Success (Get-Message api_key_changed)
 }
 
 function Invoke-FullFlow {

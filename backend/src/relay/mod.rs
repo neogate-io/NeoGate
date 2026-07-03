@@ -397,8 +397,11 @@ fn format_upstream_http_failure_log(
     failure: &UpstreamHttpFailure,
     client_response: Option<&str>,
 ) -> String {
-    format!(
-        "upstream returned error | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream={} upstream_status={} relay_status={} latency={}ms error_type={} retryable={} error={} client_response={}",
+    let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+    let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
+    let mut line = format!(
+        "upstream returned error | trace={} channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream_path={} response_mode={} upstream={} upstream_status={} relay_status={} latency={}ms streamed={} error_type={} retryable={} error={} client_response={}",
+        short_trace_id(ctx.relay_trace_id),
         ctx.upstream.channel_name,
         ctx.upstream.channel_id,
         ctx.upstream.channel_endpoint_id,
@@ -408,15 +411,20 @@ fn format_upstream_http_failure_log(
         ctx.protocol.as_str(),
         ctx.model,
         ctx.path,
+        upstream_path,
+        response_mode,
         ctx.upstream.base_url,
         status.as_u16(),
         failure.relay_status.as_u16(),
         ctx.started.elapsed().as_millis(),
+        ctx.streamed,
         failure.error_type,
         failure.retryable,
         failure.detail,
         client_response.unwrap_or("not_returned_attempting_reroute")
-    )
+    );
+    push_info_request_params(&mut line, &ctx.request_params);
+    line
 }
 
 pub(crate) async fn record_upstream_http_failure(
@@ -499,6 +507,9 @@ pub(crate) async fn record_upstream_transport_failure_for_failover(
 }
 
 pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {
+    let status = upstream_response.status();
+    let content_length = upstream_response.content_length();
+    let headers = upstream_response.headers().clone();
     let mut stream = upstream_response.bytes_stream();
     let mut body = Vec::new();
     let mut truncated = false;
@@ -512,6 +523,17 @@ pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Respons
                 }
             }
             Err(err) => {
+                tracing::warn!(
+                    upstream_status = status.as_u16(),
+                    content_type = header_for_log(&headers, header::CONTENT_TYPE.as_str()),
+                    content_encoding = header_for_log(&headers, "content-encoding"),
+                    transfer_encoding = header_for_log(&headers, "transfer-encoding"),
+                    content_length,
+                    is_decode = err.is_decode(),
+                    is_body = err.is_body(),
+                    error = %err,
+                    "failed to read upstream error body"
+                );
                 return Bytes::from(format!("failed to read upstream error body: {err}"));
             }
         }
@@ -524,6 +546,16 @@ pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Respons
         );
     }
     Bytes::from(body)
+}
+
+fn header_for_log(headers: &reqwest::header::HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-")
+        .to_string()
 }
 
 fn append_limited_error_body(body: &mut Vec<u8>, chunk: &[u8]) -> bool {

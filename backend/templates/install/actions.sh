@@ -140,6 +140,7 @@ LOADED_CLAUDE_KEY=""
 LOADED_CODEX_MODEL=""
 LOADED_CLAUDE_MODEL=""
 HAS_EXISTING_CONFIG=0
+EXISTING_CONFIG_ACTION=""
 
 json_field() {
   # Extract a string field value from JSON on stdin. $1 = field name.
@@ -301,7 +302,9 @@ verify_api_key() {
 }
 
 prompt_and_verify_api_key() {
-  prompt_secret "$(message api_key_prompt)"
+  local force="${1:-0}"
+
+  prompt_secret "$(message api_key_prompt)" "$force"
 
   while ! verify_api_key; do
     has_tty || die "$(message no_tty_api_key)"
@@ -309,6 +312,33 @@ prompt_and_verify_api_key() {
     API_KEY=""
     prompt_secret "$(message api_key_prompt)" 1
   done
+}
+
+loaded_model_for_selected_client() {
+  case "$CLIENT" in
+    claude)
+      printf '%s' "$LOADED_CLAUDE_MODEL"
+      ;;
+    *)
+      printf '%s' "$LOADED_CODEX_MODEL"
+      ;;
+  esac
+}
+
+keep_loaded_model_for_selected_client() {
+  local loaded_model
+  loaded_model="$(loaded_model_for_selected_client)"
+  [[ -n "$loaded_model" ]] || return 1
+
+  case "$CLIENT" in
+    claude)
+      CLAUDE_MODEL="$loaded_model"
+      ;;
+    *)
+      CODEX_MODEL="$loaded_model"
+      ;;
+  esac
+  detail "$(message keeping_model "$loaded_model")"
 }
 
 extract_model_ids() {

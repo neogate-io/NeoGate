@@ -14,13 +14,20 @@ try {
   Step (Get-Message step_verify_key)
   Read-AndVerifyApiKey
 
-  # Existing-config users get a fast path: switch model or full reinstall.
+  # Existing-config users get a fast path: switch model, change key, or full reinstall.
   # Only offered when config was detected and the caller did not already pin
   # behavior via -Yes / explicit client (those mean "just do the full flow").
-  if ($HasExistingConfig -and -not $Yes -and -not $Client) {
-    if (Choose-SwitchModel) {
-      Invoke-SwitchModelFlow
-      return
+  if ($HasExistingConfig -and -not $Yes -and -not $ClientExplicit) {
+    switch (Choose-SwitchModel) {
+      'switch_model' {
+        Invoke-SwitchModelFlow
+        return
+      }
+      'change_key' {
+        Invoke-ChangeKeyFlow
+        return
+      }
+      'reinstall' {}
     }
   }
 

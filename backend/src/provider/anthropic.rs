@@ -159,6 +159,8 @@ pub(crate) async fn anthropic_messages(
             relay_final: false,
             request_params: meta.request_params.clone(),
             request_permit: None,
+            upstream_request_path: None,
+            upstream_response_mode: None,
         };
         let response = match protocol {
             UpstreamProtocol::Anthropic => {
@@ -176,6 +178,8 @@ pub(crate) async fn anthropic_messages(
                     &headers,
                     meta.stream,
                 )?;
+                ctx.upstream_request_path = Some(prepared.log_path.clone());
+                ctx.upstream_response_mode = Some(prepared.response_mode.as_str());
                 forward_prepared_openai(&state, &ctx.upstream, protocol, &headers, prepared).await
             }
             UpstreamProtocol::OpenAiOauth => Err(AppError::BadRequest(

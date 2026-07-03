@@ -282,13 +282,13 @@ impl StreamingRelay {
     }
 
     fn should_ignore_successful_stream_error(&self, summary: &str) -> bool {
-        self.status.is_success() && self.usage.stream_complete() && is_body_decode_error(summary)
+        self.status.is_success() && self.usage.response_complete() && is_body_decode_error(summary)
     }
 
     async fn finish_stream_success(mut self) {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
-        let stream_complete = self.usage.stream_complete();
+        let stream_complete = self.usage.response_complete();
         tracing::debug!(
             relay_trace_id = %ctx.relay_trace_id,
             relay_attempt = ctx.relay_attempt,
@@ -590,7 +590,7 @@ impl Drop for StreamingRelay {
             return;
         };
         let status = self.status;
-        let stream_complete = self.usage.stream_complete();
+        let stream_complete = self.usage.response_complete();
         let token_usage = self.usage.finish();
         let first_response_ms = self.first_response_ms;
         let last_chunk_ms = self.last_chunk_ms;
@@ -750,8 +750,9 @@ impl ResponseUsageParser {
         }
     }
 
-    fn stream_complete(&self) -> bool {
+    fn response_complete(&self) -> bool {
         matches!(self, Self::Sse(parser) if parser.completed)
+            || matches!(self, Self::Json { buffer: Some(bytes), .. } if json_body_is_complete(bytes))
     }
 }
 
@@ -759,6 +760,10 @@ fn json_usage_buffer_capacity(content_length: Option<u64>, limit_bytes: usize) -
     content_length
         .and_then(|length| usize::try_from(length).ok())
         .map_or(0, |length| length.min(limit_bytes))
+}
+
+fn json_body_is_complete(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(bytes).is_ok()
 }
 
 struct StreamUsageParser {
@@ -936,6 +941,38 @@ mod tests {
     #[test]
     fn body_decode_errors_are_identified() {
         assert!(is_body_decode_error("error decoding response body"));
+    }
+
+    #[test]
+    fn complete_json_body_marks_non_streamed_response_complete() {
+        let mut parser = ResponseUsageParser::for_response(
+            StatusCode::OK,
+            false,
+            "/v1/chat/completions",
+            None,
+            1024,
+        );
+
+        parser.observe(
+            br#"{"choices":[{"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+        );
+
+        assert!(parser.response_complete());
+    }
+
+    #[test]
+    fn partial_json_body_is_not_complete() {
+        let mut parser = ResponseUsageParser::for_response(
+            StatusCode::OK,
+            false,
+            "/v1/chat/completions",
+            None,
+            1024,
+        );
+
+        parser.observe(br#"{"choices":["#);
+
+        assert!(!parser.response_complete());
     }
 
     #[test]

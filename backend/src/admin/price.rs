@@ -440,7 +440,9 @@ async fn sync_local_cny_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
     let upstream: HashMap<String, ModelsDevProvider> = serde_json::from_str(LOCAL_CNY_PRICING_JSON)
-        .map_err(|err| AppError::BadRequest(format!("failed to parse local CNY pricing JSON: {err}")))?;
+        .map_err(|err| {
+            AppError::BadRequest(format!("failed to parse local CNY pricing JSON: {err}"))
+        })?;
 
     let provider_codes = enabled_provider_codes(state).await?;
     let mut fetched = 0usize;
@@ -459,7 +461,8 @@ async fn sync_local_cny_pricing_templates(
         }
 
         for (model, model_data) in provider_data.models {
-            let Some(template) = pricing_template_from_local_cny_model(provider, &model, model_data)
+            let Some(template) =
+                pricing_template_from_local_cny_model(provider, &model, model_data)
             else {
                 skipped += 1;
                 continue;

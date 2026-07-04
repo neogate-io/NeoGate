@@ -783,6 +783,7 @@ pub(crate) mod tests {
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 public_base_url: Some("http://localhost:8080".to_string()),
                 site_name: "NeoGate".to_string(),
+                billing_currency: config::BillingCurrency::Usd,
                 runtime_mode: config::RuntimeMode::Standalone,
                 process_role: config::ProcessRole::All,
                 admin_token_secret: "test-admin-token-secret".to_string(),

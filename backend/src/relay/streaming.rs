@@ -333,6 +333,7 @@ impl StreamingRelay {
                 bytes_sent = self.bytes_sent,
                 largest_chunk_bytes = self.largest_chunk_bytes,
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
+                last_signal = ?self.usage.last_signal_summary(),
                 "upstream stream ended before terminal SSE event"
             );
         }
@@ -754,6 +755,37 @@ impl ResponseUsageParser {
         matches!(self, Self::Sse(parser) if parser.completed)
             || matches!(self, Self::Json { buffer: Some(bytes), .. } if json_body_is_complete(bytes))
     }
+
+    /// Returns a short human-readable summary of the last observed stream
+    /// signal so we can include it in the "stream ended before terminal SSE
+    /// event" warning. Helps distinguish an upstream that emitted an
+    /// unrecognized terminal type from one that simply hung up mid-stream.
+    fn last_signal_summary(&self) -> Option<String> {
+        match self {
+            Self::Sse(parser) => {
+                if parser.saw_done {
+                    return Some("data:[DONE]".to_string());
+                }
+                let event = parser.last_event.as_deref();
+                let data_type = parser.last_type.as_deref();
+                match (event, data_type) {
+                    (Some(event), Some(data_type)) => {
+                        Some(format!("event:{event} data_type:{data_type}"))
+                    }
+                    (Some(event), None) => Some(format!("event:{event}")),
+                    (None, Some(data_type)) => Some(format!("data_type:{data_type}")),
+                    (None, None) => None,
+                }
+            }
+            Self::Json {
+                buffer: Some(bytes), ..
+            } => json_body_is_complete(bytes)
+                .then(|| "json-body-complete".to_string())
+                .or(Some("json-body-incomplete".to_string())),
+            Self::Json { buffer: None, .. } => Some("json-buffer-overflow".to_string()),
+            Self::Disabled => None,
+        }
+    }
 }
 
 fn json_usage_buffer_capacity(content_length: Option<u64>, limit_bytes: usize) -> usize {
@@ -766,12 +798,24 @@ fn json_body_is_complete(bytes: &[u8]) -> bool {
     serde_json::from_slice::<Value>(bytes).is_ok()
 }
 
+#[derive(Default)]
+struct ParsedLine {
+    usage: Option<TokenUsage>,
+    event: Option<String>,
+    data_type: Option<String>,
+    completed: bool,
+    done: bool,
+}
+
 struct StreamUsageParser {
     buffered: Vec<u8>,
     latest: Option<TokenUsage>,
     completed: bool,
     skipping_oversized_line: bool,
     limit_bytes: usize,
+    last_event: Option<String>,
+    last_type: Option<String>,
+    saw_done: bool,
 }
 
 impl StreamUsageParser {
@@ -782,6 +826,9 @@ impl StreamUsageParser {
             completed: false,
             skipping_oversized_line: false,
             limit_bytes,
+            last_event: None,
+            last_type: None,
+            saw_done: false,
         }
     }
 
@@ -818,8 +865,8 @@ impl StreamUsageParser {
             if matches!(line.last(), Some(b'\r')) {
                 line = &line[..line.len() - 1];
             }
-            let (usage, completed) = Self::parse_line(line);
-            self.observe_parsed_line(usage, completed);
+            let parsed = Self::parse_line(line);
+            self.observe_parsed_line(parsed);
             consumed = line_end + 1;
         }
         if consumed == self.buffered.len() {
@@ -830,39 +877,58 @@ impl StreamUsageParser {
     }
 
     fn observe_line(&mut self, line: &[u8]) {
-        let (usage, completed) = Self::parse_line(line);
-        self.observe_parsed_line(usage, completed);
+        let parsed = Self::parse_line(line);
+        self.observe_parsed_line(parsed);
     }
 
-    fn observe_parsed_line(&mut self, usage: Option<TokenUsage>, completed: bool) {
-        if let Some(usage) = usage {
+    fn observe_parsed_line(&mut self, parsed: ParsedLine) {
+        if let Some(usage) = parsed.usage {
             self.latest = Some(usage);
         }
-        if completed {
+        if let Some(event) = parsed.event {
+            self.last_event = Some(event);
+        }
+        if let Some(data_type) = parsed.data_type {
+            self.last_type = Some(data_type);
+        }
+        if parsed.done {
+            self.saw_done = true;
+        }
+        if parsed.completed {
             self.completed = true;
         }
     }
 
-    fn parse_line(line: &[u8]) -> (Option<TokenUsage>, bool) {
+    fn parse_line(line: &[u8]) -> ParsedLine {
         let Ok(line) = std::str::from_utf8(line) else {
-            return (None, false);
+            return ParsedLine::default();
         };
         if let Some(event) = line.strip_prefix("event:").map(str::trim) {
-            return (None, stream_event_is_terminal(event));
+            return ParsedLine {
+                event: Some(event.to_string()),
+                completed: stream_event_is_terminal(event),
+                ..Default::default()
+            };
         }
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
-            return (None, false);
+            return ParsedLine::default();
         };
         if data.is_empty() {
-            return (None, false);
+            return ParsedLine::default();
         }
         if data == "[DONE]" {
-            return (None, true);
+            return ParsedLine {
+                done: true,
+                completed: true,
+                ..Default::default()
+            };
         }
-        (
-            parse_usage_from_sse_data(data),
-            sse_data_has_terminal_type(data),
-        )
+        ParsedLine {
+            usage: parse_usage_from_sse_data(data),
+            data_type: sse_data_type_name(data),
+            completed: sse_data_has_terminal_type(data),
+            ..Default::default()
+        }
     }
 
     fn finish(&mut self) -> Option<TokenUsage> {
@@ -880,27 +946,33 @@ impl StreamUsageParser {
 fn stream_event_is_terminal(event: &str) -> bool {
     matches!(
         event,
-        "message_stop" | "response.completed" | "response.failed" | "response.cancelled"
+        "message_stop"
+            | "response.completed"
+            | "response.incomplete"
+            | "response.failed"
+            | "response.cancelled"
     )
 }
 
 fn sse_data_has_terminal_type(data: &str) -> bool {
     data.contains("message_stop") && sse_data_type_is(data, "message_stop")
         || data.contains("response.completed") && sse_data_type_is(data, "response.completed")
+        || data.contains("response.incomplete") && sse_data_type_is(data, "response.incomplete")
         || data.contains("response.failed") && sse_data_type_is(data, "response.failed")
         || data.contains("response.cancelled") && sse_data_type_is(data, "response.cancelled")
 }
 
+fn sse_data_type_name(data: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    value
+        .get("type")
+        .and_then(|type_| type_.as_str())
+        .map(ToString::to_string)
+}
+
 fn sse_data_type_is(data: &str, expected: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(data)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("type")
-                .and_then(|type_| type_.as_str())
-                .map(|type_| type_ == expected)
-        })
-        .unwrap_or(false)
+    sse_data_type_name(data)
+        .is_some_and(|type_| type_ == expected)
 }
 
 #[cfg(test)]
@@ -1100,5 +1172,66 @@ data: {"type":"message_stop"}
         );
 
         assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_responses_incomplete_event() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: response.incomplete
+data: {"type":"response.incomplete","response":{"status":"incomplete"}}
+"#,
+        );
+
+        assert!(parser.completed);
+        assert_eq!(parser.last_event.as_deref(), Some("response.incomplete"));
+        assert_eq!(parser.last_type.as_deref(), Some("response.incomplete"));
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_responses_incomplete_data_only() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"type":"response.incomplete","response":{"status":"incomplete"}}
+"#,
+        );
+
+        assert!(parser.completed);
+        assert_eq!(parser.last_type.as_deref(), Some("response.incomplete"));
+    }
+
+    #[test]
+    fn stream_usage_parser_records_last_signal_without_terminal() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"hi"}
+"#,
+        );
+
+        assert!(!parser.completed);
+        assert_eq!(
+            parser.last_event.as_deref(),
+            Some("response.output_text.delta")
+        );
+        assert_eq!(
+            parser.last_type.as_deref(),
+            Some("response.output_text.delta")
+        );
+        assert!(!parser.saw_done);
+    }
+
+    #[test]
+    fn stream_usage_parser_records_done_signal() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(b"data: [DONE]
+");
+
+        assert!(parser.completed);
+        assert!(parser.saw_done);
     }
 }

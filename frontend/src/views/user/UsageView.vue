@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
 import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
@@ -11,12 +12,12 @@ import {
   downloadCsv,
   formatDateTime,
   formatDurationMs,
-  formatMicroUsd,
   formatNumber,
   formatTokenRate
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { formatMoney } = useBillingCurrency()
 const DEFAULT_PAGE_SIZE = 20
 const loadingRowCount = 3
 const dateRange = ref<[Date, Date] | null>(null)
@@ -207,7 +208,7 @@ async function exportUsage() {
     formatDurationMs(row.latency_ms),
     formatDurationMs(row.first_response_ms),
     formatTokenRate(row.output_tokens_per_second, locale.value),
-    formatMicroUsd(row.cost_micro_usd, 6),
+    formatMoney(row.cost_micro_usd, locale.value, 6),
     statusLabel(row.status_code)
   ])
   downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
@@ -280,7 +281,7 @@ async function exportUsage() {
                 {{ formatTokenRate(row.output_tokens_per_second, locale) }}</small
               >
             </span>
-            <span class="usage-cost">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
+            <span class="usage-cost">{{ formatMoney(row.cost_micro_usd, locale, 6) }}</span>
             <button class="usage-details-label" type="button" @click="toggleUsageDetails">
               {{ t('viewDetails') }}
             </button>
@@ -390,7 +391,7 @@ async function exportUsage() {
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('cost') }}</dt>
-                  <dd>{{ formatMicroUsd(row.cost_micro_usd, 6) }}</dd>
+                  <dd>{{ formatMoney(row.cost_micro_usd, locale, 6) }}</dd>
                 </div>
                 <div>
                   <dt>{{ t('billingStatus') }}</dt>

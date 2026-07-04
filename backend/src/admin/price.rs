@@ -7,6 +7,7 @@ use sqlx::Row;
 
 use crate::{
     billing::BillingMeter,
+    config::BillingCurrency,
     error::{AppError, AppResult},
     id::DbId,
     AppState,
@@ -14,6 +15,8 @@ use crate::{
 
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
 const PRICE_TEMPLATE_SOURCE_MODELS_DEV: &str = "models_dev";
+const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
+const LOCAL_CNY_PRICING_JSON: &str = include_str!("../../../frontend/public/model-pricing.json");
 
 #[derive(Debug, Serialize)]
 pub struct ProviderPriceRecord {
@@ -285,7 +288,12 @@ pub async fn sync_pricing_templates(
     req: SyncPricingTemplatesRequest,
 ) -> AppResult<PricingTemplateSyncResult> {
     match req.source.trim() {
-        "" | PRICE_TEMPLATE_SOURCE_MODELS_DEV => sync_models_dev_pricing_templates(state).await,
+        "" => match state.config.billing_currency {
+            BillingCurrency::Usd => sync_models_dev_pricing_templates(state).await,
+            BillingCurrency::Cny => sync_local_cny_pricing_templates(state).await,
+        },
+        PRICE_TEMPLATE_SOURCE_MODELS_DEV => sync_models_dev_pricing_templates(state).await,
+        PRICE_TEMPLATE_SOURCE_LOCAL_CNY => sync_local_cny_pricing_templates(state).await,
         source => Err(AppError::BadRequest(format!(
             "unsupported pricing template source: {source}"
         ))),
@@ -428,6 +436,48 @@ async fn sync_models_dev_pricing_templates(
     })
 }
 
+async fn sync_local_cny_pricing_templates(
+    state: &AppState,
+) -> AppResult<PricingTemplateSyncResult> {
+    let upstream: HashMap<String, ModelsDevProvider> = serde_json::from_str(LOCAL_CNY_PRICING_JSON)
+        .map_err(|err| AppError::BadRequest(format!("failed to parse local CNY pricing JSON: {err}")))?;
+
+    let provider_codes = enabled_provider_codes(state).await?;
+    let mut fetched = 0usize;
+    let mut skipped = 0usize;
+    let mut saved = 0u64;
+
+    for (upstream_provider, provider_data) in upstream {
+        fetched += provider_data.models.len();
+        let Some(provider) = normalize_template_provider(&upstream_provider) else {
+            skipped += provider_data.models.len();
+            continue;
+        };
+        if !provider_codes.contains(provider) {
+            skipped += provider_data.models.len();
+            continue;
+        }
+
+        for (model, model_data) in provider_data.models {
+            let Some(template) = pricing_template_from_local_cny_model(provider, &model, model_data)
+            else {
+                skipped += 1;
+                continue;
+            };
+            saved +=
+                upsert_synced_pricing_template(state, template, PRICE_TEMPLATE_SOURCE_LOCAL_CNY)
+                    .await?;
+        }
+    }
+
+    Ok(PricingTemplateSyncResult {
+        source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+        fetched,
+        saved,
+        skipped,
+    })
+}
+
 fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
     tracing::warn!(
         error = %err,
@@ -475,13 +525,46 @@ fn pricing_template_from_models_dev_model<'a>(
     })
 }
 
+fn pricing_template_from_local_cny_model<'a>(
+    provider: &'a str,
+    model: &'a str,
+    model_data: ModelsDevModel,
+) -> Option<PricingTemplateUpsert<'a>> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let billing_meter = billing_meter_from_models_dev_model(&model_data);
+    let prices = pricing_micros_from_local_pricing_model(&model_data);
+    Some(PricingTemplateUpsert {
+        provider,
+        model,
+        billing_meter,
+        capabilities: local_pricing_capabilities(&model_data),
+        prices,
+    })
+}
+
 fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<PricingMicros> {
     let cost = model.cost.as_ref()?;
     Some(PricingMicros {
-        input_price_usd_micros: usd_per_million_to_micros(cost.input)?,
-        output_price_usd_micros: usd_per_million_to_micros(cost.output)?,
-        cache_read_price_usd_micros: usd_per_million_to_micros(cost.cache_read),
-        cache_write_price_usd_micros: usd_per_million_to_micros(cost.cache_write),
+        input_price_usd_micros: per_million_to_micros(cost.input)?,
+        output_price_usd_micros: per_million_to_micros(cost.output)?,
+        cache_read_price_usd_micros: per_million_to_micros(cost.cache_read),
+        cache_write_price_usd_micros: per_million_to_micros(cost.cache_write),
+        billing_meter: BillingMeter::Token,
+        unit_price_usd_micros: None,
+        pricing_basis: BillingMeter::Token,
+    })
+}
+
+fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<PricingMicros> {
+    let cost = model.cost.as_ref()?;
+    Some(PricingMicros {
+        input_price_usd_micros: per_million_to_micros(cost.input)?,
+        output_price_usd_micros: per_million_to_micros(cost.output)?,
+        cache_read_price_usd_micros: per_million_to_micros(cost.cache_read),
+        cache_write_price_usd_micros: per_million_to_micros(cost.cache_write),
         billing_meter: BillingMeter::Token,
         unit_price_usd_micros: None,
         pricing_basis: BillingMeter::Token,
@@ -522,6 +605,14 @@ fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
         "modalities": model.modalities,
         "open_weights": model.open_weights,
         "limit": model.limit,
+    })
+}
+
+fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
+    json!({
+        "id": model.id,
+        "name": model.name,
+        "modalities": model.modalities,
     })
 }
 
@@ -609,7 +700,7 @@ fn normalize_template_provider(provider: &str) -> Option<&'static str> {
     }
 }
 
-fn usd_per_million_to_micros(value: Option<f64>) -> Option<i64> {
+fn per_million_to_micros(value: Option<f64>) -> Option<i64> {
     let value = value?;
     if !value.is_finite() || value < 0.0 {
         return None;
@@ -870,11 +961,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn converts_models_dev_usd_per_million_to_micros() {
-        assert_eq!(usd_per_million_to_micros(Some(0.1)), Some(100_000));
-        assert_eq!(usd_per_million_to_micros(Some(1.25)), Some(1_250_000));
-        assert_eq!(usd_per_million_to_micros(Some(-1.0)), None);
-        assert_eq!(usd_per_million_to_micros(None), None);
+    fn converts_models_dev_per_million_to_micros() {
+        assert_eq!(per_million_to_micros(Some(0.1)), Some(100_000));
+        assert_eq!(per_million_to_micros(Some(1.25)), Some(1_250_000));
+        assert_eq!(per_million_to_micros(Some(-1.0)), None);
+        assert_eq!(per_million_to_micros(None), None);
     }
 
     #[test]
@@ -897,10 +988,10 @@ mod tests {
         .unwrap();
         let cost = model.cost.unwrap();
 
-        assert_eq!(usd_per_million_to_micros(cost.input), Some(5_000_000));
-        assert_eq!(usd_per_million_to_micros(cost.output), Some(30_000_000));
-        assert_eq!(usd_per_million_to_micros(cost.cache_read), Some(500_000));
-        assert_eq!(usd_per_million_to_micros(cost.cache_write), Some(6_250_000));
+        assert_eq!(per_million_to_micros(cost.input), Some(5_000_000));
+        assert_eq!(per_million_to_micros(cost.output), Some(30_000_000));
+        assert_eq!(per_million_to_micros(cost.cache_read), Some(500_000));
+        assert_eq!(per_million_to_micros(cost.cache_write), Some(6_250_000));
     }
 
     #[test]

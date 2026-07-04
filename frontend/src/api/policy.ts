@@ -28,6 +28,7 @@ export type ServicePolicy = {
   restart_required: boolean
   site_name?: string | null
   public_base_url?: string | null
+  billing_currency?: 'USD' | 'CNY' | null
   service_mode: ServiceMode
   credit_required: boolean
   registration_enabled: boolean
@@ -67,6 +68,7 @@ export function bootstrapSetup(input: {
   database_url?: string | null
   site_name?: string | null
   public_base_url?: string | null
+  billing_currency?: 'USD' | 'CNY' | null
 }) {
   return publicRequest<{ ok: boolean; env_file: string; restart_required: boolean }>(
     '/api/setup/bootstrap',

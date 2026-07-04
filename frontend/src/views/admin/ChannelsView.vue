@@ -33,6 +33,7 @@ import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
@@ -46,16 +47,11 @@ import type {
   ProviderPrice
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
-import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
-import {
-  derivedCacheReadPrice,
-  findPricingTemplate,
-  isProviderPriceConfigured,
-  priceKey
-} from '../../utils/pricing'
+import { derivedCacheReadPrice, findPricingTemplate, isProviderPriceConfigured, priceKey } from '../../utils/pricing'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const { currencySymbol, formatPricePerMillion, majorToMicroAmount, microAmountToMajor } = useBillingCurrency()
 
 defineOptions({
   name: 'ChannelsView'
@@ -303,24 +299,24 @@ function channelPriceRows(row: Channel) {
     const modelEnabled = Boolean(channelModel.enabled)
     const unitPrice =
       unitMicros !== undefined && unitMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(unitMicros))
+        ? formatPricePerMillion(unitMicros, 'en-US')
         : t('priceMissing')
     const inputPrice =
       inputMicros !== undefined && inputMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(inputMicros))
+        ? formatPricePerMillion(inputMicros, 'en-US')
         : t('priceMissing')
     const outputPrice =
       outputMicros !== undefined && outputMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(outputMicros))
+        ? formatPricePerMillion(outputMicros, 'en-US')
         : t('priceMissing')
     const cacheReadPrice =
       cacheReadMicros !== undefined && cacheReadMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(cacheReadMicros))
+        ? formatPricePerMillion(cacheReadMicros, 'en-US')
         : t('priceMissing')
     const cacheWritePrice = hasConfiguredPrice
       ? cacheWriteMicros === undefined || cacheWriteMicros === null
-        ? '$0'
-        : formatUsdPerMillion(microUsdToUsd(cacheWriteMicros as number))
+        ? `${currencySymbol.value}0`
+        : formatPricePerMillion(cacheWriteMicros as number, 'en-US')
       : t('priceMissing')
     const modelStatus = channelModel.status
     const upstreamMissing = modelStatus === 'missing'
@@ -563,11 +559,11 @@ function openPriceDialog(row: Channel) {
       provider: row.provider,
       model,
       billingMeter,
-      inputUsdPerMillion: microUsdToUsd(inputPrice),
-      outputUsdPerMillion: microUsdToUsd(
+      inputUsdPerMillion: microAmountToMajor(inputPrice),
+      outputUsdPerMillion: microAmountToMajor(
         price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0
       ),
-      cacheReadUsdPerMillion: microUsdToUsd(
+      cacheReadUsdPerMillion: microAmountToMajor(
         price?.cache_read_price_usd_micros ??
           template?.cache_read_price_usd_micros ??
           derivedCacheReadPrice(inputPrice)
@@ -575,8 +571,8 @@ function openPriceDialog(row: Channel) {
       cacheWriteUsdPerMillion:
         cacheWritePrice === undefined || cacheWritePrice === null
           ? 0
-          : microUsdToUsd(cacheWritePrice),
-      unitUsd: microUsdToUsd(price?.unit_price_usd_micros ?? template?.unit_price_usd_micros ?? 0),
+          : microAmountToMajor(cacheWritePrice),
+      unitUsd: microAmountToMajor(price?.unit_price_usd_micros ?? template?.unit_price_usd_micros ?? 0),
       enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
       hasPrice: hasEnabledBillablePrice(price, billingMeter),
       hasPriceRecord: Boolean(price),
@@ -601,22 +597,21 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
   if (!template) return ''
   if (template.billing_meter === 'image') {
     const unit = template.unit_price_usd_micros
-      ? formatUsdPerMillion(microUsdToUsd(template.unit_price_usd_micros))
+      ? formatPricePerMillion(template.unit_price_usd_micros, locale.value)
       : t('priceMissing')
     return `${t('billingMeterImageGeneration')} ${unit} / ${t('perImage')}`
   }
-  const input = formatUsdPerMillion(microUsdToUsd(template.input_price_usd_micros))
-  const output = formatUsdPerMillion(microUsdToUsd(template.output_price_usd_micros))
-  const cacheRead = formatUsdPerMillion(
-    microUsdToUsd(
-      template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)
-    )
+  const input = formatPricePerMillion(template.input_price_usd_micros, locale.value)
+  const output = formatPricePerMillion(template.output_price_usd_micros, locale.value)
+  const cacheRead = formatPricePerMillion(
+    template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros),
+    locale.value
   )
   const cacheWrite =
     template.cache_write_price_usd_micros === undefined ||
     template.cache_write_price_usd_micros === null
-      ? '$0'
-      : formatUsdPerMillion(microUsdToUsd(template.cache_write_price_usd_micros))
+      ? `${currencySymbol.value}0`
+      : formatPricePerMillion(template.cache_write_price_usd_micros, locale.value)
   return `Token ${input} / ${output}\nCache ${cacheRead} / ${cacheWrite}`
 }
 
@@ -634,21 +629,21 @@ function fillReferencePrice(form: (typeof priceForms)[string]) {
   const template = findApplicablePricingTemplate(form)
   if (!template) return
   form.billingMeter = template.billing_meter
-  form.inputUsdPerMillion = microUsdToUsd(template.input_price_usd_micros)
-  form.outputUsdPerMillion = microUsdToUsd(template.output_price_usd_micros)
-  form.cacheReadUsdPerMillion = microUsdToUsd(
+  form.inputUsdPerMillion = microAmountToMajor(template.input_price_usd_micros)
+  form.outputUsdPerMillion = microAmountToMajor(template.output_price_usd_micros)
+  form.cacheReadUsdPerMillion = microAmountToMajor(
     template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)
   )
   form.cacheWriteUsdPerMillion =
     template.cache_write_price_usd_micros === undefined ||
     template.cache_write_price_usd_micros === null
       ? 0
-      : microUsdToUsd(template.cache_write_price_usd_micros)
-  form.unitUsd = microUsdToUsd(template.unit_price_usd_micros ?? 0)
+      : microAmountToMajor(template.cache_write_price_usd_micros)
+  form.unitUsd = microAmountToMajor(template.unit_price_usd_micros ?? 0)
 }
 
 function cacheWritePricePayload(form: (typeof priceForms)[string]) {
-  return form.cacheWriteUsdPerMillion === null ? null : usdToMicroUsd(form.cacheWriteUsdPerMillion)
+  return form.cacheWriteUsdPerMillion === null ? null : majorToMicroAmount(form.cacheWriteUsdPerMillion)
 }
 
 function requireBillingMeter(form: (typeof priceForms)[string]) {
@@ -697,12 +692,12 @@ async function saveChannelPrices() {
         await upsertProviderPrice({
           provider: form.provider,
           model: form.model,
-          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
+          input_price_usd_micros: majorToMicroAmount(form.inputUsdPerMillion),
+          output_price_usd_micros: majorToMicroAmount(form.outputUsdPerMillion),
+          cache_read_price_usd_micros: majorToMicroAmount(form.cacheReadUsdPerMillion),
           cache_write_price_usd_micros: cacheWritePricePayload(form),
           billing_meter: billingMeter,
-          unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
+          unit_price_usd_micros: billingMeter === 'image' ? majorToMicroAmount(form.unitUsd) : null,
           enabled: shouldEnablePriceForm(form)
         })
       }
@@ -770,12 +765,12 @@ async function applyReferencePrices() {
         await upsertProviderPrice({
           provider: form.provider,
           model: form.model,
-          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
+          input_price_usd_micros: majorToMicroAmount(form.inputUsdPerMillion),
+          output_price_usd_micros: majorToMicroAmount(form.outputUsdPerMillion),
+          cache_read_price_usd_micros: majorToMicroAmount(form.cacheReadUsdPerMillion),
           cache_write_price_usd_micros: cacheWritePricePayload(form),
           billing_meter: billingMeter,
-          unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
+          unit_price_usd_micros: billingMeter === 'image' ? majorToMicroAmount(form.unitUsd) : null,
           enabled: true
         })
       }

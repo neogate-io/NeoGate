@@ -1,4 +1,9 @@
-export const MICRO_USD_PER_USD = 1_000_000
+export type BillingCurrency = 'USD' | 'CNY'
+export const MICRO_UNITS_PER_CURRENCY = 1_000_000
+
+export function currencySymbol(currency: BillingCurrency) {
+  return currency === 'CNY' ? '¥' : '$'
+}
 
 export type CacheWriteTokenSource = {
   cache_create_in_tokens?: number | null
@@ -6,17 +11,50 @@ export type CacheWriteTokenSource = {
   cache_create_1h_in_tokens?: number | null
 }
 
+export function microAmountToMajor(value: number) {
+  return value / MICRO_UNITS_PER_CURRENCY
+}
+
+export function majorToMicroAmount(value: number) {
+  return Math.round(value * MICRO_UNITS_PER_CURRENCY)
+}
+
 export function microUsdToUsd(value: number) {
-  return value / MICRO_USD_PER_USD
+  return microAmountToMajor(value)
 }
 
 export function usdToMicroUsd(value: number) {
-  return Math.round(value * MICRO_USD_PER_USD)
+  return majorToMicroAmount(value)
+}
+
+export function formatMoney(
+  value: number | null | undefined,
+  currency: BillingCurrency,
+  locale: string,
+  digits = 2
+) {
+  if (value == null) return '-'
+  return `${currencySymbol(currency)}${microAmountToMajor(value).toLocaleString(locale, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  })}`
 }
 
 export function formatMicroUsd(value?: number | null, digits = 2) {
   if (value == null) return '-'
-  return `$${microUsdToUsd(value).toFixed(digits)}`
+  return `$${microAmountToMajor(value).toFixed(digits)}`
+}
+
+export function formatPricePerMillion(
+  value: number | null | undefined,
+  currency: BillingCurrency,
+  locale: string,
+  maximumFractionDigits = 6
+) {
+  if (value == null) return '-'
+  return `${currencySymbol(currency)}${microAmountToMajor(value).toLocaleString(locale, {
+    maximumFractionDigits
+  })}`
 }
 
 export function formatUsdPerMillion(value: number) {
@@ -27,7 +65,7 @@ export function formatUsdPerMillion(value: number) {
 
 export function formatMicrosPerMillion(value?: number | null) {
   if (value == null) return '-'
-  return formatUsdPerMillion(microUsdToUsd(value))
+  return formatUsdPerMillion(microAmountToMajor(value))
 }
 
 export function formatNumber(value: number | null | undefined, locale: string) {

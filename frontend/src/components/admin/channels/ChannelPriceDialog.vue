@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import ProviderIcon from '../../common/ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
+import { useBillingCurrency } from '../../../composables/useBillingCurrency'
 import type { BillingMeter } from '../../../types/admin'
 
 export type ChannelPriceForm = {
@@ -37,14 +38,15 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+const { billingCurrency } = useBillingCurrency()
 
-function formatUsdInput(value: number | string) {
+function formatCurrencyInput(value: number | string) {
   if (value === '' || value === undefined || value === null) return ''
-  return `$${value}`
+  return `${billingCurrency.value === 'CNY' ? '¥' : '$'}${value}`
 }
 
-function parseUsdInput(value: string) {
-  return value.replace(/^\$/, '')
+function parseCurrencyInput(value: string) {
+  return value.replace(/^[¥$]/, '')
 }
 </script>
 
@@ -108,9 +110,9 @@ function parseUsdInput(value: string) {
                 v-model="row.inputUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
-                :formatter="formatUsdInput"
+                :formatter="formatCurrencyInput"
                 :min="0"
-                :parser="parseUsdInput"
+                :parser="parseCurrencyInput"
                 :step="0.01"
               />
               <span class="price-pair-separator">/</span>
@@ -118,9 +120,9 @@ function parseUsdInput(value: string) {
                 v-model="row.outputUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
-                :formatter="formatUsdInput"
+                :formatter="formatCurrencyInput"
                 :min="0"
-                :parser="parseUsdInput"
+                :parser="parseCurrencyInput"
                 :step="0.01"
               />
             </div>
@@ -129,9 +131,9 @@ function parseUsdInput(value: string) {
                 v-model="row.unitUsd"
                 class="price-number-input"
                 :controls="false"
-                :formatter="formatUsdInput"
+                :formatter="formatCurrencyInput"
                 :min="0"
-                :parser="parseUsdInput"
+                :parser="parseCurrencyInput"
                 :step="0.01"
               />
               <span class="price-unit-label">{{ t('perImage') }}</span>
@@ -144,9 +146,9 @@ function parseUsdInput(value: string) {
                 v-model="row.cacheReadUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
-                :formatter="formatUsdInput"
+                :formatter="formatCurrencyInput"
                 :min="0"
-                :parser="parseUsdInput"
+                :parser="parseCurrencyInput"
                 :step="0.01"
               />
               <span class="price-pair-separator">/</span>
@@ -154,9 +156,9 @@ function parseUsdInput(value: string) {
                 v-model="row.cacheWriteUsdPerMillion"
                 class="price-number-input"
                 :controls="false"
-                :formatter="formatUsdInput"
+                :formatter="formatCurrencyInput"
                 :min="0"
-                :parser="parseUsdInput"
+                :parser="parseCurrencyInput"
                 :step="0.01"
               />
             </div>

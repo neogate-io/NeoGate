@@ -14,15 +14,16 @@ import { deleteApp, getAppRunLogs, getApps, testApp, updateApp } from '../../api
 import AppCreateDialog from '../../components/admin/apps/AppCreateDialog.vue'
 import AppDetailDrawer from '../../components/admin/apps/AppDetailDrawer.vue'
 import { useAppCreate } from '../../composables/useAppCreate'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { AppRecord, AppRunLog } from '../../types/admin'
 import { copyTextWithMessage } from '../../utils/clipboard'
 import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
-import { microUsdToUsd } from '../../utils/format'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const { formatMoney } = useBillingCurrency()
 const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const apps = ref<AppRecord[]>([])
@@ -39,7 +40,7 @@ const create = useAppCreate()
 const edit = useAppCreate()
 
 function cost(value: number) {
-  return `$${microUsdToUsd(value).toFixed(4)}`
+  return formatMoney(value, locale.value, 4)
 }
 
 function openCreate() {

@@ -471,7 +471,7 @@ pub async fn setup_sync_pricing_templates_for_state(
     let result = sync_pricing_templates(
         state,
         SyncPricingTemplatesRequest {
-            source: "models_dev".to_string(),
+            source: String::new(),
         },
     )
     .await?;

@@ -19,18 +19,19 @@ import {
   type UserUsageStatistics
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import {
   downloadBlob,
   formatDurationMs,
-  formatMicroUsd,
   formatNumber,
   formatTokenRate,
-  microUsdToUsd,
+  microAmountToMajor,
   toDateKey
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { billingCurrency, formatMoney } = useBillingCurrency()
 const AdminUsageChart = defineAsyncComponent(
   () => import('../../components/admin/common/AdminUsageChart.vue')
 )
@@ -159,7 +160,7 @@ const timelineRows = computed(() =>
 const modelSeriesRows = computed(() => statisticsTimeSeries.value.model_points)
 const costTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#2563eb'],
-  grid: { left: 12, right: 18, top: 28, bottom: 28, containLabel: true },
+  grid: { left: 12, right: 18, top: 28, bottom: 28, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
   tooltip: {
     trigger: 'axis',
     formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
@@ -171,7 +172,10 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
   },
   yAxis: {
     type: 'value',
-    axisLabel: { color: '#667085', formatter: (value: number) => `$${value}` },
+    axisLabel: {
+      color: '#667085',
+      formatter: (value: number) => `${billingCurrency.value === 'CNY' ? '¥' : '$'}${value}`
+    },
     splitLine: { lineStyle: { color: '#edf2f7' } }
   },
   series: [
@@ -180,13 +184,13 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
       type: 'line',
       smooth: true,
       areaStyle: { opacity: 0.12 },
-      data: dailyChartRows.value.map((item) => Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)))
+      data: dailyChartRows.value.map((item) => Number(microAmountToMajor(item.cost_micro_usd).toFixed(6)))
     }
   ]
 }))
 const requestTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#16a34a'],
-  grid: { left: 12, right: 18, top: 28, bottom: 28, containLabel: true },
+  grid: { left: 12, right: 18, top: 28, bottom: 28, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
   tooltip: {
     trigger: 'axis',
     formatter: (params: unknown) => trendTooltip(params, t('requestCount'), 'number')
@@ -214,7 +218,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
   const rows = [...statisticsSummary.value.top_users].reverse()
   return {
     color: ['#0f766e'],
-    grid: { left: 12, right: 24, top: 18, bottom: 24, containLabel: true },
+    grid: { left: 12, right: 24, top: 18, bottom: 24, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
@@ -236,7 +240,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
         type: 'bar',
         barMaxWidth: 16,
         data: rows.map((item) => ({
-          value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)),
+          value: Number(microAmountToMajor(item.cost_micro_usd).toFixed(6)),
           userQuery: item.user_id != null ? String(item.user_id) : item.user_display_name
         }))
       }
@@ -245,7 +249,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
 })
 const topModelsOption = computed<EChartsCoreOption>(() => ({
   color: ['#7c3aed'],
-  grid: { left: 12, right: 18, top: 28, bottom: 54, containLabel: true },
+  grid: { left: 12, right: 18, top: 28, bottom: 54, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
   tooltip: {
     trigger: 'axis',
     axisPointer: { type: 'shadow' },
@@ -269,7 +273,7 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
       type: 'bar',
       barMaxWidth: 22,
       data: statisticsSummary.value.top_models.map((item) => ({
-        value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)),
+        value: Number(microAmountToMajor(item.cost_micro_usd).toFixed(6)),
         channelName: item.channel_name,
         model: item.model
       }))
@@ -647,7 +651,7 @@ function modelLineOption(options: {
         ]
   return {
     color: chartPalette(),
-    grid: { left: 12, right: 18, top: 36, bottom: 34, containLabel: true },
+    grid: { left: 12, right: 18, top: 36, bottom: 34, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     legend: { top: 0, type: 'scroll', textStyle: { color: '#667085' } },
     tooltip: {
       trigger: 'axis',
@@ -679,7 +683,7 @@ function horizontalMetricOption(options: {
 }): EChartsCoreOption {
   return {
     color: [options.color],
-    grid: { left: 12, right: 24, top: 18, bottom: 24, containLabel: true },
+    grid: { left: 12, right: 24, top: 18, bottom: 24, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
@@ -862,7 +866,7 @@ function chartNumericValue(value: unknown) {
           <div class="statistics-metric-grid">
             <div class="statistics-metric">
               <span>{{ t('totalCost') }}</span>
-              <strong>{{ formatMicroUsd(statisticsSummary.totals.cost_micro_usd, 6) }}</strong>
+              <strong>{{ formatMoney(statisticsSummary.totals.cost_micro_usd, locale, 6) }}</strong>
             </div>
             <div class="statistics-metric">
               <span>{{ t('requestCount') }}</span>
@@ -1065,7 +1069,7 @@ function chartNumericValue(value: unknown) {
                   <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</template>
+                  <template #default="{ row }">{{ formatMoney(row.cost_micro_usd, locale, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
@@ -1130,7 +1134,7 @@ function chartNumericValue(value: unknown) {
                   <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</template>
+                  <template #default="{ row }">{{ formatMoney(row.cost_micro_usd, locale, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>

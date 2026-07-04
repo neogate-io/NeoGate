@@ -10,12 +10,20 @@ pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-pr
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum BillingCurrency {
+    Usd,
+    Cny,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
     pub bind_addr: SocketAddr,
     pub public_base_url: Option<String>,
     pub site_name: String,
+    pub billing_currency: BillingCurrency,
     pub runtime_mode: RuntimeMode,
     pub process_role: ProcessRole,
     pub admin_token_secret: String,
@@ -50,6 +58,7 @@ pub struct RuntimeProbe {
     pub redis_url: Option<String>,
     pub public_base_url: Option<String>,
     pub site_name: Option<String>,
+    pub billing_currency: Option<BillingCurrency>,
     pub admin_token_secret: Option<String>,
     pub upstream_secret_key: Option<String>,
     pub env_file: PathBuf,
@@ -130,6 +139,23 @@ impl ServiceMode {
         match self {
             Self::Internal => "internal",
             Self::Paid => "paid",
+        }
+    }
+}
+
+impl BillingCurrency {
+    pub fn from_env_value(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "USD" => Ok(Self::Usd),
+            "CNY" => Ok(Self::Cny),
+            _ => anyhow::bail!("BILLING_CURRENCY must be USD or CNY"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Usd => "USD",
+            Self::Cny => "CNY",
         }
     }
 }
@@ -236,6 +262,12 @@ impl Config {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "NeoGate".to_string()),
+            billing_currency: env::var("BILLING_CURRENCY")
+                .ok()
+                .as_deref()
+                .map(BillingCurrency::from_env_value)
+                .transpose()?
+                .unwrap_or(BillingCurrency::Usd),
             runtime_mode,
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
@@ -454,6 +486,10 @@ impl RuntimeProbe {
             redis_url: optional("REDIS_URL"),
             public_base_url,
             site_name: optional("SITE_NAME").map(|value| value.trim().to_string()),
+            billing_currency: optional("BILLING_CURRENCY")
+                .as_deref()
+                .map(BillingCurrency::from_env_value)
+                .transpose()?,
             admin_token_secret: optional("ADMIN_TOKEN_SECRET"),
             upstream_secret_key: optional("UPSTREAM_SECRET_KEY"),
             env_file,

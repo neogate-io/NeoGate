@@ -1,20 +1,29 @@
 import { computed, reactive } from 'vue'
-import { getPublicSiteSetting } from '../api/settings'
+import { getPublicSiteSetting, type SiteSetting } from '../api/settings'
 
 const DEFAULT_SITE_NAME = 'NeoGate'
+const DEFAULT_BILLING_CURRENCY = 'USD' as const
+
+type BillingCurrency = 'USD' | 'CNY'
 
 const brand = reactive({
   loaded: false,
   loading: false,
   siteName: DEFAULT_SITE_NAME,
-  logoUrl: '/logos/logo.svg'
+  logoUrl: '/logos/logo.svg',
+  billingCurrency: DEFAULT_BILLING_CURRENCY as BillingCurrency
 })
 
 let pendingLoad: Promise<void> | null = null
 
-function applyBrand(setting: { site_name?: string | null; logo_url?: string | null }) {
+function normalizeBillingCurrency(value?: string | null): BillingCurrency {
+  return value === 'CNY' ? 'CNY' : 'USD'
+}
+
+function applyBrand(setting: SiteSetting) {
   brand.siteName = setting.site_name?.trim() || DEFAULT_SITE_NAME
   brand.logoUrl = setting.logo_url?.trim() || ''
+  brand.billingCurrency = normalizeBillingCurrency(setting.billing_currency)
   brand.loaded = true
 }
 
@@ -36,7 +45,7 @@ async function loadSiteBrand(force = false) {
   return pendingLoad
 }
 
-export function setSiteBrand(setting: { site_name?: string | null; logo_url?: string | null }) {
+export function setSiteBrand(setting: SiteSetting) {
   applyBrand(setting)
 }
 
@@ -46,6 +55,7 @@ export function useSiteBrand() {
   return {
     siteName: computed(() => brand.siteName),
     logoUrl: computed(() => brand.logoUrl),
+    billingCurrency: computed(() => brand.billingCurrency),
     loadSiteBrand,
     setSiteBrand
   }

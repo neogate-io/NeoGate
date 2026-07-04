@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { Close, Refresh } from '@element-plus/icons-vue'
 import type { AppRecord, AppRunLog } from '../../../types/admin'
-import { formatCompactDateTime, microUsdToUsd } from '../../../utils/format'
+import { useBillingCurrency } from '../../../composables/useBillingCurrency'
+import { useLocale } from '../../../composables/useLocale'
+import { formatCompactDateTime } from '../../../utils/format'
 
 const open = defineModel<boolean>('open', { required: true })
 const activeTab = defineModel<string>('activeTab', { required: true })
@@ -17,8 +19,11 @@ const emit = defineEmits<{
   test: []
 }>()
 
+const { locale } = useLocale()
+const { formatMoney } = useBillingCurrency()
+
 function cost(value: number) {
-  return `$${microUsdToUsd(value).toFixed(4)}`
+  return formatMoney(value, locale.value, 4)
 }
 
 function logStatusType(status: AppRunLog['status']) {

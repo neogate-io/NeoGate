@@ -5,6 +5,7 @@ export type SiteSetting = {
   site_name: string
   public_base_url?: string | null
   logo_url?: string | null
+  billing_currency?: 'USD' | 'CNY' | null
   env_write_supported: boolean
 }
 

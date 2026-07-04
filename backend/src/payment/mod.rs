@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserSessionAuth,
     billing::{account, MICRO_USD_PER_USD},
-    config::{PaymentProvider, ZpayConfig},
+    config::{BillingCurrency, PaymentProvider, ZpayConfig},
     error::{AppError, AppResult},
     id::DbId,
     policy::{self, ServiceMode},
@@ -27,7 +27,6 @@ use crate::{
 pub(crate) mod settings;
 mod zpay;
 
-const PAYMENT_CURRENCY: &str = "CNY";
 const MICRO_USD_PER_CNY: i64 = MICRO_USD_PER_USD * 5;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -144,7 +143,8 @@ pub async fn create_user_payment_order(
 
     let order_id = Uuid::new_v4();
     let order_no = next_payment_order_no(state).await?;
-    let payable_amount_minor = micro_usd_to_cny_minor_units(req.amount_micro_usd);
+    let (payment_currency, payable_amount_minor) =
+        payable_amount_minor_units(state.config.billing_currency, req.amount_micro_usd)?;
     let credit_account = default_project_credit_account(state, auth.user_id).await?;
     let notify_url = notify_url(state.config.public_base_url.as_deref(), provider)?;
     tracing::info!(
@@ -190,7 +190,7 @@ pub async fn create_user_payment_order(
     .bind(credit_account.id)
     .bind(provider.as_str())
     .bind(gateway_res.provider_order_id.as_deref())
-    .bind(PAYMENT_CURRENCY)
+    .bind(payment_currency)
     .bind(req.amount_micro_usd)
     .bind(payable_amount_minor)
     .bind(gateway_res.checkout_url.as_deref())
@@ -487,8 +487,28 @@ fn checkout_notify_url_matches(checkout_url: &str, notify_url: &str) -> bool {
     })
 }
 
+fn payable_amount_minor_units(
+    billing_currency: BillingCurrency,
+    amount_micro_usd: i64,
+) -> AppResult<(&'static str, i64)> {
+    if amount_micro_usd <= 0 {
+        return Err(AppError::BadRequest(
+            "amount_micro_usd must be positive".to_string(),
+        ));
+    }
+
+    match billing_currency {
+        BillingCurrency::Cny => Ok(("CNY", micro_usd_to_cny_minor_units(amount_micro_usd))),
+        BillingCurrency::Usd => Ok(("USD", micro_usd_to_usd_minor_units(amount_micro_usd))),
+    }
+}
+
 fn micro_usd_to_cny_minor_units(amount_micro_usd: i64) -> i64 {
     (amount_micro_usd + (MICRO_USD_PER_CNY / 100) - 1) / (MICRO_USD_PER_CNY / 100)
+}
+
+fn micro_usd_to_usd_minor_units(amount_micro_usd: i64) -> i64 {
+    (amount_micro_usd + (MICRO_USD_PER_USD / 100) - 1) / (MICRO_USD_PER_USD / 100)
 }
 
 fn default_provider() -> String {

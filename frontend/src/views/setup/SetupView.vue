@@ -37,7 +37,7 @@ import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
-import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
+import { majorToMicroAmount, microAmountToMajor } from '../../utils/format'
 import {
   ApiError,
   isNoModelsReturnedError,
@@ -65,7 +65,7 @@ type SetupEndpointPayload = {
 const optionalBusinessSteps = new Set<BusinessSetupStep>(['upstream', 'smtp', 'payment'])
 
 const router = useRouter()
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const loading = ref(false)
 const saving = ref(false)
 const fetchingModels = ref(false)
@@ -96,7 +96,8 @@ const bootstrapForm = reactive({
   databasePassword: '',
   databaseSslMode: 'auto',
   siteName: 'NeoGate',
-  publicBaseUrl: defaultPublicBaseUrl()
+  publicBaseUrl: defaultPublicBaseUrl(),
+  billingCurrency: defaultBillingCurrency()
 })
 
 const databasePortInput = computed({
@@ -110,6 +111,17 @@ const databasePortInput = computed({
     bootstrapForm.databasePort = Math.min(Number(digits), 65535)
   }
 })
+
+watch(
+  locale,
+  (next, prev) => {
+    if (status.value?.billing_currency) return
+    if ((prev === 'zh-CN' && bootstrapForm.billingCurrency === 'CNY') || (prev === 'en-US' && bootstrapForm.billingCurrency === 'USD')) {
+      bootstrapForm.billingCurrency = next === 'zh-CN' ? 'CNY' : 'USD'
+    }
+  },
+  { flush: 'post' }
+)
 
 const setupForm = reactive({
   adminUsername: 'admin',
@@ -459,6 +471,7 @@ async function load() {
       bootstrapForm.siteName = status.value.site_name || bootstrapForm.siteName
       bootstrapForm.publicBaseUrl =
         preferredPublicBaseUrl(status.value.public_base_url) || bootstrapForm.publicBaseUrl
+      bootstrapForm.billingCurrency = status.value.billing_currency || bootstrapForm.billingCurrency
       paymentForm.siteName = status.value.site_name || paymentForm.siteName
 
       if (!status.value.bootstrap_required) {
@@ -484,7 +497,8 @@ async function saveBootstrap() {
             ? buildDatabaseUrl(false)
             : null,
         site_name: bootstrapForm.siteName,
-        public_base_url: bootstrapForm.publicBaseUrl
+        public_base_url: bootstrapForm.publicBaseUrl,
+        billing_currency: bootstrapForm.billingCurrency
       })
       envFile.value = result.restart_required ? result.env_file : ''
       waitingForRestart.value = result.restart_required
@@ -636,8 +650,8 @@ async function syncAndApplyReferencePrices() {
       const template = findPricingTemplate(templates, setupForm.provider, price.model)
       price.enabled = Boolean(template)
       if (!template) continue
-      price.inputUsd = microUsdToUsd(template.input_price_usd_micros)
-      price.outputUsd = microUsdToUsd(template.output_price_usd_micros)
+      price.inputUsd = microAmountToMajor(template.input_price_usd_micros)
+      price.outputUsd = microAmountToMajor(template.output_price_usd_micros)
       applied += 1
     }
     if (applied > 0) {
@@ -684,8 +698,8 @@ async function submitSetup() {
           ? prices.value.map((price) => ({
               provider: setupForm.provider,
               model: price.model,
-              input_price_usd_micros: usdToMicroUsd(price.inputUsd),
-              output_price_usd_micros: usdToMicroUsd(price.outputUsd),
+              input_price_usd_micros: majorToMicroAmount(price.inputUsd),
+              output_price_usd_micros: majorToMicroAmount(price.outputUsd),
               enabled: price.enabled
             }))
           : [],
@@ -1096,6 +1110,10 @@ function defaultPublicBaseUrl() {
   return window.location.origin
 }
 
+function defaultBillingCurrency(): 'USD' | 'CNY' {
+  return locale.value === 'zh-CN' ? 'CNY' : 'USD'
+}
+
 function preferredPublicBaseUrl(value?: string | null) {
   const browserOrigin = defaultPublicBaseUrl()
   if (!value) return browserOrigin
@@ -1251,6 +1269,12 @@ onMounted(load)
               </el-form-item>
               <el-form-item :label="t('publicBaseUrlLabel')">
                 <el-input v-model="bootstrapForm.publicBaseUrl" />
+              </el-form-item>
+              <el-form-item :label="t('billingCurrency')">
+                <el-select v-model="bootstrapForm.billingCurrency">
+                  <el-option label="USD" value="USD" />
+                  <el-option label="CNY" value="CNY" />
+                </el-select>
               </el-form-item>
             </div>
           </div>

@@ -4,11 +4,13 @@ import { Calendar, DataLine, Document, Key, Monitor, Wallet } from '@element-plu
 import { RouterLink } from 'vue-router'
 import { getUserOverview } from '../../api/overview'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
-import { formatMicroUsd, toDateKey } from '../../utils/format'
+import { toDateKey } from '../../utils/format'
 import type { ServicePolicy } from '../../api/policy'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const { formatMoney } = useBillingCurrency()
 const {
   data: overview,
   loading,
@@ -27,7 +29,7 @@ const usageMetricCards = computed(() => [
   {
     key: 'todayCost',
     label: t('todayCost'),
-    value: formatMicroUsd(overview.value?.today_cost_micro_usd),
+    value: formatMoney(overview.value?.today_cost_micro_usd, locale.value, 2),
     trend: buildTrend(
       todayCost.value,
       yesterdayCost.value,
@@ -39,7 +41,7 @@ const usageMetricCards = computed(() => [
   {
     key: 'monthCost',
     label: t('monthCost'),
-    value: formatMicroUsd(overview.value?.month_cost_micro_usd),
+    value: formatMoney(overview.value?.month_cost_micro_usd, locale.value, 2),
     trend: buildTrend(
       currentMonthCost.value,
       previousMonthSamePeriodCost.value,
@@ -256,7 +258,7 @@ onBeforeUnmount(() => {
           <span>{{ t('currentBalance') }}</span>
         </div>
         <div class="overview-balance-value">
-          <strong>{{ formatMicroUsd(overview?.available_micro_usd) }}</strong>
+          <strong>{{ formatMoney(overview?.available_micro_usd, locale, 2) }}</strong>
           <small class="overview-balance-estimate">{{ balanceEstimate }}</small>
         </div>
         <el-button
@@ -300,7 +302,7 @@ onBeforeUnmount(() => {
       <div class="user-section-header">
         <div>
           <span class="user-eyebrow">{{ t('trendSummary') }}</span>
-          <h3>{{ formatMicroUsd(overview?.month_cost_micro_usd) }}</h3>
+          <h3>{{ formatMoney(overview?.month_cost_micro_usd, locale, 2) }}</h3>
         </div>
         <span>{{ t('trendPill') }}</span>
       </div>
@@ -327,7 +329,7 @@ onBeforeUnmount(() => {
             height="100"
             tabindex="0"
             role="button"
-            :aria-label="`${formatFullChartDate(point.date)} ${formatMicroUsd(point.cost_micro_usd)}`"
+            :aria-label="`${formatFullChartDate(point.date)} ${formatMoney(point.cost_micro_usd, locale, 2)}`"
             @mouseenter="hoveredChartIndex = index"
             @mousemove="hoveredChartIndex = index"
             @focus="hoveredChartIndex = index"
@@ -336,7 +338,7 @@ onBeforeUnmount(() => {
         </svg>
         <div v-if="hoveredChartPoint" class="overview-chart-tooltip" :style="chartTooltipStyle">
           <span>{{ formatFullChartDate(hoveredChartPoint.date) }}</span>
-          <strong>{{ formatMicroUsd(hoveredChartPoint.cost_micro_usd) }}</strong>
+          <strong>{{ formatMoney(hoveredChartPoint.cost_micro_usd, locale, 2) }}</strong>
         </div>
       </div>
       <div class="overview-chart-axis">

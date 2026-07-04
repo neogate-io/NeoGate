@@ -22,6 +22,7 @@ pub struct SiteSettingRecord {
     pub site_name: String,
     pub public_base_url: Option<String>,
     pub logo_url: Option<String>,
+    pub billing_currency: String,
     pub env_write_supported: bool,
 }
 
@@ -127,6 +128,7 @@ pub async fn get_site_setting(state: &AppState) -> AppResult<SiteSettingRecord> 
         site_name,
         public_base_url: probe.public_base_url,
         logo_url,
+        billing_currency: state.config.billing_currency.as_str().to_string(),
         env_write_supported,
     })
 }

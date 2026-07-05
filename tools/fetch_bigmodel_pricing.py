@@ -156,12 +156,15 @@ def decimal_number(value: str | None) -> int | float | None:
     return float(decimal)
 
 
-def price_per_million(price: dict[str, Any]) -> int | float | None:
+def price_per_million(price: dict[str, Any], *, scale_from_thousand: bool = True) -> int | float | None:
     amount = price.get("amount_cny")
     if amount is None:
         return None
     decimal = Decimal(amount)
-    if "千" in str(price.get("unit") or ""):
+    # 智谱官网 latest/history 表的价格单位是 "元/千tokens"，需 ×1000 换算到元/百万tokens；
+    # 但旗舰表(newModel)的 inPrice/outPrice 虽标注 unit1="千tokens"，实际口径已是元/百万tokens
+    # (与火山引擎渠道 cny_per_million_tokens、models.dev 国际价一致)，故不应再乘 1000。
+    if scale_from_thousand and "千" in str(price.get("unit") or ""):
         decimal *= Decimal(1000)
     return decimal_number(format(decimal.normalize(), "f"))
 
@@ -217,13 +220,15 @@ def to_models_dev_payload(records: list[dict[str, Any]], page_url: str, app_bund
             "raw": record.get("raw"),
         }
         if record.get("pricing_type") == "input_output":
+            # 旗舰表(newModel)的价格口径已是元/百万tokens，不应再按"千tokens"换算。
+            scale_from_thousand = False
             for source, target in (
                 ("input_price", "input"),
                 ("output_price", "output"),
                 ("cache_hit_price", "cache_read"),
                 ("cache_storage_price", "cache_write"),
             ):
-                value = price_per_million(record[source])
+                value = price_per_million(record[source], scale_from_thousand=scale_from_thousand)
                 if value is not None:
                     cost[target] = value
         else:

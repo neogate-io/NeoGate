@@ -37,6 +37,17 @@ function formatReferenceMicros(value: number | null | undefined) {
 }
 const confirmDialog = createConfirmAction(() => t('cancel'))
 
+const referencePricesIntro = computed(() =>
+  billingCurrency.value === 'CNY'
+    ? t('syncReferencePricesConfirmIntroCny')
+    : t('syncReferencePricesConfirmIntro')
+)
+const referencePricesSourceUnavailableText = computed(() =>
+  billingCurrency.value === 'CNY'
+    ? t('referencePricesSourceUnavailableCny')
+    : t('referencePricesSourceUnavailable')
+)
+
 const loading = ref(false)
 const servicePolicy = ref<ServicePolicy | null>(null)
 const servicePolicySaving = ref(false)
@@ -175,7 +186,7 @@ function referencePricesSyncedMessage(result: { saved: number }) {
 
 function referenceSyncConfirmContent() {
   return h('div', { class: 'reference-sync-copy' }, [
-    h('p', { class: 'reference-sync-lead' }, t('syncReferencePricesConfirmIntro')),
+    h('p', { class: 'reference-sync-lead' }, referencePricesIntro.value),
     h('div', { class: 'reference-sync-notes' }, [
       h('p', t('syncReferencePricesConfirmSafe')),
       h('p', t('syncReferencePricesConfirmApply'))
@@ -189,7 +200,7 @@ function readReferenceSyncError(err: unknown) {
     err.status === 502 &&
     err.message.includes('pricing reference source')
   ) {
-    return t('referencePricesSourceUnavailable')
+    return referencePricesSourceUnavailableText.value
   }
 
   return readError(err)
@@ -338,7 +349,7 @@ onMounted(load)
           <el-icon class="admin-settings-panel-icon"><PriceTag /></el-icon>
           <div class="other-settings-card-copy">
             <h3>{{ t('modelReferencePrices') }}</h3>
-            <p>{{ t('syncReferencePricesConfirmIntro') }}</p>
+            <p>{{ referencePricesIntro }}</p>
             <p class="other-settings-meta">
               <span>{{ t('referencePricesLastUpdated') }}</span>
               <strong>{{ referencePricesLastUpdated }}</strong>

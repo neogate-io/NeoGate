@@ -13,6 +13,16 @@ Thanks for helping improve NeoGate. This project is a self-hosted Rust LLM API g
 
 See [docs/development.md](docs/development.md) for the local development workflow, environment variables, and verification commands.
 
+## Git Hooks
+
+This repository ships a `pre-commit` hook under `.githooks/` that runs `cargo fmt --all -- --check` on staged Rust files, mirroring the CI formatting check. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+If a commit is blocked, fix with `cargo fmt --all`, then `git add -u` and commit again.
+
 ## Verification
 
 Run the checks that match your change:

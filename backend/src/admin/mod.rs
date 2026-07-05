@@ -64,10 +64,11 @@ use self::{
         ChannelDiagnosticReport,
     },
     price::{
-        list_model_reference_catalog, live_model_reference_catalog, list_pricing_policies, list_pricing_templates,
-        list_provider_models, list_provider_prices, sync_pricing_templates, upsert_pricing_policy,
-        upsert_provider_price, ModelReferenceCatalogRecord, PricingPolicyRecord,
-        PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
+        list_model_reference_catalog, list_pricing_policies, list_pricing_templates,
+        list_provider_models, list_provider_prices, live_model_reference_catalog,
+        sync_pricing_templates, upsert_pricing_policy, upsert_provider_price,
+        ModelReferenceCatalogRecord, PricingPolicyRecord, PricingTemplateRecord,
+        PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
         SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
     },
     project::{

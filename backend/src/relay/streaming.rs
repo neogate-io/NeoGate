@@ -778,7 +778,8 @@ impl ResponseUsageParser {
                 }
             }
             Self::Json {
-                buffer: Some(bytes), ..
+                buffer: Some(bytes),
+                ..
             } => json_body_is_complete(bytes)
                 .then(|| "json-body-complete".to_string())
                 .or(Some("json-body-incomplete".to_string())),
@@ -971,8 +972,7 @@ fn sse_data_type_name(data: &str) -> Option<String> {
 }
 
 fn sse_data_type_is(data: &str, expected: &str) -> bool {
-    sse_data_type_name(data)
-        .is_some_and(|type_| type_ == expected)
+    sse_data_type_name(data).is_some_and(|type_| type_ == expected)
 }
 
 #[cfg(test)]
@@ -1228,8 +1228,10 @@ data: {"type":"response.output_text.delta","delta":"hi"}
     fn stream_usage_parser_records_done_signal() {
         let mut parser = StreamUsageParser::new(1024);
 
-        parser.observe(b"data: [DONE]
-");
+        parser.observe(
+            b"data: [DONE]
+",
+        );
 
         assert!(parser.completed);
         assert!(parser.saw_done);

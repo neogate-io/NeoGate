@@ -31,7 +31,7 @@ export function getLiveModelReferenceCatalog() {
   )
 }
 
-export function syncPricingTemplates(source = 'models_dev') {
+export function syncPricingTemplates(source = '') {
   return adminRequest<PricingTemplateSyncResult>('/api/admin/pricing-templates/sync', {
     method: 'POST',
     body: JSON.stringify({ source })

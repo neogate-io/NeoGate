@@ -493,6 +493,7 @@ export type PricingTemplateSyncResult = {
   fetched: number
   saved: number
   skipped: number
+  removed: number
 }
 
 export type PricingPolicy = {

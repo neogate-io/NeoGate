@@ -2,7 +2,7 @@ import { computed, reactive } from 'vue'
 import { getPublicSiteSetting, type SiteSetting } from '../api/settings'
 
 const DEFAULT_SITE_NAME = 'NeoGate'
-const DEFAULT_BILLING_CURRENCY = 'USD' as const
+const DEFAULT_BILLING_CURRENCY = 'CNY' as const
 
 type BillingCurrency = 'USD' | 'CNY'
 

@@ -32885,6 +32885,116 @@
       ]
     }
   },
+  "deepseek": {
+    "id": "deepseek",
+    "env": [
+      "DEEPSEEK_API_KEY"
+    ],
+    "npm": "@ai-sdk/openai-compatible",
+    "api": "https://api.deepseek.com",
+    "name": "DeepSeek",
+    "doc": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+    "models": {
+      "deepseek-v4-flash": {
+        "id": "deepseek-v4-flash",
+        "name": "deepseek-v4-flash",
+        "description": "",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "metadata": {
+          "currency": "CNY",
+          "cost_unit": "1M tokens",
+          "pricing": [
+            {
+              "section": "模型推理价格",
+              "context": "1M",
+              "output_length": "最大 384K",
+              "cost": {
+                "cache_read": 0.02,
+                "input": 1,
+                "output": 2,
+                "basis": "token"
+              },
+              "raw": {
+                "cache_read_cny_per_million_tokens": "0.02元",
+                "input_cny_per_million_tokens": "1元",
+                "output_cny_per_million_tokens": "2元"
+              },
+              "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
+            }
+          ]
+        },
+        "limit": {
+          "context": 1000000
+        },
+        "cost": {
+          "cache_read": 0.02,
+          "input": 1,
+          "output": 2,
+          "basis": "token"
+        }
+      },
+      "deepseek-v4-pro": {
+        "id": "deepseek-v4-pro",
+        "name": "deepseek-v4-pro",
+        "description": "",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "metadata": {
+          "currency": "CNY",
+          "cost_unit": "1M tokens",
+          "pricing": [
+            {
+              "section": "模型推理价格",
+              "context": "1M",
+              "output_length": "最大 384K",
+              "cost": {
+                "cache_read": 0.025,
+                "input": 3,
+                "output": 6,
+                "basis": "token"
+              },
+              "raw": {
+                "cache_read_cny_per_million_tokens": "0.025元",
+                "input_cny_per_million_tokens": "3元",
+                "output_cny_per_million_tokens": "6元"
+              },
+              "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
+            }
+          ]
+        },
+        "limit": {
+          "context": 1000000
+        },
+        "cost": {
+          "cache_read": 0.025,
+          "input": 3,
+          "output": 6,
+          "basis": "token"
+        }
+      }
+    },
+    "metadata": {
+      "currency": "CNY",
+      "cost_unit": "1M tokens",
+      "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+      "fetched_at": "2026-07-05T12:22:11.321763+00:00"
+    }
+  },
   "minimax": {
     "id": "minimax",
     "env": [

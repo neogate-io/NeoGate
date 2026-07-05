@@ -1112,7 +1112,7 @@ function defaultPublicBaseUrl() {
 }
 
 function defaultBillingCurrency(): 'USD' | 'CNY' {
-  return locale.value === 'zh-CN' ? 'CNY' : 'USD'
+  return 'CNY'
 }
 
 function preferredPublicBaseUrl(value?: string | null) {

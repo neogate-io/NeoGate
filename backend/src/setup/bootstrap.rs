@@ -236,7 +236,7 @@ pub async fn prepare_runtime_config(req: BootstrapConfigInput) -> AppResult<Prep
     let public_base_url = public_base_url
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
     let site_name = site_name.unwrap_or_else(|| "NeoGate".to_string());
-    let billing_currency = billing_currency.unwrap_or(crate::config::BillingCurrency::Usd);
+    let billing_currency = billing_currency.unwrap_or(crate::config::BillingCurrency::Cny);
     validate_public_base_url(&public_base_url)?;
     test_database(&database_url).await?;
 

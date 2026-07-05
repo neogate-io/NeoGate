@@ -267,7 +267,7 @@ impl Config {
                 .as_deref()
                 .map(BillingCurrency::from_env_value)
                 .transpose()?
-                .unwrap_or(BillingCurrency::Usd),
+                .unwrap_or(BillingCurrency::Cny),
             runtime_mode,
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
@@ -336,7 +336,7 @@ impl Config {
                     "CREDIT_RELEASE_INTERVAL_SECONDS",
                     60,
                 )?),
-                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 2048)?,
+                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 8192)?,
             },
             usage_queue: UsageQueueConfig {
                 flush_interval: Duration::from_millis(parse_u64("USAGE_FLUSH_INTERVAL_MS", 1000)?),

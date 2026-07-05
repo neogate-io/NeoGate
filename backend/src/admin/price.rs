@@ -106,6 +106,7 @@ pub struct PricingTemplateSyncResult {
     pub fetched: usize,
     pub saved: u64,
     pub skipped: usize,
+    pub removed: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,7 +290,10 @@ pub async fn list_model_reference_catalog(
 pub async fn live_model_reference_catalog(
     state: &AppState,
 ) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
-    let upstream = fetch_local_cny_pricing_json(state).await?;
+    let upstream = match state.config.billing_currency {
+        BillingCurrency::Usd => fetch_models_dev_pricing_json(state).await?,
+        BillingCurrency::Cny => fetch_local_cny_pricing_json(state).await?,
+    };
     let provider_codes = enabled_provider_codes(state).await?;
     let now = Utc::now();
     let mut records = Vec::new();
@@ -303,33 +307,40 @@ pub async fn live_model_reference_catalog(
         }
 
         for (model, model_data) in provider_data.models {
-            let model = model.trim();
-            if model.is_empty() {
-                continue;
-            }
-            let Some(prices) = pricing_micros_from_local_pricing_model(&model_data) else {
+            let template = match state.config.billing_currency {
+                BillingCurrency::Usd => {
+                    pricing_template_from_models_dev_model(provider, &model, &model_data)
+                }
+                BillingCurrency::Cny => {
+                    pricing_template_from_local_cny_model(provider, &model, &model_data)
+                }
+            };
+            let Some(template) = template else { continue };
+            let Some(prices) = template.prices else {
                 continue;
             };
-            let billing_meter = billing_meter_from_models_dev_model(&model_data);
             records.push(ModelReferenceCatalogRecord {
                 id: 0,
                 provider: provider.to_string(),
-                model: model.to_string(),
+                model: model.trim().to_string(),
                 display_name: model_data
                     .name
                     .clone()
                     .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| model.to_string()),
+                    .unwrap_or_else(|| model.trim().to_string()),
                 input_price_usd_micros: prices.input_price_usd_micros,
                 output_price_usd_micros: prices.output_price_usd_micros,
                 cache_read_price_usd_micros: prices.cache_read_price_usd_micros,
                 cache_write_price_usd_micros: prices.cache_write_price_usd_micros,
-                billing_meter,
+                billing_meter: template.billing_meter,
                 unit_price_usd_micros: prices.unit_price_usd_micros,
                 pricing_basis: prices.pricing_basis,
-                source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+                source: match state.config.billing_currency {
+                    BillingCurrency::Usd => PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
+                    BillingCurrency::Cny => PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+                },
                 enabled: true,
-                capabilities: local_pricing_capabilities(&model_data),
+                capabilities: template.capabilities,
                 model_source: "upstream".to_string(),
                 model_updated_at: now,
                 created_at: now,
@@ -492,7 +503,7 @@ async fn sync_models_dev_pricing_templates(
 
         for (model, model_data) in provider_data.models {
             let Some(template) =
-                pricing_template_from_models_dev_model(provider, &model, model_data)
+                pricing_template_from_models_dev_model(provider, &model, &model_data)
             else {
                 skipped += 1;
                 continue;
@@ -503,11 +514,14 @@ async fn sync_models_dev_pricing_templates(
         }
     }
 
+    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_LOCAL_CNY).await?;
+
     Ok(PricingTemplateSyncResult {
         source: PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
         fetched,
         saved,
         skipped,
+        removed,
     })
 }
 
@@ -542,6 +556,22 @@ async fn fetch_local_cny_pricing_json(
         .map_err(local_cny_pricing_unavailable)
 }
 
+async fn fetch_models_dev_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    state
+        .http
+        .get(MODELS_DEV_PRICING_URL)
+        .send()
+        .await
+        .map_err(models_dev_pricing_unavailable)?
+        .error_for_status()
+        .map_err(models_dev_pricing_unavailable)?
+        .json::<HashMap<String, ModelsDevProvider>>()
+        .await
+        .map_err(models_dev_pricing_unavailable)
+}
+
 async fn apply_local_cny_pricing_templates(
     state: &AppState,
     upstream: HashMap<String, ModelsDevProvider>,
@@ -564,7 +594,7 @@ async fn apply_local_cny_pricing_templates(
 
         for (model, model_data) in provider_data.models {
             let Some(template) =
-                pricing_template_from_local_cny_model(provider, &model, model_data)
+                pricing_template_from_local_cny_model(provider, &model, &model_data)
             else {
                 skipped += 1;
                 continue;
@@ -575,11 +605,14 @@ async fn apply_local_cny_pricing_templates(
         }
     }
 
+    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MODELS_DEV).await?;
+
     Ok(PricingTemplateSyncResult {
         source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
         fetched,
         saved,
         skipped,
+        removed,
     })
 }
 
@@ -621,19 +654,19 @@ struct PricingTemplateUpsert<'a> {
 fn pricing_template_from_models_dev_model<'a>(
     provider: &'a str,
     model: &'a str,
-    model_data: ModelsDevModel,
+    model_data: &ModelsDevModel,
 ) -> Option<PricingTemplateUpsert<'a>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
-    let billing_meter = billing_meter_from_models_dev_model(&model_data);
-    let prices = pricing_micros_from_models_dev_model(&model_data);
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let prices = pricing_micros_from_models_dev_model(model_data);
     Some(PricingTemplateUpsert {
         provider,
         model,
         billing_meter,
-        capabilities: models_dev_capabilities(&model_data),
+        capabilities: models_dev_capabilities(model_data),
         prices,
     })
 }
@@ -641,19 +674,19 @@ fn pricing_template_from_models_dev_model<'a>(
 fn pricing_template_from_local_cny_model<'a>(
     provider: &'a str,
     model: &'a str,
-    model_data: ModelsDevModel,
+    model_data: &ModelsDevModel,
 ) -> Option<PricingTemplateUpsert<'a>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
-    let billing_meter = billing_meter_from_models_dev_model(&model_data);
-    let prices = pricing_micros_from_local_pricing_model(&model_data);
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let prices = pricing_micros_from_local_pricing_model(model_data);
     Some(PricingTemplateUpsert {
         provider,
         model,
         billing_meter,
-        capabilities: local_pricing_capabilities(&model_data),
+        capabilities: local_pricing_capabilities(model_data),
         prices,
     })
 }
@@ -886,6 +919,20 @@ async fn upsert_synced_pricing_template(
     .bind(prices.unit_price_usd_micros)
     .bind(prices.pricing_basis.as_str())
     .bind(source)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 同步切换计费币种/数据源后,清理上一个自动同步源残留的参考价记录,
+/// 避免 CNY 计费下残留的 models.dev USD 价格被当作 CNY 展示(反之亦然)。
+/// 仅清理指定的旧自动源;手动确认价(confirmed_price)等其它来源不受影响。
+async fn prune_stale_pricing_templates(state: &AppState, stale_source: &str) -> AppResult<u64> {
+    let result = sqlx::query(
+        "DELETE FROM pricing_template
+         WHERE source = $1",
+    )
+    .bind(stale_source)
     .execute(&state.db.pool)
     .await?;
     Ok(result.rows_affected())

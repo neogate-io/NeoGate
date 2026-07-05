@@ -16,7 +16,6 @@ use crate::{
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
 const PRICE_TEMPLATE_SOURCE_MODELS_DEV: &str = "models_dev";
 const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
-const LOCAL_CNY_PRICING_JSON: &str = include_str!("../../../frontend/public/model-pricing.json");
 
 #[derive(Debug, Serialize)]
 pub struct ProviderPriceRecord {
@@ -271,6 +270,66 @@ pub async fn list_model_reference_catalog(
     rows.iter().map(model_reference_catalog_from_row).collect()
 }
 
+pub async fn live_model_reference_catalog(
+    state: &AppState,
+) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
+    let upstream = fetch_local_cny_pricing_json(state).await?;
+    let provider_codes = enabled_provider_codes(state).await?;
+    let now = Utc::now();
+    let mut records = Vec::new();
+
+    for (upstream_provider, provider_data) in upstream {
+        let Some(provider) = normalize_template_provider(&upstream_provider) else {
+            continue;
+        };
+        if !provider_codes.contains(provider) {
+            continue;
+        }
+
+        for (model, model_data) in provider_data.models {
+            let model = model.trim();
+            if model.is_empty() {
+                continue;
+            }
+            let Some(prices) = pricing_micros_from_local_pricing_model(&model_data) else {
+                continue;
+            };
+            let billing_meter = billing_meter_from_models_dev_model(&model_data);
+            records.push(ModelReferenceCatalogRecord {
+                id: 0,
+                provider: provider.to_string(),
+                model: model.to_string(),
+                display_name: model_data
+                    .name
+                    .clone()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| model.to_string()),
+                input_price_usd_micros: prices.input_price_usd_micros,
+                output_price_usd_micros: prices.output_price_usd_micros,
+                cache_read_price_usd_micros: prices.cache_read_price_usd_micros,
+                cache_write_price_usd_micros: prices.cache_write_price_usd_micros,
+                billing_meter,
+                unit_price_usd_micros: prices.unit_price_usd_micros,
+                pricing_basis: prices.pricing_basis,
+                source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+                enabled: true,
+                capabilities: local_pricing_capabilities(&model_data),
+                model_source: "upstream".to_string(),
+                model_updated_at: now,
+                created_at: now,
+                updated_at: now,
+            });
+        }
+    }
+
+    records.sort_by(|left, right| {
+        left.provider
+            .cmp(&right.provider)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+    Ok(records)
+}
+
 pub async fn list_pricing_policies(state: &AppState) -> AppResult<Vec<PricingPolicyRecord>> {
     let rows = sqlx::query(
         "SELECT id, name, user_group, multiplier_micros,
@@ -436,14 +495,41 @@ async fn sync_models_dev_pricing_templates(
     })
 }
 
+const LOCAL_CNY_PRICING_JSON_PATH: &str = "/model-pricing.json";
+
 async fn sync_local_cny_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
-    let upstream: HashMap<String, ModelsDevProvider> = serde_json::from_str(LOCAL_CNY_PRICING_JSON)
-        .map_err(|err| {
-            AppError::BadRequest(format!("failed to parse local CNY pricing JSON: {err}"))
-        })?;
+    let upstream = fetch_local_cny_pricing_json(state).await?;
+    apply_local_cny_pricing_templates(state, upstream).await
+}
 
+async fn fetch_local_cny_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    let Some(base_url) = state.config.public_base_url.as_deref() else {
+        return Err(AppError::BadRequest(
+            "PUBLIC_BASE_URL is not configured, cannot fetch local CNY pricing JSON".to_string(),
+        ));
+    };
+    let url = format!("{base_url}{LOCAL_CNY_PRICING_JSON_PATH}");
+    state
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(local_cny_pricing_unavailable)?
+        .error_for_status()
+        .map_err(local_cny_pricing_unavailable)?
+        .json::<HashMap<String, ModelsDevProvider>>()
+        .await
+        .map_err(local_cny_pricing_unavailable)
+}
+
+async fn apply_local_cny_pricing_templates(
+    state: &AppState,
+    upstream: HashMap<String, ModelsDevProvider>,
+) -> AppResult<PricingTemplateSyncResult> {
     let provider_codes = enabled_provider_codes(state).await?;
     let mut fetched = 0usize;
     let mut skipped = 0usize;
@@ -486,6 +572,14 @@ fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
         error = %err,
         error_debug = ?err,
         "failed to sync pricing templates from models.dev"
+    );
+    AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
+}
+fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
+    tracing::warn!(
+        error = %err,
+        error_debug = ?err,
+        "failed to sync local CNY pricing templates from public base url"
     );
     AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
 }

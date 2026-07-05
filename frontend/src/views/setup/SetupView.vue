@@ -45,7 +45,7 @@ import {
   readModelFetchError,
   readSmtpTestError
 } from '../../utils/errors'
-import { splitCommaList } from '../../utils/channel'
+import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
@@ -362,6 +362,7 @@ const setupProgressPercent = computed(() => {
 const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
+const providerOptions = computed(() => sortProvidersForDisplay(providers.value))
 const isManualBaseUrlProviderSelected = computed(
   () => selectedProvider.value?.code === 'custom' || selectedProvider.value?.code === 'newapi'
 )
@@ -476,8 +477,8 @@ async function load() {
 
       if (!status.value.bootstrap_required) {
         providers.value = await getSetupProviders()
-        if (providers.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providers.value[0].code
+        if (providerOptions.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providerOptions.value[0].code
         }
         applyProviderDefaults()
       }
@@ -508,8 +509,8 @@ async function saveBootstrap() {
         status.value = await getSetupStatus(true)
         reviewingRuntimeConfig.value = false
         providers.value = await getSetupProviders()
-        if (providers.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providers.value[0].code
+        if (providerOptions.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providerOptions.value[0].code
         }
         applyProviderDefaults()
         return
@@ -547,8 +548,8 @@ async function waitForRuntimeRestart() {
         waitingForRestart.value = false
         restartWaitTimedOut.value = false
         providers.value = await getSetupProviders()
-        if (providers.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providers.value[0].code
+        if (providerOptions.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providerOptions.value[0].code
         }
         applyProviderDefaults()
         return
@@ -1272,8 +1273,8 @@ onMounted(load)
               </el-form-item>
               <el-form-item :label="t('billingCurrency')">
                 <el-select v-model="bootstrapForm.billingCurrency">
-                  <el-option label="USD" value="USD" />
-                  <el-option label="CNY" value="CNY" />
+                  <el-option :label="t('currencyUsdLabel')" value="USD" />
+                  <el-option :label="t('currencyCnyLabel')" value="CNY" />
                 </el-select>
               </el-form-item>
             </div>
@@ -1463,7 +1464,7 @@ onMounted(load)
               <el-form-item :label="t('provider')">
                 <el-select v-model="setupForm.provider" filterable>
                   <el-option
-                    v-for="provider in providers"
+                    v-for="provider in providerOptions"
                     :key="provider.code"
                     :label="provider.display_name"
                     :value="provider.code"

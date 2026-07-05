@@ -13,7 +13,11 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getChannels } from '../../api/channels'
-import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
+import {
+  getLiveModelReferenceCatalog,
+  getModelReferenceCatalog,
+  syncPricingTemplates
+} from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import {
   checkLatestVersion,
@@ -24,13 +28,19 @@ import {
 } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { setSiteBrand } from '../../composables/useSiteBrand'
 import type { Channel, ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
-import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
+import { currencySymbol, formatDateTime, formatPricePerMillion } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { billingCurrency } = useBillingCurrency()
+
+function formatReferenceMicros(value: number | null | undefined) {
+  return formatPricePerMillion(value, billingCurrency.value, locale.value)
+}
 const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const loading = ref(false)
@@ -51,6 +61,7 @@ const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
 const servicePolicySaving = ref(false)
 const adminModelSaving = ref(false)
 const syncingTemplates = ref(false)
+const loadingReferenceCatalog = ref(false)
 const checkingVersion = ref(false)
 const versionCheck = ref<VersionCheckResult | null>(null)
 const referencePricesDialogOpen = ref(false)
@@ -164,23 +175,24 @@ function pricingBasisLabel(template: ModelReferenceCatalogRecord) {
 
 function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
   if (template.pricing_basis === 'image') {
-    return `${formatMicrosPerMillion(template.unit_price_usd_micros)} / ${t('perImage')}`
+    return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perImage')}`
   }
-  return `${formatMicrosPerMillion(template.input_price_usd_micros)} / ${formatMicrosPerMillion(
+  return `${formatReferenceMicros(template.input_price_usd_micros)} / ${formatReferenceMicros(
     template.output_price_usd_micros
   )}`
 }
 
 function formatCachePricePair(template: ModelReferenceCatalogRecord) {
   if (template.pricing_basis === 'image') return '-'
+  const zero = `${currencySymbol(billingCurrency.value)}0`
   const cacheRead =
     template.cache_read_price_usd_micros == null
-      ? '$0'
-      : formatMicrosPerMillion(template.cache_read_price_usd_micros)
+      ? zero
+      : formatReferenceMicros(template.cache_read_price_usd_micros)
   const cacheWrite =
     template.cache_write_price_usd_micros == null
-      ? '$0'
-      : formatMicrosPerMillion(template.cache_write_price_usd_micros)
+      ? zero
+      : formatReferenceMicros(template.cache_write_price_usd_micros)
   return `${cacheRead} / ${cacheWrite}`
 }
 
@@ -334,6 +346,18 @@ async function saveServicePolicy() {
     } catch (err) {
       ElMessage.error(readError(err))
       servicePolicy.value = await getAdminServicePolicy().catch(() => servicePolicy.value)
+    }
+  })
+}
+
+async function openReferencePricesDialog() {
+  referencePricesDialogOpen.value = true
+  await withLoading(loadingReferenceCatalog, async () => {
+    try {
+      modelReferenceCatalog.value = await getLiveModelReferenceCatalog()
+    } catch (err) {
+      ElMessage.error(readError(err))
+      modelReferenceCatalog.value = await getModelReferenceCatalog()
     }
   })
 }
@@ -520,7 +544,8 @@ onMounted(load)
           <el-button
             class="admin-action-button"
             :icon="View"
-            @click="referencePricesDialogOpen = true"
+            :loading="loadingReferenceCatalog"
+            @click="openReferencePricesDialog"
           >
             {{ t('viewReferencePrices') }}
           </el-button>
@@ -594,6 +619,7 @@ onMounted(load)
         </span>
       </div>
       <el-table
+        v-loading="loadingReferenceCatalog"
         class="admin-table reference-prices-table"
         :data="filteredPricingTemplates"
         max-height="62vh"

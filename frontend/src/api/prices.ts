@@ -25,6 +25,12 @@ export function getModelReferenceCatalog() {
   return adminRequest<ModelReferenceCatalogRecord[]>('/api/admin/model-reference-catalog')
 }
 
+export function getLiveModelReferenceCatalog() {
+  return adminRequest<ModelReferenceCatalogRecord[]>(
+    '/api/admin/model-reference-catalog/live'
+  )
+}
+
 export function syncPricingTemplates(source = 'models_dev') {
   return adminRequest<PricingTemplateSyncResult>('/api/admin/pricing-templates/sync', {
     method: 'POST',

@@ -64,7 +64,7 @@ use self::{
         ChannelDiagnosticReport,
     },
     price::{
-        list_model_reference_catalog, list_pricing_policies, list_pricing_templates,
+        list_model_reference_catalog, live_model_reference_catalog, list_pricing_policies, list_pricing_templates,
         list_provider_models, list_provider_prices, sync_pricing_templates, upsert_pricing_policy,
         upsert_provider_price, ModelReferenceCatalogRecord, PricingPolicyRecord,
         PricingTemplateRecord, PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
@@ -177,6 +177,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/model-reference-catalog",
             get(model_reference_catalog),
+        )
+        .route(
+            "/api/admin/model-reference-catalog/live",
+            get(live_model_reference_catalog_handler),
         )
         .route("/api/admin/pricing-templates", get(pricing_templates))
         .route(
@@ -624,6 +628,13 @@ async fn model_reference_catalog(
     _admin: AdminAuth,
 ) -> AppResult<Json<Vec<ModelReferenceCatalogRecord>>> {
     Ok(Json(list_model_reference_catalog(&state).await?))
+}
+
+async fn live_model_reference_catalog_handler(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminAuth,
+) -> AppResult<Json<Vec<ModelReferenceCatalogRecord>>> {
+    Ok(Json(live_model_reference_catalog(&state).await?))
 }
 
 async fn smtp_setting(

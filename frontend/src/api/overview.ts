@@ -3,18 +3,18 @@ import { userRequest } from './request'
 export type UserOverview = {
   email: string
   display_name: string
-  balance_micro_usd: number
-  reserved_micro_usd: number
-  available_micro_usd: number
-  today_cost_micro_usd: number
-  month_cost_micro_usd: number
+  balance_micros: number
+  reserved_micros: number
+  available_micros: number
+  today_cost_micros: number
+  month_cost_micros: number
   request_count: number
   daily_costs: DailyCost[]
 }
 
 export type DailyCost = {
   date: string
-  cost_micro_usd: number
+  cost_micros: number
 }
 
 export function getUserOverview() {

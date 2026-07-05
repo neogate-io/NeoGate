@@ -159,8 +159,8 @@ export function completeSetupWizard(input: {
   prices: Array<{
     provider: string
     model: string
-    input_price_usd_micros: number
-    output_price_usd_micros: number
+    input_price_micros: number
+    output_price_micros: number
     enabled: boolean
   }>
   smtp?:

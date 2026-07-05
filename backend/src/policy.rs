@@ -142,8 +142,8 @@ pub struct SetupChannelRequest {
 pub struct SetupProviderPriceRequest {
     pub provider: String,
     pub model: String,
-    pub input_price_usd_micros: i64,
-    pub output_price_usd_micros: i64,
+    pub input_price_micros: i64,
+    pub output_price_micros: i64,
     pub enabled: bool,
 }
 
@@ -339,12 +339,12 @@ pub async fn complete_setup_for_state(
             UpsertProviderPriceRequest {
                 provider: price.provider,
                 model: price.model,
-                input_price_usd_micros: price.input_price_usd_micros,
-                output_price_usd_micros: price.output_price_usd_micros,
-                cache_read_price_usd_micros: None,
-                cache_write_price_usd_micros: None,
+                input_price_micros: price.input_price_micros,
+                output_price_micros: price.output_price_micros,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
                 billing_meter: BillingMeter::Token,
-                unit_price_usd_micros: None,
+                unit_price_micros: None,
                 enabled: price.enabled,
             },
         )

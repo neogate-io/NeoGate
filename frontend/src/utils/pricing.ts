@@ -13,9 +13,9 @@ export function derivedCacheReadPrice(inputPrice: number) {
 export function isProviderPriceConfigured(price?: ProviderPrice) {
   if (!price) return false
   if (price.billing_meter === 'image') {
-    return price.unit_price_usd_micros !== undefined && price.unit_price_usd_micros !== null
+    return price.unit_price_micros !== undefined && price.unit_price_micros !== null
   }
-  return price.input_price_usd_micros >= 0 && price.output_price_usd_micros >= 0
+  return price.input_price_micros >= 0 && price.output_price_micros >= 0
 }
 
 export function isProviderPriceReady(price?: ProviderPrice) {

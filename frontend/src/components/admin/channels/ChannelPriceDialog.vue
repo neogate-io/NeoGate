@@ -7,11 +7,11 @@ export type ChannelPriceForm = {
   provider: string
   model: string
   billingMeter: BillingMeter | null
-  inputUsdPerMillion: number
-  outputUsdPerMillion: number
-  cacheReadUsdPerMillion: number
-  cacheWriteUsdPerMillion: number | null
-  unitUsd: number
+  inputPerMillion: number
+  outputPerMillion: number
+  cacheReadPerMillion: number
+  cacheWritePerMillion: number | null
+  unitPrice: number
   enabled: boolean
   hasPrice: boolean
   hasPriceRecord: boolean
@@ -103,7 +103,7 @@ function parseCurrencyInput(value: string) {
           <div class="price-pair-field">
             <div v-if="row.billingMeter === 'token'" class="price-pair-input">
               <el-input-number
-                v-model="row.inputUsdPerMillion"
+                v-model="row.inputPerMillion"
                 class="price-number-input"
                 :controls="false"
                 :formatter="formatCurrencyInput"
@@ -113,7 +113,7 @@ function parseCurrencyInput(value: string) {
               />
               <span class="price-pair-separator">/</span>
               <el-input-number
-                v-model="row.outputUsdPerMillion"
+                v-model="row.outputPerMillion"
                 class="price-number-input"
                 :controls="false"
                 :formatter="formatCurrencyInput"
@@ -124,7 +124,7 @@ function parseCurrencyInput(value: string) {
             </div>
             <div v-else-if="row.billingMeter === 'image'" class="price-single-input">
               <el-input-number
-                v-model="row.unitUsd"
+                v-model="row.unitPrice"
                 class="price-number-input"
                 :controls="false"
                 :formatter="formatCurrencyInput"
@@ -139,7 +139,7 @@ function parseCurrencyInput(value: string) {
           <div class="price-pair-field">
             <div v-if="row.billingMeter === 'token'" class="price-pair-input">
               <el-input-number
-                v-model="row.cacheReadUsdPerMillion"
+                v-model="row.cacheReadPerMillion"
                 class="price-number-input"
                 :controls="false"
                 :formatter="formatCurrencyInput"
@@ -149,7 +149,7 @@ function parseCurrencyInput(value: string) {
               />
               <span class="price-pair-separator">/</span>
               <el-input-number
-                v-model="row.cacheWriteUsdPerMillion"
+                v-model="row.cacheWritePerMillion"
                 class="price-number-input"
                 :controls="false"
                 :formatter="formatCurrencyInput"

@@ -77,30 +77,30 @@ pub(crate) async fn lock_for_update(
 pub(crate) async fn adjust_balance(
     tx: &mut Transaction<'_, Postgres>,
     credit_account: &CreditAccountId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<i64> {
     let row = sqlx::query(
         "UPDATE credit_account
-         SET balance_micro_usd = balance_micro_usd + $2,
+         SET balance_micros = balance_micros + $2,
              updated_at = now()
-         WHERE id = $1 AND balance_micro_usd + $2 >= reserved_micro_usd
-         RETURNING balance_micro_usd",
+         WHERE id = $1 AND balance_micros + $2 >= reserved_micros
+         RETURNING balance_micros",
     )
     .bind(credit_account.id)
-    .bind(amount_micro_usd)
+    .bind(amount_micros)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(AppError::PaymentRequired)?;
 
-    Ok(row.try_get("balance_micro_usd")?)
+    Ok(row.try_get("balance_micros")?)
 }
 
 pub(crate) async fn decrement_reserved(
     tx: &mut Transaction<'_, Postgres>,
     credit_account: &CreditAccountId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<()> {
-    decrement_reserved_returning_balance(tx, credit_account, amount_micro_usd)
+    decrement_reserved_returning_balance(tx, credit_account, amount_micros)
         .await
         .map(|_| ())
 }
@@ -108,70 +108,70 @@ pub(crate) async fn decrement_reserved(
 pub(crate) async fn decrement_reserved_returning_balance(
     tx: &mut Transaction<'_, Postgres>,
     credit_account: &CreditAccountId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<i64> {
     let row = sqlx::query(
         "UPDATE credit_account
-         SET reserved_micro_usd = reserved_micro_usd - $2,
+         SET reserved_micros = reserved_micros - $2,
              updated_at = now()
          WHERE id = $1
-           AND reserved_micro_usd >= $2
-         RETURNING balance_micro_usd",
+           AND reserved_micros >= $2
+         RETURNING balance_micros",
     )
     .bind(credit_account.id)
-    .bind(amount_micro_usd)
+    .bind(amount_micros)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(AppError::Conflict(
         "reserved credit is insufficient".to_string(),
     ))?;
-    Ok(row.try_get("balance_micro_usd")?)
+    Ok(row.try_get("balance_micros")?)
 }
 
 pub(crate) async fn debit_reserved_balance(
     tx: &mut Transaction<'_, Postgres>,
     credit_account: &CreditAccountId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<i64> {
     let row = sqlx::query(
         "UPDATE credit_account
-         SET balance_micro_usd = balance_micro_usd - $2,
-             reserved_micro_usd = reserved_micro_usd - $2,
+         SET balance_micros = balance_micros - $2,
+             reserved_micros = reserved_micros - $2,
              updated_at = now()
          WHERE id = $1
-           AND balance_micro_usd >= $2
-           AND reserved_micro_usd >= $2
-         RETURNING balance_micro_usd",
+           AND balance_micros >= $2
+           AND reserved_micros >= $2
+         RETURNING balance_micros",
     )
     .bind(credit_account.id)
-    .bind(amount_micro_usd)
+    .bind(amount_micros)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(AppError::Conflict(
         "reserved credit is insufficient".to_string(),
     ))?;
-    Ok(row.try_get("balance_micro_usd")?)
+    Ok(row.try_get("balance_micros")?)
 }
 
 pub(crate) async fn mark_allocation_returned(
     tx: &mut Transaction<'_, Postgres>,
     allocation_id: DbId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<()> {
     let result = sqlx::query(
         "UPDATE credit_allocation
-         SET returned_micro_usd = returned_micro_usd + $2,
+         SET returned_micros = returned_micros + $2,
              status = CASE
-                 WHEN consumed_micro_usd + returned_micro_usd + $2 >= amount_micro_usd
+                 WHEN consumed_micros + returned_micros + $2 >= amount_micros
                  THEN 'settled'
                  ELSE status
              END,
              updated_at = now()
          WHERE id = $1
-           AND consumed_micro_usd + returned_micro_usd + $2 <= amount_micro_usd",
+           AND consumed_micros + returned_micros + $2 <= amount_micros",
     )
     .bind(allocation_id)
-    .bind(amount_micro_usd)
+    .bind(amount_micros)
     .execute(&mut **tx)
     .await?;
     if result.rows_affected() == 0 {
@@ -185,22 +185,22 @@ pub(crate) async fn mark_allocation_returned(
 pub(crate) async fn mark_allocation_consumed(
     tx: &mut Transaction<'_, Postgres>,
     allocation_id: DbId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<()> {
     let result = sqlx::query(
         "UPDATE credit_allocation
-         SET consumed_micro_usd = consumed_micro_usd + $2,
+         SET consumed_micros = consumed_micros + $2,
              status = CASE
-                 WHEN consumed_micro_usd + returned_micro_usd + $2 >= amount_micro_usd
+                 WHEN consumed_micros + returned_micros + $2 >= amount_micros
                  THEN 'settled'
                  ELSE status
              END,
              updated_at = now()
          WHERE id = $1
-           AND consumed_micro_usd + returned_micro_usd + $2 <= amount_micro_usd",
+           AND consumed_micros + returned_micros + $2 <= amount_micros",
     )
     .bind(allocation_id)
-    .bind(amount_micro_usd)
+    .bind(amount_micros)
     .execute(&mut **tx)
     .await?;
     if result.rows_affected() == 0 {
@@ -217,7 +217,7 @@ pub(crate) async fn mark_allocation_recovered(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE credit_allocation
-         SET returned_micro_usd = amount_micro_usd - consumed_micro_usd,
+         SET returned_micros = amount_micros - consumed_micros,
              status = 'recovered',
              updated_at = now()
          WHERE id = $1 AND status = 'active'",

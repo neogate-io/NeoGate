@@ -51,7 +51,7 @@ export type UsageStatisticsAggregate = {
   audio_in_tokens: number
   audio_out_tokens: number
   billable_units: number
-  cost_micro_usd: number
+  cost_micros: number
   avg_latency_ms?: number | null
   avg_first_response_ms?: number | null
 }
@@ -65,7 +65,7 @@ export type DailyUsageStatistics = {
   output_tokens: number
   total_tokens: number
   billable_units: number
-  cost_micro_usd: number
+  cost_micros: number
   avg_latency_ms?: number | null
 }
 
@@ -78,7 +78,7 @@ export type UsageTimeSeriesPoint = {
   output_tokens: number
   total_tokens: number
   billable_units: number
-  cost_micro_usd: number
+  cost_micros: number
   avg_latency_ms?: number | null
   avg_first_response_ms?: number | null
   avg_output_tokens_per_second?: number | null
@@ -96,7 +96,7 @@ export type UserUsageStatistics = {
   output_tokens: number
   total_tokens: number
   billable_units: number
-  cost_micro_usd: number
+  cost_micros: number
   avg_latency_ms?: number | null
   model_count: number
 }
@@ -112,7 +112,7 @@ export type ModelUsageStatistics = {
   output_tokens: number
   total_tokens: number
   billable_units: number
-  cost_micro_usd: number
+  cost_micros: number
   avg_latency_ms?: number | null
   user_count: number
 }
@@ -138,7 +138,7 @@ export type UserModelUsageStatistics = {
   output_tokens: number
   total_tokens: number
   billable_units: number
-  cost_micro_usd: number
+  cost_micros: number
   avg_latency_ms?: number | null
 }
 

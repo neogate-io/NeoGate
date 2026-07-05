@@ -25,9 +25,9 @@ pub struct ProjectRecord {
     pub member_count: i64,
     pub user_key_count: i64,
     pub project_model_count: i64,
-    pub balance_micro_usd: i64,
-    pub reserved_micro_usd: i64,
-    pub available_micro_usd: i64,
+    pub balance_micros: i64,
+    pub reserved_micros: i64,
+    pub available_micros: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -170,8 +170,8 @@ pub async fn list_projects(state: &AppState, query: ListProjectsQuery) -> AppRes
                   COALESCE(pm.member_count, 0) AS member_count,
                   COALESCE(uk.user_key_count, 0) AS user_key_count,
                   COALESCE(pmodels.project_model_count, 0) AS project_model_count,
-                  COALESCE(w.balance_micro_usd, 0) AS balance_micro_usd,
-                  COALESCE(w.reserved_micro_usd, 0) AS reserved_micro_usd,
+                  COALESCE(w.balance_micros, 0) AS balance_micros,
+                  COALESCE(w.reserved_micros, 0) AS reserved_micros,
                   p.created_at, p.updated_at
            FROM page_projects p
            JOIN "user" owner ON owner.id = p.owner_user_id
@@ -513,8 +513,8 @@ async fn get_project(state: &AppState, id: DbId) -> AppResult<ProjectRecord> {
                 COALESCE(pm.member_count, 0) AS member_count,
                 COALESCE(uk.user_key_count, 0) AS user_key_count,
                 COALESCE(pmodels.project_model_count, 0) AS project_model_count,
-                COALESCE(w.balance_micro_usd, 0) AS balance_micro_usd,
-                COALESCE(w.reserved_micro_usd, 0) AS reserved_micro_usd,
+                COALESCE(w.balance_micros, 0) AS balance_micros,
+                COALESCE(w.reserved_micros, 0) AS reserved_micros,
                 p.created_at, p.updated_at
          FROM project p
          JOIN \"user\" owner ON owner.id = p.owner_user_id
@@ -816,7 +816,7 @@ async fn recover_hot_credit_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     parts: &[DebitPart],
 ) -> AppResult<()> {
-    let total = parts.iter().map(|part| part.amount_micro_usd).sum::<i64>();
+    let total = parts.iter().map(|part| part.amount_micros).sum::<i64>();
     if total <= 0 {
         return Ok(());
     }
@@ -827,7 +827,7 @@ async fn recover_hot_credit_in_tx(
     account::decrement_reserved(tx, credit_account, total).await?;
 
     for part in parts {
-        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
     }
 
     Ok(())
@@ -863,8 +863,8 @@ fn normalize_project_name(name: &str) -> AppResult<String> {
 }
 
 fn project_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectRecord> {
-    let balance_micro_usd = row.try_get("balance_micro_usd")?;
-    let reserved_micro_usd = row.try_get("reserved_micro_usd")?;
+    let balance_micros = row.try_get("balance_micros")?;
+    let reserved_micros = row.try_get("reserved_micros")?;
     Ok(ProjectRecord {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
@@ -877,9 +877,9 @@ fn project_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProjectRecord> {
         member_count: row.try_get("member_count")?,
         user_key_count: row.try_get("user_key_count")?,
         project_model_count: row.try_get("project_model_count")?,
-        balance_micro_usd,
-        reserved_micro_usd,
-        available_micro_usd: balance_micro_usd - reserved_micro_usd,
+        balance_micros,
+        reserved_micros,
+        available_micros: balance_micros - reserved_micros,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

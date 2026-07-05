@@ -54,7 +54,7 @@ pub struct AppRecord {
     pub project_name: String,
     pub endpoint: Option<AppEndpointRecord>,
     pub today_message_count: i64,
-    pub today_cost_micro_usd: i64,
+    pub today_cost_micros: i64,
     pub last_active_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -95,7 +95,7 @@ pub struct AppRunLogRecord {
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
-    pub cost_micro_usd: Option<i64>,
+    pub cost_micros: Option<i64>,
     pub error_summary: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -225,13 +225,13 @@ pub(crate) async fn list_app_records(
                uk.name AS user_key_name, uk.project_id, p.name AS project_name,
                a.last_active_at, a.created_at, a.updated_at,
                COALESCE(today.message_count, 0)::BIGINT AS today_message_count,
-               COALESCE(today.cost_micro_usd, 0)::BIGINT AS today_cost_micro_usd
+               COALESCE(today.cost_micros, 0)::BIGINT AS today_cost_micros
         FROM app a
         JOIN user_key uk ON uk.id = a.user_key_id
         JOIN project p ON p.id = uk.project_id
         LEFT JOIN (
             SELECT app_id, COUNT(*)::BIGINT AS message_count,
-                   COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS cost_micro_usd
+                   COALESCE(SUM(cost_micros), 0)::BIGINT AS cost_micros
             FROM app_run_log
             WHERE created_at >= date_trunc('day', now())
               AND status = 'success'
@@ -267,13 +267,13 @@ pub(crate) async fn get_app_record(state: &AppState, id: DbId) -> AppResult<AppR
                uk.name AS user_key_name, uk.project_id, p.name AS project_name,
                a.last_active_at, a.created_at, a.updated_at,
                COALESCE(today.message_count, 0)::BIGINT AS today_message_count,
-               COALESCE(today.cost_micro_usd, 0)::BIGINT AS today_cost_micro_usd
+               COALESCE(today.cost_micros, 0)::BIGINT AS today_cost_micros
         FROM app a
         JOIN user_key uk ON uk.id = a.user_key_id
         JOIN project p ON p.id = uk.project_id
         LEFT JOIN (
             SELECT app_id, COUNT(*)::BIGINT AS message_count,
-                   COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS cost_micro_usd
+                   COALESCE(SUM(cost_micros), 0)::BIGINT AS cost_micros
             FROM app_run_log
             WHERE created_at >= date_trunc('day', now())
               AND status = 'success'
@@ -337,7 +337,7 @@ fn app_from_row(
         project_name: row.try_get("project_name")?,
         endpoint,
         today_message_count: row.try_get("today_message_count")?,
-        today_cost_micro_usd: row.try_get("today_cost_micro_usd")?,
+        today_cost_micros: row.try_get("today_cost_micros")?,
         last_active_at: row.try_get("last_active_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -405,7 +405,7 @@ pub(crate) fn run_log_from_row(row: &sqlx::postgres::PgRow) -> AppResult<AppRunL
         input_tokens: row.try_get("input_tokens")?,
         output_tokens: row.try_get("output_tokens")?,
         total_tokens: row.try_get("total_tokens")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         error_summary: row.try_get("error_summary")?,
         created_at: row.try_get("created_at")?,
     })

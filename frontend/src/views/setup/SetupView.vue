@@ -176,8 +176,8 @@ const paymentForm = reactive({
 const prices = ref<
   Array<{
     model: string
-    inputUsd: number
-    outputUsd: number
+    inputPrice: number
+    outputPrice: number
     enabled: boolean
   }>
 >([])
@@ -651,8 +651,8 @@ async function syncAndApplyReferencePrices() {
       const template = findPricingTemplate(templates, setupForm.provider, price.model)
       price.enabled = Boolean(template)
       if (!template) continue
-      price.inputUsd = microAmountToMajor(template.input_price_usd_micros)
-      price.outputUsd = microAmountToMajor(template.output_price_usd_micros)
+      price.inputPrice = microAmountToMajor(template.input_price_micros)
+      price.outputPrice = microAmountToMajor(template.output_price_micros)
       applied += 1
     }
     if (applied > 0) {
@@ -699,8 +699,8 @@ async function submitSetup() {
           ? prices.value.map((price) => ({
               provider: setupForm.provider,
               model: price.model,
-              input_price_usd_micros: majorToMicroAmount(price.inputUsd),
-              output_price_usd_micros: majorToMicroAmount(price.outputUsd),
+              input_price_micros: majorToMicroAmount(price.inputPrice),
+              output_price_micros: majorToMicroAmount(price.outputPrice),
               enabled: price.enabled
             }))
           : [],
@@ -1080,8 +1080,8 @@ function syncPriceRows() {
   const existing = new Map(prices.value.map((price) => [price.model.trim().toLowerCase(), price]))
   prices.value = splitCommaList(setupForm.models).map((model) => ({
     model,
-    inputUsd: existing.get(model.trim().toLowerCase())?.inputUsd ?? 0,
-    outputUsd: existing.get(model.trim().toLowerCase())?.outputUsd ?? 0,
+    inputPrice: existing.get(model.trim().toLowerCase())?.inputPrice ?? 0,
+    outputPrice: existing.get(model.trim().toLowerCase())?.outputPrice ?? 0,
     enabled:
       existing.get(model.trim().toLowerCase())?.enabled ??
       Boolean(findPricingTemplate(pricingTemplates.value, setupForm.provider, model))

@@ -3,6 +3,57 @@ DROP INDEX IF EXISTS idx_usage_daily_provider_model_day;
 DROP INDEX IF EXISTS idx_usage_daily_user_provider_model_day;
 DROP INDEX IF EXISTS idx_channel_model_provider_model;
 
+ALTER TABLE credit_account
+    RENAME COLUMN balance_micro_usd TO balance_micros;
+ALTER TABLE credit_account
+    RENAME COLUMN reserved_micro_usd TO reserved_micros;
+
+ALTER TABLE payment
+    RENAME COLUMN amount_micro_usd TO amount_micros;
+
+ALTER TABLE usage
+    RENAME COLUMN cost_micro_usd TO cost_micros;
+
+ALTER TABLE provider_price
+    RENAME COLUMN input_price_usd_micros TO input_price_micros;
+ALTER TABLE provider_price
+    RENAME COLUMN output_price_usd_micros TO output_price_micros;
+ALTER TABLE provider_price
+    RENAME COLUMN cache_read_price_usd_micros TO cache_read_price_micros;
+ALTER TABLE provider_price
+    RENAME COLUMN cache_write_price_usd_micros TO cache_write_price_micros;
+ALTER TABLE provider_price
+    RENAME COLUMN unit_price_usd_micros TO unit_price_micros;
+
+ALTER TABLE pricing_template
+    RENAME COLUMN input_price_usd_micros TO input_price_micros;
+ALTER TABLE pricing_template
+    RENAME COLUMN output_price_usd_micros TO output_price_micros;
+ALTER TABLE pricing_template
+    RENAME COLUMN cache_read_price_usd_micros TO cache_read_price_micros;
+ALTER TABLE pricing_template
+    RENAME COLUMN cache_write_price_usd_micros TO cache_write_price_micros;
+ALTER TABLE pricing_template
+    RENAME COLUMN unit_price_usd_micros TO unit_price_micros;
+
+ALTER TABLE credit_allocation
+    RENAME COLUMN amount_micro_usd TO amount_micros;
+ALTER TABLE credit_allocation
+    RENAME COLUMN consumed_micro_usd TO consumed_micros;
+ALTER TABLE credit_allocation
+    RENAME COLUMN returned_micro_usd TO returned_micros;
+
+ALTER TABLE credit_ledger
+    RENAME COLUMN amount_micro_usd TO amount_micros;
+ALTER TABLE credit_ledger
+    RENAME COLUMN balance_after_micro_usd TO balance_after_micros;
+
+ALTER TABLE usage_daily
+    RENAME COLUMN cost_micro_usd TO cost_micros;
+
+ALTER TABLE app_run_log
+    RENAME COLUMN cost_micro_usd TO cost_micros;
+
 ALTER TABLE usage
     DROP COLUMN IF EXISTS provider;
 

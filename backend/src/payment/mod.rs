@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserSessionAuth,
-    billing::{account, MICRO_USD_PER_USD},
+    billing::{account, MICROS_PER_MAJOR_UNIT},
     config::{BillingCurrency, PaymentProvider, ZpayConfig},
     error::{AppError, AppResult},
     id::DbId,
@@ -27,7 +27,7 @@ use crate::{
 pub(crate) mod settings;
 mod zpay;
 
-const MICRO_USD_PER_CNY: i64 = MICRO_USD_PER_USD * 5;
+const MICROS_PER_CNY: i64 = MICROS_PER_MAJOR_UNIT * 5;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route(
@@ -45,7 +45,7 @@ pub struct PaymentOrderRecord {
     pub provider_order_id: Option<String>,
     pub status: String,
     pub currency: String,
-    pub amount_micro_usd: i64,
+    pub amount_micros: i64,
     pub payable_amount_minor: i64,
     pub checkout_url: Option<String>,
     pub return_url: Option<String>,
@@ -58,7 +58,7 @@ pub struct PaymentOrderRecord {
 pub struct CreatePaymentOrderRequest {
     #[serde(default = "default_provider")]
     pub provider: String,
-    pub amount_micro_usd: i64,
+    pub amount_micros: i64,
     pub pay_type: Option<String>,
     pub return_url: Option<String>,
 }
@@ -135,16 +135,16 @@ pub async fn create_user_payment_order(
             provider.as_str()
         )));
     }
-    if req.amount_micro_usd <= 0 {
+    if req.amount_micros <= 0 {
         return Err(AppError::BadRequest(
-            "amount_micro_usd must be positive".to_string(),
+            "amount_micros must be positive".to_string(),
         ));
     }
 
     let order_id = Uuid::new_v4();
     let order_no = next_payment_order_no(state).await?;
     let (payment_currency, payable_amount_minor) =
-        payable_amount_minor_units(state.config.billing_currency, req.amount_micro_usd)?;
+        payable_amount_minor_units(state.config.billing_currency, req.amount_micros)?;
     let credit_account = default_project_credit_account(state, auth.user_id).await?;
     let notify_url = notify_url(state.config.public_base_url.as_deref(), provider)?;
     tracing::info!(
@@ -181,7 +181,7 @@ pub async fn create_user_payment_order(
     sqlx::query(
         "INSERT INTO payment
          (id, order_no, user_id, credit_account_id, provider, provider_order_id, status, currency,
-          amount_micro_usd, payable_amount_minor, checkout_url, return_url)
+          amount_micros, payable_amount_minor, checkout_url, return_url)
          VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)",
     )
     .bind(order_id)
@@ -191,7 +191,7 @@ pub async fn create_user_payment_order(
     .bind(provider.as_str())
     .bind(gateway_res.provider_order_id.as_deref())
     .bind(payment_currency)
-    .bind(req.amount_micro_usd)
+    .bind(req.amount_micros)
     .bind(payable_amount_minor)
     .bind(gateway_res.checkout_url.as_deref())
     .bind(req.return_url.as_deref())
@@ -241,7 +241,7 @@ pub async fn list_user_payment_orders(
 ) -> AppResult<Vec<PaymentOrderRecord>> {
     let rows = sqlx::query(
         "SELECT id, order_no, user_id, provider, provider_order_id, status, currency,
-                amount_micro_usd, payable_amount_minor, checkout_url, return_url,
+                amount_micros, payable_amount_minor, checkout_url, return_url,
                 paid_at, created_at, updated_at
          FROM payment
          WHERE user_id = $1
@@ -301,7 +301,7 @@ async fn settle_payment_notification(
 ) -> AppResult<()> {
     let mut tx = state.db.pool.begin().await?;
     let row = sqlx::query(
-        "SELECT id, credit_account_id, amount_micro_usd, payable_amount_minor, status
+        "SELECT id, credit_account_id, amount_micros, payable_amount_minor, status
          FROM payment
          WHERE order_no = $1 AND provider = $2
          FOR UPDATE",
@@ -356,18 +356,18 @@ async fn settle_payment_notification(
 
     if notification.status == PaymentStatus::Paid {
         let credit_account_id: DbId = row.try_get("credit_account_id")?;
-        let amount_micro_usd: i64 = row.try_get("amount_micro_usd")?;
+        let amount_micros: i64 = row.try_get("amount_micros")?;
         let credit_account = crate::billing::CreditAccountId::new(credit_account_id);
         let balance_after =
-            account::adjust_balance(&mut tx, &credit_account, amount_micro_usd).await?;
+            account::adjust_balance(&mut tx, &credit_account, amount_micros).await?;
         sqlx::query(
             "INSERT INTO credit_ledger
-             (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
+             (credit_account_id, amount_micros, balance_after_micros, reason,
               transaction_id, metadata)
              VALUES ($1, $2, $3, 'recharge', $4, $5)",
         )
         .bind(credit_account_id)
-        .bind(amount_micro_usd)
+        .bind(amount_micros)
         .bind(balance_after)
         .bind(row.try_get::<Uuid, _>("id")?)
         .bind(json!({
@@ -420,7 +420,7 @@ async fn get_user_payment_order(
 ) -> AppResult<PaymentOrderRecord> {
     let row = sqlx::query(
         "SELECT id, order_no, user_id, provider, provider_order_id, status, currency,
-                amount_micro_usd, payable_amount_minor, checkout_url, return_url,
+                amount_micros, payable_amount_minor, checkout_url, return_url,
                 paid_at, created_at, updated_at
          FROM payment
          WHERE id = $1 AND user_id = $2",
@@ -442,7 +442,7 @@ fn payment_order_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PaymentOrder
         provider_order_id: row.try_get("provider_order_id")?,
         status: row.try_get("status")?,
         currency: row.try_get("currency")?,
-        amount_micro_usd: row.try_get("amount_micro_usd")?,
+        amount_micros: row.try_get("amount_micros")?,
         payable_amount_minor: row.try_get("payable_amount_minor")?,
         checkout_url: row.try_get("checkout_url")?,
         return_url: row.try_get("return_url")?,
@@ -489,26 +489,26 @@ fn checkout_notify_url_matches(checkout_url: &str, notify_url: &str) -> bool {
 
 fn payable_amount_minor_units(
     billing_currency: BillingCurrency,
-    amount_micro_usd: i64,
+    amount_micros: i64,
 ) -> AppResult<(&'static str, i64)> {
-    if amount_micro_usd <= 0 {
+    if amount_micros <= 0 {
         return Err(AppError::BadRequest(
-            "amount_micro_usd must be positive".to_string(),
+            "amount_micros must be positive".to_string(),
         ));
     }
 
     match billing_currency {
-        BillingCurrency::Cny => Ok(("CNY", micro_usd_to_cny_minor_units(amount_micro_usd))),
-        BillingCurrency::Usd => Ok(("USD", micro_usd_to_usd_minor_units(amount_micro_usd))),
+        BillingCurrency::Cny => Ok(("CNY", micros_to_cny_minor_units(amount_micros))),
+        BillingCurrency::Usd => Ok(("USD", micros_to_usd_minor_units(amount_micros))),
     }
 }
 
-fn micro_usd_to_cny_minor_units(amount_micro_usd: i64) -> i64 {
-    (amount_micro_usd + (MICRO_USD_PER_CNY / 100) - 1) / (MICRO_USD_PER_CNY / 100)
+fn micros_to_cny_minor_units(amount_micros: i64) -> i64 {
+    (amount_micros + (MICROS_PER_CNY / 100) - 1) / (MICROS_PER_CNY / 100)
 }
 
-fn micro_usd_to_usd_minor_units(amount_micro_usd: i64) -> i64 {
-    (amount_micro_usd + (MICRO_USD_PER_USD / 100) - 1) / (MICRO_USD_PER_USD / 100)
+fn micros_to_usd_minor_units(amount_micros: i64) -> i64 {
+    (amount_micros + (MICROS_PER_MAJOR_UNIT / 100) - 1) / (MICROS_PER_MAJOR_UNIT / 100)
 }
 
 fn default_provider() -> String {

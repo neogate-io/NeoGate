@@ -252,8 +252,8 @@ struct AutoConfigureAvailableModel {
     channel_id: DbId,
     channel_name: String,
     protocol: String,
-    input_price_usd_micros: Option<i64>,
-    output_price_usd_micros: Option<i64>,
+    input_price_micros: Option<i64>,
+    output_price_micros: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1370,7 +1370,7 @@ async fn list_auto_configure_available_models(
         r#"
         SELECT DISTINCT ON (cm.model, c.id)
                cm.model, c.provider, c.id AS channel_id, c.name AS channel_name, ce.protocol,
-               pp.input_price_usd_micros, pp.output_price_usd_micros
+               pp.input_price_micros, pp.output_price_micros
         FROM channel_model cm
         JOIN channel c ON c.id = cm.channel_id
         JOIN provider p ON p.code = c.provider
@@ -1437,8 +1437,8 @@ async fn list_auto_configure_available_models(
                 protocol: row
                     .try_get::<Option<String>, _>("protocol")?
                     .unwrap_or_else(|| "openai".to_string()),
-                input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-                output_price_usd_micros: row.try_get("output_price_usd_micros")?,
+                input_price_micros: row.try_get("input_price_micros")?,
+                output_price_micros: row.try_get("output_price_micros")?,
             })
         })
         .collect()
@@ -1699,8 +1699,8 @@ fn auto_configure_prompt(
                 "protocol": item.protocol,
                 "channel_id": item.channel_id,
                 "channel_name": item.channel_name,
-                "input_price_usd_micros": item.input_price_usd_micros,
-                "output_price_usd_micros": item.output_price_usd_micros
+                "input_price_micros": item.input_price_micros,
+                "output_price_micros": item.output_price_micros
             })
         })
         .collect::<Vec<_>>();

@@ -231,7 +231,7 @@ onMounted(load)
           </div>
           <div>
             <dt>消耗</dt>
-            <dd>{{ cost(app.today_cost_micro_usd) }}</dd>
+            <dd>{{ cost(app.today_cost_micros) }}</dd>
           </div>
         </dl>
         <div class="app-actions table-row-actions">

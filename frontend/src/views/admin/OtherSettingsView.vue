@@ -207,24 +207,24 @@ function microsFromCny(value: number | null | undefined) {
 function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
   switch (template.pricing_basis) {
     case 'image':
-      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perImage')}`
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perImage')}`
     case 'call':
-      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perCall')}`
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perCall')}`
     case 'hour':
-      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perHour')}`
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perHour')}`
     case 'second':
-      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perSecond')}`
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perSecond')}`
     case 'per_10k_token':
-      return `${formatReferenceMicros(template.input_price_usd_micros)} / ${formatReferenceMicros(
-        template.output_price_usd_micros
+      return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
+        template.output_price_micros
       )}`
     case 'multi_tier_video':
-      return `${formatReferenceMicros(template.output_price_usd_micros)} (${t(
+      return `${formatReferenceMicros(template.output_price_micros)} (${t(
         'multiTierRepresentative'
       )})`
     default:
-      return `${formatReferenceMicros(template.input_price_usd_micros)} / ${formatReferenceMicros(
-        template.output_price_usd_micros
+      return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
+        template.output_price_micros
       )}`
   }
 }
@@ -234,13 +234,13 @@ function formatCachePricePair(template: ModelReferenceCatalogRecord) {
   if (noCacheBases.includes(template.pricing_basis)) return '-'
   const zero = `${currencySymbol(billingCurrency.value)}0`
   const cacheRead =
-    template.cache_read_price_usd_micros == null
+    template.cache_read_price_micros == null
       ? zero
-      : formatReferenceMicros(template.cache_read_price_usd_micros)
+      : formatReferenceMicros(template.cache_read_price_micros)
   const cacheWrite =
-    template.cache_write_price_usd_micros == null
+    template.cache_write_price_micros == null
       ? zero
-      : formatReferenceMicros(template.cache_write_price_usd_micros)
+      : formatReferenceMicros(template.cache_write_price_micros)
   return `${cacheRead} / ${cacheWrite}`
 }
 

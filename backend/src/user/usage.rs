@@ -72,7 +72,7 @@ struct UsageRecord {
     audio_out_tokens: Option<i64>,
     billing_meter: String,
     billable_units: i64,
-    cost_micro_usd: Option<i64>,
+    cost_micros: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
     routing: Option<UsageRouting>,
@@ -123,7 +123,7 @@ async fn usage(
                 usage_record.cache_create_1h_in_tokens, usage_record.reason_out_tokens,
                 usage_record.audio_in_tokens, usage_record.audio_out_tokens,
                 usage_record.billing_meter, usage_record.billable_units,
-                usage_record.cost_micro_usd, usage_record.billing_status,
+                usage_record.cost_micros, usage_record.billing_status,
                 usage_record.error_summary, usage_record.created_at,
                 usage_routing.id AS routing_id,
                 usage_routing.project_id AS routing_project_id,
@@ -146,7 +146,7 @@ async fn usage(
          LEFT JOIN usage_routing ON usage_routing.usage_id = usage_record.id
          WHERE usage_record.user_id = $1
            AND usage_record.billing_status IN ('billed', 'undercharged')
-           AND usage_record.cost_micro_usd IS NOT NULL
+           AND usage_record.cost_micros IS NOT NULL
            AND ($2::timestamptz IS NULL OR usage_record.created_at >= $2)
            AND ($3::timestamptz IS NULL OR usage_record.created_at <= $3)
            AND ($4::timestamptz IS NULL OR (usage_record.created_at, usage_record.id) < ($4, $5))
@@ -203,7 +203,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         audio_out_tokens: row.try_get("audio_out_tokens")?,
         billing_meter: row.try_get("billing_meter")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,
         routing: usage_routing_from_row(row)?,

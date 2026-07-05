@@ -20,7 +20,7 @@ pub(super) trait HotCreditStore: Send + Sync {
         &self,
         credit_account: CreditAccountId,
         allocation_id: DbId,
-        amount_micro_usd: i64,
+        amount_micros: i64,
     ) -> AppResult<()>;
     async fn drain_credit_account(
         &self,
@@ -29,7 +29,7 @@ pub(super) trait HotCreditStore: Send + Sync {
     async fn try_debit_ordered(
         &self,
         credit_accounts: &[CreditAccountId],
-        amount_micro_usd: i64,
+        amount_micros: i64,
     ) -> AppResult<Option<Vec<DebitPart>>>;
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()>;
 }
@@ -52,14 +52,14 @@ pub(super) struct RedisHotCreditStore {
 #[derive(Debug, Clone, Default)]
 struct CreditAccountHotCredit {
     generation: u64,
-    total_available_micro_usd: i64,
+    total_available_micros: i64,
     segments: VecDeque<HotSegment>,
 }
 
 #[derive(Debug, Clone)]
 struct HotSegment {
     allocation_id: DbId,
-    available_micro_usd: i64,
+    available_micros: i64,
 }
 
 const HOT_CREDIT_SHARDS: usize = 64;
@@ -191,17 +191,17 @@ impl HotCreditStore for MemoryHotCreditStore {
         &self,
         credit_account: CreditAccountId,
         allocation_id: DbId,
-        amount_micro_usd: i64,
+        amount_micros: i64,
     ) -> AppResult<()> {
-        if amount_micro_usd <= 0 {
+        if amount_micros <= 0 {
             return Ok(());
         }
         let mut balances = self.lock_shard_for_credit_account(&credit_account).await;
         let account_hot = balances.entry(credit_account).or_default();
-        account_hot.total_available_micro_usd += amount_micro_usd;
+        account_hot.total_available_micros += amount_micros;
         account_hot.segments.push_back(HotSegment {
             allocation_id,
-            available_micro_usd: amount_micro_usd,
+            available_micros: amount_micros,
         });
         Ok(())
     }
@@ -214,14 +214,14 @@ impl HotCreditStore for MemoryHotCreditStore {
         let account_hot = balances.entry(credit_account.clone()).or_default();
         let generation = account_hot.generation;
         account_hot.generation = account_hot.generation.wrapping_add(1);
-        account_hot.total_available_micro_usd = 0;
+        account_hot.total_available_micros = 0;
         Ok(std::mem::take(&mut account_hot.segments)
             .into_iter()
-            .filter(|segment| segment.available_micro_usd > 0)
+            .filter(|segment| segment.available_micros > 0)
             .map(|segment| DebitPart {
                 credit_account: credit_account.clone(),
                 allocation_id: segment.allocation_id,
-                amount_micro_usd: segment.available_micro_usd,
+                amount_micros: segment.available_micros,
                 generation,
             })
             .collect())
@@ -230,9 +230,9 @@ impl HotCreditStore for MemoryHotCreditStore {
     async fn try_debit_ordered(
         &self,
         credit_accounts: &[CreditAccountId],
-        amount_micro_usd: i64,
+        amount_micros: i64,
     ) -> AppResult<Option<Vec<DebitPart>>> {
-        if amount_micro_usd <= 0 {
+        if amount_micros <= 0 {
             return Ok(Some(Vec::new()));
         }
 
@@ -256,13 +256,13 @@ impl HotCreditStore for MemoryHotCreditStore {
                     .find(|(id, _)| *id == shard_id)
                     .and_then(|(_, balances)| balances.get(credit_account))
             })
-            .map(|account_hot| account_hot.total_available_micro_usd)
+            .map(|account_hot| account_hot.total_available_micros)
             .sum::<i64>();
-        if available < amount_micro_usd {
+        if available < amount_micros {
             return Ok(None);
         }
 
-        let mut remaining = amount_micro_usd;
+        let mut remaining = amount_micros;
         let mut parts = Vec::new();
         for credit_account in credit_accounts {
             if remaining <= 0 {
@@ -281,17 +281,17 @@ impl HotCreditStore for MemoryHotCreditStore {
                 let Some(front) = segments.front_mut() else {
                     break;
                 };
-                let debit = front.available_micro_usd.min(remaining);
-                front.available_micro_usd -= debit;
-                account_hot.total_available_micro_usd -= debit;
+                let debit = front.available_micros.min(remaining);
+                front.available_micros -= debit;
+                account_hot.total_available_micros -= debit;
                 remaining -= debit;
                 parts.push(DebitPart {
                     credit_account: credit_account.clone(),
                     allocation_id: front.allocation_id,
-                    amount_micro_usd: debit,
+                    amount_micros: debit,
                     generation,
                 });
-                if front.available_micro_usd == 0 {
+                if front.available_micros == 0 {
                     segments.pop_front();
                 }
             }
@@ -305,10 +305,10 @@ impl HotCreditStore for MemoryHotCreditStore {
                     continue;
                 };
                 let account_hot = balances.entry(part.credit_account.clone()).or_default();
-                account_hot.total_available_micro_usd += part.amount_micro_usd;
+                account_hot.total_available_micros += part.amount_micros;
                 account_hot.segments.push_front(HotSegment {
                     allocation_id: part.allocation_id,
-                    available_micro_usd: part.amount_micro_usd,
+                    available_micros: part.amount_micros,
                 });
             }
             return Ok(None);
@@ -338,11 +338,11 @@ impl HotCreditStore for MemoryHotCreditStore {
                 if allocation_ids.contains(&segment.allocation_id) {
                     false
                 } else {
-                    kept_total += segment.available_micro_usd;
+                    kept_total += segment.available_micros;
                     true
                 }
             });
-            account_hot.total_available_micro_usd = kept_total;
+            account_hot.total_available_micros = kept_total;
         }
         Ok(())
     }
@@ -402,9 +402,9 @@ impl HotCreditStore for RedisHotCreditStore {
         &self,
         credit_account: CreditAccountId,
         allocation_id: DbId,
-        amount_micro_usd: i64,
+        amount_micros: i64,
     ) -> AppResult<()> {
-        if amount_micro_usd <= 0 {
+        if amount_micros <= 0 {
             return Ok(());
         }
         let credit_account_key = self.credit_account_key(&credit_account);
@@ -416,7 +416,7 @@ impl HotCreditStore for RedisHotCreditStore {
             .key(generation_key)
             .key(total_key)
             .arg(allocation_id)
-            .arg(amount_micro_usd)
+            .arg(amount_micros)
             .invoke_async(&mut conn)
             .await?;
         Ok(())
@@ -445,9 +445,9 @@ impl HotCreditStore for RedisHotCreditStore {
     async fn try_debit_ordered(
         &self,
         credit_accounts: &[CreditAccountId],
-        amount_micro_usd: i64,
+        amount_micros: i64,
     ) -> AppResult<Option<Vec<DebitPart>>> {
-        if amount_micro_usd <= 0 {
+        if amount_micros <= 0 {
             return Ok(Some(Vec::new()));
         }
         if credit_accounts.is_empty() {
@@ -476,7 +476,7 @@ impl HotCreditStore for RedisHotCreditStore {
         for key in &total_keys {
             invocation.key(key);
         }
-        invocation.arg(credit_accounts.len()).arg(amount_micro_usd);
+        invocation.arg(credit_accounts.len()).arg(amount_micros);
         let values: Vec<String> = invocation.invoke_async(&mut conn).await?;
         if values.is_empty() {
             return Ok(None);
@@ -540,13 +540,13 @@ fn decode_redis_debit_part(
     let allocation_id = chunk[1].parse::<DbId>().map_err(|err| {
         AppError::BadRequest(format!("invalid redis hot credit allocation id: {err}"))
     })?;
-    let amount_micro_usd = chunk[2]
+    let amount_micros = chunk[2]
         .parse::<i64>()
         .map_err(|err| AppError::BadRequest(format!("invalid redis hot credit amount: {err}")))?;
     let generation = chunk[3].parse::<u64>().map_err(|err| {
         AppError::BadRequest(format!("invalid redis hot credit generation: {err}"))
     })?;
-    if allocation_id <= 0 || amount_micro_usd <= 0 {
+    if allocation_id <= 0 || amount_micros <= 0 {
         return Err(AppError::BadRequest(
             "invalid redis hot credit debit part".to_string(),
         ));
@@ -554,7 +554,7 @@ fn decode_redis_debit_part(
     Ok(DebitPart {
         credit_account,
         allocation_id,
-        amount_micro_usd,
+        amount_micros,
         generation,
     })
 }
@@ -562,12 +562,12 @@ fn decode_redis_debit_part(
 fn decode_hot_segment(credit_account: &CreditAccountId, item: &str) -> Option<DebitPart> {
     let mut parts = item.splitn(3, ':');
     let allocation_id = parts.next()?.parse::<DbId>().ok()?;
-    let amount_micro_usd = parts.next()?.parse::<i64>().ok()?;
+    let amount_micros = parts.next()?.parse::<i64>().ok()?;
     let generation = parts.next()?.parse::<u64>().ok()?;
-    (amount_micro_usd > 0).then(|| DebitPart {
+    (amount_micros > 0).then(|| DebitPart {
         credit_account: credit_account.clone(),
         allocation_id,
-        amount_micro_usd,
+        amount_micros,
         generation,
     })
 }
@@ -593,10 +593,7 @@ mod tests {
         let drained = store.drain_credit_account(&credit_account).await.unwrap();
         assert_eq!(drained.len(), 2);
         assert_eq!(
-            drained
-                .iter()
-                .map(|part| part.amount_micro_usd)
-                .sum::<i64>(),
+            drained.iter().map(|part| part.amount_micros).sum::<i64>(),
             50
         );
         assert!(store
@@ -630,6 +627,6 @@ mod tests {
         let drained = store.drain_credit_account(&credit_account).await.unwrap();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].allocation_id, 102);
-        assert_eq!(drained[0].amount_micro_usd, 20);
+        assert_eq!(drained[0].amount_micros, 20);
     }
 }

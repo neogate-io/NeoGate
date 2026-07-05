@@ -38,10 +38,10 @@ struct UserApiKeyRecord {
     status: String,
     last_active_at: Option<DateTime<Utc>>,
     expires_at: Option<DateTime<Utc>>,
-    balance_micro_usd: i64,
-    reserved_micro_usd: i64,
-    available_micro_usd: i64,
-    month_cost_micro_usd: i64,
+    balance_micros: i64,
+    reserved_micros: i64,
+    available_micros: i64,
+    month_cost_micros: i64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -74,14 +74,14 @@ async fn list_apikeys(
     let rows = sqlx::query(
         "SELECT uk.id, uk.user_id, uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
-                w.balance_micro_usd, w.reserved_micro_usd,
-                COALESCE(month_usage.month_cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
+                w.balance_micros, w.reserved_micros,
+                COALESCE(month_usage.month_cost_micros, 0)::BIGINT AS month_cost_micros,
                 uk.created_at, uk.updated_at
          FROM user_key uk
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          LEFT JOIN (
              SELECT user_key_id,
-                    COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS month_cost_micro_usd
+                    COALESCE(SUM(cost_micros), 0)::BIGINT AS month_cost_micros
              FROM usage_daily
              WHERE user_id = $1
                AND day >= date_trunc('month', now())::date
@@ -206,14 +206,14 @@ async fn get_apikey(state: &AppState, user_id: DbId, id: DbId) -> AppResult<User
     let row = sqlx::query(
         "SELECT uk.id, uk.user_id, uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
-                w.balance_micro_usd, w.reserved_micro_usd,
-                COALESCE(month_usage.month_cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
+                w.balance_micros, w.reserved_micros,
+                COALESCE(month_usage.month_cost_micros, 0)::BIGINT AS month_cost_micros,
                 uk.created_at, uk.updated_at
          FROM user_key uk
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          LEFT JOIN (
              SELECT user_key_id,
-                    COALESCE(SUM(cost_micro_usd), 0)::BIGINT AS month_cost_micro_usd
+                    COALESCE(SUM(cost_micros), 0)::BIGINT AS month_cost_micros
              FROM usage_daily
              WHERE user_id = $2
                AND day >= date_trunc('month', now())::date
@@ -277,7 +277,7 @@ async fn recover_hot_credit_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     parts: &[DebitPart],
 ) -> AppResult<()> {
-    let total = parts.iter().map(|part| part.amount_micro_usd).sum::<i64>();
+    let total = parts.iter().map(|part| part.amount_micros).sum::<i64>();
     if total <= 0 {
         return Ok(());
     }
@@ -288,7 +288,7 @@ async fn recover_hot_credit_in_tx(
     account::decrement_reserved(tx, credit_account, total).await?;
 
     for part in parts {
-        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
     }
 
     Ok(())
@@ -306,11 +306,11 @@ fn apikey_from_row(state: &AppState, row: &sqlx::postgres::PgRow) -> AppResult<U
         status: row.try_get("status")?,
         last_active_at: row.try_get("last_active_at")?,
         expires_at: row.try_get("expires_at")?,
-        balance_micro_usd: row.try_get("balance_micro_usd")?,
-        reserved_micro_usd: row.try_get("reserved_micro_usd")?,
-        available_micro_usd: row.try_get::<i64, _>("balance_micro_usd")?
-            - row.try_get::<i64, _>("reserved_micro_usd")?,
-        month_cost_micro_usd: row.try_get("month_cost_micro_usd")?,
+        balance_micros: row.try_get("balance_micros")?,
+        reserved_micros: row.try_get("reserved_micros")?,
+        available_micros: row.try_get::<i64, _>("balance_micros")?
+            - row.try_get::<i64, _>("reserved_micros")?,
+        month_cost_micros: row.try_get("month_cost_micros")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

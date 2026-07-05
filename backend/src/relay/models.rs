@@ -140,9 +140,9 @@ async fn available_models(
                 c.provider,
                 cm.model,
                 pp.billing_meter,
-                pp.unit_price_usd_micros,
-                pp.input_price_usd_micros,
-                pp.output_price_usd_micros
+                pp.unit_price_micros,
+                pp.input_price_micros,
+                pp.output_price_micros
             FROM channel c
             JOIN provider p ON p.code = c.provider
             JOIN channel_endpoint ce ON ce.channel_id = c.id
@@ -188,9 +188,9 @@ async fn available_models(
               )
         ) available
         GROUP BY model
-        ORDER BY MAX(COALESCE(unit_price_usd_micros, output_price_usd_micros)) DESC,
-                 MAX(output_price_usd_micros) DESC,
-                 MAX(input_price_usd_micros) DESC,
+        ORDER BY MAX(COALESCE(unit_price_micros, output_price_micros)) DESC,
+                 MAX(output_price_micros) DESC,
+                 MAX(input_price_micros) DESC,
                  model ASC
         "#
     )))

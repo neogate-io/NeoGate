@@ -95,7 +95,7 @@ struct UsageStatsAggregate {
     audio_in_tokens: i64,
     audio_out_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
     avg_first_response_ms: Option<f64>,
 }
@@ -110,7 +110,7 @@ struct DailyUsageStats {
     output_tokens: i64,
     total_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
 }
 
@@ -124,7 +124,7 @@ struct UsageTimeSeriesPoint {
     output_tokens: i64,
     total_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
     avg_first_response_ms: Option<f64>,
     avg_output_tokens_per_second: Option<f64>,
@@ -143,7 +143,7 @@ struct UserUsageStats {
     output_tokens: i64,
     total_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
     model_count: i64,
 }
@@ -160,7 +160,7 @@ struct ModelUsageStats {
     output_tokens: i64,
     total_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
     user_count: i64,
 }
@@ -178,7 +178,7 @@ struct ModelUsageTimeSeriesPoint {
     output_tokens: i64,
     total_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
     avg_first_response_ms: Option<f64>,
     avg_output_tokens_per_second: Option<f64>,
@@ -200,7 +200,7 @@ struct UserModelUsageStats {
     output_tokens: i64,
     total_tokens: i64,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
     avg_latency_ms: Option<f64>,
 }
 
@@ -436,19 +436,17 @@ impl SortMode {
 
     fn model_order_by(self) -> &'static str {
         match self {
-            Self::Cost => "cost_micro_usd DESC, request_count DESC, channel_name ASC, model ASC",
-            Self::Tokens => "total_tokens DESC, cost_micro_usd DESC, channel_name ASC, model ASC",
-            Self::Requests => {
-                "request_count DESC, cost_micro_usd DESC, channel_name ASC, model ASC"
-            }
+            Self::Cost => "cost_micros DESC, request_count DESC, channel_name ASC, model ASC",
+            Self::Tokens => "total_tokens DESC, cost_micros DESC, channel_name ASC, model ASC",
+            Self::Requests => "request_count DESC, cost_micros DESC, channel_name ASC, model ASC",
         }
     }
 
     fn user_order_by(self) -> &'static str {
         match self {
-            Self::Cost => "cost_micro_usd DESC, request_count DESC, user_id ASC NULLS LAST",
-            Self::Tokens => "total_tokens DESC, cost_micro_usd DESC, user_id ASC NULLS LAST",
-            Self::Requests => "request_count DESC, cost_micro_usd DESC, user_id ASC NULLS LAST",
+            Self::Cost => "cost_micros DESC, request_count DESC, user_id ASC NULLS LAST",
+            Self::Tokens => "total_tokens DESC, cost_micros DESC, user_id ASC NULLS LAST",
+            Self::Requests => "request_count DESC, cost_micros DESC, user_id ASC NULLS LAST",
         }
     }
 }
@@ -492,7 +490,7 @@ async fn aggregate_totals(
           COALESCE(SUM(ud.audio_in_tokens), 0)::BIGINT AS audio_in_tokens,
           COALESCE(SUM(ud.audio_out_tokens), 0)::BIGINT AS audio_out_tokens,
           COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms,
           SUM(ud.first_response_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.first_response_count), 0)::DOUBLE PRECISION AS avg_first_response_ms
         FROM usage_daily ud
@@ -530,7 +528,7 @@ async fn daily_stats(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<
           COALESCE(SUM(ud.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
         FROM usage_daily ud
         LEFT JOIN channel c ON c.id = ud.channel_id
@@ -565,7 +563,7 @@ async fn daily_stats(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<
                 output_tokens: row.try_get("output_tokens")?,
                 total_tokens: row.try_get("total_tokens")?,
                 billable_units: row.try_get("billable_units")?,
-                cost_micro_usd: row.try_get("cost_micro_usd")?,
+                cost_micros: row.try_get("cost_micros")?,
                 avg_latency_ms: row.try_get("avg_latency_ms")?,
             })
         })
@@ -589,7 +587,7 @@ async fn usage_timeseries(
           COALESCE(SUM(usage_record.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(usage_record.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(usage_record.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(usage_record.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(usage_record.cost_micros), 0)::BIGINT AS cost_micros,
           AVG(usage_record.latency_ms)::DOUBLE PRECISION AS avg_latency_ms,
           AVG(usage_record.first_response_ms)::DOUBLE PRECISION AS avg_first_response_ms,
           AVG(usage_record.output_tokens_per_second)::DOUBLE PRECISION AS avg_output_tokens_per_second
@@ -638,7 +636,7 @@ async fn model_usage_timeseries(
             COALESCE(c.name, '') AS channel_name,
             COALESCE(usage_record.model, '') AS model,
             usage_record.billing_meter,
-            COALESCE(SUM(usage_record.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+            COALESCE(SUM(usage_record.cost_micros), 0)::BIGINT AS cost_micros,
             COUNT(*)::BIGINT AS request_count
           FROM usage AS usage_record
           LEFT JOIN channel c ON c.id = usage_record.channel_id
@@ -650,7 +648,7 @@ async fn model_usage_timeseries(
           AND ($5::TEXT IS NULL OR COALESCE(usage_record.model, '') = $5)
           AND ($6::TEXT IS NULL OR usage_record.billing_meter = $6)
           GROUP BY COALESCE(usage_record.channel_id, -1), COALESCE(c.name, ''), COALESCE(usage_record.model, ''), usage_record.billing_meter
-          ORDER BY cost_micro_usd DESC, request_count DESC, channel_name ASC, model ASC
+          ORDER BY cost_micros DESC, request_count DESC, channel_name ASC, model ASC
           LIMIT $7
         )
         SELECT
@@ -665,7 +663,7 @@ async fn model_usage_timeseries(
           COALESCE(SUM(usage_record.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(usage_record.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(usage_record.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(usage_record.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(usage_record.cost_micros), 0)::BIGINT AS cost_micros,
           AVG(usage_record.latency_ms)::DOUBLE PRECISION AS avg_latency_ms,
           AVG(usage_record.first_response_ms)::DOUBLE PRECISION AS avg_first_response_ms,
           AVG(usage_record.output_tokens_per_second)::DOUBLE PRECISION AS avg_output_tokens_per_second
@@ -758,7 +756,7 @@ async fn user_stats(
           COALESCE(SUM(ud.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms,
           COUNT(DISTINCT NULLIF(COALESCE(c.name, '') || '/' || ud.model, '/'))::BIGINT AS model_count
         FROM usage_daily ud
@@ -851,7 +849,7 @@ async fn user_model_stats(
           COALESCE(SUM(ud.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
         FROM usage_daily ud
         LEFT JOIN channel c ON c.id = ud.channel_id
@@ -949,7 +947,7 @@ async fn model_stats_page(
           COALESCE(SUM(ud.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(ud.billable_units), 0)::BIGINT AS billable_units,
-          COALESCE(SUM(ud.cost_micro_usd), 0)::BIGINT AS cost_micro_usd,
+          COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
           SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms,
           COUNT(DISTINCT ud.user_id)::BIGINT AS user_count
         FROM usage_daily ud
@@ -1037,7 +1035,7 @@ async fn option_users(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec
           u.email::TEXT AS user_email,
           u.username AS user_username,
           MAX(ud.day) AS last_day,
-          SUM(ud.cost_micro_usd) AS cost_micro_usd
+          SUM(ud.cost_micros) AS cost_micros
         FROM usage_daily ud
         LEFT JOIN "user" u ON u.id = ud.user_id
         WHERE ud.day >= $1
@@ -1048,7 +1046,7 @@ async fn option_users(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec
           AND ($5::TEXT IS NULL OR ud.model = $5)
           AND ($6::TEXT IS NULL OR ud.billing_meter = $6)
         GROUP BY ud.user_id, u.email, u.username
-        ORDER BY last_day DESC, cost_micro_usd DESC, ud.user_id ASC
+        ORDER BY last_day DESC, cost_micros DESC, ud.user_id ASC
         LIMIT 50
         "#,
     )
@@ -1095,7 +1093,7 @@ async fn export_users(
         "output_tokens".into(),
         "total_tokens".into(),
         "billable_units".into(),
-        "cost_micro_usd".into(),
+        "cost_micros".into(),
         "avg_latency_ms".into(),
         "model_count".into(),
     ]];
@@ -1111,7 +1109,7 @@ async fn export_users(
             item.output_tokens.to_string(),
             item.total_tokens.to_string(),
             item.billable_units.to_string(),
-            item.cost_micro_usd.to_string(),
+            item.cost_micros.to_string(),
             optional_f64(item.avg_latency_ms),
             item.model_count.to_string(),
         ]
@@ -1140,7 +1138,7 @@ async fn export_user_models(
         "output_tokens".into(),
         "total_tokens".into(),
         "billable_units".into(),
-        "cost_micro_usd".into(),
+        "cost_micros".into(),
         "avg_latency_ms".into(),
     ]];
     rows.extend(page.items.into_iter().map(|item| {
@@ -1158,7 +1156,7 @@ async fn export_user_models(
             item.output_tokens.to_string(),
             item.total_tokens.to_string(),
             item.billable_units.to_string(),
-            item.cost_micro_usd.to_string(),
+            item.cost_micros.to_string(),
             optional_f64(item.avg_latency_ms),
         ]
     }));
@@ -1180,7 +1178,7 @@ async fn export_daily(
         "output_tokens".into(),
         "total_tokens".into(),
         "billable_units".into(),
-        "cost_micro_usd".into(),
+        "cost_micros".into(),
         "avg_latency_ms".into(),
     ]];
     rows.extend(items.into_iter().map(|item| {
@@ -1193,7 +1191,7 @@ async fn export_daily(
             item.output_tokens.to_string(),
             item.total_tokens.to_string(),
             item.billable_units.to_string(),
-            item.cost_micro_usd.to_string(),
+            item.cost_micros.to_string(),
             optional_f64(item.avg_latency_ms),
         ]
     }));
@@ -1218,7 +1216,7 @@ async fn export_models(
         "output_tokens".into(),
         "total_tokens".into(),
         "billable_units".into(),
-        "cost_micro_usd".into(),
+        "cost_micros".into(),
         "avg_latency_ms".into(),
         "user_count".into(),
     ]];
@@ -1234,7 +1232,7 @@ async fn export_models(
             item.output_tokens.to_string(),
             item.total_tokens.to_string(),
             item.billable_units.to_string(),
-            item.cost_micro_usd.to_string(),
+            item.cost_micros.to_string(),
             optional_f64(item.avg_latency_ms),
             item.user_count.to_string(),
         ]
@@ -1257,7 +1255,7 @@ fn aggregate_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageStatsAggregate
         audio_in_tokens: row.try_get("audio_in_tokens")?,
         audio_out_tokens: row.try_get("audio_out_tokens")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         avg_latency_ms: row.try_get("avg_latency_ms")?,
         avg_first_response_ms: row.try_get("avg_first_response_ms")?,
     })
@@ -1275,7 +1273,7 @@ fn usage_timeseries_point_from_row(
         output_tokens: row.try_get("output_tokens")?,
         total_tokens: row.try_get("total_tokens")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         avg_latency_ms: row.try_get("avg_latency_ms")?,
         avg_first_response_ms: row.try_get("avg_first_response_ms")?,
         avg_output_tokens_per_second: row.try_get("avg_output_tokens_per_second")?,
@@ -1298,7 +1296,7 @@ fn user_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<UserUsageStats, sq
         output_tokens: row.try_get("output_tokens")?,
         total_tokens: row.try_get("total_tokens")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         avg_latency_ms: row.try_get("avg_latency_ms")?,
         model_count: row.try_get("model_count")?,
     })
@@ -1316,7 +1314,7 @@ fn model_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ModelUsageStats, 
         output_tokens: row.try_get("output_tokens")?,
         total_tokens: row.try_get("total_tokens")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         avg_latency_ms: row.try_get("avg_latency_ms")?,
         user_count: row.try_get("user_count")?,
     })
@@ -1337,7 +1335,7 @@ fn model_usage_timeseries_point_from_row(
         output_tokens: row.try_get("output_tokens")?,
         total_tokens: row.try_get("total_tokens")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         avg_latency_ms: row.try_get("avg_latency_ms")?,
         avg_first_response_ms: row.try_get("avg_first_response_ms")?,
         avg_output_tokens_per_second: row.try_get("avg_output_tokens_per_second")?,
@@ -1365,7 +1363,7 @@ fn user_model_stats_from_row(
         output_tokens: row.try_get("output_tokens")?,
         total_tokens: row.try_get("total_tokens")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         avg_latency_ms: row.try_get("avg_latency_ms")?,
     })
 }

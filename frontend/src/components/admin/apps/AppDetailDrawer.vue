@@ -64,7 +64,7 @@ function logStatusType(status: AppRunLog['status']) {
             </div>
             <div class="app-detail-stat">
               <dt>今日消耗</dt>
-              <dd>{{ cost(app.today_cost_micro_usd) }}</dd>
+              <dd>{{ cost(app.today_cost_micros) }}</dd>
             </div>
             <div>
               <dt>上下文轮数</dt>

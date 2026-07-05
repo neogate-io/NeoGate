@@ -451,7 +451,7 @@ async fn app_run_logs(
         SELECT id, app_id, endpoint_id, conversation_id, external_user_id,
                external_conversation_id, external_message_id, trace_id, app_type, model,
                status, status_code, latency_ms, input_tokens, output_tokens, total_tokens,
-               cost_micro_usd, error_summary, created_at
+               cost_micros, error_summary, created_at
         FROM app_run_log
         WHERE ($1::BIGINT IS NULL OR app_id = $1)
           AND ($2::BIGINT IS NULL OR endpoint_id = $2)

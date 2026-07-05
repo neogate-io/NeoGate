@@ -208,7 +208,7 @@ async function exportUsage() {
     formatDurationMs(row.latency_ms),
     formatDurationMs(row.first_response_ms),
     formatTokenRate(row.output_tokens_per_second, locale.value),
-    formatMoney(row.cost_micro_usd, locale.value, 6),
+    formatMoney(row.cost_micros, locale.value, 6),
     statusLabel(row.status_code)
   ])
   downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
@@ -281,7 +281,7 @@ async function exportUsage() {
                 {{ formatTokenRate(row.output_tokens_per_second, locale) }}</small
               >
             </span>
-            <span class="usage-cost">{{ formatMoney(row.cost_micro_usd, locale, 6) }}</span>
+            <span class="usage-cost">{{ formatMoney(row.cost_micros, locale, 6) }}</span>
             <button class="usage-details-label" type="button" @click="toggleUsageDetails">
               {{ t('viewDetails') }}
             </button>
@@ -391,7 +391,7 @@ async function exportUsage() {
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('cost') }}</dt>
-                  <dd>{{ formatMoney(row.cost_micro_usd, locale, 6) }}</dd>
+                  <dd>{{ formatMoney(row.cost_micros, locale, 6) }}</dd>
                 </div>
                 <div>
                   <dt>{{ t('billingStatus') }}</dt>

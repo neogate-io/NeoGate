@@ -822,7 +822,7 @@ mod tests {
                 total_tokens: None,
                 billing_meter: BillingMeter::Token,
                 billable_units: 0,
-                cost_micro_usd: 0,
+                cost_micros: 0,
                 status: "billed".to_string(),
                 parts: Vec::new(),
                 returned_parts: Vec::new(),

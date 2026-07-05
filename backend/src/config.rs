@@ -204,7 +204,7 @@ pub struct CacheConfig {
 
 #[derive(Clone, Debug)]
 pub struct BillingConfig {
-    pub credit_prefetch_micro_usd: i64,
+    pub credit_prefetch_micros: i64,
     pub credit_allocation_recovery_after: Duration,
     pub credit_allocation_recovery_interval: Duration,
     pub default_output_tokens: i64,
@@ -327,7 +327,7 @@ impl Config {
             redis_key_prefix: env::var("REDIS_KEY_PREFIX")
                 .unwrap_or_else(|_| "neogate".to_string()),
             billing: BillingConfig {
-                credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000)?,
+                credit_prefetch_micros: parse_i64("CREDIT_PREFETCH_MICROS", 100_000)?,
                 credit_allocation_recovery_after: Duration::from_secs(parse_u64(
                     "CREDIT_RELEASE_AFTER_SECONDS",
                     900,
@@ -384,8 +384,8 @@ impl Config {
         if self.runtime_mode.is_distributed() && self.redis_url.is_none() {
             anyhow::bail!("REDIS_URL is required when RUNTIME_MODE=distributed");
         }
-        if self.billing.credit_prefetch_micro_usd <= 0 {
-            anyhow::bail!("CREDIT_PREFETCH_MICRO_USD must be positive");
+        if self.billing.credit_prefetch_micros <= 0 {
+            anyhow::bail!("CREDIT_PREFETCH_MICROS must be positive");
         }
         if self.billing.credit_allocation_recovery_after.is_zero() {
             anyhow::bail!("CREDIT_RELEASE_AFTER_SECONDS must be positive");

@@ -8,8 +8,8 @@ const amount = defineModel<number>('amount', { required: true })
 
 defineProps<{
   title: string
-  currentBalanceMicroUsd: number
-  adjustedBalanceMicroUsd: number
+  currentBalance: number
+  adjustedBalance: number
   hint: string
   confirmText: string
   saving: boolean
@@ -41,14 +41,14 @@ const { billingCurrency, formatMoney } = useBillingCurrency()
       <section class="credit-adjust-balance-card" aria-live="polite">
         <div class="credit-adjust-balance-item">
           <span>{{ t('currentBalance') }}</span>
-          <strong>{{ formatMoney(currentBalanceMicroUsd, locale, 2) }}</strong>
+          <strong>{{ formatMoney(currentBalance, locale, 2) }}</strong>
         </div>
         <div class="credit-adjust-balance-arrow" aria-hidden="true">
           <el-icon><Right /></el-icon>
         </div>
         <div class="credit-adjust-balance-item is-after">
           <span>{{ t('afterAdjustment') }}</span>
-          <strong>{{ formatMoney(adjustedBalanceMicroUsd, locale, 2) }}</strong>
+          <strong>{{ formatMoney(adjustedBalance, locale, 2) }}</strong>
         </div>
       </section>
 

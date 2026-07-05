@@ -125,12 +125,12 @@ impl CreditAccountId {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Price {
-    pub input_price_usd_micros: i64,
-    pub output_price_usd_micros: i64,
-    pub cache_read_price_usd_micros: Option<i64>,
-    pub cache_write_price_usd_micros: Option<i64>,
+    pub input_price_micros: i64,
+    pub output_price_micros: i64,
+    pub cache_read_price_micros: Option<i64>,
+    pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
-    pub unit_price_usd_micros: Option<i64>,
+    pub unit_price_micros: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -181,14 +181,14 @@ impl BillableUsage {
 pub struct DebitPart {
     pub credit_account: CreditAccountId,
     pub allocation_id: DbId,
-    pub amount_micro_usd: i64,
+    pub amount_micros: i64,
     pub(super) generation: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebitHold {
     pub transaction_id: Uuid,
-    pub estimated_micro_usd: i64,
+    pub estimated_micros: i64,
     pub parts: Vec<DebitPart>,
     #[serde(default = "default_charge_credit")]
     pub charge_credit: bool,
@@ -206,7 +206,7 @@ pub struct BillingCharge {
     pub total_tokens: Option<i64>,
     pub billing_meter: BillingMeter,
     pub billable_units: i64,
-    pub cost_micro_usd: i64,
+    pub cost_micros: i64,
     pub status: String,
     pub parts: Vec<DebitPart>,
     pub returned_parts: Vec<DebitPart>,

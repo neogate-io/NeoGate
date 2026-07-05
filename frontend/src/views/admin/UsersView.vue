@@ -152,9 +152,9 @@ const emptyUsersDescription = computed(() =>
 const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
 const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
 const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
-const rechargePreviewMicroUsd = computed(() => {
+const rechargePreviewMicros = computed(() => {
   if (!selectedUser.value) return majorToMicroAmount(amountMajor.value)
-  return selectedUser.value.balance_micro_usd + majorToMicroAmount(amountMajor.value)
+  return selectedUser.value.balance_micros + majorToMicroAmount(amountMajor.value)
 })
 const userMobileMetaText = (row: User) => {
   if (!isPaidServiceMode.value) return userStatusText(row.status)
@@ -184,16 +184,16 @@ async function loadUsers() {
   })
 }
 
-function creditCellClass(row: Pick<CreditBalance, 'available_micro_usd'>): CreditClass {
+function creditCellClass(row: Pick<CreditBalance, 'available_micros'>): CreditClass {
   if (!isCreditRequired.value) return 'is-unlimited'
-  return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
+  return row.available_micros <= 0 ? 'is-depleted' : 'is-available'
 }
 
 function accountBalanceTooltip(row: CreditBalance) {
   return [
-    `${t('accountBalance')}: ${formatMoney(row.balance_micro_usd, locale.value, 2)}`,
-    `${t('reservedBalance')}: ${formatMoney(row.reserved_micro_usd, locale.value, 2)}`,
-    `${t('availableBalance')}: ${formatMoney(row.available_micro_usd, locale.value, 2)}`
+    `${t('accountBalance')}: ${formatMoney(row.balance_micros, locale.value, 2)}`,
+    `${t('reservedBalance')}: ${formatMoney(row.reserved_micros, locale.value, 2)}`,
+    `${t('availableBalance')}: ${formatMoney(row.available_micros, locale.value, 2)}`
   ].join('\n')
 }
 
@@ -421,9 +421,9 @@ function exportUsers() {
     'email',
     'group',
     'status',
-    'balance_micro_usd',
-    'reserved_micro_usd',
-    'available_micro_usd',
+    'balance_micros',
+    'reserved_micros',
+    'available_micros',
     'created_at',
     'last_active_at'
   ]
@@ -432,9 +432,9 @@ function exportUsers() {
     user.email,
     user.user_group_name,
     user.status,
-    user.balance_micro_usd,
-    user.reserved_micro_usd,
-    user.available_micro_usd,
+    user.balance_micros,
+    user.reserved_micros,
+    user.available_micros,
     user.created_at,
     user.last_active_at ?? ''
   ])
@@ -659,7 +659,7 @@ onMounted(() => {
           <template #default="{ row }">
             <el-tooltip :content="accountBalanceTooltip(row)" placement="top" :show-after="600">
               <span class="user-credit-cell" :class="creditCellClass(row)">
-                {{ formatMoney(row.balance_micro_usd, locale, 2) }}
+                {{ formatMoney(row.balance_micros, locale, 2) }}
               </span>
             </el-tooltip>
           </template>
@@ -877,9 +877,9 @@ onMounted(() => {
       v-if="selectedUser"
       v-model:amount="amountMajor"
       v-model:open="creditDialogVisible"
-      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :adjusted-balance="rechargePreviewMicros"
       :confirm-text="t('confirmRecharge')"
-      :current-balance-micro-usd="selectedUser.balance_micro_usd"
+      :current-balance="selectedUser.balance_micros"
       :hint="t('accountCreditAdjustHint')"
       :saving="creditSaving"
       :title="t('accountRecharge')"

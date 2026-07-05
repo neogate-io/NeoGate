@@ -188,7 +188,7 @@ export const adminMessages = {
     priceStatus: '计费状态',
     modelPrices: '模型价格 (输入 / 输出 / 百万Token)',
     modelPriceDetails: '模型明细',
-    inputOutputPriceHint: '输入 / 输出价格（美元 / 百万 Token）',
+    inputOutputPriceHint: '输入 / 输出价格（计费货币 / 百万 Token）',
     configurePrice: '配置价格',
     pricingPolicy: '定价策略',
     pricingPolicyHint: '定价策略用于按用户等级设置销售倍率，最终价格 = 模型价格 × 售价比例。',
@@ -712,7 +712,7 @@ export const adminMessages = {
     priceStatus: 'Billing status',
     modelPrices: 'Model prices (Input / Output / 1M Tokens)',
     modelPriceDetails: 'Model details',
-    inputOutputPriceHint: 'Input / output prices in USD per 1M tokens',
+    inputOutputPriceHint: 'Input / output prices in billing currency per 1M tokens',
     configurePrice: 'Configure prices',
     pricingPolicy: 'Pricing policy',
     pricingPolicyHint:

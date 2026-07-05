@@ -184,7 +184,7 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
       type: 'line',
       smooth: true,
       areaStyle: { opacity: 0.12 },
-      data: dailyChartRows.value.map((item) => Number(microAmountToMajor(item.cost_micro_usd).toFixed(6)))
+      data: dailyChartRows.value.map((item) => Number(microAmountToMajor(item.cost_micros).toFixed(6)))
     }
   ]
 }))
@@ -240,7 +240,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
         type: 'bar',
         barMaxWidth: 16,
         data: rows.map((item) => ({
-          value: Number(microAmountToMajor(item.cost_micro_usd).toFixed(6)),
+          value: Number(microAmountToMajor(item.cost_micros).toFixed(6)),
           userQuery: item.user_id != null ? String(item.user_id) : item.user_display_name
         }))
       }
@@ -273,7 +273,7 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
       type: 'bar',
       barMaxWidth: 22,
       data: statisticsSummary.value.top_models.map((item) => ({
-        value: Number(microAmountToMajor(item.cost_micro_usd).toFixed(6)),
+        value: Number(microAmountToMajor(item.cost_micros).toFixed(6)),
         channelName: item.channel_name,
         model: item.model
       }))
@@ -501,7 +501,7 @@ function emptyStatisticsSummary(): UsageStatisticsSummary {
       audio_in_tokens: 0,
       audio_out_tokens: 0,
       billable_units: 0,
-      cost_micro_usd: 0,
+      cost_micros: 0,
       avg_latency_ms: null,
       avg_first_response_ms: null
     },
@@ -544,7 +544,7 @@ function filledDailyRows(summary: UsageStatisticsSummary) {
         output_tokens: 0,
         total_tokens: 0,
         billable_units: 0,
-        cost_micro_usd: 0,
+        cost_micros: 0,
         avg_latency_ms: null
       }
     )
@@ -866,7 +866,7 @@ function chartNumericValue(value: unknown) {
           <div class="statistics-metric-grid">
             <div class="statistics-metric">
               <span>{{ t('totalCost') }}</span>
-              <strong>{{ formatMoney(statisticsSummary.totals.cost_micro_usd, locale, 6) }}</strong>
+              <strong>{{ formatMoney(statisticsSummary.totals.cost_micros, locale, 6) }}</strong>
             </div>
             <div class="statistics-metric">
               <span>{{ t('requestCount') }}</span>
@@ -1069,7 +1069,7 @@ function chartNumericValue(value: unknown) {
                   <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMoney(row.cost_micro_usd, locale, 6) }}</template>
+                  <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
@@ -1134,7 +1134,7 @@ function chartNumericValue(value: unknown) {
                   <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMoney(row.cost_micro_usd, locale, 6) }}</template>
+                  <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>

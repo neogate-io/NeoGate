@@ -8,7 +8,7 @@ export type PaymentOrder = {
   provider_order_id?: string | null
   status: 'pending' | 'paid' | 'failed' | 'canceled' | 'expired'
   currency: string
-  amount_micro_usd: number
+  amount_micros: number
   payable_amount_minor: number
   checkout_url?: string | null
   return_url?: string | null
@@ -23,12 +23,12 @@ export function getRechargeOrders() {
   return userRequest<PaymentOrder[]>('/api/user/recharge/orders')
 }
 
-export function createRechargeOrder(amountMicroUsd: number, payType: PayType, returnUrl: string) {
+export function createRechargeOrder(amountMicros: number, payType: PayType, returnUrl: string) {
   return userRequest<{ order: PaymentOrder; checkout_url?: string | null }>('/api/user/recharge/orders', {
     method: 'POST',
     body: JSON.stringify({
       provider: 'zpay',
-      amount_micro_usd: amountMicroUsd,
+      amount_micros: amountMicros,
       pay_type: payType,
       return_url: returnUrl
     })

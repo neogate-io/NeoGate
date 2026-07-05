@@ -228,9 +228,9 @@ const smartProjectModel = computed(
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
 )
-const rechargePreviewMicroUsd = computed(() => {
+const rechargePreviewMicros = computed(() => {
   if (!selectedProject.value) return majorToMicroAmount(amountMajor.value)
-  return selectedProject.value.balance_micro_usd + majorToMicroAmount(amountMajor.value)
+  return selectedProject.value.balance_micros + majorToMicroAmount(amountMajor.value)
 })
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
 const isEditingProject = computed(() => Boolean(selectedProject.value))
@@ -270,19 +270,19 @@ function projectStatusIcon(status: ProjectStatus) {
 
 function creditTooltip(row: Project) {
   return [
-    `${t('totalCredit')}: ${formatMoney(row.balance_micro_usd, locale.value, 2)}`,
-    `${t('reservedCredit')}: ${formatMoney(row.reserved_micro_usd, locale.value, 2)}`,
-    `${t('remainingCredit')}: ${formatMoney(row.available_micro_usd, locale.value, 2)}`
+    `${t('totalCredit')}: ${formatMoney(row.balance_micros, locale.value, 2)}`,
+    `${t('reservedCredit')}: ${formatMoney(row.reserved_micros, locale.value, 2)}`,
+    `${t('remainingCredit')}: ${formatMoney(row.available_micros, locale.value, 2)}`
   ].join('\n')
 }
 
 function creditCellClass(row: Project): CreditClass {
-  return !isCreditRequired.value && row.available_micro_usd === 0 ? 'is-unlimited' : 'is-available'
+  return !isCreditRequired.value && row.available_micros === 0 ? 'is-unlimited' : 'is-available'
 }
 
-function formatAvailableUsd(row: Project) {
-  if (!isCreditRequired.value && row.available_micro_usd === 0) return '-'
-  return formatMoney(row.available_micro_usd, locale.value, 2)
+function formatAvailableCredit(row: Project) {
+  if (!isCreditRequired.value && row.available_micros === 0) return '-'
+  return formatMoney(row.available_micros, locale.value, 2)
 }
 
 function formatProjectModelCount(row: Project) {
@@ -1060,7 +1060,7 @@ onMounted(loadServicePolicy)
           <template #default="{ row }">
             <el-tooltip :content="creditTooltip(row)" placement="top" :show-after="600">
               <span class="project-credit-cell" :class="creditCellClass(row)">
-                {{ formatAvailableUsd(row) }}
+                {{ formatAvailableCredit(row) }}
               </span>
             </el-tooltip>
           </template>
@@ -1249,9 +1249,9 @@ onMounted(loadServicePolicy)
       v-if="selectedProject"
       v-model:amount="amountMajor"
       v-model:open="creditDialogVisible"
-      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :adjusted-balance="rechargePreviewMicros"
       :confirm-text="t('confirmAdjustment')"
-      :current-balance-micro-usd="selectedProject.available_micro_usd"
+      :current-balance="selectedProject.available_micros"
       :hint="t('projectCreditAdjustHint')"
       :saving="creditSaving"
       :subject-label="t('project')"

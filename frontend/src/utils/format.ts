@@ -19,14 +19,6 @@ export function majorToMicroAmount(value: number) {
   return Math.round(value * MICRO_UNITS_PER_CURRENCY)
 }
 
-export function microUsdToUsd(value: number) {
-  return microAmountToMajor(value)
-}
-
-export function usdToMicroUsd(value: number) {
-  return majorToMicroAmount(value)
-}
-
 export function formatMoney(
   value: number | null | undefined,
   currency: BillingCurrency,
@@ -40,7 +32,7 @@ export function formatMoney(
   })}`
 }
 
-export function formatMicroUsd(value?: number | null, digits = 2) {
+export function formatMicros(value?: number | null, digits = 2) {
   if (value == null) return '-'
   return `$${microAmountToMajor(value).toFixed(digits)}`
 }
@@ -57,7 +49,7 @@ export function formatPricePerMillion(
   })}`
 }
 
-export function formatUsdPerMillion(value: number) {
+export function formatMajorPerMillion(value: number) {
   return `$${value.toLocaleString('en-US', {
     maximumFractionDigits: 6
   })}`
@@ -65,7 +57,7 @@ export function formatUsdPerMillion(value: number) {
 
 export function formatMicrosPerMillion(value?: number | null) {
   if (value == null) return '-'
-  return formatUsdPerMillion(microAmountToMajor(value))
+  return formatMajorPerMillion(microAmountToMajor(value))
 }
 
 export function formatNumber(value: number | null | undefined, locale: string) {

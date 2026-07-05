@@ -284,7 +284,7 @@ async function submitRecharge() {
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
           <el-table-column :label="t('amount')" min-width="110">
-            <template #default="{ row }">{{ formatMoney(row.amount_micro_usd, locale, 2) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.amount_micros, locale, 2) }}</template>
           </el-table-column>
           <el-table-column :label="t('payAmount')" min-width="120">
             <template #default="{ row }">{{ formatPayable(row) }}</template>
@@ -319,7 +319,7 @@ async function submitRecharge() {
             </div>
             <div>
               <span>{{ t('amount') }}</span>
-              <strong>{{ formatMoney(row.amount_micro_usd, locale, 2) }}</strong>
+              <strong>{{ formatMoney(row.amount_micros, locale, 2) }}</strong>
             </div>
             <div>
               <span>{{ t('payAmount') }}</span>

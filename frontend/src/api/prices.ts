@@ -45,12 +45,12 @@ export function getPricingPolicies() {
 export function upsertProviderPrice(input: {
   provider: string
   model: string
-  input_price_usd_micros: number
-  output_price_usd_micros: number
-  cache_read_price_usd_micros?: number | null
-  cache_write_price_usd_micros?: number | null
+  input_price_micros: number
+  output_price_micros: number
+  cache_read_price_micros?: number | null
+  cache_write_price_micros?: number | null
   billing_meter: BillingMeter
-  unit_price_usd_micros?: number | null
+  unit_price_micros?: number | null
   enabled: boolean
 }) {
   return adminRequest<ProviderPrice>('/api/admin/provider-prices', {

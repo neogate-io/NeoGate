@@ -14,11 +14,11 @@ pub fn router() -> Router<Arc<AppState>> {
 struct UserOverview {
     email: String,
     display_name: String,
-    balance_micro_usd: i64,
-    reserved_micro_usd: i64,
-    available_micro_usd: i64,
-    today_cost_micro_usd: i64,
-    month_cost_micro_usd: i64,
+    balance_micros: i64,
+    reserved_micros: i64,
+    available_micros: i64,
+    today_cost_micros: i64,
+    month_cost_micros: i64,
     request_count: i64,
     daily_costs: Vec<DailyCost>,
 }
@@ -26,7 +26,7 @@ struct UserOverview {
 #[derive(Debug, Serialize)]
 struct DailyCost {
     date: String,
-    cost_micro_usd: i64,
+    cost_micros: i64,
 }
 
 async fn overview(
@@ -38,14 +38,14 @@ async fn overview(
         SELECT
             u.email::TEXT AS email,
             u.username,
-            COALESCE(pw.balance_micro_usd, 0)::BIGINT AS balance_micro_usd,
-            COALESCE(pw.reserved_micro_usd, 0)::BIGINT AS reserved_micro_usd,
-            COALESCE(today.cost_micro_usd, 0)::BIGINT AS today_cost_micro_usd,
-            COALESCE(month.cost_micro_usd, 0)::BIGINT AS month_cost_micro_usd,
+            COALESCE(pw.balance_micros, 0)::BIGINT AS balance_micros,
+            COALESCE(pw.reserved_micros, 0)::BIGINT AS reserved_micros,
+            COALESCE(today.cost_micros, 0)::BIGINT AS today_cost_micros,
+            COALESCE(month.cost_micros, 0)::BIGINT AS month_cost_micros,
             COALESCE(total.request_count, 0)::BIGINT AS request_count
         FROM "user" u
         LEFT JOIN LATERAL (
-            SELECT w.balance_micro_usd, w.reserved_micro_usd
+            SELECT w.balance_micros, w.reserved_micros
             FROM project p
             JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
             WHERE p.owner_user_id = u.id
@@ -55,13 +55,13 @@ async fn overview(
             LIMIT 1
         ) pw ON TRUE
         LEFT JOIN LATERAL (
-            SELECT SUM(cost_micro_usd) AS cost_micro_usd
+            SELECT SUM(cost_micros) AS cost_micros
             FROM usage_daily
             WHERE user_id = u.id
               AND day = current_date
         ) today ON TRUE
         LEFT JOIN LATERAL (
-            SELECT SUM(cost_micro_usd) AS cost_micro_usd
+            SELECT SUM(cost_micros) AS cost_micros
             FROM usage_daily
             WHERE user_id = u.id
               AND day >= date_trunc('month', now())::date
@@ -80,18 +80,18 @@ async fn overview(
 
     let email: String = row.try_get("email")?;
     let username: Option<String> = row.try_get("username")?;
-    let balance_micro_usd: i64 = row.try_get("balance_micro_usd")?;
-    let reserved_micro_usd: i64 = row.try_get("reserved_micro_usd")?;
+    let balance_micros: i64 = row.try_get("balance_micros")?;
+    let reserved_micros: i64 = row.try_get("reserved_micros")?;
     let daily_costs = daily_costs(&state, auth.user_id).await?;
 
     Ok(Json(UserOverview {
         display_name: username.unwrap_or_else(|| display_name_from_email(&email)),
         email,
-        balance_micro_usd,
-        reserved_micro_usd,
-        available_micro_usd: balance_micro_usd - reserved_micro_usd,
-        today_cost_micro_usd: row.try_get("today_cost_micro_usd")?,
-        month_cost_micro_usd: row.try_get("month_cost_micro_usd")?,
+        balance_micros,
+        reserved_micros,
+        available_micros: balance_micros - reserved_micros,
+        today_cost_micros: row.try_get("today_cost_micros")?,
+        month_cost_micros: row.try_get("month_cost_micros")?,
         request_count: row.try_get("request_count")?,
         daily_costs,
     }))
@@ -102,11 +102,11 @@ async fn daily_costs(state: &AppState, user_id: crate::id::DbId) -> AppResult<Ve
         r#"
         SELECT
             to_char(day, 'YYYY-MM-DD') AS date,
-            SUM(cost_micro_usd)::BIGINT AS cost_micro_usd
+            SUM(cost_micros)::BIGINT AS cost_micros
         FROM usage_daily
         WHERE user_id = $1
           AND day >= (current_date - 29)
-          AND cost_micro_usd > 0
+          AND cost_micros > 0
         GROUP BY day
         ORDER BY day
         "#,
@@ -120,7 +120,7 @@ async fn daily_costs(state: &AppState, user_id: crate::id::DbId) -> AppResult<Ve
         .map(|row| {
             Ok(DailyCost {
                 date: row.try_get("date")?,
-                cost_micro_usd: row.try_get("cost_micro_usd")?,
+                cost_micros: row.try_get("cost_micros")?,
             })
         })
         .collect::<Result<_, sqlx::Error>>()?)

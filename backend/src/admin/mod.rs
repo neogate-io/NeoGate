@@ -371,14 +371,14 @@ async fn delete_user_key_handler(
 struct AdjustCreditRequest {
     credit_account_type: String,
     owner_id: DbId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
     #[serde(default = "default_credit_reason")]
     reason: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct AdjustDefaultProjectCreditRequest {
-    amount_micro_usd: i64,
+    amount_micros: i64,
     #[serde(default = "default_credit_reason")]
     reason: String,
 }
@@ -387,14 +387,14 @@ struct AdjustDefaultProjectCreditRequest {
 struct AdjustUserKeyModelCreditRequest {
     user_key_id: DbId,
     model: String,
-    amount_micro_usd: i64,
+    amount_micros: i64,
     #[serde(default = "default_credit_reason")]
     reason: String,
 }
 
 #[derive(Debug, Serialize)]
 struct AdjustCreditResponse {
-    balance_micro_usd: i64,
+    balance_micros: i64,
 }
 
 fn default_credit_reason() -> String {
@@ -416,15 +416,15 @@ async fn adjust_credit_handler(
             )));
         }
     };
-    let balance_micro_usd = adjust_credit(
+    let balance_micros = adjust_credit(
         &state,
         credit_account_type,
         req.owner_id,
-        req.amount_micro_usd,
+        req.amount_micros,
         &req.reason,
     )
     .await?;
-    Ok(Json(AdjustCreditResponse { balance_micro_usd }))
+    Ok(Json(AdjustCreditResponse { balance_micros }))
 }
 
 async fn adjust_default_project_credit_handler(
@@ -433,9 +433,9 @@ async fn adjust_default_project_credit_handler(
     Path(id): Path<DbId>,
     Json(req): Json<AdjustDefaultProjectCreditRequest>,
 ) -> AppResult<Json<AdjustCreditResponse>> {
-    let balance_micro_usd =
-        adjust_default_project_credit(&state, id, req.amount_micro_usd, &req.reason).await?;
-    Ok(Json(AdjustCreditResponse { balance_micro_usd }))
+    let balance_micros =
+        adjust_default_project_credit(&state, id, req.amount_micros, &req.reason).await?;
+    Ok(Json(AdjustCreditResponse { balance_micros }))
 }
 
 async fn adjust_user_key_model_credit_handler(
@@ -447,7 +447,7 @@ async fn adjust_user_key_model_credit_handler(
         &state,
         req.user_key_id,
         req.model,
-        req.amount_micro_usd,
+        req.amount_micros,
         &req.reason,
     )
     .await?;
@@ -1127,7 +1127,7 @@ struct UsageRecord {
     audio_out_tokens: Option<i64>,
     billing_meter: String,
     billable_units: i64,
-    cost_micro_usd: Option<i64>,
+    cost_micros: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
     routing: Option<UsageRouting>,
@@ -1260,7 +1260,7 @@ async fn usage_rows(
                 usage_record.cache_create_5m_in_tokens, usage_record.cache_create_1h_in_tokens,
                 usage_record.reason_out_tokens, usage_record.audio_in_tokens,
                 usage_record.audio_out_tokens, usage_record.billing_meter,
-                usage_record.billable_units, usage_record.cost_micro_usd,
+                usage_record.billable_units, usage_record.cost_micros,
                 usage_record.billing_status, usage_record.error_summary, usage_record.created_at,
                 usage_routing.id AS routing_id,
                 usage_routing.project_id AS routing_project_id,
@@ -1366,7 +1366,7 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         audio_out_tokens: row.try_get("audio_out_tokens")?,
         billing_meter: row.try_get("billing_meter")?,
         billable_units: row.try_get("billable_units")?,
-        cost_micro_usd: row.try_get("cost_micro_usd")?,
+        cost_micros: row.try_get("cost_micros")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,
         routing: usage_routing_from_row(row)?,
@@ -1447,7 +1447,7 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
         "audio_out_tokens".into(),
         "billing_meter".into(),
         "billable_units".into(),
-        "cost_micro_usd".into(),
+        "cost_micros".into(),
         "billing_status".into(),
         "error_summary".into(),
     ]];
@@ -1519,7 +1519,7 @@ fn usage_csv_rows(records: Vec<UsageRecord>) -> Vec<Vec<String>> {
             optional_i64(record.audio_out_tokens),
             record.billing_meter,
             record.billable_units.to_string(),
-            optional_i64(record.cost_micro_usd),
+            optional_i64(record.cost_micros),
             record.billing_status,
             record.error_summary.unwrap_or_default(),
         ]

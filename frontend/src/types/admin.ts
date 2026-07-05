@@ -30,9 +30,9 @@ export type CursorPage<T> = {
 }
 
 export type CreditBalance = {
-  balance_micro_usd: number
-  reserved_micro_usd: number
-  available_micro_usd: number
+  balance_micros: number
+  reserved_micros: number
+  available_micros: number
 }
 
 export type UserKey = CreditBalance & {
@@ -47,7 +47,7 @@ export type UserKey = CreditBalance & {
   status: UserKeyStatus
   last_active_at?: string | null
   expires_at?: string | null
-  month_cost_micro_usd: number
+  month_cost_micros: number
   created_at: string
   updated_at: string
 }
@@ -287,12 +287,12 @@ export type ChannelModel = {
   failure_count: number
   billing_enabled: boolean
   price_configured: boolean
-  input_price_usd_micros?: number | null
-  output_price_usd_micros?: number | null
-  cache_read_price_usd_micros?: number | null
-  cache_write_price_usd_micros?: number | null
+  input_price_micros?: number | null
+  output_price_micros?: number | null
+  cache_read_price_micros?: number | null
+  cache_write_price_micros?: number | null
   billing_meter?: BillingMeter | null
-  unit_price_usd_micros?: number | null
+  unit_price_micros?: number | null
   created_at: string
   updated_at: string
 }
@@ -417,7 +417,7 @@ export type UsageRecord = {
   audio_out_tokens?: number | null
   billing_meter: BillingMeter
   billable_units: number
-  cost_micro_usd?: number | null
+  cost_micros?: number | null
   billing_status: string
   routing?: UsageRouting | null
   created_at: string
@@ -427,12 +427,12 @@ export type ProviderPrice = {
   id: number
   provider: string
   model: string
-  input_price_usd_micros: number
-  output_price_usd_micros: number
-  cache_read_price_usd_micros?: number | null
-  cache_write_price_usd_micros?: number | null
+  input_price_micros: number
+  output_price_micros: number
+  cache_read_price_micros?: number | null
+  cache_write_price_micros?: number | null
   billing_meter: BillingMeter
-  unit_price_usd_micros?: number | null
+  unit_price_micros?: number | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -456,12 +456,12 @@ export type PricingTemplate = {
   id: number
   provider: string
   model: string
-  input_price_usd_micros: number
-  output_price_usd_micros: number
-  cache_read_price_usd_micros?: number | null
-  cache_write_price_usd_micros?: number | null
+  input_price_micros: number
+  output_price_micros: number
+  cache_read_price_micros?: number | null
+  cache_write_price_micros?: number | null
   billing_meter: BillingMeter
-  unit_price_usd_micros?: number | null
+  unit_price_micros?: number | null
   pricing_basis: PricingBasis
   source: string
   enabled: boolean
@@ -567,7 +567,7 @@ export type AppRecord = {
   project_name: string
   endpoint?: AppEndpoint | null
   today_message_count: number
-  today_cost_micro_usd: number
+  today_cost_micros: number
   last_active_at?: string | null
   created_at: string
   updated_at: string
@@ -590,7 +590,7 @@ export type AppRunLog = {
   input_tokens?: number | null
   output_tokens?: number | null
   total_tokens?: number | null
-  cost_micro_usd?: number | null
+  cost_micros?: number | null
   error_summary?: string | null
   created_at: string
 }

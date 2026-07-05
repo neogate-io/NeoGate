@@ -66,7 +66,8 @@ const navGroups = computed(() => {
 const settingItems = computed(() => {
   const items: SettingNavItem[] = [
     { path: '/admin/settings/admin-password', key: 'adminPasswordSettings' },
-    { path: '/admin/settings/smtp', key: 'smtpSettings' }
+    { path: '/admin/settings/smtp', key: 'smtpSettings' },
+    { path: '/admin/settings/site', key: 'siteSettingsPage' }
   ]
   if (servicePolicy.value?.service_mode === 'paid') {
     items.push({ path: '/admin/settings/payment', key: 'paymentSettings' })

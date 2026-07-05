@@ -3,8 +3,6 @@ import { computed, h, onMounted, ref } from 'vue'
 import {
   ChatDotRound,
   Coin,
-  Link as LinkIcon,
-  Monitor,
   PriceTag,
   Refresh,
   Search,
@@ -20,17 +18,13 @@ import {
 } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import {
-  checkLatestVersion,
   getAdminModelSetting,
-  getSiteSetting,
-  saveAdminModelSetting,
-  saveSiteSetting
+  saveAdminModelSetting
 } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
-import { setSiteBrand } from '../../composables/useSiteBrand'
-import type { Channel, ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
+import type { Channel, ModelReferenceCatalogRecord } from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { currencySymbol, formatDateTime, formatPricePerMillion } from '../../utils/format'
@@ -45,25 +39,16 @@ const confirmDialog = createConfirmAction(() => t('cancel'))
 
 const loading = ref(false)
 const servicePolicy = ref<ServicePolicy | null>(null)
-const siteSettingSaving = ref(false)
-const siteForm = ref({
-  siteName: '',
-  logoUrl: '',
-  publicBaseUrl: '',
-  envWriteSupported: false
-})
+const servicePolicySaving = ref(false)
 const adminModelForm = ref({
   defaultTextModel: '',
   defaultTextChannelId: null as number | null
 })
 const channels = ref<Channel[]>([])
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
-const servicePolicySaving = ref(false)
 const adminModelSaving = ref(false)
 const syncingTemplates = ref(false)
 const loadingReferenceCatalog = ref(false)
-const checkingVersion = ref(false)
-const versionCheck = ref<VersionCheckResult | null>(null)
 const referencePricesDialogOpen = ref(false)
 const referencePriceSearch = ref('')
 
@@ -108,11 +93,6 @@ const registrationDescription = computed(() => {
     ? t('registrationPaidEnabledDescription')
     : t('registrationInternalEnabledDescription')
 })
-const siteSettingDescription = computed(() => {
-  return siteForm.value.envWriteSupported
-    ? t('siteSettingsDescription')
-    : t('siteSettingsReadOnlyDescription')
-})
 const textModelOptions = computed(() => {
   const options: Array<{ value: string; label: string; model: string; channelId: number }> = []
   const seen = new Set<string>()
@@ -150,17 +130,6 @@ const selectedAdminTextModelValue = computed({
     adminModelForm.value.defaultTextModel = option?.model ?? ''
     adminModelForm.value.defaultTextChannelId = option?.channelId ?? null
   }
-})
-const versionStatusLabel = computed(() => {
-  if (!versionCheck.value) return t('versionNotChecked')
-  return versionCheck.value.update_available ? t('versionUpdateAvailable') : t('versionUpToDate')
-})
-const versionStatusType = computed(() => {
-  if (!versionCheck.value) return 'info'
-  return versionCheck.value.update_available ? 'warning' : 'success'
-})
-const versionPublishedAt = computed(() => {
-  return formatDateTime(versionCheck.value?.published_at, locale.value)
 })
 
 function formatSyncCount(value: number) {
@@ -226,15 +195,6 @@ function readReferenceSyncError(err: unknown) {
   return readError(err)
 }
 
-function applySiteSetting(setting: Awaited<ReturnType<typeof getSiteSetting>>) {
-  siteForm.value = {
-    siteName: setting.site_name || 'NeoGate',
-    logoUrl: setting.logo_url ?? '',
-    publicBaseUrl: setting.public_base_url ?? '',
-    envWriteSupported: setting.env_write_supported
-  }
-}
-
 function applyAdminModelSetting(setting: Awaited<ReturnType<typeof getAdminModelSetting>>) {
   adminModelForm.value = {
     defaultTextModel: setting.default_text_model ?? '',
@@ -245,66 +205,16 @@ function applyAdminModelSetting(setting: Awaited<ReturnType<typeof getAdminModel
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [policy, siteSetting, adminModelSetting, fetchedChannels, catalog] = await Promise.all([
+      const [policy, adminModelSetting, fetchedChannels, catalog] = await Promise.all([
         getAdminServicePolicy(),
-        getSiteSetting(),
         getAdminModelSetting(),
         getChannels(),
         getModelReferenceCatalog()
       ])
       servicePolicy.value = policy
-      applySiteSetting(siteSetting)
       applyAdminModelSetting(adminModelSetting)
       channels.value = fetchedChannels
       modelReferenceCatalog.value = catalog
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
-async function saveSiteConfig() {
-  const siteName = siteForm.value.siteName.trim()
-  const logoUrl = siteForm.value.logoUrl.trim()
-  const publicBaseUrl = siteForm.value.publicBaseUrl.trim()
-  if (!siteName) {
-    ElMessage.error(t('siteNameRequired'))
-    return
-  }
-  if (!publicBaseUrl) {
-    ElMessage.error(t('publicBaseUrlRequired'))
-    return
-  }
-  try {
-    const url = new URL(publicBaseUrl)
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
-  } catch {
-    ElMessage.error(t('publicBaseUrlInvalid'))
-    return
-  }
-  if (logoUrl) {
-    try {
-      const url = new URL(logoUrl)
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
-    } catch {
-      ElMessage.error(t('siteLogoUrlInvalid'))
-      return
-    }
-  }
-
-  await withLoading(siteSettingSaving, async () => {
-    try {
-      const result = await saveSiteSetting({
-        site_name: siteName,
-        public_base_url: publicBaseUrl,
-        logo_url: logoUrl || null
-      })
-      applySiteSetting(result.setting)
-      setSiteBrand(result.setting)
-      servicePolicy.value = await getAdminServicePolicy(true).catch(() => servicePolicy.value)
-      ElMessage.success(
-        result.restart_required ? t('siteSettingsSavedRestartRequired') : t('siteSettingsSaved')
-      )
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -383,70 +293,12 @@ async function syncReferencePrices() {
   })
 }
 
-async function checkVersion() {
-  await withLoading(checkingVersion, async () => {
-    try {
-      versionCheck.value = await checkLatestVersion()
-      ElMessage.success(versionStatusLabel.value)
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
 onMounted(load)
 </script>
 
 <template>
   <section class="admin-settings-view other-settings-view">
     <div v-loading="loading" class="other-settings-grid">
-      <section class="other-settings-card">
-        <header class="admin-settings-section-header other-settings-card-header">
-          <el-icon class="admin-settings-panel-icon"><Monitor /></el-icon>
-          <div class="other-settings-card-copy">
-            <h3>{{ t('siteSettings') }}</h3>
-            <p>{{ siteSettingDescription }}</p>
-          </div>
-        </header>
-        <el-form
-          class="site-settings-inline-form"
-          label-position="top"
-          @submit.prevent="saveSiteConfig"
-        >
-          <el-form-item :label="t('siteNameLabel')">
-            <el-input
-              v-model="siteForm.siteName"
-              :disabled="siteSettingSaving"
-              :placeholder="t('siteNamePlaceholder')"
-            />
-          </el-form-item>
-          <el-form-item :label="t('siteLogoUrlLabel')">
-            <el-input
-              v-model="siteForm.logoUrl"
-              :disabled="siteSettingSaving"
-              :placeholder="t('siteLogoUrlPlaceholder')"
-            />
-          </el-form-item>
-          <el-form-item :label="t('publicBaseUrlLabel')">
-            <el-input
-              v-model="siteForm.publicBaseUrl"
-              :disabled="!siteForm.envWriteSupported || siteSettingSaving"
-              :placeholder="t('publicBaseUrlPlaceholder')"
-            />
-          </el-form-item>
-        </el-form>
-        <div class="other-settings-actions">
-          <el-button
-            class="admin-action-button"
-            type="primary"
-            :loading="siteSettingSaving"
-            @click="saveSiteConfig"
-          >
-            {{ t('save') }}
-          </el-button>
-        </div>
-      </section>
-
       <section class="other-settings-card">
         <header class="admin-settings-section-header other-settings-card-header">
           <el-icon class="admin-settings-panel-icon"><Coin /></el-icon>
@@ -479,53 +331,6 @@ onMounted(load)
             @change="saveServicePolicy"
           />
         </header>
-      </section>
-
-      <section class="other-settings-card">
-        <header class="admin-settings-section-header other-settings-card-header">
-          <el-icon class="admin-settings-panel-icon"><Refresh /></el-icon>
-          <div class="other-settings-card-copy">
-            <div class="version-heading-row">
-              <h3>{{ t('versionCheck') }}</h3>
-              <el-tag class="version-status-tag" :type="versionStatusType" effect="light" round>
-                {{ versionStatusLabel }}
-              </el-tag>
-            </div>
-            <p>{{ t('versionCheckDescription') }}</p>
-            <p class="other-settings-meta">
-              <span>{{ t('currentVersion') }}</span>
-              <strong>{{ versionCheck?.current_version ?? '-' }}</strong>
-              <span>{{ t('latestVersion') }}</span>
-              <strong>{{ versionCheck?.latest_tag ?? '-' }}</strong>
-            </p>
-            <p v-if="versionCheck" class="other-settings-meta">
-              <span>{{ t('releasePublishedAt') }}</span>
-              <strong>{{ versionPublishedAt }}</strong>
-            </p>
-          </div>
-        </header>
-        <div class="other-settings-actions">
-          <el-button
-            v-if="versionCheck"
-            class="admin-action-button"
-            :icon="LinkIcon"
-            tag="a"
-            :href="versionCheck.release_url"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {{ t('viewRelease') }}
-          </el-button>
-          <el-button
-            class="admin-action-button"
-            type="primary"
-            :icon="Refresh"
-            :loading="checkingVersion"
-            @click="checkVersion"
-          >
-            {{ t('checkLatestVersion') }}
-          </el-button>
-        </div>
       </section>
 
       <section class="other-settings-card">
@@ -712,23 +517,6 @@ onMounted(load)
   margin: 0;
 }
 
-.version-heading-row {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.version-status-tag.el-tag {
-  animation: none;
-  transition: none;
-}
-
-.version-status-tag.el-tag :deep(*) {
-  animation: none;
-  transition: none;
-}
-
 .other-settings-card-copy p {
   color: var(--admin-text-muted);
   font-size: 13px;
@@ -752,25 +540,6 @@ onMounted(load)
 .other-settings-meta strong {
   color: var(--admin-text);
   font-weight: 720;
-}
-
-.site-settings-inline-form {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
-  margin-left: 38px;
-}
-
-.site-settings-inline-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-.site-settings-inline-form :deep(.el-form-item__label) {
-  color: var(--admin-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.3;
-  margin-bottom: 6px;
 }
 
 .admin-model-settings-card {
@@ -933,11 +702,6 @@ onMounted(load)
   .other-settings-actions .el-button {
     flex: 1 1 0;
     min-width: 0;
-  }
-
-  .site-settings-inline-form {
-    grid-template-columns: minmax(0, 1fr);
-    margin-left: 0;
   }
 
   .admin-model-settings-form :deep(.el-form-item) {

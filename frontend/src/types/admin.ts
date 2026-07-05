@@ -4,6 +4,14 @@ export type UserStatus = 'enabled' | 'disabled' | 'pending'
 export type UserKeyStatus = 'enabled' | 'disabled'
 export type ProjectStatus = 'enabled' | 'disabled'
 export type BillingMeter = 'token' | 'image'
+export type PricingBasis =
+  | 'token'
+  | 'image'
+  | 'call'
+  | 'per_10k_token'
+  | 'hour'
+  | 'second'
+  | 'multi_tier_video'
 
 export type VersionCheckResult = {
   current_version: string
@@ -454,11 +462,23 @@ export type PricingTemplate = {
   cache_write_price_usd_micros?: number | null
   billing_meter: BillingMeter
   unit_price_usd_micros?: number | null
-  pricing_basis: BillingMeter
+  pricing_basis: PricingBasis
   source: string
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+export type VideoTierDimension =
+  | 'input_without_video'
+  | 'input_with_video'
+  | 'with_audio'
+  | 'without_audio'
+  | 'price'
+
+export type VideoTier = {
+  resolution: string
+  tiers: Partial<Record<VideoTierDimension, number>>
 }
 
 export type ModelReferenceCatalogRecord = PricingTemplate & {

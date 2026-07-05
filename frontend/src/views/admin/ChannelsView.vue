@@ -577,8 +577,7 @@ function openPriceDialog(row: Channel) {
       hasPrice: hasEnabledBillablePrice(price, billingMeter),
       hasPriceRecord: Boolean(price),
       billingMeterLocked: isBillingMeterLocked(row.provider, model),
-      canUseImageBilling: supportsImageBilling,
-      templateSource: template ? pricingTemplateSourceLabel(template, row.provider) : undefined
+      canUseImageBilling: supportsImageBilling
     }
   }
   priceDialogOpen.value = true
@@ -613,16 +612,6 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
       ? `${currencySymbol.value}0`
       : formatPricePerMillion(template.cache_write_price_usd_micros, locale.value)
   return `Token ${input} / ${output}\nCache ${cacheRead} / ${cacheWrite}`
-}
-
-function pricingTemplateSourceLabel(template: PricingTemplate, provider: string) {
-  if (template.source === 'models_dev') return ''
-  const source = template.source.replace(/_/g, '.')
-  return template.provider === provider ? source : `${template.provider} / ${source}`
-}
-
-function priceIconProvider(form: (typeof priceForms)[string]) {
-  return findApplicablePricingTemplate(form)?.provider ?? form.provider
 }
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
@@ -757,31 +746,10 @@ async function applyReferencePrices() {
     return
   }
 
-  await withLoading(savingPrices, async () => {
-    try {
-      for (const form of targetForms) {
-        fillReferencePrice(form)
-        const billingMeter = requireBillingMeter(form)
-        await upsertProviderPrice({
-          provider: form.provider,
-          model: form.model,
-          input_price_usd_micros: majorToMicroAmount(form.inputUsdPerMillion),
-          output_price_usd_micros: majorToMicroAmount(form.outputUsdPerMillion),
-          cache_read_price_usd_micros: majorToMicroAmount(form.cacheReadUsdPerMillion),
-          cache_write_price_usd_micros: cacheWritePricePayload(form),
-          billing_meter: billingMeter,
-          unit_price_usd_micros: billingMeter === 'image' ? majorToMicroAmount(form.unitUsd) : null,
-          enabled: true
-        })
-      }
-      ElMessage.success(t('referencePricesApplied'))
-      await loadPricingData()
-      await loadChannels()
-      priceDialogOpen.value = false
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
+  for (const form of targetForms) {
+    fillReferencePrice(form)
+  }
+  ElMessage.success(t('referencePricesApplied'))
 }
 
 async function submitChannel() {
@@ -1181,7 +1149,6 @@ onMounted(loadInitialData)
       :has-reference-price="hasReferencePrice"
       :reference-price-summary="referencePriceSummary"
       :reference-price-fallback-label="referencePriceFallbackLabel"
-      :price-icon-provider="priceIconProvider"
       @apply-reference-prices="applyReferencePrices"
       @save="saveChannelPrices"
     />

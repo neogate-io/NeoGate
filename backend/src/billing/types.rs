@@ -37,6 +37,63 @@ impl<'de> Deserialize<'de> for BillingMeter {
     }
 }
 
+/// 参考价展示口径。仅用于 `pricing_template.pricing_basis` 列,决定前端如何展示单价。
+/// 不参与实际计费(实际计费仍由 `BillingMeter` 决定)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingBasis {
+    Token,
+    Image,
+    Call,
+    Per10kToken,
+    Hour,
+    Second,
+    MultiTierVideo,
+}
+
+impl PricingBasis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Token => "token",
+            Self::Image => "image",
+            Self::Call => "call",
+            Self::Per10kToken => "per_10k_token",
+            Self::Hour => "hour",
+            Self::Second => "second",
+            Self::MultiTierVideo => "multi_tier_video",
+        }
+    }
+
+    /// 严格解析。未知值返回 Err;调用方若需兼容历史脏值应使用 `from_strict_str(...).unwrap_or(Token)`。
+    pub fn from_strict_str(value: &str) -> Result<Self, String> {
+        match value {
+            "token" => Ok(Self::Token),
+            "image" => Ok(Self::Image),
+            "call" => Ok(Self::Call),
+            "per_10k_token" => Ok(Self::Per10kToken),
+            "hour" => Ok(Self::Hour),
+            "second" => Ok(Self::Second),
+            "multi_tier_video" => Ok(Self::MultiTierVideo),
+            _ => Err(format!("invalid pricing basis: {value}")),
+        }
+    }
+
+    /// 宽松解析:未知值 fallback 到 `Token`,兼容历史数据与未标注口径的模型。
+    pub fn from_str_lenient(value: &str) -> Self {
+        Self::from_strict_str(value).unwrap_or(Self::Token)
+    }
+}
+
+impl<'de> Deserialize<'de> for PricingBasis {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from_str_lenient(&value))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CreditAccountType {

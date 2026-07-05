@@ -134,6 +134,8 @@ def cost_from_record(record: dict[str, Any]) -> dict[str, int | float]:
         value = amount((prices.get(source) or {}).get("amount_cny"))
         if value is not None:
             cost[target] = value
+    # Kimi/Moonshot 全部为 token 计价(元/百万 tokens),无按张/按次/多档视频口径。
+    cost["basis"] = "token"
     return cost
 
 

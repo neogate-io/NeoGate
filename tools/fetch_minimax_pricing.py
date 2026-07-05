@@ -33,11 +33,12 @@ def parse_decimal(value: Any) -> str | None:
     raw = "" if value is None else str(value).strip()
     if not raw or raw in {"-", "—", "免费", "暂不支持", "不支持"}:
         return None
-    numbers = re.findall(r"\d+(?:\.\d+)?", raw.replace(",", ""))
-    if not numbers:
+    # 取首个数字,避免折扣文本(如 "~~4.20~~ 2.10" 取 4.20、限免 "1.0(限免)" 取 1.0)
+    match = re.search(r"\d+(?:\.\d+)?", raw.replace(",", ""))
+    if not match:
         return None
     try:
-        return format(Decimal(numbers[-1]).normalize(), "f")
+        return format(Decimal(match.group(0)).normalize(), "f")
     except InvalidOperation:
         return None
 
@@ -68,13 +69,61 @@ def slug(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z._-]+", "-", value.strip().lower()).strip("-")
 
 
+# 各 section 的默认计费口径与 modality
+SECTION_BASIS = {
+    "语言模型": ("token", {"input": ["text"], "output": ["text"]}),
+    "语音": ("per_10k_token", {"input": ["text"], "output": ["audio"]}),
+    "视频": ("multi_tier_video", {"input": ["text", "image"], "output": ["video"]}),
+    "音乐": ("call", {"input": ["text"], "output": ["audio"]}),
+    "图像": ("image", {"input": ["text", "image"], "output": ["image"]}),
+    "MCP": ("call", {"input": ["text", "image"], "output": ["text"]}),
+}
+
+
+def modalities_for_record(section: str) -> dict[str, list[str]]:
+    return SECTION_BASIS.get(section, (None, {"input": ["text"], "output": ["text"]}))[1]
+
+
+# 单位关键词 -> 价格字段名(非 token 口径)
+UNIT_PRICE_KEY = {
+    "元/张": "per_image",
+    "元/视频": "per_call",
+    "元/首": "per_call",
+    "元/次": "per_call",
+    "元/音色": "per_call",
+    "元/万字符": "per_10k_token",
+}
+
+
+def detect_unit(header_cells: list[str]) -> str | None:
+    """从表头识别计费单位,返回 '百万tokens' 或 '元/张' 等。"""
+    joined = " ".join(header_cells)
+    for unit in UNIT_PRICE_KEY:
+        if unit in joined:
+            return unit
+    if "百万 tokens" in joined or "百万tokens" in joined:
+        return "百万tokens"
+    return None
+
+
 def model_name(raw: str) -> str | None:
     match = re.search(r"\bMiniMax-[0-9A-Za-z._-]+\b", raw)
-    return match.group(0) if match else None
+    if match:
+        return match.group(0)
+    # 视频/音乐/图像/MCP 模型名不带 MiniMax- 前缀
+    for pattern in (r"\bMiniMax-[0-9A-Za-z._-]+\b", r"\bimage-[\w-]+\b", r"\bAPI-[\w-]+\b"):
+        match = re.search(pattern, raw)
+        if match:
+            return match.group(0)
+    # speech/Music/Hailuo 系列
+    match = re.search(r"\b(speech-[\w.-]+|Music-[\w.+]+|MiniMax-Hailuo-[\w.-]+)", raw)
+    if match:
+        return match.group(0)
+    return None
 
 
 def condition_from_model_cell(raw: str) -> str | None:
-    for pattern in (r"[≤<>].*?tokens\\?\*?", r"输入 tokens\\?\*?"):
+    for pattern in (r"[≤<>].*?tokens\\?\*?", r"输入 tokens\\?\*?", r"\d+P\s*\d+s", r"图生视频.*", r"文生视频.*"):
         match = re.search(pattern, raw)
         if match:
             return match.group(0).replace("\\*", "*").strip()
@@ -92,33 +141,58 @@ def parse_markdown_tables(text: str) -> list[dict[str, Any]]:
             table = []
             return
         header = table[0]
-        has_language_price = any("输入价格" in h for h in header) and any("输出价格" in h for h in header)
-        if not has_language_price:
+        unit = detect_unit(header)
+        if unit is None:
             table = []
             return
-        for row in table[2:] if len(table) > 2 and re.match(r"^:?-+", table[1][0]) else table[1:]:
+        # 数据行从分隔行之后开始
+        data_rows = table[2:] if len(table) > 2 and re.match(r"^:?-+", table[1][0]) else table[1:]
+        for row in data_rows:
             if len(row) < 3:
                 continue
-            name = model_name(row[0])
+            # 模型名可能在任意列(语言模型在 row[0],语音/MCP 在 row[1])
+            name = None
+            name_col = 0
+            for idx, cell in enumerate(row):
+                name = model_name(cell)
+                if name:
+                    name_col = idx
+                    break
             if not name:
                 continue
-            condition = condition_from_model_cell(row[0])
+            # 视频/音乐/图像/MCP 表:功能/说明列(含分辨率/时长)作为 condition
+            if unit == "百万tokens":
+                condition = condition_from_model_cell(row[0]) or None
+            else:
+                cond_cell = row[2] if len(row) > 2 and name_col != 2 else (row[1] if len(row) > 1 else "")
+                condition = cond_cell.strip() if cond_cell else None
+            # 确定价格列(最后一个含数字的列)
+            price_col = len(row) - 1
+            price_raw = row[price_col]
             record = {
                 "section": section,
                 "model": name,
                 "condition": condition,
-                "prices": {
-                    "input_cny_per_million_tokens": {"raw": row[1], "amount_cny": parse_decimal(row[1]), "unit": "百万tokens"},
-                    "output_cny_per_million_tokens": {"raw": row[2], "amount_cny": parse_decimal(row[2]), "unit": "百万tokens"},
-                },
-                "raw": {"model": row[0], "input": row[1], "output": row[2]},
+                "unit": unit,
+                "prices": {},
+                "raw": {"model": row[0], "price": price_raw},
             }
-            if len(row) > 3:
-                record["prices"]["cache_read_cny_per_million_tokens"] = {"raw": row[3], "amount_cny": parse_decimal(row[3]), "unit": "百万tokens"}
-                record["raw"]["cache_read"] = row[3]
-            if len(row) > 4:
-                record["prices"]["cache_write_cny_per_million_tokens"] = {"raw": row[4], "amount_cny": parse_decimal(row[4]), "unit": "百万tokens"}
-                record["raw"]["cache_write"] = row[4]
+            if unit == "百万tokens":
+                # 语言模型:输入/输出/缓存读/缓存写
+                record["prices"]["input_cny_per_million_tokens"] = {"raw": row[1], "amount_cny": parse_decimal(row[1]), "unit": unit}
+                record["prices"]["output_cny_per_million_tokens"] = {"raw": row[2], "amount_cny": parse_decimal(row[2]), "unit": unit}
+                record["raw"]["input"] = row[1]
+                record["raw"]["output"] = row[2]
+                if len(row) > 3:
+                    record["prices"]["cache_read_cny_per_million_tokens"] = {"raw": row[3], "amount_cny": parse_decimal(row[3]), "unit": unit}
+                    record["raw"]["cache_read"] = row[3]
+                if len(row) > 4:
+                    record["prices"]["cache_write_cny_per_million_tokens"] = {"raw": row[4], "amount_cny": parse_decimal(row[4]), "unit": unit}
+                    record["raw"]["cache_write"] = row[4]
+            else:
+                # 非 token 口径:单价在最后一列
+                key = UNIT_PRICE_KEY[unit]
+                record["prices"][key] = {"raw": price_raw, "amount_cny": parse_decimal(price_raw), "unit": unit}
             records.append(record)
         table = []
 
@@ -133,43 +207,73 @@ def parse_markdown_tables(text: str) -> list[dict[str, Any]]:
         else:
             flush()
     flush()
+
+    # 视频模型多档聚合:同模型多行合并为 multi_tier_video
     return records
 
 
-def cost_from_record(record: dict[str, Any]) -> dict[str, int | float]:
+def cost_from_record(record: dict[str, Any]) -> dict[str, Any]:
     prices = record["prices"]
-    cost: dict[str, int | float] = {}
-    mapping = (
-        ("input_cny_per_million_tokens", "input"),
-        ("output_cny_per_million_tokens", "output"),
-        ("cache_read_cny_per_million_tokens", "cache_read"),
-        ("cache_write_cny_per_million_tokens", "cache_write"),
-    )
-    for source, target in mapping:
-        value = amount((prices.get(source) or {}).get("amount_cny"))
+    cost: dict[str, Any] = {}
+    section = record.get("section") or ""
+    unit = record.get("unit")
+
+    if unit == "百万tokens":
+        for source, target in (
+            ("input_cny_per_million_tokens", "input"),
+            ("output_cny_per_million_tokens", "output"),
+            ("cache_read_cny_per_million_tokens", "cache_read"),
+            ("cache_write_cny_per_million_tokens", "cache_write"),
+        ):
+            value = amount((prices.get(source) or {}).get("amount_cny"))
+            if value is not None:
+                cost[target] = value
+        cost["basis"] = "token"
+    elif unit in UNIT_PRICE_KEY:
+        key = UNIT_PRICE_KEY[unit]
+        value = amount((prices.get(key) or {}).get("amount_cny"))
         if value is not None:
-            cost[target] = value
+            if key == "per_image":
+                cost["per_image"] = value
+                cost["basis"] = "image"
+            elif key == "per_10k_token":
+                cost["per_10k_token_input"] = value
+                cost["per_10k_token_output"] = value
+                cost["basis"] = "per_10k_token"
+            else:  # per_call (元/视频/元/首/元/次/元/音色)
+                cost["per_call"] = value
+                cost["basis"] = "call"
     return cost
 
 
-def new_model_entry(model_id: str, name: str) -> dict[str, Any]:
+def new_model_entry(model_id: str, name: str, record: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": model_id,
         "name": name,
         "description": "",
-        "modalities": {"input": ["text"], "output": ["text"]},
+        "modalities": modalities_for_record(record.get("section") or ""),
         "open_weights": False,
-        "metadata": {"currency": "CNY", "cost_unit": "1M tokens", "pricing": []},
+        "metadata": {"currency": "CNY", "cost_unit": "1M tokens unless noted", "pricing": []},
     }
 
 
 def to_provider_payload(records: list[dict[str, Any]], source_url: str) -> dict[str, Any]:
     models: dict[str, Any] = {}
+    # 视频模型同模型多档先聚合
+    video_tiers_by_model: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         name = record["model"]
         model_id = slug(name)
-        entry = models.setdefault(model_id, new_model_entry(model_id, name))
+        entry = models.setdefault(model_id, new_model_entry(model_id, name, record))
         cost = cost_from_record(record)
+        if record.get("section") == "视频" and cost.get("basis") == "call":
+            # 视频按次计费但有多档(分辨率/时长),收集档位
+            tier = {
+                "resolution": record.get("condition") or "",
+                "tiers": {"price": cost.get("per_call")},
+            }
+            video_tiers_by_model.setdefault(model_id, []).append(tier)
+            continue
         if cost and "cost" not in entry:
             entry["cost"] = cost
         entry["metadata"]["pricing"].append({
@@ -177,6 +281,26 @@ def to_provider_payload(records: list[dict[str, Any]], source_url: str) -> dict[
             "condition": record.get("condition"),
             "cost": cost,
             "raw": record.get("raw"),
+        })
+    # 视频多档:取最低档作为代表档,写入 video_tiers
+    for model_id, tiers in video_tiers_by_model.items():
+        entry = models.get(model_id)
+        if not entry:
+            continue
+        valid = [t for t in tiers if t["tiers"].get("price") is not None]
+        if not valid:
+            continue
+        prices = [t["tiers"]["price"] for t in valid]
+        representative = min(prices)
+        entry["cost"] = {
+            "input": representative,
+            "output": representative,
+            "video_tiers": valid,
+            "basis": "multi_tier_video",
+        }
+        entry["metadata"]["pricing"].append({
+            "section": "视频",
+            "cost": entry["cost"],
         })
     return {
         "minimax": {

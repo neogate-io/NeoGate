@@ -30,3 +30,12 @@ ALTER TABLE channel_model
 
 ALTER TABLE channel_probe
     DROP COLUMN IF EXISTS provider;
+
+-- 放宽 pricing_template.pricing_basis 约束,支持更多展示口径。
+-- pricing_basis 仅用于参考价展示,不参与实际计费(billing_meter 仍受 token/image 约束)。
+ALTER TABLE pricing_template
+    DROP CONSTRAINT IF EXISTS pricing_template_pricing_basis_check;
+ALTER TABLE pricing_template
+    ADD CONSTRAINT pricing_template_pricing_basis_check
+    CHECK (pricing_basis IN ('token', 'image', 'call', 'per_10k_token', 'hour', 'second', 'multi_tier_video')) NOT VALID;
+ALTER TABLE pricing_template VALIDATE CONSTRAINT pricing_template_pricing_basis_check;

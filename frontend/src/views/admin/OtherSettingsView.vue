@@ -22,9 +22,15 @@ import {
   saveAdminModelSetting
 } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
+import { type MessageKey } from '../../i18n'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
-import type { Channel, ModelReferenceCatalogRecord } from '../../types/admin'
+import type {
+  Channel,
+  ModelReferenceCatalogRecord,
+  VideoTier,
+  VideoTierDimension
+} from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
 import { currencySymbol, formatDateTime, formatPricePerMillion } from '../../utils/format'
@@ -148,22 +154,84 @@ function formatSyncCount(value: number) {
 }
 
 function pricingBasisLabel(template: ModelReferenceCatalogRecord) {
-  return template.pricing_basis === 'image'
-    ? t('billingMeterImageGeneration')
-    : t('billingMeterToken')
+  switch (template.pricing_basis) {
+    case 'image':
+      return t('billingMeterImageGeneration')
+    case 'call':
+      return t('billingBasisCall')
+    case 'per_10k_token':
+      return t('billingBasisPer10kToken')
+    case 'hour':
+      return t('billingBasisHour')
+    case 'second':
+      return t('billingBasisSecond')
+    case 'multi_tier_video':
+      return t('billingBasisMultiTierVideo')
+    default:
+      return t('billingMeterToken')
+  }
+}
+
+const VIDEO_TIER_DIMENSION_LABELS: Record<string, string> = {
+  input_without_video: 'videoTierInputWithoutVideo',
+  input_with_video: 'videoTierInputWithVideo',
+  with_audio: 'videoTierWithAudio',
+  without_audio: 'videoTierWithoutAudio',
+  price: 'videoTierPrice'
+}
+
+function videoTiersOf(template: ModelReferenceCatalogRecord) {
+  const value = template.capabilities?.video_tiers
+  return Array.isArray(value) ? (value as VideoTier[]) : []
+}
+
+function formatVideoTier(tier: VideoTier) {
+  const dimensions = Object.keys(tier.tiers ?? {}) as string[]
+  const parts = dimensions
+    .filter((d) => tier.tiers?.[d as VideoTierDimension] != null)
+    .map((d) => {
+      const labelKey = (VIDEO_TIER_DIMENSION_LABELS[d] ?? 'videoTierPrice') as MessageKey
+      const amount = formatReferenceMicros(
+        microsFromCny(tier.tiers?.[d as VideoTierDimension] ?? null)
+      )
+      return `${t(labelKey)} ${amount}/${t('pricePerMillionTokens')}`
+    })
+  return { resolution: tier.resolution || '', parts }
+}
+
+function microsFromCny(value: number | null | undefined) {
+  if (value == null) return null
+  return Math.round(value * 1_000_000)
 }
 
 function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
-  if (template.pricing_basis === 'image') {
-    return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perImage')}`
+  switch (template.pricing_basis) {
+    case 'image':
+      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perImage')}`
+    case 'call':
+      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perCall')}`
+    case 'hour':
+      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perHour')}`
+    case 'second':
+      return `${formatReferenceMicros(template.unit_price_usd_micros)} / ${t('perSecond')}`
+    case 'per_10k_token':
+      return `${formatReferenceMicros(template.input_price_usd_micros)} / ${formatReferenceMicros(
+        template.output_price_usd_micros
+      )}`
+    case 'multi_tier_video':
+      return `${formatReferenceMicros(template.output_price_usd_micros)} (${t(
+        'multiTierRepresentative'
+      )})`
+    default:
+      return `${formatReferenceMicros(template.input_price_usd_micros)} / ${formatReferenceMicros(
+        template.output_price_usd_micros
+      )}`
   }
-  return `${formatReferenceMicros(template.input_price_usd_micros)} / ${formatReferenceMicros(
-    template.output_price_usd_micros
-  )}`
 }
 
 function formatCachePricePair(template: ModelReferenceCatalogRecord) {
-  if (template.pricing_basis === 'image') return '-'
+  const noCacheBases = ['image', 'call', 'hour', 'second', 'multi_tier_video']
+  if (noCacheBases.includes(template.pricing_basis)) return '-'
   const zero = `${currencySymbol(billingCurrency.value)}0`
   const cacheRead =
     template.cache_read_price_usd_micros == null
@@ -442,7 +510,7 @@ onMounted(load)
         stripe
       >
         <el-table-column prop="provider" :label="t('provider')" width="112" />
-        <el-table-column prop="model" :label="t('modelName')" min-width="260" />
+        <el-table-column prop="model" :label="t('modelName')" min-width="240" />
         <el-table-column :label="t('pricingBasis')" width="92" align="center" header-align="center">
           <template #default="{ row }">
             <span class="reference-meter-badge">{{ pricingBasisLabel(row) }}</span>
@@ -450,7 +518,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column
           class-name="reference-price-column"
-          min-width="180"
+          min-width="200"
           align="right"
           header-align="right"
         >
@@ -458,7 +526,28 @@ onMounted(load)
             <span class="reference-price-head-label">{{ t('inputOutputPriceShort') }}</span>
           </template>
           <template #default="{ row }">
-            <span class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
+            <div
+              v-if="row.pricing_basis === 'multi_tier_video' && videoTiersOf(row).length"
+              class="reference-video-tiers"
+            >
+              <div
+                v-for="(tier, idx) in videoTiersOf(row)"
+                :key="idx"
+                class="reference-video-tier"
+              >
+                <span v-if="tier.resolution" class="reference-video-tier-res">
+                  {{ tier.resolution }}
+                </span>
+                <span
+                  v-for="(part, pIdx) in formatVideoTier(tier).parts"
+                  :key="pIdx"
+                  class="reference-video-tier-price"
+                >
+                  {{ part }}
+                </span>
+              </div>
+            </div>
+            <span v-else class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -665,6 +754,47 @@ onMounted(load)
   font-weight: 620;
   text-align: right;
   white-space: nowrap;
+}
+
+.reference-video-tiers {
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: right;
+}
+
+.reference-video-tier {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: flex-end;
+}
+
+.reference-video-tier-res {
+  background: #f5f7fb;
+  border: 1px solid #dbe4ef;
+  border-radius: 4px;
+  color: #5f6f85;
+  font-size: 11px;
+  font-weight: 680;
+  padding: 1px 6px;
+}
+
+.reference-video-tier-price {
+  color: #263242;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.reference-video-tier-note {
+  color: #697586;
+  font-size: 11px;
+  font-weight: 560;
+  margin-top: 2px;
 }
 
 .reference-meter-badge {

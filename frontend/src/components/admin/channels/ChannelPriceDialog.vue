@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import ProviderIcon from '../../common/ProviderIcon.vue'
 import { useLocale } from '../../../composables/useLocale'
 import { useBillingCurrency } from '../../../composables/useBillingCurrency'
 import type { BillingMeter } from '../../../types/admin'
@@ -18,7 +17,6 @@ export type ChannelPriceForm = {
   hasPriceRecord: boolean
   billingMeterLocked: boolean
   canUseImageBilling: boolean
-  templateSource?: string
 }
 
 const open = defineModel<boolean>('open', { required: true })
@@ -29,7 +27,6 @@ defineProps<{
   hasReferencePrice: (form: ChannelPriceForm) => boolean
   referencePriceSummary: (form: ChannelPriceForm) => string
   referencePriceFallbackLabel: (form: ChannelPriceForm) => string
-  priceIconProvider: (form: ChannelPriceForm) => string
 }>()
 
 const emit = defineEmits<{
@@ -79,7 +76,6 @@ function parseCurrencyInput(value: string) {
           class="price-editor-row"
         >
           <div class="price-model-cell" :title="row.model">
-            <ProviderIcon :provider="priceIconProvider(row)" class="price-model-icon" />
             <span>{{ row.model }}</span>
           </div>
           <div class="price-meter-cell">
@@ -167,9 +163,6 @@ function parseCurrencyInput(value: string) {
           <div class="reference-price-cell">
             <template v-if="hasReferencePrice(row)">
               <span class="reference-price-summary">{{ referencePriceSummary(row) }}</span>
-              <span v-if="row.templateSource" class="reference-price-source">
-                {{ row.templateSource }}
-              </span>
             </template>
             <el-tag
               v-else
@@ -290,13 +283,6 @@ function parseCurrencyInput(value: string) {
   text-overflow: ellipsis;
 }
 
-.price-model-icon {
-  border-radius: 5px;
-  flex: 0 0 auto;
-  height: 20px;
-  width: 20px;
-}
-
 .price-pair-field {
   display: flex;
   justify-content: flex-start;
@@ -390,15 +376,6 @@ function parseCurrencyInput(value: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: pre-line;
-}
-
-.reference-price-source {
-  color: var(--brand-blue);
-  font-size: 11px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .reference-price-fallback-tag {

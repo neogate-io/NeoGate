@@ -30,7 +30,7 @@ pub use metering::{
 };
 pub use types::{
     BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
-    DebitPart, Price, TokenUsage,
+    DebitPart, Price, PricingBasis, TokenUsage,
 };
 
 pub const MICRO_USD_PER_USD: i64 = 1_000_000;

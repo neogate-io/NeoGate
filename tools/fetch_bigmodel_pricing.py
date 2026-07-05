@@ -211,7 +211,7 @@ def to_models_dev_payload(records: list[dict[str, Any]], page_url: str, app_bund
         if context and "limit" not in entry:
             entry["limit"] = {"context": context}
 
-        cost: dict[str, int | float] = {}
+        cost: dict[str, Any] = {}
         pricing_item = {
             "section": record.get("section"),
             "category": record.get("category"),
@@ -220,7 +220,7 @@ def to_models_dev_payload(records: list[dict[str, Any]], page_url: str, app_bund
             "raw": record.get("raw"),
         }
         if record.get("pricing_type") == "input_output":
-            # 旗舰表(newModel)的价格口径已是元/百万tokens，不应再按"千tokens"换算。
+            # 旗舰表(newModel)的价格口径已是元/百万tokens,不应再按"千tokens"换算。
             scale_from_thousand = False
             for source, target in (
                 ("input_price", "input"),
@@ -231,11 +231,24 @@ def to_models_dev_payload(records: list[dict[str, Any]], page_url: str, app_bund
                 value = price_per_million(record[source], scale_from_thousand=scale_from_thousand)
                 if value is not None:
                     cost[target] = value
+            cost["basis"] = "token"
         else:
-            value = price_per_million(record["price"])
+            unit = str((record.get("price") or {}).get("unit") or "")
+            value = price_per_million(record["price"], scale_from_thousand=False)
             if value is not None:
-                cost["input"] = value
-                cost["output"] = value
+                if "次" in unit:
+                    cost["per_call"] = value
+                    cost["basis"] = "call"
+                elif "张" in unit:
+                    cost["per_image"] = value
+                    cost["basis"] = "image"
+                else:
+                    # token 口径(元/千tokens 或 元/百万tokens),由 price_per_million 换算
+                    token_value = price_per_million(record["price"])
+                    if token_value is not None:
+                        cost["input"] = token_value
+                        cost["output"] = token_value
+                        cost["basis"] = "token"
             batch = price_per_million(record["batch_price"])
             if batch is not None:
                 pricing_item["batch_cost"] = batch

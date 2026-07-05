@@ -201,27 +201,186 @@ def merge_modalities(existing: dict[str, Any], record: dict[str, Any]) -> None:
         current[direction] = merged
 
 
-def cost_from_record(record: dict[str, Any]) -> dict[str, int | float]:
+def parse_multi_tier_video(prices: dict[str, Any]) -> tuple[int | float | None, list[dict[str, Any]]]:
+    """解析多档视频价文本,返回 (代表档最低价, 完整档位结构)。
+
+    online_inference_cny_per_million_tokens 对视频模型是多行多档文本,例如:
+      "输出视频分辨率为 480p，720p\\n输入不含视频：46.00\\n输入包含视频：28.00\\n
+       输出视频分辨率为 1080p\\n输入不含视频：51.00\\n输入包含视频：31.00\\n..."
+    也可能是简化版:
+      "输入不含视频：37.00\\n输入包含视频：22.00"
+      "有声视频：16.00\\n无声视频：8.00"
+      "15.00"
+
+    返回结构示例:
+      [
+        {"resolution": "480p,720p", "tiers": {"input_without_video": 46.0, "input_with_video": 28.0}},
+        {"resolution": "1080p", "tiers": {"input_without_video": 51.0, "input_with_video": 31.0}},
+        {"resolution": "4k", "tiers": {"input_without_video": 26.0, "input_with_video": 16.0}},
+      ]
+    代表档为所有档位价格的最小值。
+    """
+    price = prices.get("online_inference_cny_per_million_tokens")
+    raw = str((price or {}).get("raw") or "")
+    if not raw:
+        return None, []
+
+    # 中文维度标签 -> 英文 key
+    dimension_keys = {
+        "输入不含视频": "input_without_video",
+        "输入包含视频": "input_with_video",
+        "有声视频": "with_audio",
+        "无声视频": "without_audio",
+    }
+
+    tiers: list[dict[str, Any]] = []
+    current_resolution: str | None = None
+    current_tiers: dict[str, int | float] = {}
+    all_prices: list[int | float] = []
+
+    def flush() -> None:
+        nonlocal current_resolution, current_tiers
+        if current_tiers or current_resolution is not None:
+            tiers.append(
+                {
+                    "resolution": current_resolution or "",
+                    "tiers": dict(current_tiers),
+                }
+            )
+        current_resolution = None
+        current_tiers = {}
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # 分辨率档头行:形如 "输出视频分辨率为 480p，720p"
+        if "分辨率" in line or re.search(r"\d+[pPkK]", line):
+            flush()
+            # 提取分辨率标识(如 480p,720p / 1080p / 4k)
+            res_matches = re.findall(r"\d+[pPkK]", line, re.IGNORECASE)
+            if res_matches:
+                current_resolution = ",".join(m.lower() for m in res_matches)
+            else:
+                # 含"分辨率"但无标准标识,取该行作为档头描述
+                current_resolution = line
+            continue
+        # 维度:价格行,如 "输入不含视频：46.00"
+        matched = False
+        for cn, en in dimension_keys.items():
+            if cn in line:
+                amount = _first_number(line)
+                if amount is not None:
+                    current_tiers[en] = amount
+                    all_prices.append(amount)
+                matched = True
+                break
+        if matched:
+            continue
+        # 单一价格行(无维度标签),如 "15.00"
+        amount = _first_number(line)
+        if amount is not None:
+            current_tiers["price"] = amount
+            all_prices.append(amount)
+
+    flush()
+
+    if not all_prices:
+        return None, tiers
+
+    minimum = min(all_prices)
+    return decimal_number(format(Decimal(str(minimum)).normalize(), "f")), tiers
+
+
+def _first_number(text: str) -> int | float | None:
+    match = re.search(r"\d+(?:\.\d+)?", text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        return decimal_number(format(Decimal(match.group()).normalize(), "f"))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def infer_basis(record: dict[str, Any], cost: dict[str, Any], prices: dict[str, Any]) -> str:
+    """按 cost 键与 section 推断参考价展示口径。"""
+    if "per_image" in cost:
+        return "image"
+    if "per_call" in cost:
+        return "call"
+    if "per_hour" in cost:
+        return "hour"
+    if "per_10k_token_input" in cost or "per_10k_token_output" in cost:
+        return "per_10k_token"
+    section = record.get("section") or ""
+    online = prices.get("online_inference_cny_per_million_tokens")
+    online_raw = str((online or {}).get("raw") or "")
+    if "视频" in section and online_raw and "\n" in online_raw:
+        return "multi_tier_video"
+    return "token"
+
+
+def cost_from_record(record: dict[str, Any]) -> dict[str, Any]:
     prices = record.get("prices") or {}
-    cost: dict[str, int | float] = {}
-    mappings = (
+    cost: dict[str, Any] = {}
+
+    # token 口径(每百万 token)
+    token_mappings = (
         ("input_text_cny_per_million_tokens", "input"),
+        ("text_input_cny_per_million_tokens", "input"),
         ("output_cny_per_million_tokens", "output"),
         ("cache_hit_text_cny_per_million_tokens", "cache_read"),
         ("cache_storage_cny_per_million_tokens_hour", "cache_write"),
-        ("online_inference_cny_per_million_tokens", "input"),
-        ("text_input_cny_per_million_tokens", "input"),
-        ("image_input_cny_per_million_tokens", "input_image"),
-        ("price_cny_per_image", "output"),
-        ("output_cny_per_request", "output"),
-        ("price_cny_per_call", "output"),
     )
-    for source, target in mappings:
+    for source, target in token_mappings:
         value = price_amount(prices.get(source))
         if value is not None and target not in cost:
             cost[target] = value
-    if "input" in cost and "output" not in cost and record.get("section") not in {"向量模型"}:
+
+    # 非口径字段写独立键(不再塞进 output)
+    def set_unit(key: str, target: str) -> None:
+        value = price_amount(prices.get(key))
+        if value is not None:
+            cost[target] = value
+
+    set_unit("price_cny_per_image", "per_image")
+    set_unit("output_cny_per_request", "per_call")
+    set_unit("price_cny_per_call", "per_call")
+    set_unit("price_cny_per_hour", "per_hour")
+    set_unit("price_cny_per_unit", "per_unit")
+    set_unit("price_cny_per_thousand_calls", "per_thousand_calls")
+    # 按万 token:output_cny_per_1k_tpm 是每千 token,×10 换到每万 token
+    per_10k_in = price_amount(prices.get("input_cny_per_10k_tpm"))
+    per_1k_out = price_amount(prices.get("output_cny_per_1k_tpm"))
+    if per_10k_in is not None:
+        cost["per_10k_token_input"] = per_10k_in
+    if per_1k_out is not None:
+        cost["per_10k_token_output"] = decimal_number(
+            format((Decimal(str(per_1k_out)) * Decimal(10)).normalize(), "f")
+        )
+
+    basis = infer_basis(record, cost, prices)
+
+    # 多档视频价:用代表档(最低档)覆盖 input/output,并保留完整档位结构
+    if basis == "multi_tier_video":
+        representative, video_tiers = parse_multi_tier_video(prices)
+        if representative is not None:
+            cost["input"] = representative
+            cost["output"] = representative
+        if video_tiers:
+            cost["video_tiers"] = video_tiers
+    elif "online_inference_cny_per_million_tokens" in prices and "input" not in cost:
+        # 非多档视频的 online_inference fallback(单档文本)
+        value = price_amount(prices.get("online_inference_cny_per_million_tokens"))
+        if value is not None:
+            cost["input"] = value
+            cost["output"] = value
+
+    # token 模型:只有 input 没有 output 时复制(向量模型除外)
+    if basis == "token" and "input" in cost and "output" not in cost and record.get("section") not in {"向量模型"}:
         cost["output"] = cost["input"]
+
+    cost["basis"] = basis
     return cost
 
 

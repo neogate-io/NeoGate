@@ -157,6 +157,7 @@ def clean_key(value: str) -> str:
         "单次请求的输入Token数": "condition",
         "单次请求的输入Token范围": "condition",
         "输入Token范围": "condition",
+        "输出视频分辨率": "resolution",
         "输入单价(每百万Token)": "input_cny_per_million_tokens",
         "输出单价(每百万Token)思维链+回答": "output_cny_per_million_tokens",
         "输出单价(每百万Token)": "output_cny_per_million_tokens",
@@ -164,8 +165,11 @@ def clean_key(value: str) -> str:
         "免费额度（注）有效期:阿里云百炼开通后90天内": "free_quota",
         "上下文缓存写入价格(每百万Token)": "cache_write_cny_per_million_tokens",
         "上下文缓存命中价格(每百万Token)": "cache_read_cny_per_million_tokens",
+        "输入单价(每万字符)": "input_cny_per_10k_char",
+        "输出单价(每秒)": "output_cny_per_second",
         "单价": "price",
         "价格": "price",
+        "输出单价": "output_price",
     }
     if compact in mapping:
         return mapping[compact]
@@ -173,6 +177,10 @@ def clean_key(value: str) -> str:
         return "input_cny_per_million_tokens"
     if "输出单价" in compact and "百万" in compact:
         return "output_cny_per_million_tokens"
+    if "输入单价" in compact and "万字符" in compact:
+        return "input_cny_per_10k_char"
+    if ("输出单价" in compact or "单价" in compact) and "秒" in compact:
+        return "output_cny_per_second"
     if "缓存" in compact and "写入" in compact:
         return "cache_write_cny_per_million_tokens"
     if "缓存" in compact and "命中" in compact:
@@ -211,15 +219,26 @@ def slug(value: str) -> str:
 
 
 def model_id_from_cell(value: str) -> str | None:
-    match = re.search(r"\bqwen[0-9A-Za-z._-]*\b", value)
-    return match.group(0) if match else None
+    # 支持 qwen/wan/z-image/happyhorse/fun-music/qwen3-tts 等前缀
+    for pattern in (
+        r"\bqwen[\w.-]*\b",
+        r"\bwan[\w.-]*\b",
+        r"\bz-image[\w.-]*\b",
+        r"\bhappyhorse[\w.-]*\b",
+        r"\bfun-music[\w.-]*\b",
+        r"\bcosyvoice[\w.-]*\b",
+    ):
+        match = re.search(pattern, value, re.IGNORECASE)
+        if match:
+            return match.group(0).lower()
+    return None
 
 
 def is_qwen_table(table: dict[str, Any], grid: list[list[str]]) -> bool:
-    attrs = table.get("attrs") or {}
-    class_name = attrs.get("class") or ""
-    text = " ".join(" ".join(row) for row in grid[:6])
-    return "qwen" in class_name or "qwen" in text.lower()
+    # 放宽:只要表头含价格列(单价/价格/百万Token/万字符/秒/张)即认为是定价表
+    header_text = " ".join(grid[0]) if grid else ""
+    has_price = any(kw in header_text for kw in ("单价", "价格", "百万Token", "万字符", "元/秒", "元/张"))
+    return bool(has_price)
 
 
 def table_records(grid: list[list[str]], headings: list[str]) -> list[dict[str, Any]]:
@@ -246,6 +265,18 @@ def table_records(grid: list[list[str]], headings: list[str]) -> list[dict[str, 
             "cache_write_cny_per_million_tokens": normalize_price(raw.get("cache_write_cny_per_million_tokens"), "百万Token"),
             "cache_read_cny_per_million_tokens": normalize_price(raw.get("cache_read_cny_per_million_tokens"), "百万Token"),
         }
+        # 非 token 口径:output_price 根据文本单位分流(元/张 vs 元/秒)
+        output_price_raw = raw.get("output_price") or ""
+        if output_price_raw:
+            if "秒" in output_price_raw:
+                prices["per_second"] = normalize_price(output_price_raw, "元/秒")
+            else:
+                prices["per_image"] = normalize_price(output_price_raw, "元/张")
+        if raw.get("output_cny_per_second"):
+            prices["per_second"] = normalize_price(raw.get("output_cny_per_second"), "元/秒")
+        if raw.get("input_cny_per_10k_char"):
+            prices["per_10k_token_input"] = normalize_price(raw.get("input_cny_per_10k_char"), "元/万字符")
+        # 元/张 的价格文本可能形如 "0.5元/张" 或 "关闭提示词改写:0.1元/张",normalize_price 已取首数字
         records.append(
             {
                 "section": headings[0] if headings else None,
@@ -253,7 +284,7 @@ def table_records(grid: list[list[str]], headings: list[str]) -> list[dict[str, 
                 "category": headings[2] if len(headings) > 2 else None,
                 "region": raw.get("deployment_scope"),
                 "model": model,
-                "condition": raw.get("condition"),
+                "condition": raw.get("condition") or raw.get("resolution"),
                 "mode": raw.get("mode"),
                 "prices": {key: value for key, value in prices.items() if value["raw"]},
                 "raw": raw,
@@ -267,39 +298,90 @@ def normalize_price(raw: Any, unit: str | None) -> dict[str, Any]:
     return {"raw": value, "amount_cny": parse_decimal(value), "unit": unit}
 
 
-def cost_from_record(record: dict[str, Any]) -> dict[str, int | float]:
+def infer_basis(record: dict[str, Any], prices: dict[str, Any]) -> str:
+    if prices.get("per_image", {}).get("amount_cny"):
+        return "image"
+    if prices.get("per_second", {}).get("amount_cny"):
+        return "second"
+    if prices.get("per_10k_token_input", {}).get("amount_cny"):
+        return "per_10k_token"
+    return "token"
+
+
+def cost_from_record(record: dict[str, Any]) -> dict[str, Any]:
     prices = record.get("prices") or {}
-    cost: dict[str, int | float] = {}
-    for source, target in (
-        ("input_cny_per_million_tokens", "input"),
-        ("output_cny_per_million_tokens", "output"),
-        ("cache_read_cny_per_million_tokens", "cache_read"),
-        ("cache_write_cny_per_million_tokens", "cache_write"),
-    ):
-        value = price_amount((prices.get(source) or {}).get("amount_cny"))
+    cost: dict[str, Any] = {}
+    basis = infer_basis(record, prices)
+    if basis == "image":
+        value = price_amount(prices.get("per_image", {}).get("amount_cny"))
         if value is not None:
-            cost[target] = value
+            cost["per_image"] = value
+    elif basis == "second":
+        value = price_amount(prices.get("per_second", {}).get("amount_cny"))
+        if value is not None:
+            cost["per_second"] = value
+    elif basis == "per_10k_token":
+        value = price_amount(prices.get("per_10k_token_input", {}).get("amount_cny"))
+        if value is not None:
+            cost["per_10k_token_input"] = value
+            cost["per_10k_token_output"] = value
+    else:  # token
+        for source, target in (
+            ("input_cny_per_million_tokens", "input"),
+            ("output_cny_per_million_tokens", "output"),
+            ("cache_read_cny_per_million_tokens", "cache_read"),
+            ("cache_write_cny_per_million_tokens", "cache_write"),
+        ):
+            value = price_amount(prices.get(source, {}).get("amount_cny"))
+            if value is not None:
+                cost[target] = value
+    cost["basis"] = basis
     return cost
 
 
-def new_model_entry(model_id: str, name: str) -> dict[str, Any]:
+def modalities_for_section(section: str | None, subsection: str | None = None) -> dict[str, list[str]]:
+    text = f"{section or ''} {subsection or ''}"
+    if "图像" in text:
+        return {"input": ["text", "image"], "output": ["image"]}
+    if "视频" in text:
+        return {"input": ["text", "image", "video"], "output": ["video"]}
+    if "语音" in text or "音乐" in text:
+        return {"input": ["text"], "output": ["audio"]}
+    if "向量" in text or "排序" in text:
+        return {"input": ["text"], "output": ["embedding"]}
+    if "3D" in text:
+        return {"input": ["text", "image"], "output": ["3d"]}
+    return {"input": ["text"], "output": ["text"]}
+
+
+def new_model_entry(model_id: str, name: str, record: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": model_id,
         "name": name,
         "description": "",
-        "modalities": {"input": ["text"], "output": ["text"]},
+        "modalities": modalities_for_section(record.get("section"), record.get("subsection")),
         "open_weights": False,
-        "metadata": {"currency": "CNY", "cost_unit": "1M tokens", "pricing": []},
+        "metadata": {"currency": "CNY", "cost_unit": "1M tokens unless noted", "pricing": []},
     }
 
 
 def to_provider_payload(records: list[dict[str, Any]], tables: list[dict[str, Any]], source_url: str) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = {}
+    # 视频多档聚合:同模型同 section 多档(分辨率)合并
+    video_tiers_by_model: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         model = str(record["model"])
         model_id = slug(model)
-        entry = models.setdefault(model_id, new_model_entry(model_id, model))
+        entry = models.setdefault(model_id, new_model_entry(model_id, model, record))
         cost = cost_from_record(record)
+        section = record.get("section") or ""
+        subsection = record.get("subsection") or ""
+        if subsection == "视频生成" and cost.get("basis") == "second":
+            res = record.get("condition") or ""
+            video_tiers_by_model.setdefault(model_id, []).append(
+                {"resolution": res, "tiers": {"price": cost.get("per_second")}}
+            )
+            continue
         if cost and "cost" not in entry:
             entry["cost"] = cost
         entry["metadata"]["pricing"].append(
@@ -314,6 +396,27 @@ def to_provider_payload(records: list[dict[str, Any]], tables: list[dict[str, An
                 "raw": record.get("raw"),
             }
         )
+
+    # 视频多档:取最低档作为代表档,写入 video_tiers(单位元/秒)
+    for model_id, tiers in video_tiers_by_model.items():
+        entry = models.get(model_id)
+        if not entry:
+            continue
+        valid = [t for t in tiers if t["tiers"].get("price") is not None]
+        if not valid:
+            continue
+        prices_list = [t["tiers"]["price"] for t in valid]
+        representative = min(prices_list)
+        entry["cost"] = {
+            "input": representative,
+            "output": representative,
+            "video_tiers": valid,
+            "basis": "multi_tier_video",
+        }
+        entry["metadata"]["pricing"].append({
+            "section": "视频生成",
+            "cost": entry["cost"],
+        })
 
     return {
         "dashscope": {

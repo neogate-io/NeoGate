@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    billing::BillingMeter,
+    billing::{BillingMeter, PricingBasis},
     config::BillingCurrency,
     error::{AppError, AppResult},
     id::DbId,
@@ -59,7 +59,7 @@ pub struct PricingTemplateRecord {
     pub cache_write_price_usd_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_usd_micros: Option<i64>,
-    pub pricing_basis: BillingMeter,
+    pub pricing_basis: PricingBasis,
     pub source: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -78,7 +78,7 @@ pub struct ModelReferenceCatalogRecord {
     pub cache_write_price_usd_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_usd_micros: Option<i64>,
-    pub pricing_basis: BillingMeter,
+    pub pricing_basis: PricingBasis,
     pub source: String,
     pub enabled: bool,
     pub capabilities: Value,
@@ -180,12 +180,28 @@ struct ModelsDevLimit {
     output: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ModelsDevCost {
     input: Option<f64>,
     output: Option<f64>,
     cache_read: Option<f64>,
     cache_write: Option<f64>,
+    // 非 token 口径字段(由抓取脚本写入)
+    per_image: Option<f64>,
+    per_call: Option<f64>,
+    per_hour: Option<f64>,
+    per_second: Option<f64>,
+    #[allow(dead_code)]
+    per_unit: Option<f64>,
+    #[allow(dead_code)]
+    per_thousand_calls: Option<f64>,
+    per_10k_token_input: Option<f64>,
+    per_10k_token_output: Option<f64>,
+    /// 抓取脚本推断的口径字符串(见 PricingBasis::as_str)。
+    basis: Option<String>,
+    /// 多档视频价的完整档位结构(由抓取脚本 parse_multi_tier_video 写入),
+    /// 仅 `basis=multi_tier_video` 时存在。代表档仍写入 input/output。
+    video_tiers: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -196,7 +212,7 @@ struct PricingMicros {
     cache_write_price_usd_micros: Option<i64>,
     billing_meter: BillingMeter,
     unit_price_usd_micros: Option<i64>,
-    pricing_basis: BillingMeter,
+    pricing_basis: PricingBasis,
 }
 
 fn default_enabled() -> bool {
@@ -643,29 +659,123 @@ fn pricing_template_from_local_cny_model<'a>(
 }
 
 fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<PricingMicros> {
-    let cost = model.cost.as_ref()?;
-    Some(PricingMicros {
-        input_price_usd_micros: per_million_to_micros(cost.input)?,
-        output_price_usd_micros: per_million_to_micros(cost.output)?,
-        cache_read_price_usd_micros: per_million_to_micros(cost.cache_read),
-        cache_write_price_usd_micros: per_million_to_micros(cost.cache_write),
-        billing_meter: BillingMeter::Token,
-        unit_price_usd_micros: None,
-        pricing_basis: BillingMeter::Token,
-    })
+    pricing_micros_from_cost(model.cost.as_ref()?)
 }
 
 fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<PricingMicros> {
-    let cost = model.cost.as_ref()?;
-    Some(PricingMicros {
-        input_price_usd_micros: per_million_to_micros(cost.input)?,
-        output_price_usd_micros: per_million_to_micros(cost.output)?,
-        cache_read_price_usd_micros: per_million_to_micros(cost.cache_read),
-        cache_write_price_usd_micros: per_million_to_micros(cost.cache_write),
-        billing_meter: BillingMeter::Token,
-        unit_price_usd_micros: None,
-        pricing_basis: BillingMeter::Token,
-    })
+    pricing_micros_from_cost(model.cost.as_ref()?)
+}
+
+/// 按 `cost.basis` 口径分流构造参考价微单位。
+/// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
+/// `billing_meter` 仅 token/image,不引入新值,实际计费链路不受影响。
+fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
+    let basis = parse_pricing_basis(cost.basis.as_deref());
+    use PricingBasis::*;
+    match basis {
+        Image => {
+            let unit_price = cny_to_micros(cost.per_image)?;
+            Some(PricingMicros {
+                input_price_usd_micros: 0,
+                output_price_usd_micros: 0,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Image,
+                unit_price_usd_micros: Some(unit_price),
+                pricing_basis: Image,
+            })
+        }
+        Call => {
+            let unit_price = cny_to_micros(cost.per_call)?;
+            Some(PricingMicros {
+                input_price_usd_micros: 0,
+                output_price_usd_micros: 0,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: Some(unit_price),
+                pricing_basis: Call,
+            })
+        }
+        Hour => {
+            let unit_price = cny_to_micros(cost.per_hour)?;
+            Some(PricingMicros {
+                input_price_usd_micros: 0,
+                output_price_usd_micros: 0,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: Some(unit_price),
+                pricing_basis: Hour,
+            })
+        }
+        Second => {
+            let unit_price = cny_to_micros(cost.per_second)?;
+            Some(PricingMicros {
+                input_price_usd_micros: 0,
+                output_price_usd_micros: 0,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: Some(unit_price),
+                pricing_basis: Second,
+            })
+        }
+        Per10kToken => {
+            let input = per_10k_to_micros(cost.per_10k_token_input)?;
+            let output = per_10k_to_micros(cost.per_10k_token_output)
+                .or_else(|| per_10k_to_micros(cost.per_10k_token_input))?;
+            Some(PricingMicros {
+                input_price_usd_micros: input,
+                output_price_usd_micros: output,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: None,
+                pricing_basis: Per10kToken,
+            })
+        }
+        MultiTierVideo => {
+            // input/output 已由抓取脚本取代表档(最低档)写入,按 token 微单位处理。
+            let input = per_million_to_micros(cost.input)?;
+            let output =
+                per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
+            Some(PricingMicros {
+                input_price_usd_micros: input,
+                output_price_usd_micros: output,
+                cache_read_price_usd_micros: None,
+                cache_write_price_usd_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: None,
+                pricing_basis: MultiTierVideo,
+            })
+        }
+        Token => {
+            let input = per_million_to_micros(cost.input)?;
+            let output = per_million_to_micros(cost.output)?;
+            Some(PricingMicros {
+                input_price_usd_micros: input,
+                output_price_usd_micros: output,
+                cache_read_price_usd_micros: per_million_to_micros(cost.cache_read),
+                cache_write_price_usd_micros: per_million_to_micros(cost.cache_write),
+                billing_meter: BillingMeter::Token,
+                unit_price_usd_micros: None,
+                pricing_basis: Token,
+            })
+        }
+    }
+}
+
+fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
+    match value {
+        Some("image") => PricingBasis::Image,
+        Some("call") => PricingBasis::Call,
+        Some("hour") => PricingBasis::Hour,
+        Some("second") => PricingBasis::Second,
+        Some("per_10k_token") => PricingBasis::Per10kToken,
+        Some("multi_tier_video") => PricingBasis::MultiTierVideo,
+        _ => PricingBasis::Token,
+    }
 }
 
 fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
@@ -706,11 +816,17 @@ fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
 }
 
 fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
-    json!({
+    let mut payload = json!({
         "id": model.id,
         "name": model.name,
         "modalities": model.modalities,
-    })
+    });
+    if let Some(cost) = model.cost.as_ref() {
+        if let Some(video_tiers) = cost.video_tiers.as_ref() {
+            payload["video_tiers"] = json!(video_tiers);
+        }
+    }
+    payload
 }
 
 async fn upsert_synced_pricing_template(
@@ -809,6 +925,17 @@ fn per_million_to_micros(value: Option<f64>) -> Option<i64> {
     Some(micros as i64)
 }
 
+/// 参考价展示用:按张/按次/按小时的 CNY 单价转 micro-CNY。
+/// 与 `per_million_to_micros` 同为 ×1_000_000,前端按 `pricing_basis` 标签区分单位语义。
+fn cny_to_micros(value: Option<f64>) -> Option<i64> {
+    per_million_to_micros(value)
+}
+
+/// 参考价展示用:按万 token 的 CNY 单价转 micro-CNY。前端按"万Token"口径展示。
+fn per_10k_to_micros(value: Option<f64>) -> Option<i64> {
+    per_million_to_micros(value)
+}
+
 pub async fn upsert_pricing_policy(
     state: &AppState,
     req: UpsertPricingPolicyRequest,
@@ -874,7 +1001,11 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         cache_write_price_usd_micros: req.cache_write_price_usd_micros,
         billing_meter: req.billing_meter,
         unit_price_usd_micros: req.unit_price_usd_micros,
-        pricing_basis: req.billing_meter,
+        // 手动录入价格默认按 token 口径展示;image 计费时展示口径同步为 image。
+        pricing_basis: match req.billing_meter {
+            BillingMeter::Image => PricingBasis::Image,
+            BillingMeter::Token => PricingBasis::Token,
+        },
     };
     if !prices_are_non_negative(prices) {
         return Err(AppError::BadRequest(
@@ -1035,9 +1166,9 @@ fn billing_meter_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, s
     BillingMeter::from_strict_str(&value).map_err(|err| sqlx::Error::Decode(err.into()))
 }
 
-fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, sqlx::Error> {
+fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<PricingBasis, sqlx::Error> {
     let value: String = row.try_get("pricing_basis")?;
-    BillingMeter::from_strict_str(&value).map_err(|err| sqlx::Error::Decode(err.into()))
+    Ok(PricingBasis::from_str_lenient(&value))
 }
 
 fn pricing_policy_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingPolicyRecord> {
@@ -1107,9 +1238,69 @@ mod tests {
             BillingMeter::Image
         );
         assert_eq!(prices.billing_meter, BillingMeter::Token);
-        assert_eq!(prices.pricing_basis, BillingMeter::Token);
+        assert_eq!(prices.pricing_basis, PricingBasis::Token);
         assert_eq!(prices.input_price_usd_micros, 8_000_000);
         assert_eq!(prices.output_price_usd_micros, 30_000_000);
         assert_eq!(prices.unit_price_usd_micros, None);
+    }
+
+    #[test]
+    fn pricing_basis_image_uses_unit_price() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"per_image":0.22,"basis":"image"}}"#).unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Image);
+        assert_eq!(prices.billing_meter, BillingMeter::Image);
+        assert_eq!(prices.unit_price_usd_micros, Some(220_000));
+        assert_eq!(prices.input_price_usd_micros, 0);
+        assert_eq!(prices.output_price_usd_micros, 0);
+    }
+
+    #[test]
+    fn pricing_basis_call_uses_unit_price() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"per_call":2.4,"basis":"call"}}"#).unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Call);
+        assert_eq!(prices.billing_meter, BillingMeter::Token);
+        assert_eq!(prices.unit_price_usd_micros, Some(2_400_000));
+    }
+
+    #[test]
+    fn pricing_basis_per_10k_token_uses_input_output() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{"cost":{"per_10k_token_input":0.36,"per_10k_token_output":3.6,"basis":"per_10k_token"}}"#,
+        )
+        .unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Per10kToken);
+        assert_eq!(prices.input_price_usd_micros, 360_000);
+        assert_eq!(prices.output_price_usd_micros, 3_600_000);
+    }
+
+    #[test]
+    fn pricing_basis_multi_tier_video_uses_representative_tier() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"input":16,"output":16,"basis":"multi_tier_video"}}"#)
+                .unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::MultiTierVideo);
+        assert_eq!(prices.input_price_usd_micros, 16_000_000);
+        assert_eq!(prices.output_price_usd_micros, 16_000_000);
+    }
+
+    #[test]
+    fn pricing_basis_second_uses_unit_price() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"per_second":0.9,"basis":"second"}}"#).unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Second);
+        assert_eq!(prices.billing_meter, BillingMeter::Token);
+        assert_eq!(prices.unit_price_usd_micros, Some(900_000));
     }
 }

@@ -234,6 +234,7 @@ fn is_auth_error(status: StatusCode, lowered: &str) -> bool {
                 "无效的 api key",
                 "未授权",
                 "无权限",
+                "未登录",
             ],
         )
 }
@@ -367,6 +368,22 @@ mod tests {
         assert_eq!(failure.error_type, "upstream_authentication_failed");
         assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
         assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn classifies_jdcloud_not_logged_in_as_auth_error() {
+        // JDCloud's JoyAgent returns 406 with a JSON body whose `code` is 401
+        // and `msg` is "账号未登录" when the channel secret is invalid or
+        // expired. This must be treated as an authentication failure rather
+        // than the generic upstream_http_error fallback.
+        let body = "{\"code\":401,\"data\":null,\"msg\":\"账号未登录\"}".as_bytes();
+
+        let failure = describe_upstream_http_failure(StatusCode::NOT_ACCEPTABLE, body);
+
+        assert_eq!(failure.error_type, "upstream_authentication_failed");
+        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
+        assert!(!failure.retryable);
+        assert!(failure.detail.contains("账号未登录"));
     }
 
     #[test]

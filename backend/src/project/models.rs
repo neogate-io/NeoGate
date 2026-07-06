@@ -514,8 +514,11 @@ pub async fn resolve_project_model_with_context(
 
     if let Some(row) = row {
         let enabled: bool = row.try_get("enabled")?;
+        let model_name: String = row.try_get("model")?;
         if !enabled {
-            return Err(AppError::Forbidden);
+            return Err(AppError::Forbidden(format!(
+                "model '{model_name}' is disabled for this project"
+            )));
         }
         let route_mode: String = row.try_get("route_mode")?;
         if route_mode == "smart" {
@@ -530,7 +533,9 @@ pub async fn resolve_project_model_with_context(
     }
 
     if project_has_models(pool, project_id).await? {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden(format!(
+            "model '{requested_model}' is not in the project's model allowlist"
+        )));
     }
 
     Ok(ResolvedProjectModel {

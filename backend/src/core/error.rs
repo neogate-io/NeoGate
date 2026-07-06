@@ -118,8 +118,8 @@ impl std::error::Error for UpstreamRequestError {}
 pub enum AppError {
     #[error("unauthorized")]
     Unauthorized,
-    #[error("forbidden")]
-    Forbidden,
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("password change required")]
     PasswordChangeRequired,
     #[error("payment required")]
@@ -188,7 +188,7 @@ impl AppError {
     fn status(&self) -> StatusCode {
         match self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
-            AppError::Forbidden => StatusCode::FORBIDDEN,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::PasswordChangeRequired => StatusCode::FORBIDDEN,
             AppError::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
             AppError::Conflict(_) | AppError::ConflictWithCode { .. } => StatusCode::CONFLICT,
@@ -212,7 +212,7 @@ impl AppError {
     fn code(&self) -> &'static str {
         match self {
             AppError::Unauthorized => "unauthorized",
-            AppError::Forbidden => "forbidden",
+            AppError::Forbidden(_) => "forbidden",
             AppError::PasswordChangeRequired => "password_change_required",
             AppError::PaymentRequired => "payment_required",
             AppError::Conflict(_) => "conflict",
@@ -246,7 +246,8 @@ impl AppError {
             AppError::Conflict(message)
             | AppError::PayloadTooLarge(message)
             | AppError::BadRequest(message)
-            | AppError::RateLimited(message) => message.clone(),
+            | AppError::RateLimited(message)
+            | AppError::Forbidden(message) => message.clone(),
             AppError::ConflictWithCode { message, .. } => (*message).to_string(),
             AppError::BadRequestWithCode { message, .. } => (*message).to_string(),
             _ => self.to_string(),
@@ -280,6 +281,7 @@ impl AppError {
                 | AppError::BadRequestWithCode { .. }
                 | AppError::PayloadTooLarge(_)
                 | AppError::RateLimited(_)
+                | AppError::Forbidden(_)
         )
     }
 }

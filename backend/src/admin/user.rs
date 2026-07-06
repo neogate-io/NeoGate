@@ -597,7 +597,7 @@ pub async fn claim_public_user_key(
         existing_user.as_ref().map(|record| record.status.as_str()),
         Some("disabled")
     ) {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden("account is disabled".to_string()));
     }
 
     let (user_id, created_user) = if let Some(record) = existing_user {

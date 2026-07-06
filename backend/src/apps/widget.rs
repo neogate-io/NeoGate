@@ -36,7 +36,9 @@ pub(super) async fn message(
 ) -> AppResult<Json<AppMessageResponse>> {
     let runtime = runtime_for_endpoint(&state, endpoint_id, "widget").await?;
     if !anonymous_access_enabled(&runtime) {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden(
+            "anonymous access is disabled for this app".to_string(),
+        ));
     }
     verify_origin(&runtime, &headers)?;
     let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -161,13 +163,17 @@ fn verify_origin(runtime: &AppRuntime, headers: &HeaderMap) -> AppResult<()> {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     let Some((origin_host, origin_host_port)) = origin_host(origin) else {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden(
+            "request origin is missing or invalid".to_string(),
+        ));
     };
     let allowed = domains
         .iter()
         .filter_map(Value::as_str)
         .any(|domain| domain_matches(&origin_host, &origin_host_port, domain));
-    allowed.then_some(()).ok_or(AppError::Forbidden)
+    allowed.then_some(()).ok_or(AppError::Forbidden(format!(
+        "request origin '{origin}' is not allowed"
+    )))
 }
 
 fn anonymous_access_enabled(runtime: &AppRuntime) -> bool {

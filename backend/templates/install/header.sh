@@ -15,6 +15,8 @@ CODEX_MODEL_EXPLICIT=0
 CLAUDE_MODEL_EXPLICIT=0
 API_KEY="${NEOGATE_API_KEY:-}"
 CLIENT="${NEOGATE_CLIENT:-}"
+CLIENT_EXPLICIT=0
+[[ -n "$CLIENT" ]] && CLIENT_EXPLICIT=1
 ASSUME_YES="${NEOGATE_ASSUME_YES:-0}"
 SKIP_INSTALL=0
 SKIP_RELAY_TEST=0
@@ -182,9 +184,13 @@ message() {
       installer_title) printf '%s 安装器' "$1" ;;
       switch_or_reinstall_prompt) printf '请选择 [1]：' ;;
       switch_option) printf '1. 切换模型' ;;
-      reinstall_option) printf '2. 重新安装' ;;
+      change_key_option) printf '2. 更换 API Key' ;;
+      reinstall_option) printf '3. 重新安装' ;;
       switch_model) printf '切换模型' ;;
+      change_api_key) printf '更换 API Key' ;;
+      keeping_model) printf '保留当前模型：%s' "$1" ;;
       model_switched) printf '模型已切换为 %s' "$1" ;;
+      api_key_changed) printf '%s' "API Key 已更新" ;;
       step_verify_key) printf '%s' "验证 API 密钥" ;;
       step_choose_client) printf '%s' "选择客户端" ;;
       step_choose_model) printf '%s' "选择默认模型" ;;
@@ -297,9 +303,13 @@ message() {
     installer_title) printf '%s installer' "$1" ;;
     switch_or_reinstall_prompt) printf 'Choose [1]: ' ;;
     switch_option) printf '1. Switch model' ;;
-    reinstall_option) printf '2. Reinstall' ;;
+    change_key_option) printf '2. Change API key' ;;
+    reinstall_option) printf '3. Reinstall' ;;
     switch_model) printf 'Switch model' ;;
+    change_api_key) printf 'Change API key' ;;
+    keeping_model) printf 'Keeping current model: %s' "$1" ;;
     model_switched) printf 'Model switched to %s' "$1" ;;
+    api_key_changed) printf '%s' "API key updated" ;;
     step_verify_key) printf '%s' "Verify API key" ;;
     step_choose_client) printf '%s' "Choose client" ;;
     step_choose_model) printf '%s' "Choose default model" ;;
@@ -384,6 +394,7 @@ parse_args() {
       --client)
         [[ $# -ge 2 ]] || die "$(message client_required)"
         CLIENT="$2"
+        CLIENT_EXPLICIT=1
         shift 2
         ;;
       --yes|-y)

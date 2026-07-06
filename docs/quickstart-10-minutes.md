@@ -185,4 +185,4 @@ The script guides you through:
 - Writing the Base URL, API key, and model name.
 - Running one gateway relay test.
 
-If the machine is already configured for NeoGate, running the same command again tries to reuse the previous API key, model, and client, then asks whether to switch model or reinstall.
+If the machine is already configured for NeoGate, running the same command again tries to reuse the previous API key, model, and client, then asks whether to switch model, change API key, or reinstall.

@@ -37,7 +37,7 @@ export const publicMessages = {
     runtimeConfigurationDescription:
       '填写数据库、站点名称和公网地址，NeoGate 会先验证配置，完成向导后再写入环境变量。',
     siteConfiguration: '站点信息',
-    siteConfigurationDescription: '设置后台显示名称和服务对外访问地址。',
+    siteConfigurationDescription: '设置后台显示名称、服务对外访问地址，以及初始化后固定的基础计费货币。',
     databaseConfiguration: '数据库连接',
     databaseConfigurationDescription:
       '配置 NeoGate 使用的 PostgreSQL 数据库，并在保存前测试连通性。',
@@ -66,6 +66,9 @@ export const publicMessages = {
     databaseTlsError: '数据库 SSL/TLS 握手失败。请检查 SSL 模式和证书配置。',
     siteNameLabel: '站点名称',
     publicBaseUrlLabel: '公网访问地址（PUBLIC_BASE_URL）',
+    billingCurrency: '基础计费货币',
+    currencyUsdLabel: '美元（USD）',
+    currencyCnyLabel: '人民币（CNY）',
     siteNameRequired: '请输入站点名称。',
     publicBaseUrlRequired: '请输入公网访问地址。',
     publicBaseUrlInvalid: '公网访问地址必须是有效的 http 或 https URL。',
@@ -444,7 +447,8 @@ export const publicMessages = {
     runtimeConfigurationDescription:
       'Enter the database, site name, and public URL. NeoGate verifies them now and writes the environment file when setup is completed.',
     siteConfiguration: 'Site information',
-    siteConfigurationDescription: 'Set the admin display name and public service URL.',
+    siteConfigurationDescription:
+      'Set the admin display name, public service URL, and the base billing currency that stays fixed after setup.',
     databaseConfiguration: 'Database connection',
     databaseConfigurationDescription:
       'Configure the PostgreSQL database NeoGate will use and test it before saving.',
@@ -480,6 +484,9 @@ export const publicMessages = {
       'The database SSL/TLS handshake failed. Check the SSL mode and certificate settings.',
     siteNameLabel: 'Site name',
     publicBaseUrlLabel: 'Public URL (PUBLIC_BASE_URL)',
+    billingCurrency: 'Base billing currency',
+    currencyUsdLabel: 'USD (US Dollar)',
+    currencyCnyLabel: 'CNY (Chinese Yuan)',
     siteNameRequired: 'Enter the site name.',
     publicBaseUrlRequired: 'Enter the public URL.',
     publicBaseUrlInvalid: 'The public URL must be a valid http or https URL.',

@@ -191,8 +191,8 @@ async fn sync_channel_models_from_upstream(
     {
         sqlx::query(
             "INSERT INTO channel_model
-             (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
-             VALUES ($1, $2, $3, FALSE, 'available', 'normal', now())
+             (channel_id, model, enabled, status, runtime_status, last_seen_at)
+             VALUES ($1, $2, FALSE, 'available', 'normal', now())
              ON CONFLICT (channel_id, model)
              DO UPDATE SET
                  status = 'available',
@@ -205,7 +205,6 @@ async fn sync_channel_models_from_upstream(
                  updated_at = now()",
         )
         .bind(channel_id)
-        .bind(provider)
         .bind(model)
         .execute(&state.db.pool)
         .await?;

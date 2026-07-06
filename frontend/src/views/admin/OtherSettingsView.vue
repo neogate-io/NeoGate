@@ -3,8 +3,6 @@ import { computed, h, onMounted, ref } from 'vue'
 import {
   ChatDotRound,
   Coin,
-  Link as LinkIcon,
-  Monitor,
   PriceTag,
   Refresh,
   Search,
@@ -13,46 +11,61 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getChannels } from '../../api/channels'
-import { getModelReferenceCatalog, syncPricingTemplates } from '../../api/prices'
+import {
+  getLiveModelReferenceCatalog,
+  getModelReferenceCatalog,
+  syncPricingTemplates
+} from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import {
-  checkLatestVersion,
   getAdminModelSetting,
-  getSiteSetting,
-  saveAdminModelSetting,
-  saveSiteSetting
+  saveAdminModelSetting
 } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
+import { type MessageKey } from '../../i18n'
 import { withLoading } from '../../composables/useLoadingTask'
-import { setSiteBrand } from '../../composables/useSiteBrand'
-import type { Channel, ModelReferenceCatalogRecord, VersionCheckResult } from '../../types/admin'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
+import type {
+  Channel,
+  ModelReferenceCatalogRecord,
+  VideoTier,
+  VideoTierDimension
+} from '../../types/admin'
 import { createConfirmAction } from '../../utils/confirm'
 import { ApiError, readError } from '../../utils/errors'
-import { formatDateTime, formatMicrosPerMillion } from '../../utils/format'
+import { currencySymbol, formatDateTime, formatPricePerMillion } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { billingCurrency } = useBillingCurrency()
+
+function formatReferenceMicros(value: number | null | undefined) {
+  return formatPricePerMillion(value, billingCurrency.value, locale.value)
+}
 const confirmDialog = createConfirmAction(() => t('cancel'))
+
+const referencePricesIntro = computed(() =>
+  billingCurrency.value === 'CNY'
+    ? t('syncReferencePricesConfirmIntroCny')
+    : t('syncReferencePricesConfirmIntro')
+)
+const referencePricesSourceUnavailableText = computed(() =>
+  billingCurrency.value === 'CNY'
+    ? t('referencePricesSourceUnavailableCny')
+    : t('referencePricesSourceUnavailable')
+)
 
 const loading = ref(false)
 const servicePolicy = ref<ServicePolicy | null>(null)
-const siteSettingSaving = ref(false)
-const siteForm = ref({
-  siteName: '',
-  logoUrl: '',
-  publicBaseUrl: '',
-  envWriteSupported: false
-})
+const servicePolicySaving = ref(false)
 const adminModelForm = ref({
   defaultTextModel: '',
   defaultTextChannelId: null as number | null
 })
 const channels = ref<Channel[]>([])
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
-const servicePolicySaving = ref(false)
 const adminModelSaving = ref(false)
 const syncingTemplates = ref(false)
-const checkingVersion = ref(false)
-const versionCheck = ref<VersionCheckResult | null>(null)
+const loadingReferenceCatalog = ref(false)
 const referencePricesDialogOpen = ref(false)
 const referencePriceSearch = ref('')
 
@@ -97,11 +110,6 @@ const registrationDescription = computed(() => {
     ? t('registrationPaidEnabledDescription')
     : t('registrationInternalEnabledDescription')
 })
-const siteSettingDescription = computed(() => {
-  return siteForm.value.envWriteSupported
-    ? t('siteSettingsDescription')
-    : t('siteSettingsReadOnlyDescription')
-})
 const textModelOptions = computed(() => {
   const options: Array<{ value: string; label: string; model: string; channelId: number }> = []
   const seen = new Set<string>()
@@ -140,47 +148,99 @@ const selectedAdminTextModelValue = computed({
     adminModelForm.value.defaultTextChannelId = option?.channelId ?? null
   }
 })
-const versionStatusLabel = computed(() => {
-  if (!versionCheck.value) return t('versionNotChecked')
-  return versionCheck.value.update_available ? t('versionUpdateAvailable') : t('versionUpToDate')
-})
-const versionStatusType = computed(() => {
-  if (!versionCheck.value) return 'info'
-  return versionCheck.value.update_available ? 'warning' : 'success'
-})
-const versionPublishedAt = computed(() => {
-  return formatDateTime(versionCheck.value?.published_at, locale.value)
-})
 
 function formatSyncCount(value: number) {
   return value.toLocaleString('en-US')
 }
 
 function pricingBasisLabel(template: ModelReferenceCatalogRecord) {
-  return template.pricing_basis === 'image'
-    ? t('billingMeterImageGeneration')
-    : t('billingMeterToken')
+  switch (template.pricing_basis) {
+    case 'image':
+      return t('billingMeterImageGeneration')
+    case 'call':
+      return t('billingBasisCall')
+    case 'per_10k_token':
+      return t('billingBasisPer10kToken')
+    case 'hour':
+      return t('billingBasisHour')
+    case 'second':
+      return t('billingBasisSecond')
+    case 'multi_tier_video':
+      return t('billingBasisMultiTierVideo')
+    default:
+      return t('billingMeterToken')
+  }
+}
+
+const VIDEO_TIER_DIMENSION_LABELS: Record<string, string> = {
+  input_without_video: 'videoTierInputWithoutVideo',
+  input_with_video: 'videoTierInputWithVideo',
+  with_audio: 'videoTierWithAudio',
+  without_audio: 'videoTierWithoutAudio',
+  price: 'videoTierPrice'
+}
+
+function videoTiersOf(template: ModelReferenceCatalogRecord) {
+  const value = template.capabilities?.video_tiers
+  return Array.isArray(value) ? (value as VideoTier[]) : []
+}
+
+function formatVideoTier(tier: VideoTier) {
+  const dimensions = Object.keys(tier.tiers ?? {}) as string[]
+  const parts = dimensions
+    .filter((d) => tier.tiers?.[d as VideoTierDimension] != null)
+    .map((d) => {
+      const labelKey = (VIDEO_TIER_DIMENSION_LABELS[d] ?? 'videoTierPrice') as MessageKey
+      const amount = formatReferenceMicros(
+        microsFromCny(tier.tiers?.[d as VideoTierDimension] ?? null)
+      )
+      return `${t(labelKey)} ${amount}/${t('pricePerMillionTokens')}`
+    })
+  return { resolution: tier.resolution || '', parts }
+}
+
+function microsFromCny(value: number | null | undefined) {
+  if (value == null) return null
+  return Math.round(value * 1_000_000)
 }
 
 function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
-  if (template.pricing_basis === 'image') {
-    return `${formatMicrosPerMillion(template.unit_price_usd_micros)} / ${t('perImage')}`
+  switch (template.pricing_basis) {
+    case 'image':
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perImage')}`
+    case 'call':
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perCall')}`
+    case 'hour':
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perHour')}`
+    case 'second':
+      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perSecond')}`
+    case 'per_10k_token':
+      return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
+        template.output_price_micros
+      )}`
+    case 'multi_tier_video':
+      return `${formatReferenceMicros(template.output_price_micros)} (${t(
+        'multiTierRepresentative'
+      )})`
+    default:
+      return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
+        template.output_price_micros
+      )}`
   }
-  return `${formatMicrosPerMillion(template.input_price_usd_micros)} / ${formatMicrosPerMillion(
-    template.output_price_usd_micros
-  )}`
 }
 
 function formatCachePricePair(template: ModelReferenceCatalogRecord) {
-  if (template.pricing_basis === 'image') return '-'
+  const noCacheBases = ['image', 'call', 'hour', 'second', 'multi_tier_video']
+  if (noCacheBases.includes(template.pricing_basis)) return '-'
+  const zero = `${currencySymbol(billingCurrency.value)}0`
   const cacheRead =
-    template.cache_read_price_usd_micros == null
-      ? '$0'
-      : formatMicrosPerMillion(template.cache_read_price_usd_micros)
+    template.cache_read_price_micros == null
+      ? zero
+      : formatReferenceMicros(template.cache_read_price_micros)
   const cacheWrite =
-    template.cache_write_price_usd_micros == null
-      ? '$0'
-      : formatMicrosPerMillion(template.cache_write_price_usd_micros)
+    template.cache_write_price_micros == null
+      ? zero
+      : formatReferenceMicros(template.cache_write_price_micros)
   return `${cacheRead} / ${cacheWrite}`
 }
 
@@ -194,7 +254,7 @@ function referencePricesSyncedMessage(result: { saved: number }) {
 
 function referenceSyncConfirmContent() {
   return h('div', { class: 'reference-sync-copy' }, [
-    h('p', { class: 'reference-sync-lead' }, t('syncReferencePricesConfirmIntro')),
+    h('p', { class: 'reference-sync-lead' }, referencePricesIntro.value),
     h('div', { class: 'reference-sync-notes' }, [
       h('p', t('syncReferencePricesConfirmSafe')),
       h('p', t('syncReferencePricesConfirmApply'))
@@ -208,19 +268,10 @@ function readReferenceSyncError(err: unknown) {
     err.status === 502 &&
     err.message.includes('pricing reference source')
   ) {
-    return t('referencePricesSourceUnavailable')
+    return referencePricesSourceUnavailableText.value
   }
 
   return readError(err)
-}
-
-function applySiteSetting(setting: Awaited<ReturnType<typeof getSiteSetting>>) {
-  siteForm.value = {
-    siteName: setting.site_name || 'NeoGate',
-    logoUrl: setting.logo_url ?? '',
-    publicBaseUrl: setting.public_base_url ?? '',
-    envWriteSupported: setting.env_write_supported
-  }
 }
 
 function applyAdminModelSetting(setting: Awaited<ReturnType<typeof getAdminModelSetting>>) {
@@ -233,66 +284,16 @@ function applyAdminModelSetting(setting: Awaited<ReturnType<typeof getAdminModel
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [policy, siteSetting, adminModelSetting, fetchedChannels, catalog] = await Promise.all([
+      const [policy, adminModelSetting, fetchedChannels, catalog] = await Promise.all([
         getAdminServicePolicy(),
-        getSiteSetting(),
         getAdminModelSetting(),
         getChannels(),
         getModelReferenceCatalog()
       ])
       servicePolicy.value = policy
-      applySiteSetting(siteSetting)
       applyAdminModelSetting(adminModelSetting)
       channels.value = fetchedChannels
       modelReferenceCatalog.value = catalog
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
-async function saveSiteConfig() {
-  const siteName = siteForm.value.siteName.trim()
-  const logoUrl = siteForm.value.logoUrl.trim()
-  const publicBaseUrl = siteForm.value.publicBaseUrl.trim()
-  if (!siteName) {
-    ElMessage.error(t('siteNameRequired'))
-    return
-  }
-  if (!publicBaseUrl) {
-    ElMessage.error(t('publicBaseUrlRequired'))
-    return
-  }
-  try {
-    const url = new URL(publicBaseUrl)
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
-  } catch {
-    ElMessage.error(t('publicBaseUrlInvalid'))
-    return
-  }
-  if (logoUrl) {
-    try {
-      const url = new URL(logoUrl)
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol')
-    } catch {
-      ElMessage.error(t('siteLogoUrlInvalid'))
-      return
-    }
-  }
-
-  await withLoading(siteSettingSaving, async () => {
-    try {
-      const result = await saveSiteSetting({
-        site_name: siteName,
-        public_base_url: publicBaseUrl,
-        logo_url: logoUrl || null
-      })
-      applySiteSetting(result.setting)
-      setSiteBrand(result.setting)
-      servicePolicy.value = await getAdminServicePolicy(true).catch(() => servicePolicy.value)
-      ElMessage.success(
-        result.restart_required ? t('siteSettingsSavedRestartRequired') : t('siteSettingsSaved')
-      )
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -338,6 +339,18 @@ async function saveServicePolicy() {
   })
 }
 
+async function openReferencePricesDialog() {
+  referencePricesDialogOpen.value = true
+  await withLoading(loadingReferenceCatalog, async () => {
+    try {
+      modelReferenceCatalog.value = await getLiveModelReferenceCatalog()
+    } catch (err) {
+      ElMessage.error(readError(err))
+      modelReferenceCatalog.value = await getModelReferenceCatalog()
+    }
+  })
+}
+
 async function syncReferencePrices() {
   const confirmed = await confirmDialog(
     referenceSyncConfirmContent(),
@@ -359,70 +372,12 @@ async function syncReferencePrices() {
   })
 }
 
-async function checkVersion() {
-  await withLoading(checkingVersion, async () => {
-    try {
-      versionCheck.value = await checkLatestVersion()
-      ElMessage.success(versionStatusLabel.value)
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
 onMounted(load)
 </script>
 
 <template>
   <section class="admin-settings-view other-settings-view">
     <div v-loading="loading" class="other-settings-grid">
-      <section class="other-settings-card">
-        <header class="admin-settings-section-header other-settings-card-header">
-          <el-icon class="admin-settings-panel-icon"><Monitor /></el-icon>
-          <div class="other-settings-card-copy">
-            <h3>{{ t('siteSettings') }}</h3>
-            <p>{{ siteSettingDescription }}</p>
-          </div>
-        </header>
-        <el-form
-          class="site-settings-inline-form"
-          label-position="top"
-          @submit.prevent="saveSiteConfig"
-        >
-          <el-form-item :label="t('siteNameLabel')">
-            <el-input
-              v-model="siteForm.siteName"
-              :disabled="siteSettingSaving"
-              :placeholder="t('siteNamePlaceholder')"
-            />
-          </el-form-item>
-          <el-form-item :label="t('siteLogoUrlLabel')">
-            <el-input
-              v-model="siteForm.logoUrl"
-              :disabled="siteSettingSaving"
-              :placeholder="t('siteLogoUrlPlaceholder')"
-            />
-          </el-form-item>
-          <el-form-item :label="t('publicBaseUrlLabel')">
-            <el-input
-              v-model="siteForm.publicBaseUrl"
-              :disabled="!siteForm.envWriteSupported || siteSettingSaving"
-              :placeholder="t('publicBaseUrlPlaceholder')"
-            />
-          </el-form-item>
-        </el-form>
-        <div class="other-settings-actions">
-          <el-button
-            class="admin-action-button"
-            type="primary"
-            :loading="siteSettingSaving"
-            @click="saveSiteConfig"
-          >
-            {{ t('save') }}
-          </el-button>
-        </div>
-      </section>
-
       <section class="other-settings-card">
         <header class="admin-settings-section-header other-settings-card-header">
           <el-icon class="admin-settings-panel-icon"><Coin /></el-icon>
@@ -459,57 +414,10 @@ onMounted(load)
 
       <section class="other-settings-card">
         <header class="admin-settings-section-header other-settings-card-header">
-          <el-icon class="admin-settings-panel-icon"><Refresh /></el-icon>
-          <div class="other-settings-card-copy">
-            <div class="version-heading-row">
-              <h3>{{ t('versionCheck') }}</h3>
-              <el-tag class="version-status-tag" :type="versionStatusType" effect="light" round>
-                {{ versionStatusLabel }}
-              </el-tag>
-            </div>
-            <p>{{ t('versionCheckDescription') }}</p>
-            <p class="other-settings-meta">
-              <span>{{ t('currentVersion') }}</span>
-              <strong>{{ versionCheck?.current_version ?? '-' }}</strong>
-              <span>{{ t('latestVersion') }}</span>
-              <strong>{{ versionCheck?.latest_tag ?? '-' }}</strong>
-            </p>
-            <p v-if="versionCheck" class="other-settings-meta">
-              <span>{{ t('releasePublishedAt') }}</span>
-              <strong>{{ versionPublishedAt }}</strong>
-            </p>
-          </div>
-        </header>
-        <div class="other-settings-actions">
-          <el-button
-            v-if="versionCheck"
-            class="admin-action-button"
-            :icon="LinkIcon"
-            tag="a"
-            :href="versionCheck.release_url"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {{ t('viewRelease') }}
-          </el-button>
-          <el-button
-            class="admin-action-button"
-            type="primary"
-            :icon="Refresh"
-            :loading="checkingVersion"
-            @click="checkVersion"
-          >
-            {{ t('checkLatestVersion') }}
-          </el-button>
-        </div>
-      </section>
-
-      <section class="other-settings-card">
-        <header class="admin-settings-section-header other-settings-card-header">
           <el-icon class="admin-settings-panel-icon"><PriceTag /></el-icon>
           <div class="other-settings-card-copy">
             <h3>{{ t('modelReferencePrices') }}</h3>
-            <p>{{ t('syncReferencePricesConfirmIntro') }}</p>
+            <p>{{ referencePricesIntro }}</p>
             <p class="other-settings-meta">
               <span>{{ t('referencePricesLastUpdated') }}</span>
               <strong>{{ referencePricesLastUpdated }}</strong>
@@ -520,7 +428,8 @@ onMounted(load)
           <el-button
             class="admin-action-button"
             :icon="View"
-            @click="referencePricesDialogOpen = true"
+            :loading="loadingReferenceCatalog"
+            @click="openReferencePricesDialog"
           >
             {{ t('viewReferencePrices') }}
           </el-button>
@@ -594,13 +503,14 @@ onMounted(load)
         </span>
       </div>
       <el-table
+        v-loading="loadingReferenceCatalog"
         class="admin-table reference-prices-table"
         :data="filteredPricingTemplates"
         max-height="62vh"
         stripe
       >
         <el-table-column prop="provider" :label="t('provider')" width="112" />
-        <el-table-column prop="model" :label="t('modelName')" min-width="260" />
+        <el-table-column prop="model" :label="t('modelName')" min-width="240" />
         <el-table-column :label="t('pricingBasis')" width="92" align="center" header-align="center">
           <template #default="{ row }">
             <span class="reference-meter-badge">{{ pricingBasisLabel(row) }}</span>
@@ -608,7 +518,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column
           class-name="reference-price-column"
-          min-width="180"
+          min-width="200"
           align="right"
           header-align="right"
         >
@@ -616,7 +526,28 @@ onMounted(load)
             <span class="reference-price-head-label">{{ t('inputOutputPriceShort') }}</span>
           </template>
           <template #default="{ row }">
-            <span class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
+            <div
+              v-if="row.pricing_basis === 'multi_tier_video' && videoTiersOf(row).length"
+              class="reference-video-tiers"
+            >
+              <div
+                v-for="(tier, idx) in videoTiersOf(row)"
+                :key="idx"
+                class="reference-video-tier"
+              >
+                <span v-if="tier.resolution" class="reference-video-tier-res">
+                  {{ tier.resolution }}
+                </span>
+                <span
+                  v-for="(part, pIdx) in formatVideoTier(tier).parts"
+                  :key="pIdx"
+                  class="reference-video-tier-price"
+                >
+                  {{ part }}
+                </span>
+              </div>
+            </div>
+            <span v-else class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -686,23 +617,6 @@ onMounted(load)
   margin: 0;
 }
 
-.version-heading-row {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.version-status-tag.el-tag {
-  animation: none;
-  transition: none;
-}
-
-.version-status-tag.el-tag :deep(*) {
-  animation: none;
-  transition: none;
-}
-
 .other-settings-card-copy p {
   color: var(--admin-text-muted);
   font-size: 13px;
@@ -726,25 +640,6 @@ onMounted(load)
 .other-settings-meta strong {
   color: var(--admin-text);
   font-weight: 720;
-}
-
-.site-settings-inline-form {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
-  margin-left: 38px;
-}
-
-.site-settings-inline-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-.site-settings-inline-form :deep(.el-form-item__label) {
-  color: var(--admin-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.3;
-  margin-bottom: 6px;
 }
 
 .admin-model-settings-card {
@@ -861,6 +756,47 @@ onMounted(load)
   white-space: nowrap;
 }
 
+.reference-video-tiers {
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: right;
+}
+
+.reference-video-tier {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: flex-end;
+}
+
+.reference-video-tier-res {
+  background: #f5f7fb;
+  border: 1px solid #dbe4ef;
+  border-radius: 4px;
+  color: #5f6f85;
+  font-size: 11px;
+  font-weight: 680;
+  padding: 1px 6px;
+}
+
+.reference-video-tier-price {
+  color: #263242;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.reference-video-tier-note {
+  color: #697586;
+  font-size: 11px;
+  font-weight: 560;
+  margin-top: 2px;
+}
+
 .reference-meter-badge {
   background: #f5f7fb;
   border: 1px solid #dbe4ef;
@@ -907,11 +843,6 @@ onMounted(load)
   .other-settings-actions .el-button {
     flex: 1 1 0;
     min-width: 0;
-  }
-
-  .site-settings-inline-form {
-    grid-template-columns: minmax(0, 1fr);
-    margin-left: 0;
   }
 
   .admin-model-settings-form :deep(.el-form-item) {

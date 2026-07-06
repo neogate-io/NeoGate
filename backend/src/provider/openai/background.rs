@@ -166,6 +166,8 @@ pub(super) async fn create_background_response(
         relay_final: true,
         request_params,
         request_permit: request_permit.take(),
+        upstream_request_path: Some("/v1/responses".to_string()),
+        upstream_response_mode: None,
     };
 
     let upstream_response = match response {

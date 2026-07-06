@@ -252,8 +252,8 @@ struct AutoConfigureAvailableModel {
     channel_id: DbId,
     channel_name: String,
     protocol: String,
-    input_price_usd_micros: Option<i64>,
-    output_price_usd_micros: Option<i64>,
+    input_price_micros: Option<i64>,
+    output_price_micros: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -373,18 +373,16 @@ pub async fn auto_configure_project_model(
             "请先在其他设置中配置一个可调用的默认文本大模型，再使用自动配置。".to_string(),
         ));
     };
-    let mut suggestions = match llm_auto_configure_suggestions(
-        state,
-        classifier_protocol,
-        &classifier_model,
-        &upstream,
-        &available,
-        &existing_tiers,
-        &mode,
+    let params = LlmAutoConfigureParams {
+        protocol: classifier_protocol,
+        classifier_model: &classifier_model,
+        upstream: &upstream,
+        available: &available,
+        existing_tiers: &existing_tiers,
+        mode: &mode,
         max_candidates_per_tier,
-    )
-    .await
-    {
+    };
+    let mut suggestions = match llm_auto_configure_suggestions(state, params).await {
         Ok(items) if !items.is_empty() => items,
         Ok(_) => {
             return Err(AppError::BadRequest(
@@ -429,26 +427,28 @@ pub struct ProjectModelRequestContext {
 
 impl ProjectModelRequestContext {
     pub fn from_value(value: &Value) -> Self {
-        let mut context = Self::default();
-        context.has_tools = value
-            .get("tools")
-            .and_then(Value::as_array)
-            .map(|items| !items.is_empty())
-            .unwrap_or(false);
-        context.has_response_format = value.get("response_format").is_some()
-            || value
-                .get("text")
-                .and_then(|text| text.get("format"))
-                .is_some();
-        context.reasoning_effort = value
-            .get("reasoning_effort")
-            .or_else(|| {
-                value
-                    .get("reasoning")
-                    .and_then(|reasoning| reasoning.get("effort"))
-            })
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let mut context = Self {
+            has_tools: value
+                .get("tools")
+                .and_then(Value::as_array)
+                .map(|items| !items.is_empty())
+                .unwrap_or(false),
+            has_response_format: value.get("response_format").is_some()
+                || value
+                    .get("text")
+                    .and_then(|text| text.get("format"))
+                    .is_some(),
+            reasoning_effort: value
+                .get("reasoning_effort")
+                .or_else(|| {
+                    value
+                        .get("reasoning")
+                        .and_then(|reasoning| reasoning.get("effort"))
+                })
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            ..Default::default()
+        };
         collect_request_text(value, &mut context);
         context
     }
@@ -1370,7 +1370,7 @@ async fn list_auto_configure_available_models(
         r#"
         SELECT DISTINCT ON (cm.model, c.id)
                cm.model, c.provider, c.id AS channel_id, c.name AS channel_name, ce.protocol,
-               pp.input_price_usd_micros, pp.output_price_usd_micros
+               pp.input_price_micros, pp.output_price_micros
         FROM channel_model cm
         JOIN channel c ON c.id = cm.channel_id
         JOIN provider p ON p.code = c.provider
@@ -1437,8 +1437,8 @@ async fn list_auto_configure_available_models(
                 protocol: row
                     .try_get::<Option<String>, _>("protocol")?
                     .unwrap_or_else(|| "openai".to_string()),
-                input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-                output_price_usd_micros: row.try_get("output_price_usd_micros")?,
+                input_price_micros: row.try_get("input_price_micros")?,
+                output_price_micros: row.try_get("output_price_micros")?,
             })
         })
         .collect()
@@ -1514,23 +1514,39 @@ async fn resolve_admin_text_model(
     Ok(None)
 }
 
+struct LlmAutoConfigureParams<'a> {
+    protocol: UpstreamProtocol,
+    classifier_model: &'a str,
+    upstream: &'a SelectedUpstream,
+    available: &'a [AutoConfigureAvailableModel],
+    existing_tiers: &'a HashSet<String>,
+    mode: &'a str,
+    max_candidates_per_tier: usize,
+}
+
 async fn llm_auto_configure_suggestions(
     state: &Arc<AppState>,
-    protocol: UpstreamProtocol,
-    classifier_model: &str,
-    upstream: &SelectedUpstream,
-    available: &[AutoConfigureAvailableModel],
-    existing_tiers: &HashSet<String>,
-    mode: &str,
-    max_candidates_per_tier: usize,
+    params: LlmAutoConfigureParams<'_>,
 ) -> AppResult<Vec<AutoSuggestion>> {
-    let prompt = auto_configure_prompt(available, existing_tiers, mode, max_candidates_per_tier);
-    let content = match protocol {
+    let prompt = auto_configure_prompt(
+        params.available,
+        params.existing_tiers,
+        params.mode,
+        params.max_candidates_per_tier,
+    );
+    let content = match params.protocol {
         UpstreamProtocol::Openai => {
-            openai_auto_configure_content(state, classifier_model, upstream, prompt).await?
+            openai_auto_configure_content(state, params.classifier_model, params.upstream, prompt)
+                .await?
         }
         UpstreamProtocol::Anthropic => {
-            anthropic_auto_configure_content(state, classifier_model, upstream, prompt).await?
+            anthropic_auto_configure_content(
+                state,
+                params.classifier_model,
+                params.upstream,
+                prompt,
+            )
+            .await?
         }
         UpstreamProtocol::OpenAiOauth => {
             return Err(AppError::BadRequest(
@@ -1542,7 +1558,7 @@ async fn llm_auto_configure_suggestions(
         Ok(value) => value,
         Err(_) => serde_json::from_value(extract_json_object(&content)?)?,
     };
-    validate_llm_auto_configure_response(parsed, available)
+    validate_llm_auto_configure_response(parsed, params.available)
 }
 
 async fn openai_auto_configure_content(
@@ -1683,8 +1699,8 @@ fn auto_configure_prompt(
                 "protocol": item.protocol,
                 "channel_id": item.channel_id,
                 "channel_name": item.channel_name,
-                "input_price_usd_micros": item.input_price_usd_micros,
-                "output_price_usd_micros": item.output_price_usd_micros
+                "input_price_micros": item.input_price_micros,
+                "output_price_micros": item.output_price_micros
             })
         })
         .collect::<Vec<_>>();

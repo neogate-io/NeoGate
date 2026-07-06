@@ -14,7 +14,7 @@ export type GetUserKeysFilters = {
 export type CreditAccountType = 'project' | 'user_key' | 'user_key_model'
 
 export type AdjustCreditResponse = {
-  balance_micro_usd: number
+  balance_micros: number
 }
 
 export type CreatedUserKey = {
@@ -78,41 +78,41 @@ export function createUserKey(email: string, draftId: string, locale: string) {
 export function adjustCredit(
   creditAccountType: CreditAccountType,
   ownerId: number,
-  amountMicroUsd: number
+  amountMicros: number
 ) {
   return adminRequest<AdjustCreditResponse>('/api/admin/credits', {
     method: 'POST',
     body: JSON.stringify({
       credit_account_type: creditAccountType,
       owner_id: ownerId,
-      amount_micro_usd: amountMicroUsd,
-      reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
+      amount_micros: amountMicros,
+      reason: amountMicros > 0 ? 'recharge' : 'adjustment'
     })
   })
 }
 
-export function adjustDefaultProjectCredit(userId: number, amountMicroUsd: number) {
+export function adjustDefaultProjectCredit(userId: number, amountMicros: number) {
   return adminRequest<AdjustCreditResponse>(`/api/admin/users/${userId}/default-project-credit`, {
     method: 'POST',
     body: JSON.stringify({
-      amount_micro_usd: amountMicroUsd,
-      reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
+      amount_micros: amountMicros,
+      reason: amountMicros > 0 ? 'recharge' : 'adjustment'
     })
   })
 }
 
-export function adjustUserKeyModelCredit(userKeyId: number, model: string, amountMicroUsd: number) {
+export function adjustUserKeyModelCredit(userKeyId: number, model: string, amountMicros: number) {
   return adminRequest<{
     user_key_model_id: number
     credit_account_id: number
-    balance_micro_usd: number
+    balance_micros: number
   }>('/api/admin/user-key-model-credits', {
     method: 'POST',
     body: JSON.stringify({
       user_key_id: userKeyId,
       model,
-      amount_micro_usd: amountMicroUsd,
-      reason: amountMicroUsd > 0 ? 'recharge' : 'adjustment'
+      amount_micros: amountMicros,
+      reason: amountMicros > 0 ? 'recharge' : 'adjustment'
     })
   })
 }

@@ -27,7 +27,7 @@ pub(super) mod record {
         pub(in crate::usage) total_tokens: Option<i64>,
         pub(in crate::usage) billing_meter: BillingMeter,
         pub(in crate::usage) billable_units: i64,
-        pub(in crate::usage) cost_micro_usd: Option<i64>,
+        pub(in crate::usage) cost_micros: Option<i64>,
         pub(in crate::usage) billing_status: &'a str,
     }
 
@@ -41,7 +41,7 @@ pub(super) mod record {
             billable_units: billing
                 .map_or(item.billable_units, |billing| billing.billable_units)
                 .max(0),
-            cost_micro_usd: billing.map(|billing| billing.cost_micro_usd),
+            cost_micros: billing.map(|billing| billing.cost_micros),
             billing_status: billing.map_or("not_billed", |billing| billing.status.as_str()),
         }
     }
@@ -353,8 +353,8 @@ async fn flush_returned_billing_part(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     part: &DebitPart,
 ) -> AppResult<()> {
-    account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
-    account::decrement_reserved(tx, &part.credit_account, part.amount_micro_usd).await?;
+    account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
+    account::decrement_reserved(tx, &part.credit_account, part.amount_micros).await?;
     Ok(())
 }
 
@@ -370,13 +370,13 @@ async fn flush_unbilled_usage(
         "INSERT INTO usage
          (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
           relay_trace_id, relay_attempt, relay_final,
-          provider, model, upstream_model, routing_phase, status_code,
+          model, upstream_model, routing_phase, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
           cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
           audio_out_tokens, billing_meter, billable_units,
-          cost_micro_usd, billing_status, billing_transaction_id)
+          cost_micros, billing_status, billing_transaction_id)
          ",
     );
     query_builder.push_values(usages, |mut row, item| {
@@ -390,7 +390,6 @@ async fn flush_unbilled_usage(
             .push_bind(item.relay_trace_id)
             .push_bind(item.relay_attempt)
             .push_bind(item.relay_final)
-            .push_bind(&item.provider)
             .push_bind(item.model.as_deref())
             .push_bind(item.upstream_model.as_deref())
             .push_bind(&item.routing_phase)
@@ -424,7 +423,7 @@ async fn flush_unbilled_usage(
             .push_bind(item.token_usage.and_then(|usage| usage.audio_output_tokens))
             .push_bind(fields.billing_meter.as_str())
             .push_bind(fields.billable_units)
-            .push_bind(fields.cost_micro_usd)
+            .push_bind(fields.cost_micros)
             .push_bind(fields.billing_status)
             .push_bind(item.billing.as_ref().map(|billing| billing.transaction_id));
     });
@@ -441,17 +440,17 @@ async fn insert_usage(
         "INSERT INTO usage
          (user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id,
           relay_trace_id, relay_attempt, relay_final,
-          provider, model, upstream_model, routing_phase, status_code,
+          model, upstream_model, routing_phase, status_code,
           streamed, latency_ms, first_response_ms, output_tokens_per_second, error_summary,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
           cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
           audio_out_tokens, billing_meter, billable_units,
-          cost_micro_usd, billing_status, billing_transaction_id)
+          cost_micros, billing_status, billing_transaction_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-                 $31, $32, $33, $34)
+                 $31, $32, $33)
          RETURNING id",
     )
     .bind(item.user_id)
@@ -463,7 +462,6 @@ async fn insert_usage(
     .bind(item.relay_trace_id)
     .bind(item.relay_attempt)
     .bind(item.relay_final)
-    .bind(&item.provider)
     .bind(item.model.as_deref())
     .bind(item.upstream_model.as_deref())
     .bind(&item.routing_phase)
@@ -497,7 +495,7 @@ async fn insert_usage(
     .bind(item.token_usage.and_then(|usage| usage.audio_output_tokens))
     .bind(fields.billing_meter.as_str())
     .bind(fields.billable_units)
-    .bind(fields.cost_micro_usd)
+    .bind(fields.cost_micros)
     .bind(fields.billing_status)
     .bind(item.billing.as_ref().map(|billing| billing.transaction_id))
     .fetch_one(&mut **tx)
@@ -511,18 +509,18 @@ async fn flush_billing_part(
     billing: &BillingCharge,
     part: &DebitPart,
 ) -> AppResult<()> {
-    account::mark_allocation_consumed(tx, part.allocation_id, part.amount_micro_usd).await?;
+    account::mark_allocation_consumed(tx, part.allocation_id, part.amount_micros).await?;
     let balance_after =
-        account::debit_reserved_balance(tx, &part.credit_account, part.amount_micro_usd).await?;
+        account::debit_reserved_balance(tx, &part.credit_account, part.amount_micros).await?;
 
     sqlx::query(
         "INSERT INTO credit_ledger
-         (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
+         (credit_account_id, amount_micros, balance_after_micros, reason,
           usage_id, allocation_id, transaction_id, metadata)
          VALUES ($1, $2, $3, 'usage', $4, $5, $6, $7)",
     )
     .bind(part.credit_account.id)
-    .bind(-part.amount_micro_usd)
+    .bind(-part.amount_micros)
     .bind(balance_after)
     .bind(usage_id)
     .bind(part.allocation_id)
@@ -546,13 +544,13 @@ fn coalesce_debit_parts(parts: &[DebitPart]) -> Vec<DebitPart> {
     let mut indexes: HashMap<(DbId, DbId), usize> = HashMap::new();
 
     for part in parts {
-        if part.amount_micro_usd <= 0 {
+        if part.amount_micros <= 0 {
             continue;
         }
 
         let key = (part.credit_account.id, part.allocation_id);
         if let Some(&index) = indexes.get(&key) {
-            coalesced[index].amount_micro_usd += part.amount_micro_usd;
+            coalesced[index].amount_micros += part.amount_micros;
         } else {
             indexes.insert(key, coalesced.len());
             coalesced.push(part.clone());
@@ -577,7 +575,7 @@ pub(super) mod tests {
             total_tokens: Some(30),
             billing_meter: BillingMeter::Token,
             billable_units: 30,
-            cost_micro_usd: 300,
+            cost_micros: 300,
             status: "billed".to_string(),
             parts: Vec::new(),
             returned_parts: Vec::new(),
@@ -595,7 +593,6 @@ pub(super) mod tests {
             relay_trace_id: None,
             relay_attempt: 1,
             relay_final: true,
-            provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
@@ -634,7 +631,6 @@ pub(super) mod tests {
             relay_trace_id: None,
             relay_attempt: 1,
             relay_final: true,
-            provider: "openai".to_string(),
             model: Some("gpt-4.1".to_string()),
             upstream_model: Some("gpt-4.1".to_string()),
             routing_phase: "relay".to_string(),
@@ -668,7 +664,6 @@ pub(super) mod tests {
             decoded.billing.unwrap().transaction_id,
             charge.transaction_id
         );
-        assert_eq!(decoded.provider, "openai");
         assert_eq!(decoded.channel_key_id, Some(4));
     }
 
@@ -730,7 +725,7 @@ pub(super) mod tests {
             total_tokens: Some(30),
             billing_meter: BillingMeter::Token,
             billable_units: 30,
-            cost_micro_usd: 300,
+            cost_micros: 300,
             status: "billed".to_string(),
             parts: Vec::new(),
             returned_parts: Vec::new(),
@@ -743,7 +738,7 @@ pub(super) mod tests {
         assert_eq!(fields.total_tokens, Some(3));
         assert_eq!(fields.billing_meter, BillingMeter::Token);
         assert_eq!(fields.billable_units, 30);
-        assert_eq!(fields.cost_micro_usd, Some(300));
+        assert_eq!(fields.cost_micros, Some(300));
         assert_eq!(fields.billing_status, "billed");
     }
 
@@ -759,7 +754,7 @@ pub(super) mod tests {
         assert_eq!(fields.total_tokens, None);
         assert_eq!(fields.billing_meter, BillingMeter::Token);
         assert_eq!(fields.billable_units, 0);
-        assert_eq!(fields.cost_micro_usd, None);
+        assert_eq!(fields.cost_micros, None);
         assert_eq!(fields.billing_status, "not_billed");
     }
 
@@ -769,21 +764,21 @@ pub(super) mod tests {
             serde_json::from_value(serde_json::json!({
                 "credit_account": { "id": 7 },
                 "allocation_id": 101,
-                "amount_micro_usd": 30,
+                "amount_micros": 30,
                 "generation": 1
             }))
             .unwrap(),
             serde_json::from_value(serde_json::json!({
                 "credit_account": { "id": 7 },
                 "allocation_id": 101,
-                "amount_micro_usd": 20,
+                "amount_micros": 20,
                 "generation": 2
             }))
             .unwrap(),
             serde_json::from_value(serde_json::json!({
                 "credit_account": { "id": 7 },
                 "allocation_id": 102,
-                "amount_micro_usd": 5,
+                "amount_micros": 5,
                 "generation": 3
             }))
             .unwrap(),
@@ -793,8 +788,8 @@ pub(super) mod tests {
 
         assert_eq!(coalesced.len(), 2);
         assert_eq!(coalesced[0].allocation_id, 101);
-        assert_eq!(coalesced[0].amount_micro_usd, 50);
+        assert_eq!(coalesced[0].amount_micros, 50);
         assert_eq!(coalesced[1].allocation_id, 102);
-        assert_eq!(coalesced[1].amount_micro_usd, 5);
+        assert_eq!(coalesced[1].amount_micros, 5);
     }
 }

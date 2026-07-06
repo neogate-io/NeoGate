@@ -1,6 +1,6 @@
 [package]
 name = "neogate"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.94"
 license = "AGPL-3.0-only"
@@ -10,6 +10,7 @@ anyhow = "1.0.102"
 async-trait = "0.1.89"
 aes = "0.8.4"
 aes-gcm = "0.10.3"
+async-compression = { version = "0.4.42", default-features = false, features = ["gzip", "brotli", "zstd", "deflate", "zlib", "tokio"] }
 argon2 = "0.5.3"
 axum = { version = "0.8.9", features = ["macros", "json", "multipart"] }
 base64 = "0.22.1"

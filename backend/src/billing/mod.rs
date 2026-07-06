@@ -25,31 +25,31 @@ mod types;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
 pub use metering::{
-    cost_for_billable_usage, estimate_input_tokens, estimated_cost_micro_usd,
-    parse_usage_from_bytes, parse_usage_from_sse_data,
+    cost_for_billable_usage, estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes,
+    parse_usage_from_sse_data,
 };
 pub use types::{
     BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
-    DebitPart, Price, TokenUsage,
+    DebitPart, Price, PricingBasis, TokenUsage,
 };
 
-pub const MICRO_USD_PER_USD: i64 = 1_000_000;
+pub const MICROS_PER_MAJOR_UNIT: i64 = 1_000_000;
 pub const BILLABLE_PROVIDER_PRICE_CONDITION: &str = r#"
 (
     (billing_meter = 'token'
-        AND input_price_usd_micros >= 0
-        AND output_price_usd_micros >= 0)
+        AND input_price_micros >= 0
+        AND output_price_micros >= 0)
     OR (billing_meter = 'image'
-        AND unit_price_usd_micros > 0)
+        AND unit_price_micros > 0)
 )
 "#;
 pub const BILLABLE_PROVIDER_PRICE_CONDITION_PP: &str = r#"
 (
     (pp.billing_meter = 'token'
-        AND pp.input_price_usd_micros >= 0
-        AND pp.output_price_usd_micros >= 0)
+        AND pp.input_price_micros >= 0
+        AND pp.output_price_micros >= 0)
     OR (pp.billing_meter = 'image'
-        AND pp.unit_price_usd_micros > 0)
+        AND pp.unit_price_micros > 0)
 )
 "#;
 const ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT: usize = 20;
@@ -59,7 +59,7 @@ pub struct Billing {
     hot: Arc<dyn HotCreditStore>,
     price_cache: PriceCache,
     prefetch_locks: Arc<Vec<Mutex<()>>>,
-    prefetch_micro_usd: i64,
+    prefetch_micros: i64,
     default_output_tokens: i64,
 }
 
@@ -83,7 +83,7 @@ pub struct SettleRequest<'a> {
 #[derive(Debug, Default)]
 struct AllocationRecoverySummary {
     count: u64,
-    recovered_micro_usd: i64,
+    recovered_micros: i64,
     oldest_created_at: Option<DateTime<Utc>>,
     oldest_age_seconds: Option<i64>,
     samples: Vec<AllocationRecoverySample>,
@@ -93,10 +93,10 @@ struct AllocationRecoverySummary {
 struct AllocationRecoverySample {
     allocation_id: DbId,
     credit_account_id: DbId,
-    amount_micro_usd: i64,
-    consumed_micro_usd: i64,
-    already_returned_micro_usd: i64,
-    recovered_micro_usd: i64,
+    amount_micros: i64,
+    consumed_micros: i64,
+    already_returned_micros: i64,
+    recovered_micros: i64,
     age_seconds: i64,
 }
 
@@ -105,13 +105,10 @@ impl fmt::Debug for AllocationRecoverySample {
         f.debug_struct("AllocationRecoverySample")
             .field("allocation_id", &self.allocation_id)
             .field("credit_account_id", &self.credit_account_id)
-            .field("amount_micro_usd", &self.amount_micro_usd)
-            .field("consumed_micro_usd", &self.consumed_micro_usd)
-            .field(
-                "already_returned_micro_usd",
-                &self.already_returned_micro_usd,
-            )
-            .field("recovered_micro_usd", &self.recovered_micro_usd)
+            .field("amount_micros", &self.amount_micros)
+            .field("consumed_micros", &self.consumed_micros)
+            .field("already_returned_micros", &self.already_returned_micros)
+            .field("recovered_micros", &self.recovered_micros)
             .field("age_seconds", &self.age_seconds)
             .finish()
     }
@@ -136,14 +133,14 @@ impl Billing {
     pub fn new_memory(
         price_cache_ttl: Duration,
         price_cache_max_entries: usize,
-        prefetch_micro_usd: i64,
+        prefetch_micros: i64,
         default_output_tokens: i64,
     ) -> Self {
         Self {
             hot: Arc::new(MemoryHotCreditStore::default()),
             price_cache: PriceCache::new(price_cache_ttl, price_cache_max_entries),
             prefetch_locks: prefetch_locks(),
-            prefetch_micro_usd,
+            prefetch_micros,
             default_output_tokens,
         }
     }
@@ -153,14 +150,14 @@ impl Billing {
         key_prefix: String,
         price_cache_ttl: Duration,
         price_cache_max_entries: usize,
-        prefetch_micro_usd: i64,
+        prefetch_micros: i64,
         default_output_tokens: i64,
     ) -> AppResult<Self> {
         Ok(Self {
             hot: Arc::new(RedisHotCreditStore::connect(redis_url, key_prefix).await?),
             price_cache: PriceCache::new(price_cache_ttl, price_cache_max_entries),
             prefetch_locks: prefetch_locks(),
-            prefetch_micro_usd,
+            prefetch_micros,
             default_output_tokens,
         })
     }
@@ -216,7 +213,7 @@ impl Billing {
                     Ok(summary) if summary.count > 0 => {
                         tracing::info!(
                             count = summary.count,
-                            recovered_micro_usd = summary.recovered_micro_usd,
+                            recovered_micros = summary.recovered_micros,
                             oldest_created_at = ?summary.oldest_created_at,
                             oldest_age_seconds = summary.oldest_age_seconds,
                             samples = ?summary.samples,
@@ -249,12 +246,12 @@ impl Billing {
         &self,
         pool: &PgPool,
         accounts: BillingAccounts<'_>,
-        estimated_micro_usd: i64,
+        estimated_micros: i64,
     ) -> AppResult<DebitHold> {
-        if estimated_micro_usd <= 0 {
+        if estimated_micros <= 0 {
             return Ok(DebitHold {
                 transaction_id: Uuid::new_v4(),
-                estimated_micro_usd: 0,
+                estimated_micros: 0,
                 parts: Vec::new(),
                 charge_credit: true,
             });
@@ -263,12 +260,12 @@ impl Billing {
         let credit_accounts = ordered_credit_accounts(accounts);
         if let Some(parts) = self
             .hot
-            .try_debit_ordered(&credit_accounts, estimated_micro_usd)
+            .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         {
             return Ok(DebitHold {
                 transaction_id: Uuid::new_v4(),
-                estimated_micro_usd,
+                estimated_micros,
                 parts,
                 charge_credit: true,
             });
@@ -279,22 +276,22 @@ impl Billing {
 
         if let Some(parts) = self
             .hot
-            .try_debit_ordered(&credit_accounts, estimated_micro_usd)
+            .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         {
             return Ok(DebitHold {
                 transaction_id: Uuid::new_v4(),
-                estimated_micro_usd,
+                estimated_micros,
                 parts,
                 charge_credit: true,
             });
         }
 
-        self.prefetch(pool, accounts, estimated_micro_usd).await?;
+        self.prefetch(pool, accounts, estimated_micros).await?;
 
         let Some(parts) = self
             .hot
-            .try_debit_ordered(&credit_accounts, estimated_micro_usd)
+            .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         else {
             return Err(AppError::PaymentRequired);
@@ -302,7 +299,7 @@ impl Billing {
 
         Ok(DebitHold {
             transaction_id: Uuid::new_v4(),
-            estimated_micro_usd,
+            estimated_micros,
             parts,
             charge_credit: true,
         })
@@ -315,12 +312,11 @@ impl Billing {
 
         let mut tx = pool.begin().await?;
         for part in &hold.parts {
-            if part.amount_micro_usd <= 0 {
+            if part.amount_micros <= 0 {
                 continue;
             }
-            account::decrement_reserved(&mut tx, &part.credit_account, part.amount_micro_usd)
-                .await?;
-            account::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micro_usd)
+            account::decrement_reserved(&mut tx, &part.credit_account, part.amount_micros).await?;
+            account::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micros)
                 .await?;
         }
         tx.commit().await?;
@@ -338,11 +334,11 @@ impl Billing {
             usage,
             price,
         } = request;
-        let (cost_micro_usd, status) = match usage {
+        let (cost_micros, status) = match usage {
             Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
-            None => (hold.estimated_micro_usd, "usage_missing".to_string()),
+            None => (hold.estimated_micros, "usage_missing".to_string()),
         };
-        let cost_micro_usd = cost_micro_usd.max(0);
+        let cost_micros = cost_micros.max(0);
         let token_usage = usage.and_then(|usage| usage.token_usage);
         let billing_meter = usage.map_or(price.billing_meter, |usage| usage.meter);
         let billable_units = usage.map_or(0, |usage| usage.billable_units.max(0));
@@ -355,17 +351,17 @@ impl Billing {
                 total_tokens: token_usage.map(TokenUsage::total_tokens),
                 billing_meter,
                 billable_units,
-                cost_micro_usd,
+                cost_micros,
                 status,
                 parts: Vec::new(),
                 returned_parts: Vec::new(),
             });
         }
 
-        if cost_micro_usd >= hold.estimated_micro_usd {
-            if cost_micro_usd > hold.estimated_micro_usd {
-                let supplemental_micro_usd = cost_micro_usd - hold.estimated_micro_usd;
-                match self.reserve(pool, accounts, supplemental_micro_usd).await {
+        if cost_micros >= hold.estimated_micros {
+            if cost_micros > hold.estimated_micros {
+                let supplemental_micros = cost_micros - hold.estimated_micros;
+                match self.reserve(pool, accounts, supplemental_micros).await {
                     Ok(extra_hold) => {
                         let mut parts = hold.parts;
                         parts.extend(extra_hold.parts);
@@ -376,7 +372,7 @@ impl Billing {
                             total_tokens: token_usage.map(TokenUsage::total_tokens),
                             billing_meter,
                             billable_units,
-                            cost_micro_usd,
+                            cost_micros,
                             status,
                             parts,
                             returned_parts: Vec::new(),
@@ -396,8 +392,8 @@ impl Billing {
                 total_tokens: token_usage.map(TokenUsage::total_tokens),
                 billing_meter,
                 billable_units,
-                cost_micro_usd: hold.estimated_micro_usd,
-                status: if cost_micro_usd > hold.estimated_micro_usd {
+                cost_micros: hold.estimated_micros,
+                status: if cost_micros > hold.estimated_micros {
                     "undercharged".to_string()
                 } else {
                     status
@@ -407,7 +403,7 @@ impl Billing {
             });
         }
 
-        let mut remaining = cost_micro_usd;
+        let mut remaining = cost_micros;
         let mut consumed = Vec::new();
         let mut returned_parts = Vec::new();
         for part in hold.parts {
@@ -415,15 +411,15 @@ impl Billing {
                 returned_parts.push(part);
                 continue;
             }
-            let consume = part.amount_micro_usd.min(remaining);
+            let consume = part.amount_micros.min(remaining);
             remaining -= consume;
             consumed.push(DebitPart {
-                amount_micro_usd: consume,
+                amount_micros: consume,
                 ..part.clone()
             });
-            if part.amount_micro_usd > consume {
+            if part.amount_micros > consume {
                 returned_parts.push(DebitPart {
-                    amount_micro_usd: part.amount_micro_usd - consume,
+                    amount_micros: part.amount_micros - consume,
                     ..part
                 });
             }
@@ -436,7 +432,7 @@ impl Billing {
             total_tokens: token_usage.map(TokenUsage::total_tokens),
             billing_meter,
             billable_units,
-            cost_micro_usd,
+            cost_micros,
             status,
             parts: consumed,
             returned_parts,
@@ -447,11 +443,11 @@ impl Billing {
         &self,
         pool: &PgPool,
         accounts: BillingAccounts<'_>,
-        needed_micro_usd: i64,
+        needed_micros: i64,
     ) -> AppResult<()> {
         let mut tx = pool.begin().await?;
-        let mut remaining = needed_micro_usd;
-        let target = self.prefetch_micro_usd.max(needed_micro_usd);
+        let mut remaining = needed_micros;
+        let target = self.prefetch_micros.max(needed_micros);
         let mut allocations = Vec::new();
 
         if let Some(user_key_model_credit_account) = accounts.user_key_model_credit_account {
@@ -476,7 +472,7 @@ impl Billing {
         }
 
         if remaining > 0 {
-            let key_target = self.prefetch_micro_usd.max(remaining);
+            let key_target = self.prefetch_micros.max(remaining);
             if let Some((allocation_id, amount)) = allocate_user_key(
                 &mut tx,
                 accounts.user_key_id,
@@ -498,7 +494,7 @@ impl Billing {
         }
 
         if remaining > 0 {
-            let project_target = self.prefetch_micro_usd.max(remaining);
+            let project_target = self.prefetch_micros.max(remaining);
             if let Some((allocation_id, amount)) = allocate_project(
                 &mut tx,
                 accounts.project_id,
@@ -631,11 +627,11 @@ impl PriceCache {
         let row = sqlx::query(
             r#"
             WITH base_price AS (
-                SELECT input_price_usd_micros, output_price_usd_micros,
-                       cache_read_price_usd_micros,
-                       cache_write_price_usd_micros,
+                SELECT input_price_micros, output_price_micros,
+                       cache_read_price_micros,
+                       cache_write_price_micros,
                        billing_meter,
-                       unit_price_usd_micros
+                       unit_price_micros
                 FROM provider_price
                 WHERE provider = $1 AND model = $2 AND enabled = TRUE
             ),
@@ -650,28 +646,28 @@ impl PriceCache {
                 LIMIT 1
             )
             SELECT
-                (base_price.input_price_usd_micros *
+                (base_price.input_price_micros *
                     COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                    AS input_price_usd_micros,
-                (base_price.output_price_usd_micros *
+                    AS input_price_micros,
+                (base_price.output_price_micros *
                     COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                    AS output_price_usd_micros,
+                    AS output_price_micros,
                 CASE
-                    WHEN base_price.cache_read_price_usd_micros IS NULL THEN NULL
-                    ELSE (base_price.cache_read_price_usd_micros *
+                    WHEN base_price.cache_read_price_micros IS NULL THEN NULL
+                    ELSE (base_price.cache_read_price_micros *
                         COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                END AS cache_read_price_usd_micros,
+                END AS cache_read_price_micros,
                 CASE
-                    WHEN base_price.cache_write_price_usd_micros IS NULL THEN NULL
-                    ELSE (base_price.cache_write_price_usd_micros *
+                    WHEN base_price.cache_write_price_micros IS NULL THEN NULL
+                    ELSE (base_price.cache_write_price_micros *
                         COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                END AS cache_write_price_usd_micros,
+                END AS cache_write_price_micros,
                 base_price.billing_meter,
                 CASE
-                    WHEN base_price.unit_price_usd_micros IS NULL THEN NULL
-                    ELSE (base_price.unit_price_usd_micros *
+                    WHEN base_price.unit_price_micros IS NULL THEN NULL
+                    ELSE (base_price.unit_price_micros *
                         COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                END AS unit_price_usd_micros
+                END AS unit_price_micros
             FROM base_price
             LEFT JOIN policy ON TRUE
             "#,
@@ -686,15 +682,15 @@ impl PriceCache {
         })?;
 
         let price = Price {
-            input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-            output_price_usd_micros: row.try_get("output_price_usd_micros")?,
-            cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
-            cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+            input_price_micros: row.try_get("input_price_micros")?,
+            output_price_micros: row.try_get("output_price_micros")?,
+            cache_read_price_micros: row.try_get("cache_read_price_micros")?,
+            cache_write_price_micros: row.try_get("cache_write_price_micros")?,
             billing_meter: BillingMeter::from_strict_str(
                 &row.try_get::<String, _>("billing_meter")?,
             )
             .map_err(AppError::BadRequest)?,
-            unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+            unit_price_micros: row.try_get("unit_price_micros")?,
         };
         if !self.ttl.is_zero() {
             let now = Instant::now();
@@ -733,10 +729,10 @@ async fn allocate_user_key(
     user_key_id: DbId,
     user_id: DbId,
     credit_account: &CreditAccountId,
-    target_micro_usd: i64,
+    target_micros: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
-        "SELECT w.balance_micro_usd, w.reserved_micro_usd
+        "SELECT w.balance_micros, w.reserved_micros
          FROM user_key uk
          JOIN credit_account w ON w.owner_type = 'user_key' AND w.owner_id = uk.id
          WHERE uk.id = $1 AND uk.user_id = $2 AND w.id = $3
@@ -750,9 +746,9 @@ async fn allocate_user_key(
     let Some(row) = row else {
         return Ok(None);
     };
-    let balance: i64 = row.try_get("balance_micro_usd")?;
-    let reserved: i64 = row.try_get("reserved_micro_usd")?;
-    reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
+    let balance: i64 = row.try_get("balance_micros")?;
+    let reserved: i64 = row.try_get("reserved_micros")?;
+    reserve_available_credit(tx, credit_account, balance, reserved, target_micros).await
 }
 
 async fn allocate_user_key_model(
@@ -760,10 +756,10 @@ async fn allocate_user_key_model(
     user_key_id: DbId,
     user_id: DbId,
     credit_account: &CreditAccountId,
-    target_micro_usd: i64,
+    target_micros: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
-        "SELECT w.balance_micro_usd, w.reserved_micro_usd
+        "SELECT w.balance_micros, w.reserved_micros
          FROM user_key_model ukm
          JOIN user_key uk ON uk.id = ukm.user_key_id
          JOIN credit_account w ON w.owner_type = 'user_key_model' AND w.owner_id = ukm.id
@@ -781,19 +777,19 @@ async fn allocate_user_key_model(
     let Some(row) = row else {
         return Ok(None);
     };
-    let balance: i64 = row.try_get("balance_micro_usd")?;
-    let reserved: i64 = row.try_get("reserved_micro_usd")?;
-    reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
+    let balance: i64 = row.try_get("balance_micros")?;
+    let reserved: i64 = row.try_get("reserved_micros")?;
+    reserve_available_credit(tx, credit_account, balance, reserved, target_micros).await
 }
 
 async fn allocate_project(
     tx: &mut Transaction<'_, Postgres>,
     project_id: DbId,
     credit_account: &CreditAccountId,
-    target_micro_usd: i64,
+    target_micros: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let row = sqlx::query(
-        r#"SELECT w.balance_micro_usd, w.reserved_micro_usd
+        r#"SELECT w.balance_micros, w.reserved_micros
            FROM project p
            JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
            WHERE p.id = $1 AND w.id = $2
@@ -806,9 +802,9 @@ async fn allocate_project(
     let Some(row) = row else {
         return Ok(None);
     };
-    let balance: i64 = row.try_get("balance_micro_usd")?;
-    let reserved: i64 = row.try_get("reserved_micro_usd")?;
-    reserve_available_credit(tx, credit_account, balance, reserved, target_micro_usd).await
+    let balance: i64 = row.try_get("balance_micros")?;
+    let reserved: i64 = row.try_get("reserved_micros")?;
+    reserve_available_credit(tx, credit_account, balance, reserved, target_micros).await
 }
 
 async fn reserve_available_credit(
@@ -816,17 +812,17 @@ async fn reserve_available_credit(
     credit_account: &CreditAccountId,
     balance: i64,
     reserved: i64,
-    target_micro_usd: i64,
+    target_micros: i64,
 ) -> AppResult<Option<(DbId, i64)>> {
     let available = (balance - reserved).max(0);
-    let amount = target_micro_usd.min(available);
+    let amount = target_micros.min(available);
     if amount <= 0 {
         return Ok(None);
     }
 
     sqlx::query(
         "UPDATE credit_account
-         SET reserved_micro_usd = reserved_micro_usd + $2,
+         SET reserved_micros = reserved_micros + $2,
              updated_at = now()
          WHERE id = $1",
     )
@@ -835,7 +831,7 @@ async fn reserve_available_credit(
     .execute(&mut **tx)
     .await?;
     let row = sqlx::query(
-        "INSERT INTO credit_allocation (credit_account_id, amount_micro_usd)
+        "INSERT INTO credit_allocation (credit_account_id, amount_micros)
          VALUES ($1, $2)
          RETURNING id",
     )
@@ -855,7 +851,7 @@ async fn fetch_stale_allocations(
          FROM credit_allocation
          WHERE status = 'active'
            AND created_at < $1
-           AND consumed_micro_usd + returned_micro_usd < amount_micro_usd
+           AND consumed_micros + returned_micros < amount_micros
            AND NOT EXISTS (
                SELECT 1
                FROM billing b
@@ -904,7 +900,7 @@ async fn recover_allocations_in_db(
         .collect::<Vec<_>>();
     let mut tx = pool.begin().await?;
     let rows = sqlx::query(
-        "SELECT id, credit_account_id, amount_micro_usd, consumed_micro_usd, returned_micro_usd, created_at
+        "SELECT id, credit_account_id, amount_micros, consumed_micros, returned_micros, created_at
          FROM credit_allocation
          WHERE id = ANY($1) AND status = 'active'
          ORDER BY id ASC
@@ -919,9 +915,9 @@ async fn recover_allocations_in_db(
     for row in rows {
         let allocation_id: DbId = row.try_get("id")?;
         let credit_account_id: DbId = row.try_get("credit_account_id")?;
-        let amount: i64 = row.try_get("amount_micro_usd")?;
-        let consumed: i64 = row.try_get("consumed_micro_usd")?;
-        let returned: i64 = row.try_get("returned_micro_usd")?;
+        let amount: i64 = row.try_get("amount_micros")?;
+        let consumed: i64 = row.try_get("consumed_micros")?;
+        let returned: i64 = row.try_get("returned_micros")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let recover_amount = amount - consumed - returned;
         if recover_amount <= 0 {
@@ -938,7 +934,7 @@ async fn recover_allocations_in_db(
 
         sqlx::query(
             "INSERT INTO credit_ledger
-             (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
+             (credit_account_id, amount_micros, balance_after_micros, reason,
               allocation_id, transaction_id, metadata)
              VALUES ($1, 0, $2, 'allocation_recover', $3, $4, $5)",
         )
@@ -947,12 +943,12 @@ async fn recover_allocations_in_db(
         .bind(allocation_id)
         .bind(Uuid::new_v4())
         .bind(serde_json::json!({
-            "returned_reserved_micro_usd": recover_amount
+            "returned_reserved_micros": recover_amount
         }))
         .execute(&mut *tx)
         .await?;
         summary.count += 1;
-        summary.recovered_micro_usd += recover_amount;
+        summary.recovered_micros += recover_amount;
         if summary
             .oldest_created_at
             .is_none_or(|oldest| created_at < oldest)
@@ -964,10 +960,10 @@ async fn recover_allocations_in_db(
             summary.samples.push(AllocationRecoverySample {
                 allocation_id,
                 credit_account_id,
-                amount_micro_usd: amount,
-                consumed_micro_usd: consumed,
-                already_returned_micro_usd: returned,
-                recovered_micro_usd: recover_amount,
+                amount_micros: amount,
+                consumed_micros: consumed,
+                already_returned_micros: returned,
+                recovered_micros: recover_amount,
                 age_seconds,
             });
         } else {
@@ -1006,12 +1002,12 @@ mod tests {
 
     fn token_price() -> Price {
         Price {
-            input_price_usd_micros: MICRO_USD_PER_USD,
-            output_price_usd_micros: MICRO_USD_PER_USD,
-            cache_read_price_usd_micros: None,
-            cache_write_price_usd_micros: None,
+            input_price_micros: MICROS_PER_MAJOR_UNIT,
+            output_price_micros: MICROS_PER_MAJOR_UNIT,
+            cache_read_price_micros: None,
+            cache_write_price_micros: None,
             billing_meter: BillingMeter::Token,
-            unit_price_usd_micros: None,
+            unit_price_micros: None,
         }
     }
 
@@ -1039,7 +1035,7 @@ mod tests {
         assert_eq!(
             hold.parts
                 .iter()
-                .map(|part| part.amount_micro_usd)
+                .map(|part| part.amount_micros)
                 .sum::<i64>(),
             100
         );
@@ -1071,7 +1067,7 @@ mod tests {
             charge
                 .parts
                 .iter()
-                .map(|part| part.amount_micro_usd)
+                .map(|part| part.amount_micros)
                 .sum::<i64>(),
             40
         );
@@ -1079,7 +1075,7 @@ mod tests {
             charge
                 .returned_parts
                 .iter()
-                .map(|part| part.amount_micro_usd)
+                .map(|part| part.amount_micros)
                 .sum::<i64>(),
             60
         );

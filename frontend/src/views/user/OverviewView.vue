@@ -4,11 +4,13 @@ import { Calendar, DataLine, Document, Key, Monitor, Wallet } from '@element-plu
 import { RouterLink } from 'vue-router'
 import { getUserOverview } from '../../api/overview'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
-import { formatMicroUsd, toDateKey } from '../../utils/format'
+import { toDateKey } from '../../utils/format'
 import type { ServicePolicy } from '../../api/policy'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const { formatMoney } = useBillingCurrency()
 const {
   data: overview,
   loading,
@@ -27,7 +29,7 @@ const usageMetricCards = computed(() => [
   {
     key: 'todayCost',
     label: t('todayCost'),
-    value: formatMicroUsd(overview.value?.today_cost_micro_usd),
+    value: formatMoney(overview.value?.today_cost_micros, locale.value, 2),
     trend: buildTrend(
       todayCost.value,
       yesterdayCost.value,
@@ -39,7 +41,7 @@ const usageMetricCards = computed(() => [
   {
     key: 'monthCost',
     label: t('monthCost'),
-    value: formatMicroUsd(overview.value?.month_cost_micro_usd),
+    value: formatMoney(overview.value?.month_cost_micros, locale.value, 2),
     trend: buildTrend(
       currentMonthCost.value,
       previousMonthSamePeriodCost.value,
@@ -78,7 +80,7 @@ const quickActions = computed(() => [
 const dailyCostMap = computed(() => {
   const map = new Map<string, number>()
   for (const item of overview.value?.daily_costs ?? []) {
-    map.set(item.date, item.cost_micro_usd)
+    map.set(item.date, item.cost_micros)
   }
   return map
 })
@@ -92,15 +94,15 @@ const chartPoints = computed(() => {
     return {
       date: key,
       label: formatChartDate(date),
-      cost_micro_usd: dailyCostMap.value.get(key) ?? 0
+      cost_micros: dailyCostMap.value.get(key) ?? 0
     }
   })
-  const maxCost = Math.max(...days.map((item) => item.cost_micro_usd), 1)
+  const maxCost = Math.max(...days.map((item) => item.cost_micros), 1)
 
   return days.map((item, index) => ({
     ...item,
     x: (index / 29) * 100,
-    y: 88 - (item.cost_micro_usd / maxCost) * 72
+    y: 88 - (item.cost_micros / maxCost) * 72
   }))
 })
 
@@ -127,8 +129,8 @@ const chartTooltipStyle = computed(() => {
   }
 })
 const balanceEstimate = computed(() => {
-  const available = overview.value?.available_micro_usd ?? 0
-  const recentCosts = chartPoints.value.slice(-7).map((item) => item.cost_micro_usd)
+  const available = overview.value?.available_micros ?? 0
+  const recentCosts = chartPoints.value.slice(-7).map((item) => item.cost_micros)
   const averageDailyCost = recentCosts.reduce((sum, cost) => sum + cost, 0) / recentCosts.length
 
   if (available <= 0 || averageDailyCost <= 0) return t('balanceEstimateUnavailable')
@@ -143,7 +145,7 @@ const yesterdayCost = computed(() => {
   date.setDate(date.getDate() - 1)
   return getCostForDate(date)
 })
-const currentMonthCost = computed(() => overview.value?.month_cost_micro_usd ?? 0)
+const currentMonthCost = computed(() => overview.value?.month_cost_micros ?? 0)
 const previousMonthSamePeriodCost = computed(() => {
   const today = new Date()
   const dayCount = today.getDate()
@@ -256,7 +258,7 @@ onBeforeUnmount(() => {
           <span>{{ t('currentBalance') }}</span>
         </div>
         <div class="overview-balance-value">
-          <strong>{{ formatMicroUsd(overview?.available_micro_usd) }}</strong>
+          <strong>{{ formatMoney(overview?.available_micros, locale, 2) }}</strong>
           <small class="overview-balance-estimate">{{ balanceEstimate }}</small>
         </div>
         <el-button
@@ -300,7 +302,7 @@ onBeforeUnmount(() => {
       <div class="user-section-header">
         <div>
           <span class="user-eyebrow">{{ t('trendSummary') }}</span>
-          <h3>{{ formatMicroUsd(overview?.month_cost_micro_usd) }}</h3>
+          <h3>{{ formatMoney(overview?.month_cost_micros, locale, 2) }}</h3>
         </div>
         <span>{{ t('trendPill') }}</span>
       </div>
@@ -327,7 +329,7 @@ onBeforeUnmount(() => {
             height="100"
             tabindex="0"
             role="button"
-            :aria-label="`${formatFullChartDate(point.date)} ${formatMicroUsd(point.cost_micro_usd)}`"
+            :aria-label="`${formatFullChartDate(point.date)} ${formatMoney(point.cost_micros, locale, 2)}`"
             @mouseenter="hoveredChartIndex = index"
             @mousemove="hoveredChartIndex = index"
             @focus="hoveredChartIndex = index"
@@ -336,7 +338,7 @@ onBeforeUnmount(() => {
         </svg>
         <div v-if="hoveredChartPoint" class="overview-chart-tooltip" :style="chartTooltipStyle">
           <span>{{ formatFullChartDate(hoveredChartPoint.date) }}</span>
-          <strong>{{ formatMicroUsd(hoveredChartPoint.cost_micro_usd) }}</strong>
+          <strong>{{ formatMoney(hoveredChartPoint.cost_micros, locale, 2) }}</strong>
         </div>
       </div>
       <div class="overview-chart-axis">

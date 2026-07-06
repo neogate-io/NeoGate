@@ -161,6 +161,12 @@ export const router = createRouter({
           meta: { messageKey: 'smtpSettings', subtitleKey: 'adminSmtpSubtitle' }
         },
         {
+          path: 'settings/site',
+          name: 'siteSettings',
+          component: () => import('../views/admin/SiteSettingsView.vue'),
+          meta: { messageKey: 'siteSettingsPage', subtitleKey: 'adminSiteSettingsSubtitle' }
+        },
+        {
           path: 'settings/payment',
           name: 'paymentSettings',
           component: () => import('../views/admin/PaymentSettingsView.vue'),

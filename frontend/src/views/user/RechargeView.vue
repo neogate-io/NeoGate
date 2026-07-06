@@ -8,13 +8,14 @@ import {
   type PaymentOrder,
   type PayType
 } from '../../api/recharge'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { readError } from '../../utils/errors'
-import { formatDateTime, formatMicroUsd, usdToMicroUsd } from '../../utils/format'
+import { formatDateTime } from '../../utils/format'
 
 const { locale, t } = useLocale()
-const usdPerCny = 5
+const { formatMoney, majorToMicroAmount } = useBillingCurrency()
 const selectedAmount = ref(100)
 const customAmount = ref<number | null>(null)
 const payType = ref<PayType>('wxpay')
@@ -45,24 +46,20 @@ const paymentOptions = computed(() => [
   { label: t('alipay'), value: 'alipay' as PayType, icon: '/icons/alipay.svg' }
 ])
 
-const amountUsd = computed(() => {
+const amountMajor = computed(() => {
   const custom = Number(customAmount.value)
   return Number.isInteger(custom) && custom > 0 ? custom : selectedAmount.value
 })
 
-const amountMicroUsd = computed(() => usdToMicroUsd(amountUsd.value))
-const payableCny = computed(() => amountUsd.value / usdPerCny)
+const amountMicro = computed(() => majorToMicroAmount(amountMajor.value))
 
 function selectPlan(amount: number) {
   selectedAmount.value = amount
   customAmount.value = null
 }
 
-function formatUsdAmount(amount: number) {
-  return `$${amount.toLocaleString(locale.value, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
-  })}`
+function formatMajorAmount(amount: number) {
+  return formatMoney(majorToMicroAmount(amount), locale.value, 0)
 }
 
 function formatPayable(order: { payable_amount_minor: number; currency: string }) {
@@ -117,9 +114,9 @@ async function reloadOrders() {
 
 async function submitRecharge() {
   if (
-    !Number.isFinite(amountUsd.value) ||
-    !Number.isInteger(amountUsd.value) ||
-    amountUsd.value <= 0
+    !Number.isFinite(amountMajor.value) ||
+    !Number.isInteger(amountMajor.value) ||
+    amountMajor.value <= 0
   ) {
     ElMessage.error(t('rechargeAmountRequired'))
     return
@@ -128,7 +125,7 @@ async function submitRecharge() {
   await withLoading(submitting, async () => {
     try {
       const result = await createRechargeOrder(
-        amountMicroUsd.value,
+        amountMicro.value,
         payType.value,
         paymentReturnUrl()
       )
@@ -171,7 +168,7 @@ async function submitRecharge() {
               <span class="plan-name">{{ plan.name }}</span>
               <span v-if="plan.recommended" class="plan-badge">{{ t('recommended') }}</span>
             </span>
-            <strong>{{ formatUsdAmount(plan.amount) }}</strong>
+            <strong>{{ formatMajorAmount(plan.amount) }}</strong>
             <span class="plan-hint">{{ plan.hint }}</span>
             <el-icon v-if="customAmount == null && selectedAmount === plan.amount"
               ><Check
@@ -211,16 +208,12 @@ async function submitRecharge() {
         </div>
         <div class="recharge-summary-total">
           <span>{{ t('payAmount') }}</span>
-          <strong>{{ formatCny(payableCny) }}</strong>
+          <strong>{{ formatMoney(amountMicro, locale, 2) }}</strong>
         </div>
         <dl class="recharge-summary-list">
           <div>
             <dt>{{ t('creditedAmount') }}</dt>
-            <dd>{{ formatUsdAmount(amountUsd) }}</dd>
-          </div>
-          <div>
-            <dt>{{ t('exchangeRate') }}</dt>
-            <dd>{{ t('oneUsdEqualsCny') }}</dd>
+            <dd>{{ formatMajorAmount(amountMajor) }}</dd>
           </div>
           <div>
             <dt>{{ t('paymentMethod') }}</dt>
@@ -291,7 +284,7 @@ async function submitRecharge() {
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
           <el-table-column :label="t('amount')" min-width="110">
-            <template #default="{ row }">{{ formatMicroUsd(row.amount_micro_usd) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.amount_micros, locale, 2) }}</template>
           </el-table-column>
           <el-table-column :label="t('payAmount')" min-width="120">
             <template #default="{ row }">{{ formatPayable(row) }}</template>
@@ -326,7 +319,7 @@ async function submitRecharge() {
             </div>
             <div>
               <span>{{ t('amount') }}</span>
-              <strong>{{ formatMicroUsd(row.amount_micro_usd) }}</strong>
+              <strong>{{ formatMoney(row.amount_micros, locale, 2) }}</strong>
             </div>
             <div>
               <span>{{ t('payAmount') }}</span>

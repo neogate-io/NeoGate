@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
-import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
@@ -12,12 +12,12 @@ import {
   downloadCsv,
   formatDateTime,
   formatDurationMs,
-  formatMicroUsd,
   formatNumber,
   formatTokenRate
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { formatMoney } = useBillingCurrency()
 const DEFAULT_PAGE_SIZE = 20
 const loadingRowCount = 3
 const dateRange = ref<[Date, Date] | null>(null)
@@ -186,7 +186,6 @@ async function exportUsage() {
   const headers = [
     t('time'),
     t('model'),
-    t('provider'),
     t('inputShort'),
     t('outputShort'),
     t('tokens'),
@@ -201,7 +200,6 @@ async function exportUsage() {
   const rows = exportPage.items.map((row) => [
     formatFullTime(row.created_at),
     row.model || '',
-    row.provider,
     row.input_tokens ?? '',
     row.output_tokens ?? '',
     row.total_tokens ?? '',
@@ -210,7 +208,7 @@ async function exportUsage() {
     formatDurationMs(row.latency_ms),
     formatDurationMs(row.first_response_ms),
     formatTokenRate(row.output_tokens_per_second, locale.value),
-    formatMicroUsd(row.cost_micro_usd, 6),
+    formatMoney(row.cost_micros, locale.value, 6),
     statusLabel(row.status_code)
   ])
   downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
@@ -261,7 +259,6 @@ async function exportUsage() {
             <span class="usage-time">{{ formatFullTime(row.created_at) }}</span>
             <span class="usage-model-cell">
               <span class="usage-model-pill">
-                <ProviderIcon :provider="row.provider" />
                 <span>{{ row.model || '-' }}</span>
               </span>
             </span>
@@ -284,7 +281,7 @@ async function exportUsage() {
                 {{ formatTokenRate(row.output_tokens_per_second, locale) }}</small
               >
             </span>
-            <span class="usage-cost">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
+            <span class="usage-cost">{{ formatMoney(row.cost_micros, locale, 6) }}</span>
             <button class="usage-details-label" type="button" @click="toggleUsageDetails">
               {{ t('viewDetails') }}
             </button>
@@ -293,10 +290,6 @@ async function exportUsage() {
             <section class="usage-detail-section">
               <h4>调用信息</h4>
               <dl class="usage-detail-list">
-                <div>
-                  <dt>{{ t('provider') }}</dt>
-                  <dd>{{ row.provider }}</dd>
-                </div>
                 <div>
                   <dt>{{ t('model') }}</dt>
                   <dd>{{ row.model || '-' }}</dd>
@@ -398,7 +391,7 @@ async function exportUsage() {
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('cost') }}</dt>
-                  <dd>{{ formatMicroUsd(row.cost_micro_usd, 6) }}</dd>
+                  <dd>{{ formatMoney(row.cost_micros, locale, 6) }}</dd>
                 </div>
                 <div>
                   <dt>{{ t('billingStatus') }}</dt>
@@ -697,22 +690,6 @@ async function exportUsage() {
   justify-self: start;
   max-width: 100%;
   min-height: 30px;
-}
-
-.usage-model-pill :deep(.provider-icon) {
-  height: 28px;
-  min-width: 28px;
-  width: 28px;
-}
-
-.usage-model-pill :deep(.provider-icon.has-image img) {
-  height: 24px;
-  width: 24px;
-}
-
-.usage-model-pill :deep(.provider-icon-symbol) {
-  height: 20px;
-  width: 20px;
 }
 
 .usage-model-pill > span {

@@ -7,27 +7,31 @@ import {
   getAdminUsageStatisticsModels,
   getAdminUsageStatisticsOptions,
   getAdminUsageStatisticsSummary,
+  getAdminUsageStatisticsTimeSeries,
   getAdminUsageStatisticsUsers,
   type ModelUsageStatistics,
+  type ModelUsageTimeSeriesPoint,
   type UsageStatisticsExportScope,
   type UsageStatisticsPage,
   type UsageStatisticsQuery,
   type UsageStatisticsSummary,
+  type UsageStatisticsTimeSeries,
   type UserUsageStatistics
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import {
   downloadBlob,
   formatDurationMs,
-  formatMicroUsd,
   formatNumber,
-  microUsdToUsd,
+  formatTokenRate,
+  microAmountToMajor,
   toDateKey
 } from '../../utils/format'
-import ProviderIcon from '../../components/common/ProviderIcon.vue'
 
 const { locale, t } = useLocale()
+const { billingCurrency, formatMoney } = useBillingCurrency()
 const AdminUsageChart = defineAsyncComponent(
   () => import('../../components/admin/common/AdminUsageChart.vue')
 )
@@ -35,7 +39,6 @@ const AdminUsageChart = defineAsyncComponent(
 type StatisticsFilters = {
   dateRange: string[] | null
   userQuery: string
-  provider: string
   model: string
   billingMeter: '' | 'token' | 'image'
 }
@@ -43,7 +46,6 @@ type StatisticsFilters = {
 const statisticsFilters = reactive<StatisticsFilters>({
   dateRange: defaultStatisticsRange(30),
   userQuery: '',
-  provider: '',
   model: '',
   billingMeter: ''
 })
@@ -52,6 +54,9 @@ const statisticsUsersPageSize = ref(20)
 const statisticsModelsPage = ref(1)
 const statisticsModelsPageSize = ref(20)
 const statisticsExporting = ref(false)
+const tokenTrendMode = ref<'total' | 'input' | 'output'>('total')
+const requestTrendMode = ref<'total' | 'errors' | 'errorRate'>('total')
+const performanceTrendMode = ref<'latency' | 'firstResponse' | 'throughput'>('latency')
 
 const statisticsBaseQuery = computed<UsageStatisticsQuery>(() => {
   const [start, end] = statisticsFilters.dateRange ?? []
@@ -59,7 +64,6 @@ const statisticsBaseQuery = computed<UsageStatisticsQuery>(() => {
     start,
     end,
     user_query: statisticsFilters.userQuery.trim() || undefined,
-    provider: statisticsFilters.provider || undefined,
     model: statisticsFilters.model || undefined,
     billing_meter: statisticsFilters.billingMeter || undefined,
     sort: 'cost_desc'
@@ -107,7 +111,20 @@ const {
   reload: reloadStatisticsOptions
 } = useAsyncData(
   () => getAdminUsageStatisticsOptions(statisticsBaseQuery.value),
-  { providers: [], models: [], users: [] }
+  { models: [], users: [] }
+)
+const {
+  data: statisticsTimeSeries,
+  loading: statisticsTimeSeriesLoading,
+  reload: reloadStatisticsTimeSeries
+} = useAsyncData(
+  () =>
+    getAdminUsageStatisticsTimeSeries({
+      ...statisticsBaseQuery.value,
+      granularity: 'auto',
+      series_limit: 8
+    }),
+  emptyStatisticsTimeSeries()
 )
 
 const statisticsLoading = computed(
@@ -115,15 +132,12 @@ const statisticsLoading = computed(
     statisticsSummaryLoading.value ||
     statisticsUsersLoading.value ||
     statisticsModelsLoading.value ||
+    statisticsTimeSeriesLoading.value ||
     statisticsOptionsLoading.value
 )
 const statisticsInitialLoading = computed(() => !statisticsSummaryLoaded.value)
 const statisticsEmpty = computed(() => statisticsSummary.value.totals.request_count === 0)
-const filteredModelOptions = computed(() =>
-  statisticsOptions.value.models.filter(
-    (item) => !statisticsFilters.provider || item.provider === statisticsFilters.provider
-  )
-)
+const filteredModelOptions = computed(() => statisticsOptions.value.models)
 const activeQuickRange = computed(() => {
   for (const days of [7, 30, 90]) {
     const [start, end] = defaultStatisticsRange(days)
@@ -134,9 +148,19 @@ const activeQuickRange = computed(() => {
   return null
 })
 const dailyChartRows = computed(() => filledDailyRows(statisticsSummary.value))
+const timelineRows = computed(() =>
+  statisticsTimeSeries.value.points.length > 0
+    ? statisticsTimeSeries.value.points
+    : dailyChartRows.value.map((item) => ({
+        ...item,
+        avg_first_response_ms: null,
+        avg_output_tokens_per_second: null
+      }))
+)
+const modelSeriesRows = computed(() => statisticsTimeSeries.value.model_points)
 const costTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#2563eb'],
-  grid: { left: 12, right: 18, top: 28, bottom: 28, containLabel: true },
+  grid: { left: 12, right: 18, top: 28, bottom: 28, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
   tooltip: {
     trigger: 'axis',
     formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
@@ -148,7 +172,10 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
   },
   yAxis: {
     type: 'value',
-    axisLabel: { color: '#667085', formatter: (value: number) => `$${value}` },
+    axisLabel: {
+      color: '#667085',
+      formatter: (value: number) => `${billingCurrency.value === 'CNY' ? '¥' : '$'}${value}`
+    },
     splitLine: { lineStyle: { color: '#edf2f7' } }
   },
   series: [
@@ -157,13 +184,13 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
       type: 'line',
       smooth: true,
       areaStyle: { opacity: 0.12 },
-      data: dailyChartRows.value.map((item) => Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)))
+      data: dailyChartRows.value.map((item) => Number(microAmountToMajor(item.cost_micros).toFixed(6)))
     }
   ]
 }))
 const requestTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#16a34a'],
-  grid: { left: 12, right: 18, top: 28, bottom: 28, containLabel: true },
+  grid: { left: 12, right: 18, top: 28, bottom: 28, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
   tooltip: {
     trigger: 'axis',
     formatter: (params: unknown) => trendTooltip(params, t('requestCount'), 'number')
@@ -191,7 +218,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
   const rows = [...statisticsSummary.value.top_users].reverse()
   return {
     color: ['#0f766e'],
-    grid: { left: 12, right: 24, top: 18, bottom: 24, containLabel: true },
+    grid: { left: 12, right: 24, top: 18, bottom: 24, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
@@ -213,7 +240,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
         type: 'bar',
         barMaxWidth: 16,
         data: rows.map((item) => ({
-          value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)),
+          value: Number(microAmountToMajor(item.cost_micros).toFixed(6)),
           userQuery: item.user_id != null ? String(item.user_id) : item.user_display_name
         }))
       }
@@ -222,7 +249,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
 })
 const topModelsOption = computed<EChartsCoreOption>(() => ({
   color: ['#7c3aed'],
-  grid: { left: 12, right: 18, top: 28, bottom: 54, containLabel: true },
+  grid: { left: 12, right: 18, top: 28, bottom: 54, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
   tooltip: {
     trigger: 'axis',
     axisPointer: { type: 'shadow' },
@@ -230,7 +257,9 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
   },
   xAxis: {
     type: 'category',
-    data: statisticsSummary.value.top_models.map((item) => modelDisplay(item.provider, item.model)),
+    data: statisticsSummary.value.top_models.map((item) =>
+      modelDisplay(item.channel_name, item.model)
+    ),
     axisLabel: { color: '#667085', rotate: 28, width: 92, overflow: 'truncate' }
   },
   yAxis: {
@@ -244,13 +273,123 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
       type: 'bar',
       barMaxWidth: 22,
       data: statisticsSummary.value.top_models.map((item) => ({
-        value: Number(microUsdToUsd(item.cost_micro_usd).toFixed(6)),
-        provider: item.provider,
+        value: Number(microAmountToMajor(item.cost_micros).toFixed(6)),
+        channelName: item.channel_name,
         model: item.model
       }))
     }
   ]
 }))
+const tokenUsageTrendOption = computed<EChartsCoreOption>(() => {
+  const mode = tokenTrendMode.value
+  const label =
+    mode === 'input' ? t('inputTokens') : mode === 'output' ? t('outputTokens') : t('tokens')
+  const valueOf = (item: ModelUsageTimeSeriesPoint) =>
+    mode === 'input'
+      ? item.input_tokens
+      : mode === 'output'
+        ? item.output_tokens
+        : item.total_tokens
+  return modelLineOption({
+    rows: modelSeriesRows.value,
+    aggregateRows: timelineRows.value,
+    aggregateValue: (item) =>
+      mode === 'input'
+        ? item.input_tokens
+        : mode === 'output'
+          ? item.output_tokens
+          : item.total_tokens,
+    modelValue: valueOf,
+    label,
+    valueMode: 'number'
+  })
+})
+const callTrendOption = computed<EChartsCoreOption>(() => {
+  const mode = requestTrendMode.value
+  const label =
+    mode === 'errors'
+      ? t('failedRequests')
+      : mode === 'errorRate'
+        ? t('failureRate')
+        : t('requestCount')
+  return modelLineOption({
+    rows: modelSeriesRows.value,
+    aggregateRows: timelineRows.value,
+    aggregateValue: (item) =>
+      mode === 'errors'
+        ? item.error_count
+        : mode === 'errorRate'
+          ? percentValue(item.error_count, item.request_count)
+          : item.request_count,
+    modelValue: (item) =>
+      mode === 'errors'
+        ? item.error_count
+        : mode === 'errorRate'
+          ? percentValue(item.error_count, item.request_count)
+          : item.request_count,
+    label,
+    valueMode: mode === 'errorRate' ? 'percent' : 'number'
+  })
+})
+const performanceTrendOption = computed<EChartsCoreOption>(() => {
+  const mode = performanceTrendMode.value
+  const label =
+    mode === 'firstResponse'
+      ? t('firstResponseLatency')
+      : mode === 'throughput'
+        ? t('outputTokensPerSecond')
+        : t('averageLatency')
+  return modelLineOption({
+    rows: modelSeriesRows.value,
+    aggregateRows: timelineRows.value,
+    aggregateValue: (item) =>
+      mode === 'firstResponse'
+        ? item.avg_first_response_ms ?? 0
+        : mode === 'throughput'
+          ? item.avg_output_tokens_per_second ?? 0
+          : item.avg_latency_ms ?? 0,
+    modelValue: (item) =>
+      mode === 'firstResponse'
+        ? item.avg_first_response_ms ?? 0
+        : mode === 'throughput'
+          ? item.avg_output_tokens_per_second ?? 0
+          : item.avg_latency_ms ?? 0,
+    label,
+    valueMode: mode === 'throughput' ? 'tokenRate' : 'duration'
+  })
+})
+const modelFailureRateOption = computed<EChartsCoreOption>(() => {
+  const rows = [...statisticsModels.value.items]
+    .filter((item) => item.request_count > 0)
+    .sort(
+      (left, right) =>
+        percentValue(right.error_count, right.request_count) -
+          percentValue(left.error_count, left.request_count) || right.error_count - left.error_count
+    )
+    .slice(0, 12)
+    .reverse()
+  return horizontalMetricOption({
+    rows,
+    label: t('failureRate'),
+    value: (item) => percentValue(item.error_count, item.request_count),
+    valueMode: 'percent',
+    color: '#dc2626'
+  })
+})
+const modelLatencyRankOption = computed<EChartsCoreOption>(() => {
+  const rows = [...statisticsModels.value.items]
+    .filter((item) => item.avg_latency_ms != null)
+    .sort((left, right) => (right.avg_latency_ms ?? 0) - (left.avg_latency_ms ?? 0))
+    .slice(0, 12)
+    .reverse()
+  return horizontalMetricOption({
+    rows,
+    label: t('averageLatency'),
+    value: (item) => item.avg_latency_ms ?? 0,
+    valueMode: 'duration',
+    color: '#475569'
+  })
+})
 async function reloadStatistics() {
   statisticsUsersPage.value = 1
   statisticsModelsPage.value = 1
@@ -258,6 +397,7 @@ async function reloadStatistics() {
     reloadStatisticsSummary(),
     reloadStatisticsUsers(),
     reloadStatisticsModels(),
+    reloadStatisticsTimeSeries(),
     reloadStatisticsOptions()
   ])
 }
@@ -292,14 +432,8 @@ async function applyQuickRange(days: number) {
 async function resetStatisticsFilters() {
   statisticsFilters.dateRange = defaultStatisticsRange(30)
   statisticsFilters.userQuery = ''
-  statisticsFilters.provider = ''
   statisticsFilters.model = ''
   statisticsFilters.billingMeter = ''
-  await reloadStatistics()
-}
-
-async function handleProviderChange() {
-  statisticsFilters.model = ''
   await reloadStatistics()
 }
 
@@ -326,19 +460,19 @@ async function handleTopUserChartClick(params: unknown) {
 }
 
 async function handleTopModelChartClick(params: unknown) {
-  const item = params as { data?: { provider?: string; model?: string }; name?: string }
-  const provider = item.data?.provider
+  const item = params as {
+    data?: { channelName?: string; model?: string }
+    name?: string
+  }
   const model = item.data?.model
-  if (provider) {
-    statisticsFilters.provider = provider
+  if (model) {
     statisticsFilters.model = model ?? ''
     await reloadStatistics()
     return
   }
   if (!item.name) return
-  const [fallbackProvider, ...modelParts] = item.name.split('/')
-  statisticsFilters.provider = fallbackProvider
-  statisticsFilters.model = modelParts.join('/')
+  const [, ...modelParts] = item.name.split('/')
+  statisticsFilters.model = modelParts.join('/') || item.name
   await reloadStatistics()
 }
 
@@ -367,19 +501,28 @@ function emptyStatisticsSummary(): UsageStatisticsSummary {
       audio_in_tokens: 0,
       audio_out_tokens: 0,
       billable_units: 0,
-      cost_micro_usd: 0,
+      cost_micros: 0,
       avg_latency_ms: null,
       avg_first_response_ms: null
     },
     daily: [],
     top_users: [],
-    top_models: [],
-    providers: []
+    top_models: []
   }
 }
 
 function emptyStatisticsPage<T>(): UsageStatisticsPage<T> {
   return { items: [], total: 0, page: 1, limit: 20 }
+}
+
+function emptyStatisticsTimeSeries(): UsageStatisticsTimeSeries {
+  return {
+    start: '',
+    end: '',
+    granularity: 'day',
+    points: [],
+    model_points: []
+  }
 }
 
 function filledDailyRows(summary: UsageStatisticsSummary) {
@@ -401,7 +544,7 @@ function filledDailyRows(summary: UsageStatisticsSummary) {
         output_tokens: 0,
         total_tokens: 0,
         billable_units: 0,
-        cost_micro_usd: 0,
+        cost_micros: 0,
         avg_latency_ms: null
       }
     )
@@ -410,8 +553,8 @@ function filledDailyRows(summary: UsageStatisticsSummary) {
   return rows
 }
 
-function modelDisplay(provider: string, model: string) {
-  return model ? `${provider}/${model}` : provider
+function modelDisplay(channelName: string, model: string) {
+  return model ? `${channelName}/${model}` : channelName
 }
 
 function billingMeterLabel(value?: string | null) {
@@ -421,7 +564,7 @@ function billingMeterLabel(value?: string | null) {
 }
 
 function modelStatisticsRowKey(row: ModelUsageStatistics) {
-  return `${row.provider}/${row.model}/${row.billing_meter}`
+  return `${row.channel_name}/${row.model}/${row.billing_meter}`
 }
 
 function successRate(success: number, total: number) {
@@ -429,7 +572,160 @@ function successRate(success: number, total: number) {
   return `${((success / total) * 100).toFixed(1)}%`
 }
 
-function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
+function percentValue(part: number, total: number) {
+  return total > 0 ? (part / total) * 100 : 0
+}
+
+function chartPalette() {
+  return ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#64748b']
+}
+
+function modelSeriesKey(
+  item: Pick<ModelUsageTimeSeriesPoint, 'channel_name' | 'model' | 'billing_meter'>
+) {
+  return `${modelDisplay(item.channel_name, item.model)} · ${billingMeterLabel(item.billing_meter)}`
+}
+
+function modelLineOption(options: {
+  rows: ModelUsageTimeSeriesPoint[]
+  aggregateRows: Array<{
+    bucket?: string
+    date?: string
+    request_count: number
+    error_count: number
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    avg_latency_ms?: number | null
+    avg_first_response_ms?: number | null
+    avg_output_tokens_per_second?: number | null
+  }>
+  aggregateValue: (item: {
+    request_count: number
+    error_count: number
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    avg_latency_ms?: number | null
+    avg_first_response_ms?: number | null
+    avg_output_tokens_per_second?: number | null
+  }) => number
+  modelValue: (item: ModelUsageTimeSeriesPoint) => number
+  label: string
+  valueMode: 'number' | 'duration' | 'percent' | 'tokenRate'
+}): EChartsCoreOption {
+  const bucketSet = new Set<string>()
+  options.aggregateRows.forEach((item) => bucketSet.add(item.bucket ?? item.date ?? ''))
+  options.rows.forEach((item) => bucketSet.add(item.bucket))
+  const buckets = [...bucketSet].filter(Boolean).sort()
+  const groups = new Map<string, ModelUsageTimeSeriesPoint[]>()
+  options.rows.forEach((item) => {
+    const key = modelSeriesKey(item)
+    groups.set(key, [...(groups.get(key) ?? []), item])
+  })
+  const modelSeries = [...groups.entries()].map(([name, rows]) => {
+    const values = new Map(rows.map((item) => [item.bucket, options.modelValue(item)]))
+    return {
+      name,
+      type: 'line',
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 5,
+      data: buckets.map((bucket) => Number((values.get(bucket) ?? 0).toFixed(4)))
+    }
+  })
+  const aggregateValues = new Map(
+    options.aggregateRows.map((item) => [item.bucket ?? item.date ?? '', options.aggregateValue(item)])
+  )
+  const series =
+    modelSeries.length > 0
+      ? modelSeries
+      : [
+          {
+            name: options.label,
+            type: 'line',
+            smooth: true,
+            areaStyle: { opacity: 0.12 },
+            data: buckets.map((bucket) => Number((aggregateValues.get(bucket) ?? 0).toFixed(4)))
+          }
+        ]
+  return {
+    color: chartPalette(),
+    grid: { left: 12, right: 18, top: 36, bottom: 34, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
+    legend: { top: 0, type: 'scroll', textStyle: { color: '#667085' } },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
+    },
+    xAxis: {
+      type: 'category',
+      data: buckets,
+      axisLabel: { color: '#667085', hideOverlap: true }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        color: '#667085',
+        formatter: (value: number) => axisValueLabel(value, options.valueMode)
+      },
+      splitLine: { lineStyle: { color: '#edf2f7' } }
+    },
+    series
+  }
+}
+
+function horizontalMetricOption(options: {
+  rows: ModelUsageStatistics[]
+  label: string
+  value: (item: ModelUsageStatistics) => number
+  valueMode: 'duration' | 'percent' | 'number'
+  color: string
+}): EChartsCoreOption {
+  return {
+    color: [options.color],
+    grid: { left: 12, right: 24, top: 18, bottom: 24, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
+    },
+    xAxis: {
+      type: 'value',
+      axisLabel: {
+        color: '#667085',
+        formatter: (value: number) => axisValueLabel(value, options.valueMode)
+      },
+      splitLine: { lineStyle: { color: '#edf2f7' } }
+    },
+    yAxis: {
+      type: 'category',
+      data: options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
+      axisLabel: { color: '#667085', width: 130, overflow: 'truncate' }
+    },
+    series: [
+      {
+        name: options.label,
+        type: 'bar',
+        barMaxWidth: 16,
+        data: options.rows.map((item) => Number(options.value(item).toFixed(4)))
+      }
+    ]
+  }
+}
+
+function axisValueLabel(value: number, mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate') {
+  if (mode === 'cost') return `$${value}`
+  if (mode === 'duration') return formatDurationMs(value)
+  if (mode === 'percent') return `${value.toFixed(value >= 10 ? 0 : 1)}%`
+  if (mode === 'tokenRate') return formatTokenRate(value, locale.value)
+  return formatNumber(value, locale.value)
+}
+
+function trendTooltip(
+  params: unknown,
+  label: string,
+  mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate'
+) {
   const items = Array.isArray(params) ? params : [params]
   const first = items[0] as { axisValue?: string } | undefined
   return [
@@ -437,13 +733,21 @@ function trendTooltip(params: unknown, label: string, mode: 'cost' | 'number') {
     ...items.map((item) => {
       const current = item as { marker?: string; seriesName?: string; value?: number }
       const numericValue = chartNumericValue(current.value)
-      const value =
-        mode === 'cost'
-          ? `$${numericValue.toFixed(6)}`
-          : formatNumber(numericValue, locale.value)
+      const value = tooltipValueLabel(numericValue, mode)
       return `${current.marker ?? ''}${current.seriesName ?? label}: ${value}`
     })
   ].join('<br/>')
+}
+
+function tooltipValueLabel(
+  value: number,
+  mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate'
+) {
+  if (mode === 'cost') return `$${value.toFixed(6)}`
+  if (mode === 'duration') return formatDurationMs(value)
+  if (mode === 'percent') return `${value.toFixed(2)}%`
+  if (mode === 'tokenRate') return formatTokenRate(value, locale.value)
+  return formatNumber(value, locale.value)
 }
 
 function chartNumericValue(value: unknown) {
@@ -484,24 +788,6 @@ function chartNumericValue(value: unknown) {
                 />
               </label>
               <label class="admin-filter-field">
-                <span>{{ t('provider') }}</span>
-                <el-select
-                  v-model="statisticsFilters.provider"
-                  class="usage-status-filter"
-                  clearable
-                  filterable
-                  :placeholder="t('allProviders')"
-                  @change="handleProviderChange"
-                >
-                  <el-option
-                    v-for="provider in statisticsOptions.providers"
-                    :key="provider"
-                    :label="provider"
-                    :value="provider"
-                  />
-                </el-select>
-              </label>
-              <label class="admin-filter-field">
                 <span>{{ t('model') }}</span>
                 <el-select
                   v-model="statisticsFilters.model"
@@ -512,8 +798,8 @@ function chartNumericValue(value: unknown) {
                 >
                   <el-option
                     v-for="item in filteredModelOptions"
-                    :key="`${item.provider}/${item.model}`"
-                    :label="modelDisplay(item.provider, item.model)"
+                    :key="`${item.channel_name}/${item.model}`"
+                    :label="modelDisplay(item.channel_name, item.model)"
                     :value="item.model"
                   />
                 </el-select>
@@ -580,7 +866,7 @@ function chartNumericValue(value: unknown) {
           <div class="statistics-metric-grid">
             <div class="statistics-metric">
               <span>{{ t('totalCost') }}</span>
-              <strong>{{ formatMicroUsd(statisticsSummary.totals.cost_micro_usd, 6) }}</strong>
+              <strong>{{ formatMoney(statisticsSummary.totals.cost_micros, locale, 6) }}</strong>
             </div>
             <div class="statistics-metric">
               <span>{{ t('requestCount') }}</span>
@@ -631,6 +917,89 @@ function chartNumericValue(value: unknown) {
                   :empty="statisticsEmpty"
                   :empty-text="t('noStatisticsData')"
                   height="300px"
+                />
+              </section>
+              <section class="statistics-panel">
+                <header class="statistics-chart-header">
+                  <span>{{ t('tokenUsageTrend') }}</span>
+                  <el-segmented
+                    v-model="tokenTrendMode"
+                    class="statistics-segmented"
+                    :options="[
+                      { label: t('totalTokens'), value: 'total' },
+                      { label: t('inputTokens'), value: 'input' },
+                      { label: t('outputTokens'), value: 'output' }
+                    ]"
+                  />
+                </header>
+                <AdminUsageChart
+                  :option="tokenUsageTrendOption"
+                  :loading="statisticsTimeSeriesLoading"
+                  :empty="timelineRows.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="320px"
+                />
+              </section>
+              <section class="statistics-panel">
+                <header class="statistics-chart-header">
+                  <span>{{ t('callMonitor') }}</span>
+                  <el-segmented
+                    v-model="requestTrendMode"
+                    class="statistics-segmented"
+                    :options="[
+                      { label: t('totalCalls'), value: 'total' },
+                      { label: t('failedRequests'), value: 'errors' },
+                      { label: t('failureRate'), value: 'errorRate' }
+                    ]"
+                  />
+                </header>
+                <AdminUsageChart
+                  :option="callTrendOption"
+                  :loading="statisticsTimeSeriesLoading"
+                  :empty="timelineRows.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="320px"
+                />
+              </section>
+              <section class="statistics-panel is-wide">
+                <header class="statistics-chart-header">
+                  <span>{{ t('performanceMonitor') }}</span>
+                  <el-segmented
+                    v-model="performanceTrendMode"
+                    class="statistics-segmented"
+                    :options="[
+                      { label: t('averageLatencyShort'), value: 'latency' },
+                      { label: t('firstResponseLatency'), value: 'firstResponse' },
+                      { label: t('outputTokensPerSecond'), value: 'throughput' }
+                    ]"
+                  />
+                </header>
+                <AdminUsageChart
+                  :option="performanceTrendOption"
+                  :loading="statisticsTimeSeriesLoading"
+                  :empty="timelineRows.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="340px"
+                />
+              </section>
+              <section class="statistics-panel">
+                <header>{{ t('modelFailureRateRank') }}</header>
+                <AdminUsageChart
+                  :option="modelFailureRateOption"
+                  :loading="statisticsModelsLoading"
+                  :empty="statisticsModels.items.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="340px"
+                />
+              </section>
+              <section class="statistics-panel">
+                <header>{{ t('modelLatencyRank') }}</header>
+                <AdminUsageChart
+                  :option="modelLatencyRankOption"
+                  :loading="statisticsModelsLoading"
+                  :empty="statisticsModels.items.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="340px"
                 />
               </section>
               <section class="statistics-panel">
@@ -700,7 +1069,7 @@ function chartNumericValue(value: unknown) {
                   <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</template>
+                  <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
@@ -746,11 +1115,11 @@ function chartNumericValue(value: unknown) {
                 :row-key="modelStatisticsRowKey"
                 stripe
               >
-                <el-table-column :label="t('providerOrModel')" min-width="220">
+                <el-table-column :label="t('channelAndModel')" min-width="220">
                   <template #default="{ row }">
                     <div class="usage-model">
-                      <ProviderIcon :provider="row.provider" />
-                      <span class="usage-provider">{{ row.provider }}</span>
+                      <span class="usage-provider">{{ row.channel_name || '-' }}</span>
+                      <span class="usage-separator">/</span>
                       <span>{{ row.model || '-' }}</span>
                     </div>
                   </template>
@@ -765,7 +1134,7 @@ function chartNumericValue(value: unknown) {
                   <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</template>
+                  <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
                 </el-table-column>
                 <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
                   <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
@@ -956,6 +1325,20 @@ function chartNumericValue(value: unknown) {
   margin-bottom: 12px;
 }
 
+.statistics-chart-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.statistics-segmented {
+  --el-segmented-item-selected-bg-color: #ffffff;
+  --el-segmented-item-selected-color: #168bd3;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
 .statistics-panel-header {
   align-items: center;
   display: grid;
@@ -982,11 +1365,11 @@ function chartNumericValue(value: unknown) {
 .usage-model {
   align-items: center;
   display: flex;
-  gap: 7px;
+  gap: 4px;
   min-width: 0;
 }
 
-.usage-model > span:last-child {
+.usage-model > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1087,6 +1470,15 @@ function chartNumericValue(value: unknown) {
     flex: 1 1 0;
     height: 32px;
     min-width: 0;
+  }
+
+  .statistics-chart-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .statistics-segmented {
+    width: 100%;
   }
 
   .statistics-pagination {

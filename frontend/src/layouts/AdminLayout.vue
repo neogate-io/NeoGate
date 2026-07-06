@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
 import {
   Connection,
   DataAnalysis,
@@ -66,12 +66,15 @@ const navGroups = computed(() => {
 const settingItems = computed(() => {
   const items: SettingNavItem[] = [
     { path: '/admin/settings/admin-password', key: 'adminPasswordSettings' },
-    { path: '/admin/settings/smtp', key: 'smtpSettings' }
+    { path: '/admin/settings/smtp', key: 'smtpSettings' },
+    { path: '/admin/settings/site', key: 'siteSettingsPage' }
   ]
   if (servicePolicy.value?.service_mode === 'paid') {
     items.push({ path: '/admin/settings/payment', key: 'paymentSettings' })
   }
-  items.push({ path: '/admin/settings/pricing-policies', key: 'pricingPolicy' })
+  if (servicePolicy.value?.service_mode !== 'internal') {
+    items.push({ path: '/admin/settings/pricing-policies', key: 'pricingPolicy' })
+  }
   items.push({ path: '/admin/settings/other', key: 'otherSettings' })
   return items
 })

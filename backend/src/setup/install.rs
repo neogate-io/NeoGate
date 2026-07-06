@@ -284,12 +284,15 @@ mod tests {
         );
         assert!(script.contains(r#"key_loaded) printf '%s' "已从本地配置读取 API 密钥""#));
         assert!(script.contains("HAS_EXISTING_CONFIG"));
-        assert!(script.contains("choose_switch_model"));
+        assert!(script.contains("choose_existing_config_action"));
         assert!(script.contains("run_switch_model_flow"));
+        assert!(script.contains("run_change_key_flow"));
         assert!(script.contains("run_full_flow"));
         assert!(script.contains(r#"switch_option) printf '1. 切换模型' ;"#));
-        assert!(script.contains(r#"reinstall_option) printf '2. 重新安装' ;"#));
+        assert!(script.contains(r#"change_key_option) printf '2. 更换 API Key' ;"#));
+        assert!(script.contains(r#"reinstall_option) printf '3. 重新安装' ;"#));
         assert!(script.contains("model_switched"));
+        assert!(script.contains("api_key_changed"));
     }
 
     #[test]
@@ -316,10 +319,13 @@ mod tests {
         assert!(script.contains("HasExistingConfig"));
         assert!(script.contains("function Choose-SwitchModel"));
         assert!(script.contains("function Invoke-SwitchModelFlow"));
+        assert!(script.contains("function Invoke-ChangeKeyFlow"));
         assert!(script.contains("function Invoke-FullFlow"));
         assert!(script.contains("switch_option = '1. 切换模型'"));
-        assert!(script.contains("reinstall_option = '2. 重新安装'"));
+        assert!(script.contains("change_key_option = '2. 更换 API Key'"));
+        assert!(script.contains("reinstall_option = '3. 重新安装'"));
         assert!(script.contains("model_switched"));
+        assert!(script.contains("api_key_changed"));
     }
 
     #[tokio::test]

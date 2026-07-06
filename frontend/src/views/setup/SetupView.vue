@@ -37,7 +37,7 @@ import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
-import { microUsdToUsd, usdToMicroUsd } from '../../utils/format'
+import { majorToMicroAmount, microAmountToMajor } from '../../utils/format'
 import {
   ApiError,
   isNoModelsReturnedError,
@@ -45,7 +45,7 @@ import {
   readModelFetchError,
   readSmtpTestError
 } from '../../utils/errors'
-import { splitCommaList } from '../../utils/channel'
+import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
@@ -65,7 +65,7 @@ type SetupEndpointPayload = {
 const optionalBusinessSteps = new Set<BusinessSetupStep>(['upstream', 'smtp', 'payment'])
 
 const router = useRouter()
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const loading = ref(false)
 const saving = ref(false)
 const fetchingModels = ref(false)
@@ -96,7 +96,8 @@ const bootstrapForm = reactive({
   databasePassword: '',
   databaseSslMode: 'auto',
   siteName: 'NeoGate',
-  publicBaseUrl: defaultPublicBaseUrl()
+  publicBaseUrl: defaultPublicBaseUrl(),
+  billingCurrency: defaultBillingCurrency()
 })
 
 const databasePortInput = computed({
@@ -110,6 +111,17 @@ const databasePortInput = computed({
     bootstrapForm.databasePort = Math.min(Number(digits), 65535)
   }
 })
+
+watch(
+  locale,
+  (next, prev) => {
+    if (status.value?.billing_currency) return
+    if ((prev === 'zh-CN' && bootstrapForm.billingCurrency === 'CNY') || (prev === 'en-US' && bootstrapForm.billingCurrency === 'USD')) {
+      bootstrapForm.billingCurrency = next === 'zh-CN' ? 'CNY' : 'USD'
+    }
+  },
+  { flush: 'post' }
+)
 
 const setupForm = reactive({
   adminUsername: 'admin',
@@ -164,8 +176,8 @@ const paymentForm = reactive({
 const prices = ref<
   Array<{
     model: string
-    inputUsd: number
-    outputUsd: number
+    inputPrice: number
+    outputPrice: number
     enabled: boolean
   }>
 >([])
@@ -350,6 +362,7 @@ const setupProgressPercent = computed(() => {
 const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
+const providerOptions = computed(() => sortProvidersForDisplay(providers.value))
 const isManualBaseUrlProviderSelected = computed(
   () => selectedProvider.value?.code === 'custom' || selectedProvider.value?.code === 'newapi'
 )
@@ -459,12 +472,13 @@ async function load() {
       bootstrapForm.siteName = status.value.site_name || bootstrapForm.siteName
       bootstrapForm.publicBaseUrl =
         preferredPublicBaseUrl(status.value.public_base_url) || bootstrapForm.publicBaseUrl
+      bootstrapForm.billingCurrency = status.value.billing_currency || bootstrapForm.billingCurrency
       paymentForm.siteName = status.value.site_name || paymentForm.siteName
 
       if (!status.value.bootstrap_required) {
         providers.value = await getSetupProviders()
-        if (providers.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providers.value[0].code
+        if (providerOptions.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providerOptions.value[0].code
         }
         applyProviderDefaults()
       }
@@ -484,7 +498,8 @@ async function saveBootstrap() {
             ? buildDatabaseUrl(false)
             : null,
         site_name: bootstrapForm.siteName,
-        public_base_url: bootstrapForm.publicBaseUrl
+        public_base_url: bootstrapForm.publicBaseUrl,
+        billing_currency: bootstrapForm.billingCurrency
       })
       envFile.value = result.restart_required ? result.env_file : ''
       waitingForRestart.value = result.restart_required
@@ -494,8 +509,8 @@ async function saveBootstrap() {
         status.value = await getSetupStatus(true)
         reviewingRuntimeConfig.value = false
         providers.value = await getSetupProviders()
-        if (providers.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providers.value[0].code
+        if (providerOptions.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providerOptions.value[0].code
         }
         applyProviderDefaults()
         return
@@ -533,8 +548,8 @@ async function waitForRuntimeRestart() {
         waitingForRestart.value = false
         restartWaitTimedOut.value = false
         providers.value = await getSetupProviders()
-        if (providers.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providers.value[0].code
+        if (providerOptions.value.length > 0 && !selectedProvider.value) {
+          setupForm.provider = providerOptions.value[0].code
         }
         applyProviderDefaults()
         return
@@ -636,8 +651,8 @@ async function syncAndApplyReferencePrices() {
       const template = findPricingTemplate(templates, setupForm.provider, price.model)
       price.enabled = Boolean(template)
       if (!template) continue
-      price.inputUsd = microUsdToUsd(template.input_price_usd_micros)
-      price.outputUsd = microUsdToUsd(template.output_price_usd_micros)
+      price.inputPrice = microAmountToMajor(template.input_price_micros)
+      price.outputPrice = microAmountToMajor(template.output_price_micros)
       applied += 1
     }
     if (applied > 0) {
@@ -684,8 +699,8 @@ async function submitSetup() {
           ? prices.value.map((price) => ({
               provider: setupForm.provider,
               model: price.model,
-              input_price_usd_micros: usdToMicroUsd(price.inputUsd),
-              output_price_usd_micros: usdToMicroUsd(price.outputUsd),
+              input_price_micros: majorToMicroAmount(price.inputPrice),
+              output_price_micros: majorToMicroAmount(price.outputPrice),
               enabled: price.enabled
             }))
           : [],
@@ -1065,8 +1080,8 @@ function syncPriceRows() {
   const existing = new Map(prices.value.map((price) => [price.model.trim().toLowerCase(), price]))
   prices.value = splitCommaList(setupForm.models).map((model) => ({
     model,
-    inputUsd: existing.get(model.trim().toLowerCase())?.inputUsd ?? 0,
-    outputUsd: existing.get(model.trim().toLowerCase())?.outputUsd ?? 0,
+    inputPrice: existing.get(model.trim().toLowerCase())?.inputPrice ?? 0,
+    outputPrice: existing.get(model.trim().toLowerCase())?.outputPrice ?? 0,
     enabled:
       existing.get(model.trim().toLowerCase())?.enabled ??
       Boolean(findPricingTemplate(pricingTemplates.value, setupForm.provider, model))
@@ -1094,6 +1109,10 @@ function buildDatabaseUrl(maskPassword: boolean) {
 function defaultPublicBaseUrl() {
   if (typeof window === 'undefined') return 'http://127.0.0.1:8080'
   return window.location.origin
+}
+
+function defaultBillingCurrency(): 'USD' | 'CNY' {
+  return 'CNY'
 }
 
 function preferredPublicBaseUrl(value?: string | null) {
@@ -1251,6 +1270,12 @@ onMounted(load)
               </el-form-item>
               <el-form-item :label="t('publicBaseUrlLabel')">
                 <el-input v-model="bootstrapForm.publicBaseUrl" />
+              </el-form-item>
+              <el-form-item :label="t('billingCurrency')">
+                <el-select v-model="bootstrapForm.billingCurrency">
+                  <el-option :label="t('currencyUsdLabel')" value="USD" />
+                  <el-option :label="t('currencyCnyLabel')" value="CNY" />
+                </el-select>
               </el-form-item>
             </div>
           </div>
@@ -1439,7 +1464,7 @@ onMounted(load)
               <el-form-item :label="t('provider')">
                 <el-select v-model="setupForm.provider" filterable>
                   <el-option
-                    v-for="provider in providers"
+                    v-for="provider in providerOptions"
                     :key="provider.code"
                     :label="provider.display_name"
                     :value="provider.code"

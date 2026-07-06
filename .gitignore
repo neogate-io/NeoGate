@@ -9,5 +9,6 @@ frontend/.env.*.local
 .sqlx/
 scripts/
 output/
+backend/tests/output/
 __pycache__/
 .claude/

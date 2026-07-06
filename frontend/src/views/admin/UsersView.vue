@@ -30,6 +30,7 @@ import {
 } from '../../api/users'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
@@ -43,12 +44,11 @@ import {
   formatCompactDateTime,
   formatDateTime,
   downloadCsv,
-  formatMicroUsd,
-  maskApiKey,
-  usdToMicroUsd
+  maskApiKey
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { formatMoney, majorToMicroAmount } = useBillingCurrency()
 const confirmDialog = createConfirmAction(() => t('cancel'))
 
 defineOptions({
@@ -74,7 +74,7 @@ type UserStatusMeta = {
 
 const DEFAULT_USER_PAGE_SIZE = 50
 const USER_KEY_DIALOG_LIMIT = 100
-const DEFAULT_RECHARGE_USD = 0
+const DEFAULT_RECHARGE_AMOUNT = 0
 const PREMIUM_GROUP_PATTERN = /pro|premium|vip|advanced|高级/i
 const USER_STATUS_META: Record<UserStatus, UserStatusMeta> = {
   enabled: {
@@ -114,7 +114,7 @@ const userForm = reactive<UserForm>({
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
-const amountUsd = ref(DEFAULT_RECHARGE_USD)
+const amountMajor = ref(DEFAULT_RECHARGE_AMOUNT)
 const {
   currentPage: usersCurrentPage,
   pageSize: usersPageSize,
@@ -152,9 +152,9 @@ const emptyUsersDescription = computed(() =>
 const isUserCreateDialog = computed(() => userDialogMode.value === 'create')
 const userDialogTitle = computed(() => t(isUserCreateDialog.value ? 'addUser' : 'editUser'))
 const userDialogConfirmText = computed(() => t(isUserCreateDialog.value ? 'create' : 'save'))
-const rechargePreviewMicroUsd = computed(() => {
-  if (!selectedUser.value) return usdToMicroUsd(amountUsd.value)
-  return selectedUser.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
+const rechargePreviewMicros = computed(() => {
+  if (!selectedUser.value) return majorToMicroAmount(amountMajor.value)
+  return selectedUser.value.balance_micros + majorToMicroAmount(amountMajor.value)
 })
 const userMobileMetaText = (row: User) => {
   if (!isPaidServiceMode.value) return userStatusText(row.status)
@@ -184,16 +184,16 @@ async function loadUsers() {
   })
 }
 
-function creditCellClass(row: Pick<CreditBalance, 'available_micro_usd'>): CreditClass {
+function creditCellClass(row: Pick<CreditBalance, 'available_micros'>): CreditClass {
   if (!isCreditRequired.value) return 'is-unlimited'
-  return row.available_micro_usd <= 0 ? 'is-depleted' : 'is-available'
+  return row.available_micros <= 0 ? 'is-depleted' : 'is-available'
 }
 
 function accountBalanceTooltip(row: CreditBalance) {
   return [
-    `${t('accountBalance')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
-    `${t('reservedBalance')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
-    `${t('availableBalance')}: ${formatMicroUsd(row.available_micro_usd, 2)}`
+    `${t('accountBalance')}: ${formatMoney(row.balance_micros, locale.value, 2)}`,
+    `${t('reservedBalance')}: ${formatMoney(row.reserved_micros, locale.value, 2)}`,
+    `${t('availableBalance')}: ${formatMoney(row.available_micros, locale.value, 2)}`
   ].join('\n')
 }
 
@@ -244,7 +244,7 @@ function openEditDialog(row: User) {
 function openCreditDialog(row: User) {
   if (!isPaidServiceMode.value) return
   selectedUser.value = row
-  amountUsd.value = DEFAULT_RECHARGE_USD
+  amountMajor.value = DEFAULT_RECHARGE_AMOUNT
   creditDialogVisible.value = true
 }
 
@@ -401,7 +401,7 @@ async function submitCredit() {
   if (!userId) return
   await withLoading(creditSaving, async () => {
     try {
-      await adjustDefaultProjectCredit(userId, usdToMicroUsd(amountUsd.value))
+      await adjustDefaultProjectCredit(userId, majorToMicroAmount(amountMajor.value))
       ElMessage.success(t('creditUpdated'))
       creditDialogVisible.value = false
       await reload()
@@ -421,9 +421,9 @@ function exportUsers() {
     'email',
     'group',
     'status',
-    'balance_micro_usd',
-    'reserved_micro_usd',
-    'available_micro_usd',
+    'balance_micros',
+    'reserved_micros',
+    'available_micros',
     'created_at',
     'last_active_at'
   ]
@@ -432,9 +432,9 @@ function exportUsers() {
     user.email,
     user.user_group_name,
     user.status,
-    user.balance_micro_usd,
-    user.reserved_micro_usd,
-    user.available_micro_usd,
+    user.balance_micros,
+    user.reserved_micros,
+    user.available_micros,
     user.created_at,
     user.last_active_at ?? ''
   ])
@@ -659,7 +659,7 @@ onMounted(() => {
           <template #default="{ row }">
             <el-tooltip :content="accountBalanceTooltip(row)" placement="top" :show-after="600">
               <span class="user-credit-cell" :class="creditCellClass(row)">
-                {{ formatMicroUsd(row.balance_micro_usd, 2) }}
+                {{ formatMoney(row.balance_micros, locale, 2) }}
               </span>
             </el-tooltip>
           </template>
@@ -875,11 +875,11 @@ onMounted(() => {
 
     <CreditAdjustDialog
       v-if="selectedUser"
-      v-model:amount="amountUsd"
+      v-model:amount="amountMajor"
       v-model:open="creditDialogVisible"
-      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :adjusted-balance="rechargePreviewMicros"
       :confirm-text="t('confirmRecharge')"
-      :current-balance-micro-usd="selectedUser.balance_micro_usd"
+      :current-balance="selectedUser.balance_micros"
       :hint="t('accountCreditAdjustHint')"
       :saving="creditSaving"
       :title="t('accountRecharge')"

@@ -21,8 +21,7 @@ function Read-JsonEnvField([string]$Path, [string]$Field) {
 }
 
 # Reads existing Codex ~/.codex/auth.json + config.toml and Claude ~/.claude/settings.json
-# to prefill $ApiKey (client-agnostic) and remember previously-used models. Also infers
-# $Client when exactly one side is configured and -Client was not given.
+# and remembers previously-used API keys/models.
 function Load-ExistingCredentials {
   $script:LoadedCodexKey = $null
   $script:LoadedClaudeKey = $null
@@ -36,20 +35,11 @@ function Load-ExistingCredentials {
   $codexConfig = Join-Path $codexHome 'config.toml'
   $claudeConfig = Join-Path $claudeHome 'settings.json'
 
-  if (-not $ApiKey -and (Test-Path $codexAuth)) {
+  if (Test-Path $codexAuth) {
     $script:LoadedCodexKey = Read-JsonField $codexAuth 'OPENAI_API_KEY'
   }
-  if (-not $ApiKey -and (Test-Path $claudeConfig)) {
+  if (Test-Path $claudeConfig) {
     $script:LoadedClaudeKey = Read-JsonEnvField $claudeConfig 'ANTHROPIC_AUTH_TOKEN'
-  }
-
-  if (-not $ApiKey) {
-    if ($LoadedCodexKey) {
-      $script:ApiKey = $LoadedCodexKey
-    } elseif ($LoadedClaudeKey) {
-      $script:ApiKey = $LoadedClaudeKey
-    }
-    if ($ApiKey) { Detail (Get-Message key_loaded) }
   }
 
   if (Test-Path $codexConfig) {
@@ -61,18 +51,23 @@ function Load-ExistingCredentials {
     $script:LoadedClaudeModel = Read-JsonField $claudeConfig 'model'
   }
 
-  # Infer client only when not explicitly chosen and exactly one side is configured.
-  if (-not $Client) {
-    $codexPresent = [bool]($LoadedCodexKey) -or [bool]($LoadedCodexModel)
-    $claudePresent = [bool]($LoadedClaudeKey) -or [bool]($LoadedClaudeModel)
-    if ($codexPresent -or $claudePresent) { $script:HasExistingConfig = $true }
-    if ($codexPresent -and -not $claudePresent) {
-      $script:Client = 'codex'
-      Success (Get-Message client_inferred 'Codex CLI')
-    } elseif ($claudePresent -and -not $codexPresent) {
-      $script:Client = 'claude'
-      Success (Get-Message client_inferred 'Claude Code')
-    }
+  $codexPresent = [bool]($LoadedCodexKey) -or [bool]($LoadedCodexModel)
+  $claudePresent = [bool]($LoadedClaudeKey) -or [bool]($LoadedClaudeModel)
+  if ($codexPresent -or $claudePresent) { $script:HasExistingConfig = $true }
+}
+
+function Get-LoadedApiKeyForSelectedClient {
+  if ($Client -eq 'claude') { return $LoadedClaudeKey }
+  return $LoadedCodexKey
+}
+
+function Use-ApiKeyForSelectedClient {
+  if ($ApiKey) { return }
+
+  $loadedKey = Get-LoadedApiKeyForSelectedClient
+  if ($loadedKey) {
+    $script:ApiKey = $loadedKey
+    Detail (Get-Message key_loaded)
   }
 }
 
@@ -196,9 +191,11 @@ function Verify-ApiKey {
 }
 
 function Read-AndVerifyApiKey {
+  param([switch]$ForcePrompt)
   while ($true) {
-    if (-not $ApiKey) {
+    if ($ForcePrompt -or -not $ApiKey) {
       $script:ApiKey = Read-SecretText (Get-Message api_key_prompt)
+      $ForcePrompt = $false
     }
     if (-not $ApiKey) {
       Warn (Get-Message empty_api_key)
@@ -211,6 +208,23 @@ function Read-AndVerifyApiKey {
     Warn (Get-Message reenter_api_key)
     $script:ApiKey = $null
   }
+}
+
+function Get-LoadedModelForSelectedClient {
+  if ($Client -eq 'claude') { return $LoadedClaudeModel }
+  return $LoadedCodexModel
+}
+
+function Use-LoadedModelForSelectedClient {
+  $loadedModel = Get-LoadedModelForSelectedClient
+  if (-not $loadedModel) { return $false }
+  if ($Client -eq 'claude') {
+    $script:ClaudeModel = $loadedModel
+  } else {
+    $script:CodexModel = $loadedModel
+  }
+  Detail (Get-Message keeping_model $loadedModel)
+  return $true
 }
 
 function Normalize-Client([string]$Value) {
@@ -561,17 +575,20 @@ function Test-ClaudeRelay {
 
 function Choose-SwitchModel {
   Write-Host (Get-Message switch_option)
+  Write-Host (Get-Message change_key_option)
   Write-Host (Get-Message reinstall_option)
   $answer = Read-Host (Get-Message switch_or_reinstall_prompt)
-  # Default (empty) and "1" => switch model; "2" => reinstall.
-  return $answer -ne '2'
+  # Default (empty) and "1" => switch model; "2" => change API key; "3" => reinstall.
+  switch ($answer) {
+    '' { return 'switch_model' }
+    '1' { return 'switch_model' }
+    '2' { return 'change_key' }
+    '3' { return 'reinstall' }
+    default { return 'switch_model' }
+  }
 }
 
 function Invoke-SwitchModelFlow {
-  Step (Get-Message step_choose_client)
-  Select-Client
-  Success (Selected-ClientName)
-
   Step (Get-Message switch_model)
   Select-Model
 
@@ -589,11 +606,31 @@ function Invoke-SwitchModelFlow {
   Success (Get-Message model_switched (Selected-Model))
 }
 
-function Invoke-FullFlow {
-  Step (Get-Message step_choose_client)
-  Select-Client
-  Success (Selected-ClientName)
+function Invoke-ChangeKeyFlow {
+  Step (Get-Message change_api_key)
+  $script:ApiKey = $null
+  Read-AndVerifyApiKey -ForcePrompt
 
+  if (-not (Use-LoadedModelForSelectedClient)) {
+    Step (Get-Message step_choose_model)
+    Select-Model
+  }
+
+  Step (Get-Message step_write_config)
+  if ($Client -eq 'claude') {
+    Write-ClaudeConfig
+    Step (Get-Message step_test_gateway)
+    Test-ClaudeRelay
+  } else {
+    Write-CodexConfig
+    Step (Get-Message step_test_gateway)
+    Test-CodexRelay
+  }
+
+  Success (Get-Message api_key_changed)
+}
+
+function Invoke-FullFlow {
   Step (Get-Message step_choose_model)
   Select-Model
 

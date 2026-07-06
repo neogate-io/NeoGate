@@ -10,7 +10,7 @@ use crate::{
         is_generated_user_key, issue_user_key_draft_token, key_prefix,
         user_key_draft_parts_from_token, validate_user_password_input, UserAuth,
     },
-    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICRO_USD_PER_USD},
+    billing::{account, CreditAccountId, CreditAccountType, DebitPart, MICROS_PER_MAJOR_UNIT},
     email::{smtp_config_error, EmailLocale},
     error::{AppError, AppResult},
     id::DbId,
@@ -37,9 +37,9 @@ pub struct UserRecord {
     pub user_group_code: String,
     pub user_group_name: String,
     pub user_key_count: i64,
-    pub balance_micro_usd: i64,
-    pub reserved_micro_usd: i64,
-    pub available_micro_usd: i64,
+    pub balance_micros: i64,
+    pub reserved_micros: i64,
+    pub available_micros: i64,
     pub last_active_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -88,9 +88,9 @@ pub struct UserKeyRecord {
     pub status: String,
     pub last_active_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
-    pub balance_micro_usd: i64,
-    pub reserved_micro_usd: i64,
-    pub available_micro_usd: i64,
+    pub balance_micros: i64,
+    pub reserved_micros: i64,
+    pub available_micros: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -99,7 +99,7 @@ pub struct UserKeyRecord {
 pub struct UserKeyModelCreditRecord {
     pub user_key_model_id: DbId,
     pub credit_account_id: DbId,
-    pub balance_micro_usd: i64,
+    pub balance_micros: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -318,16 +318,16 @@ pub async fn list_users(state: &AppState, query: ListUsersQuery) -> AppResult<Us
                   pw.default_project_id, pw.default_project_name,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
-                  COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
-                  COALESCE(pw.reserved_micro_usd, 0) AS reserved_micro_usd,
+                  COALESCE(pw.balance_micros, 0) AS balance_micros,
+                  COALESCE(pw.reserved_micros, 0) AS reserved_micros,
                   u.last_active_at, u.created_at, u.updated_at
            FROM page_users u
            JOIN user_group ug ON ug.id = u.user_group_id
            LEFT JOIN LATERAL (
                SELECT p.id AS default_project_id,
                       p.name AS default_project_name,
-                      COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+                      COALESCE(sum(w.balance_micros), 0)::BIGINT AS balance_micros,
+                      COALESCE(sum(w.reserved_micros), 0)::BIGINT AS reserved_micros
                FROM project p
                LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
@@ -456,16 +456,16 @@ async fn get_user(state: &AppState, id: DbId) -> AppResult<UserRecord> {
                   pw.default_project_id, pw.default_project_name,
                   ug.id AS user_group_id, ug.code AS user_group_code, ug.name AS user_group_name,
                   COALESCE(ukw.user_key_count, 0) AS user_key_count,
-                  COALESCE(pw.balance_micro_usd, 0) AS balance_micro_usd,
-                  COALESCE(pw.reserved_micro_usd, 0) AS reserved_micro_usd,
+                  COALESCE(pw.balance_micros, 0) AS balance_micros,
+                  COALESCE(pw.reserved_micros, 0) AS reserved_micros,
                   u.last_active_at, u.created_at, u.updated_at
            FROM "user" u
            JOIN user_group ug ON ug.id = u.user_group_id
            LEFT JOIN LATERAL (
                SELECT p.id AS default_project_id,
                       p.name AS default_project_name,
-                      COALESCE(sum(w.balance_micro_usd), 0)::BIGINT AS balance_micro_usd,
-                      COALESCE(sum(w.reserved_micro_usd), 0)::BIGINT AS reserved_micro_usd
+                      COALESCE(sum(w.balance_micros), 0)::BIGINT AS balance_micros,
+                      COALESCE(sum(w.reserved_micros), 0)::BIGINT AS reserved_micros
                FROM project p
                LEFT JOIN credit_account w ON w.owner_type = 'project' AND w.owner_id = p.id
                WHERE p.owner_user_id = u.id AND p.is_default = TRUE
@@ -619,7 +619,7 @@ pub async fn claim_public_user_key(
         adjust_credit_in_tx(
             &mut tx,
             credit_account,
-            MICRO_USD_PER_USD,
+            MICROS_PER_MAJOR_UNIT,
             "gift",
             serde_json::json!({ "source": "public_user_key_claim" }),
         )
@@ -706,7 +706,7 @@ pub async fn list_user_keys(state: &AppState, query: ListUserKeysQuery) -> AppRe
                 p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
-                w.balance_micro_usd, w.reserved_micro_usd,
+                w.balance_micros, w.reserved_micros,
                 uk.created_at, uk.updated_at
          FROM user_key uk
          JOIN project p ON p.id = uk.project_id
@@ -830,7 +830,7 @@ async fn get_user_key(state: &AppState, id: DbId) -> AppResult<UserKeyRecord> {
                 p.name AS project_name,
                 uk.name, uk.key_prefix, uk.secret_ciphertext,
                 uk.status, uk.last_active_at, uk.expires_at,
-                w.balance_micro_usd, w.reserved_micro_usd,
+                w.balance_micros, w.reserved_micros,
                 uk.created_at, uk.updated_at
          FROM user_key uk
          JOIN project p ON p.id = uk.project_id
@@ -1051,13 +1051,13 @@ pub async fn adjust_credit(
     state: &AppState,
     credit_account_type: CreditAccountType,
     owner_id: DbId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
     reason: &str,
 ) -> AppResult<i64> {
     let mut tx = state.db.pool.begin().await?;
     let credit_account =
         account::owner_credit_account_for_update(&mut tx, credit_account_type, owner_id).await?;
-    if amount_micro_usd < 0 {
+    if amount_micros < 0 {
         let recovered = state
             .billing
             .drain_hot_credit_account(&credit_account)
@@ -1067,7 +1067,7 @@ pub async fn adjust_credit(
     let balance_after = adjust_credit_in_tx(
         &mut tx,
         credit_account,
-        amount_micro_usd,
+        amount_micros,
         reason,
         serde_json::json!({ "source": "admin" }),
     )
@@ -1079,7 +1079,7 @@ pub async fn adjust_credit(
 pub async fn adjust_default_project_credit(
     state: &AppState,
     user_id: DbId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
     reason: &str,
 ) -> AppResult<i64> {
     let mut tx = state.db.pool.begin().await?;
@@ -1087,7 +1087,7 @@ pub async fn adjust_default_project_credit(
     let credit_account =
         account::owner_credit_account_for_update(&mut tx, CreditAccountType::Project, project_id)
             .await?;
-    if amount_micro_usd < 0 {
+    if amount_micros < 0 {
         let recovered = state
             .billing
             .drain_hot_credit_account(&credit_account)
@@ -1097,7 +1097,7 @@ pub async fn adjust_default_project_credit(
     let balance_after = adjust_credit_in_tx(
         &mut tx,
         credit_account,
-        amount_micro_usd,
+        amount_micros,
         reason,
         serde_json::json!({ "source": "admin", "user_id": user_id }),
     )
@@ -1110,7 +1110,7 @@ pub async fn adjust_user_key_model_credit(
     state: &AppState,
     user_key_id: DbId,
     model: String,
-    amount_micro_usd: i64,
+    amount_micros: i64,
     reason: &str,
 ) -> AppResult<UserKeyModelCreditRecord> {
     let model = normalize_model_name(&model)?;
@@ -1143,7 +1143,7 @@ pub async fn adjust_user_key_model_credit(
     )
     .await?;
 
-    if amount_micro_usd < 0 {
+    if amount_micros < 0 {
         let recovered = state
             .billing
             .drain_hot_credit_account(&credit_account)
@@ -1153,7 +1153,7 @@ pub async fn adjust_user_key_model_credit(
     let balance_after = adjust_credit_in_tx(
         &mut tx,
         credit_account.clone(),
-        amount_micro_usd,
+        amount_micros,
         reason,
         serde_json::json!({
             "source": "admin",
@@ -1175,7 +1175,7 @@ pub async fn adjust_user_key_model_credit(
     Ok(UserKeyModelCreditRecord {
         user_key_model_id,
         credit_account_id: credit_account.id,
-        balance_micro_usd: balance_after,
+        balance_micros: balance_after,
     })
 }
 
@@ -1255,7 +1255,7 @@ async fn recover_hot_credit_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     parts: &[DebitPart],
 ) -> AppResult<()> {
-    let total = parts.iter().map(|part| part.amount_micro_usd).sum::<i64>();
+    let total = parts.iter().map(|part| part.amount_micros).sum::<i64>();
     if total <= 0 {
         return Ok(());
     }
@@ -1266,7 +1266,7 @@ async fn recover_hot_credit_in_tx(
     account::decrement_reserved(tx, credit_account, total).await?;
 
     for part in parts {
-        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micro_usd).await?;
+        account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
     }
 
     Ok(())
@@ -1275,13 +1275,13 @@ async fn recover_hot_credit_in_tx(
 async fn adjust_credit_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     credit_account: CreditAccountId,
-    amount_micro_usd: i64,
+    amount_micros: i64,
     reason: &str,
     metadata: serde_json::Value,
 ) -> AppResult<i64> {
-    if amount_micro_usd == 0 {
+    if amount_micros == 0 {
         return Err(AppError::BadRequest(
-            "amount_micro_usd cannot be zero".to_string(),
+            "amount_micros cannot be zero".to_string(),
         ));
     }
     if !matches!(reason, "recharge" | "gift" | "adjustment") {
@@ -1290,16 +1290,16 @@ async fn adjust_credit_in_tx(
         )));
     }
 
-    let balance_after = account::adjust_balance(tx, &credit_account, amount_micro_usd).await?;
+    let balance_after = account::adjust_balance(tx, &credit_account, amount_micros).await?;
 
     sqlx::query(
         "INSERT INTO credit_ledger
-         (credit_account_id, amount_micro_usd, balance_after_micro_usd, reason,
+         (credit_account_id, amount_micros, balance_after_micros, reason,
           transaction_id, metadata)
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(credit_account.id)
-    .bind(amount_micro_usd)
+    .bind(amount_micros)
     .bind(balance_after)
     .bind(reason)
     .bind(Uuid::new_v4())
@@ -1322,10 +1322,10 @@ pub fn user_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UserRecord> {
         user_group_code: row.try_get("user_group_code")?,
         user_group_name: row.try_get("user_group_name")?,
         user_key_count: row.try_get("user_key_count")?,
-        balance_micro_usd: row.try_get("balance_micro_usd")?,
-        reserved_micro_usd: row.try_get("reserved_micro_usd")?,
-        available_micro_usd: row.try_get::<i64, _>("balance_micro_usd")?
-            - row.try_get::<i64, _>("reserved_micro_usd")?,
+        balance_micros: row.try_get("balance_micros")?,
+        reserved_micros: row.try_get("reserved_micros")?,
+        available_micros: row.try_get::<i64, _>("balance_micros")?
+            - row.try_get::<i64, _>("reserved_micros")?,
         last_active_at: row.try_get("last_active_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -1363,10 +1363,10 @@ pub fn user_key_from_row(
         status: row.try_get("status")?,
         last_active_at: row.try_get("last_active_at")?,
         expires_at: row.try_get("expires_at")?,
-        balance_micro_usd: row.try_get("balance_micro_usd")?,
-        reserved_micro_usd: row.try_get("reserved_micro_usd")?,
-        available_micro_usd: row.try_get::<i64, _>("balance_micro_usd")?
-            - row.try_get::<i64, _>("reserved_micro_usd")?,
+        balance_micros: row.try_get("balance_micros")?,
+        reserved_micros: row.try_get("reserved_micros")?,
+        available_micros: row.try_get::<i64, _>("balance_micros")?
+            - row.try_get::<i64, _>("reserved_micros")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

@@ -33,6 +33,7 @@ import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
@@ -46,16 +47,11 @@ import type {
   ProviderPrice
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
-import { formatUsdPerMillion, microUsdToUsd, usdToMicroUsd } from '../../utils/format'
 import { splitCommaList } from '../../utils/channel'
-import {
-  derivedCacheReadPrice,
-  findPricingTemplate,
-  isProviderPriceConfigured,
-  priceKey
-} from '../../utils/pricing'
+import { derivedCacheReadPrice, findPricingTemplate, isProviderPriceConfigured, priceKey } from '../../utils/pricing'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const { currencySymbol, formatPricePerMillion, majorToMicroAmount, microAmountToMajor } = useBillingCurrency()
 
 defineOptions({
   name: 'ChannelsView'
@@ -289,38 +285,38 @@ function channelPriceRows(row: Channel) {
       }
     }
 
-    const inputMicros = channelModel.input_price_usd_micros ?? price?.input_price_usd_micros
-    const outputMicros = channelModel.output_price_usd_micros ?? price?.output_price_usd_micros
+    const inputMicros = channelModel.input_price_micros ?? price?.input_price_micros
+    const outputMicros = channelModel.output_price_micros ?? price?.output_price_micros
     const billingMeter = channelModel.billing_meter ?? price?.billing_meter
-    const unitMicros = channelModel.unit_price_usd_micros ?? price?.unit_price_usd_micros
+    const unitMicros = channelModel.unit_price_micros ?? price?.unit_price_micros
     const cacheReadMicros =
-      channelModel.cache_read_price_usd_micros ??
-      price?.cache_read_price_usd_micros ??
+      channelModel.cache_read_price_micros ??
+      price?.cache_read_price_micros ??
       (inputMicros === undefined ? undefined : derivedCacheReadPrice(inputMicros))
     const cacheWriteMicros =
-      channelModel.cache_write_price_usd_micros ?? price?.cache_write_price_usd_micros
+      channelModel.cache_write_price_micros ?? price?.cache_write_price_micros
     const billingEnabled = Boolean(channelModel.billing_enabled)
     const modelEnabled = Boolean(channelModel.enabled)
     const unitPrice =
       unitMicros !== undefined && unitMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(unitMicros))
+        ? formatPricePerMillion(unitMicros, 'en-US')
         : t('priceMissing')
     const inputPrice =
       inputMicros !== undefined && inputMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(inputMicros))
+        ? formatPricePerMillion(inputMicros, 'en-US')
         : t('priceMissing')
     const outputPrice =
       outputMicros !== undefined && outputMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(outputMicros))
+        ? formatPricePerMillion(outputMicros, 'en-US')
         : t('priceMissing')
     const cacheReadPrice =
       cacheReadMicros !== undefined && cacheReadMicros !== null
-        ? formatUsdPerMillion(microUsdToUsd(cacheReadMicros))
+        ? formatPricePerMillion(cacheReadMicros, 'en-US')
         : t('priceMissing')
     const cacheWritePrice = hasConfiguredPrice
       ? cacheWriteMicros === undefined || cacheWriteMicros === null
-        ? '$0'
-        : formatUsdPerMillion(microUsdToUsd(cacheWriteMicros as number))
+        ? `${currencySymbol.value}0`
+        : formatPricePerMillion(cacheWriteMicros as number, 'en-US')
       : t('priceMissing')
     const modelStatus = channelModel.status
     const upstreamMissing = modelStatus === 'missing'
@@ -514,20 +510,20 @@ function findApplicablePricingTemplate(form: ChannelPriceForm) {
 }
 
 function hasManualPriceInput(form: ChannelPriceForm) {
-  if (form.billingMeter === 'image') return form.unitUsd > 0
+  if (form.billingMeter === 'image') return form.unitPrice > 0
   return (
-    form.inputUsdPerMillion > 0 ||
-    form.outputUsdPerMillion > 0 ||
-    form.cacheReadUsdPerMillion > 0 ||
-    (form.cacheWriteUsdPerMillion ?? 0) > 0
+    form.inputPerMillion > 0 ||
+    form.outputPerMillion > 0 ||
+    form.cacheReadPerMillion > 0 ||
+    (form.cacheWritePerMillion ?? 0) > 0
   )
 }
 
 function hasEnabledBillablePrice(price?: ProviderPrice, billingMeter?: BillingMeter | null) {
   if (!price?.enabled) return false
   if (billingMeter && price.billing_meter !== billingMeter) return false
-  if (price.billing_meter === 'image') return (price.unit_price_usd_micros ?? 0) > 0
-  return price.input_price_usd_micros > 0 || price.output_price_usd_micros > 0
+  if (price.billing_meter === 'image') return (price.unit_price_micros ?? 0) > 0
+  return price.input_price_micros > 0 || price.output_price_micros > 0
 }
 
 function shouldSavePriceForm(form: ChannelPriceForm) {
@@ -555,34 +551,33 @@ function openPriceDialog(row: Channel) {
           ? 'token'
           : null
     const billingMeter = savedBillingMeter ?? defaultBillingMeterForModel(row.provider, model)
-    const inputPrice = price?.input_price_usd_micros ?? template?.input_price_usd_micros ?? 0
+    const inputPrice = price?.input_price_micros ?? template?.input_price_micros ?? 0
     const cacheWritePrice = template
-      ? template.cache_write_price_usd_micros
-      : (price?.cache_write_price_usd_micros ?? inputPrice)
+      ? template.cache_write_price_micros
+      : (price?.cache_write_price_micros ?? inputPrice)
     priceForms[key] = {
       provider: row.provider,
       model,
       billingMeter,
-      inputUsdPerMillion: microUsdToUsd(inputPrice),
-      outputUsdPerMillion: microUsdToUsd(
-        price?.output_price_usd_micros ?? template?.output_price_usd_micros ?? 0
+      inputPerMillion: microAmountToMajor(inputPrice),
+      outputPerMillion: microAmountToMajor(
+        price?.output_price_micros ?? template?.output_price_micros ?? 0
       ),
-      cacheReadUsdPerMillion: microUsdToUsd(
-        price?.cache_read_price_usd_micros ??
-          template?.cache_read_price_usd_micros ??
+      cacheReadPerMillion: microAmountToMajor(
+        price?.cache_read_price_micros ??
+          template?.cache_read_price_micros ??
           derivedCacheReadPrice(inputPrice)
       ),
-      cacheWriteUsdPerMillion:
+      cacheWritePerMillion:
         cacheWritePrice === undefined || cacheWritePrice === null
           ? 0
-          : microUsdToUsd(cacheWritePrice),
-      unitUsd: microUsdToUsd(price?.unit_price_usd_micros ?? template?.unit_price_usd_micros ?? 0),
+          : microAmountToMajor(cacheWritePrice),
+      unitPrice: microAmountToMajor(price?.unit_price_micros ?? template?.unit_price_micros ?? 0),
       enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
       hasPrice: hasEnabledBillablePrice(price, billingMeter),
       hasPriceRecord: Boolean(price),
       billingMeterLocked: isBillingMeterLocked(row.provider, model),
-      canUseImageBilling: supportsImageBilling,
-      templateSource: template ? pricingTemplateSourceLabel(template, row.provider) : undefined
+      canUseImageBilling: supportsImageBilling
     }
   }
   priceDialogOpen.value = true
@@ -600,55 +595,44 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
   const template = findApplicablePricingTemplate(form)
   if (!template) return ''
   if (template.billing_meter === 'image') {
-    const unit = template.unit_price_usd_micros
-      ? formatUsdPerMillion(microUsdToUsd(template.unit_price_usd_micros))
+    const unit = template.unit_price_micros
+      ? formatPricePerMillion(template.unit_price_micros, locale.value)
       : t('priceMissing')
     return `${t('billingMeterImageGeneration')} ${unit} / ${t('perImage')}`
   }
-  const input = formatUsdPerMillion(microUsdToUsd(template.input_price_usd_micros))
-  const output = formatUsdPerMillion(microUsdToUsd(template.output_price_usd_micros))
-  const cacheRead = formatUsdPerMillion(
-    microUsdToUsd(
-      template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)
-    )
+  const input = formatPricePerMillion(template.input_price_micros, locale.value)
+  const output = formatPricePerMillion(template.output_price_micros, locale.value)
+  const cacheRead = formatPricePerMillion(
+    template.cache_read_price_micros ?? derivedCacheReadPrice(template.input_price_micros),
+    locale.value
   )
   const cacheWrite =
-    template.cache_write_price_usd_micros === undefined ||
-    template.cache_write_price_usd_micros === null
-      ? '$0'
-      : formatUsdPerMillion(microUsdToUsd(template.cache_write_price_usd_micros))
+    template.cache_write_price_micros === undefined ||
+    template.cache_write_price_micros === null
+      ? `${currencySymbol.value}0`
+      : formatPricePerMillion(template.cache_write_price_micros, locale.value)
   return `Token ${input} / ${output}\nCache ${cacheRead} / ${cacheWrite}`
-}
-
-function pricingTemplateSourceLabel(template: PricingTemplate, provider: string) {
-  if (template.source === 'models_dev') return ''
-  const source = template.source.replace(/_/g, '.')
-  return template.provider === provider ? source : `${template.provider} / ${source}`
-}
-
-function priceIconProvider(form: (typeof priceForms)[string]) {
-  return findApplicablePricingTemplate(form)?.provider ?? form.provider
 }
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
   const template = findApplicablePricingTemplate(form)
   if (!template) return
   form.billingMeter = template.billing_meter
-  form.inputUsdPerMillion = microUsdToUsd(template.input_price_usd_micros)
-  form.outputUsdPerMillion = microUsdToUsd(template.output_price_usd_micros)
-  form.cacheReadUsdPerMillion = microUsdToUsd(
-    template.cache_read_price_usd_micros ?? derivedCacheReadPrice(template.input_price_usd_micros)
+  form.inputPerMillion = microAmountToMajor(template.input_price_micros)
+  form.outputPerMillion = microAmountToMajor(template.output_price_micros)
+  form.cacheReadPerMillion = microAmountToMajor(
+    template.cache_read_price_micros ?? derivedCacheReadPrice(template.input_price_micros)
   )
-  form.cacheWriteUsdPerMillion =
-    template.cache_write_price_usd_micros === undefined ||
-    template.cache_write_price_usd_micros === null
+  form.cacheWritePerMillion =
+    template.cache_write_price_micros === undefined ||
+    template.cache_write_price_micros === null
       ? 0
-      : microUsdToUsd(template.cache_write_price_usd_micros)
-  form.unitUsd = microUsdToUsd(template.unit_price_usd_micros ?? 0)
+      : microAmountToMajor(template.cache_write_price_micros)
+  form.unitPrice = microAmountToMajor(template.unit_price_micros ?? 0)
 }
 
 function cacheWritePricePayload(form: (typeof priceForms)[string]) {
-  return form.cacheWriteUsdPerMillion === null ? null : usdToMicroUsd(form.cacheWriteUsdPerMillion)
+  return form.cacheWritePerMillion === null ? null : majorToMicroAmount(form.cacheWritePerMillion)
 }
 
 function requireBillingMeter(form: (typeof priceForms)[string]) {
@@ -697,12 +681,12 @@ async function saveChannelPrices() {
         await upsertProviderPrice({
           provider: form.provider,
           model: form.model,
-          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-          cache_write_price_usd_micros: cacheWritePricePayload(form),
+          input_price_micros: majorToMicroAmount(form.inputPerMillion),
+          output_price_micros: majorToMicroAmount(form.outputPerMillion),
+          cache_read_price_micros: majorToMicroAmount(form.cacheReadPerMillion),
+          cache_write_price_micros: cacheWritePricePayload(form),
           billing_meter: billingMeter,
-          unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
+          unit_price_micros: billingMeter === 'image' ? majorToMicroAmount(form.unitPrice) : null,
           enabled: shouldEnablePriceForm(form)
         })
       }
@@ -762,31 +746,10 @@ async function applyReferencePrices() {
     return
   }
 
-  await withLoading(savingPrices, async () => {
-    try {
-      for (const form of targetForms) {
-        fillReferencePrice(form)
-        const billingMeter = requireBillingMeter(form)
-        await upsertProviderPrice({
-          provider: form.provider,
-          model: form.model,
-          input_price_usd_micros: usdToMicroUsd(form.inputUsdPerMillion),
-          output_price_usd_micros: usdToMicroUsd(form.outputUsdPerMillion),
-          cache_read_price_usd_micros: usdToMicroUsd(form.cacheReadUsdPerMillion),
-          cache_write_price_usd_micros: cacheWritePricePayload(form),
-          billing_meter: billingMeter,
-          unit_price_usd_micros: billingMeter === 'image' ? usdToMicroUsd(form.unitUsd) : null,
-          enabled: true
-        })
-      }
-      ElMessage.success(t('referencePricesApplied'))
-      await loadPricingData()
-      await loadChannels()
-      priceDialogOpen.value = false
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
+  for (const form of targetForms) {
+    fillReferencePrice(form)
+  }
+  ElMessage.success(t('referencePricesApplied'))
 }
 
 async function submitChannel() {
@@ -1186,7 +1149,6 @@ onMounted(loadInitialData)
       :has-reference-price="hasReferencePrice"
       :reference-price-summary="referencePriceSummary"
       :reference-price-fallback-label="referencePriceFallbackLabel"
-      :price-icon-provider="priceIconProvider"
       @apply-reference-prices="applyReferencePrices"
       @save="saveChannelPrices"
     />

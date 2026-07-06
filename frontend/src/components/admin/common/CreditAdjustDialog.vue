@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { Right } from '@element-plus/icons-vue'
 import { useLocale } from '../../../composables/useLocale'
-import { formatMicroUsd } from '../../../utils/format'
+import { useBillingCurrency } from '../../../composables/useBillingCurrency'
 
 const open = defineModel<boolean>('open', { required: true })
 const amount = defineModel<number>('amount', { required: true })
 
 defineProps<{
   title: string
-  currentBalanceMicroUsd: number
-  adjustedBalanceMicroUsd: number
+  currentBalance: number
+  adjustedBalance: number
   hint: string
   confirmText: string
   saving: boolean
@@ -21,7 +21,8 @@ const emit = defineEmits<{
   submit: []
 }>()
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const { billingCurrency, formatMoney } = useBillingCurrency()
 </script>
 
 <template>
@@ -40,19 +41,19 @@ const { t } = useLocale()
       <section class="credit-adjust-balance-card" aria-live="polite">
         <div class="credit-adjust-balance-item">
           <span>{{ t('currentBalance') }}</span>
-          <strong>{{ formatMicroUsd(currentBalanceMicroUsd, 2) }}</strong>
+          <strong>{{ formatMoney(currentBalance, locale, 2) }}</strong>
         </div>
         <div class="credit-adjust-balance-arrow" aria-hidden="true">
           <el-icon><Right /></el-icon>
         </div>
         <div class="credit-adjust-balance-item is-after">
           <span>{{ t('afterAdjustment') }}</span>
-          <strong>{{ formatMicroUsd(adjustedBalanceMicroUsd, 2) }}</strong>
+          <strong>{{ formatMoney(adjustedBalance, locale, 2) }}</strong>
         </div>
       </section>
 
       <div class="credit-adjust-amount-section">
-        <label class="credit-adjust-amount-label">{{ t('amountUsd') }}</label>
+        <label class="credit-adjust-amount-label">{{ billingCurrency }}</label>
         <el-input-number
           v-model="amount"
           :controls="false"

@@ -514,7 +514,7 @@ pub(crate) async fn build_state(
             config.redis_key_prefix.clone(),
             config.cache.price_ttl,
             config.cache.price_max_entries,
-            config.billing.credit_prefetch_micro_usd,
+            config.billing.credit_prefetch_micros,
             config.billing.default_output_tokens,
         )
         .await?
@@ -522,7 +522,7 @@ pub(crate) async fn build_state(
         Billing::new_memory(
             config.cache.price_ttl,
             config.cache.price_max_entries,
-            config.billing.credit_prefetch_micro_usd,
+            config.billing.credit_prefetch_micros,
             config.billing.default_output_tokens,
         )
     };
@@ -783,6 +783,7 @@ pub(crate) mod tests {
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 public_base_url: Some("http://localhost:8080".to_string()),
                 site_name: "NeoGate".to_string(),
+                billing_currency: config::BillingCurrency::Usd,
                 runtime_mode: config::RuntimeMode::Standalone,
                 process_role: config::ProcessRole::All,
                 admin_token_secret: "test-admin-token-secret".to_string(),
@@ -818,7 +819,7 @@ pub(crate) mod tests {
                 redis_url: None,
                 redis_key_prefix: "neogate-test".to_string(),
                 billing: config::BillingConfig {
-                    credit_prefetch_micro_usd: 100_000,
+                    credit_prefetch_micros: 100_000,
                     credit_allocation_recovery_after: Duration::from_secs(3600),
                     credit_allocation_recovery_interval: Duration::from_secs(60),
                     default_output_tokens: 4096,

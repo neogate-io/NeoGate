@@ -9,10 +9,9 @@ pub fn estimate_input_tokens(body: &[u8]) -> i64 {
     ((body.len() as i64) + 3) / 4
 }
 
-pub fn estimated_cost_micro_usd(input_tokens: i64, output_tokens: i64, price: &Price) -> i64 {
-    micro_usd_for_tokens(input_tokens, price.input_price_usd_micros).saturating_add(
-        micro_usd_for_tokens(output_tokens, price.output_price_usd_micros),
-    )
+pub fn estimated_cost_micros(input_tokens: i64, output_tokens: i64, price: &Price) -> i64 {
+    micros_for_tokens(input_tokens, price.input_price_micros)
+        .saturating_add(micros_for_tokens(output_tokens, price.output_price_micros))
 }
 
 pub fn cost_for_usage(usage: TokenUsage, price: &Price) -> i64 {
@@ -23,21 +22,21 @@ pub fn cost_for_usage(usage: TokenUsage, price: &Price) -> i64 {
     let uncached_input_tokens = usage.input_tokens.saturating_sub(cached_input_tokens);
     let cache_create_input_tokens = usage.cache_creation_input_tokens.unwrap_or(0).max(0);
     let cache_in_price = price
-        .cache_read_price_usd_micros
-        .unwrap_or(price.input_price_usd_micros / DEFAULT_CACHE_READ_PRICE_DIVISOR);
+        .cache_read_price_micros
+        .unwrap_or(price.input_price_micros / DEFAULT_CACHE_READ_PRICE_DIVISOR);
     let cache_create_in_price = price
-        .cache_write_price_usd_micros
-        .unwrap_or(price.input_price_usd_micros);
+        .cache_write_price_micros
+        .unwrap_or(price.input_price_micros);
 
-    micro_usd_for_tokens(uncached_input_tokens, price.input_price_usd_micros)
-        .saturating_add(micro_usd_for_tokens(cached_input_tokens, cache_in_price))
-        .saturating_add(micro_usd_for_tokens(
+    micros_for_tokens(uncached_input_tokens, price.input_price_micros)
+        .saturating_add(micros_for_tokens(cached_input_tokens, cache_in_price))
+        .saturating_add(micros_for_tokens(
             cache_create_input_tokens,
             cache_create_in_price,
         ))
-        .saturating_add(micro_usd_for_tokens(
+        .saturating_add(micros_for_tokens(
             usage.output_tokens,
-            price.output_price_usd_micros,
+            price.output_price_micros,
         ))
 }
 
@@ -48,19 +47,19 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
             .map_or(0, |token_usage| cost_for_usage(token_usage, price)),
         BillingMeter::Image => usage.billable_units.max(0).saturating_mul(
             price
-                .unit_price_usd_micros
-                .expect("image billing requires unit_price_usd_micros")
+                .unit_price_micros
+                .expect("image billing requires unit_price_micros")
                 .max(0),
         ),
     }
 }
 
-fn micro_usd_for_tokens(tokens: i64, price_usd_micros: i64) -> i64 {
-    if tokens <= 0 || price_usd_micros <= 0 {
+fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
+    if tokens <= 0 || price_micros <= 0 {
         return 0;
     }
 
-    let product = (tokens as i128).saturating_mul(price_usd_micros as i128);
+    let product = (tokens as i128).saturating_mul(price_micros as i128);
     let rounded = (product + TOKENS_PER_MILLION - 1) / TOKENS_PER_MILLION;
     i64::try_from(rounded).unwrap_or(i64::MAX)
 }
@@ -225,32 +224,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cost_uses_price_usd_micros() {
+    fn cost_uses_price_micros() {
         let price = Price {
-            input_price_usd_micros: 270_000,
-            output_price_usd_micros: 1_100_000,
-            cache_read_price_usd_micros: None,
-            cache_write_price_usd_micros: None,
+            input_price_micros: 270_000,
+            output_price_micros: 1_100_000,
+            cache_read_price_micros: None,
+            cache_write_price_micros: None,
             billing_meter: BillingMeter::Token,
-            unit_price_usd_micros: None,
+            unit_price_micros: None,
         };
 
         assert_eq!(
-            estimated_cost_micro_usd(1_000_000, 1_000_000, &price),
+            estimated_cost_micros(1_000_000, 1_000_000, &price),
             1_370_000
         );
-        assert_eq!(estimated_cost_micro_usd(1, 0, &price), 1);
+        assert_eq!(estimated_cost_micros(1, 0, &price), 1);
     }
 
     #[test]
     fn cost_discounts_cached_input_tokens() {
         let price = Price {
-            input_price_usd_micros: 5_000_000,
-            output_price_usd_micros: 30_000_000,
-            cache_read_price_usd_micros: Some(500_000),
-            cache_write_price_usd_micros: None,
+            input_price_micros: 5_000_000,
+            output_price_micros: 30_000_000,
+            cache_read_price_micros: Some(500_000),
+            cache_write_price_micros: None,
             billing_meter: BillingMeter::Token,
-            unit_price_usd_micros: None,
+            unit_price_micros: None,
         };
         let usage = TokenUsage {
             input_tokens: 77_931,

@@ -95,7 +95,7 @@ pub(super) async fn relay_openai_image(
                 user_key_model_credit_account.as_ref(),
                 estimated_image_units.saturating_mul(
                     price
-                        .unit_price_usd_micros
+                        .unit_price_micros
                         .ok_or_else(|| {
                             AppError::BadRequest(
                                 "unit price is required for image billing".to_string(),
@@ -137,6 +137,8 @@ pub(super) async fn relay_openai_image(
             relay_final: false,
             request_params: meta.request_params.clone(),
             request_permit: None,
+            upstream_request_path: Some(path.to_string()),
+            upstream_response_mode: None,
         };
         let response = forward_openai_with_content_type(
             &state,

@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    billing::BillingMeter,
+    billing::{BillingMeter, PricingBasis},
+    config::BillingCurrency,
     error::{AppError, AppResult},
     id::DbId,
     AppState,
@@ -14,18 +15,19 @@ use crate::{
 
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
 const PRICE_TEMPLATE_SOURCE_MODELS_DEV: &str = "models_dev";
+const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
 
 #[derive(Debug, Serialize)]
 pub struct ProviderPriceRecord {
     pub id: DbId,
     pub provider: String,
     pub model: String,
-    pub input_price_usd_micros: i64,
-    pub output_price_usd_micros: i64,
-    pub cache_read_price_usd_micros: Option<i64>,
-    pub cache_write_price_usd_micros: Option<i64>,
+    pub input_price_micros: i64,
+    pub output_price_micros: i64,
+    pub cache_read_price_micros: Option<i64>,
+    pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
-    pub unit_price_usd_micros: Option<i64>,
+    pub unit_price_micros: Option<i64>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -51,13 +53,13 @@ pub struct PricingTemplateRecord {
     pub id: DbId,
     pub provider: String,
     pub model: String,
-    pub input_price_usd_micros: i64,
-    pub output_price_usd_micros: i64,
-    pub cache_read_price_usd_micros: Option<i64>,
-    pub cache_write_price_usd_micros: Option<i64>,
+    pub input_price_micros: i64,
+    pub output_price_micros: i64,
+    pub cache_read_price_micros: Option<i64>,
+    pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
-    pub unit_price_usd_micros: Option<i64>,
-    pub pricing_basis: BillingMeter,
+    pub unit_price_micros: Option<i64>,
+    pub pricing_basis: PricingBasis,
     pub source: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -70,13 +72,13 @@ pub struct ModelReferenceCatalogRecord {
     pub provider: String,
     pub model: String,
     pub display_name: String,
-    pub input_price_usd_micros: i64,
-    pub output_price_usd_micros: i64,
-    pub cache_read_price_usd_micros: Option<i64>,
-    pub cache_write_price_usd_micros: Option<i64>,
+    pub input_price_micros: i64,
+    pub output_price_micros: i64,
+    pub cache_read_price_micros: Option<i64>,
+    pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
-    pub unit_price_usd_micros: Option<i64>,
-    pub pricing_basis: BillingMeter,
+    pub unit_price_micros: Option<i64>,
+    pub pricing_basis: PricingBasis,
     pub source: String,
     pub enabled: bool,
     pub capabilities: Value,
@@ -104,18 +106,19 @@ pub struct PricingTemplateSyncResult {
     pub fetched: usize,
     pub saved: u64,
     pub skipped: usize,
+    pub removed: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpsertProviderPriceRequest {
     pub provider: String,
     pub model: String,
-    pub input_price_usd_micros: i64,
-    pub output_price_usd_micros: i64,
-    pub cache_read_price_usd_micros: Option<i64>,
-    pub cache_write_price_usd_micros: Option<i64>,
+    pub input_price_micros: i64,
+    pub output_price_micros: i64,
+    pub cache_read_price_micros: Option<i64>,
+    pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
-    pub unit_price_usd_micros: Option<i64>,
+    pub unit_price_micros: Option<i64>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -178,23 +181,39 @@ struct ModelsDevLimit {
     output: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ModelsDevCost {
     input: Option<f64>,
     output: Option<f64>,
     cache_read: Option<f64>,
     cache_write: Option<f64>,
+    // 非 token 口径字段(由抓取脚本写入)
+    per_image: Option<f64>,
+    per_call: Option<f64>,
+    per_hour: Option<f64>,
+    per_second: Option<f64>,
+    #[allow(dead_code)]
+    per_unit: Option<f64>,
+    #[allow(dead_code)]
+    per_thousand_calls: Option<f64>,
+    per_10k_token_input: Option<f64>,
+    per_10k_token_output: Option<f64>,
+    /// 抓取脚本推断的口径字符串(见 PricingBasis::as_str)。
+    basis: Option<String>,
+    /// 多档视频价的完整档位结构(由抓取脚本 parse_multi_tier_video 写入),
+    /// 仅 `basis=multi_tier_video` 时存在。代表档仍写入 input/output。
+    video_tiers: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PricingMicros {
-    input_price_usd_micros: i64,
-    output_price_usd_micros: i64,
-    cache_read_price_usd_micros: Option<i64>,
-    cache_write_price_usd_micros: Option<i64>,
+    input_price_micros: i64,
+    output_price_micros: i64,
+    cache_read_price_micros: Option<i64>,
+    cache_write_price_micros: Option<i64>,
     billing_meter: BillingMeter,
-    unit_price_usd_micros: Option<i64>,
-    pricing_basis: BillingMeter,
+    unit_price_micros: Option<i64>,
+    pricing_basis: PricingBasis,
 }
 
 fn default_enabled() -> bool {
@@ -220,10 +239,10 @@ pub async fn list_provider_models(state: &AppState) -> AppResult<Vec<ProviderMod
 
 pub async fn list_provider_prices(state: &AppState) -> AppResult<Vec<ProviderPriceRecord>> {
     let rows = sqlx::query(
-        "SELECT id, provider, model, input_price_usd_micros,
-                output_price_usd_micros, cache_read_price_usd_micros,
-                cache_write_price_usd_micros, billing_meter,
-                unit_price_usd_micros,
+        "SELECT id, provider, model, input_price_micros,
+                output_price_micros, cache_read_price_micros,
+                cache_write_price_micros, billing_meter,
+                unit_price_micros,
                 enabled, created_at, updated_at
          FROM provider_price
          ORDER BY provider ASC, model ASC",
@@ -235,10 +254,10 @@ pub async fn list_provider_prices(state: &AppState) -> AppResult<Vec<ProviderPri
 
 pub async fn list_pricing_templates(state: &AppState) -> AppResult<Vec<PricingTemplateRecord>> {
     let rows = sqlx::query(
-        "SELECT id, provider, model, input_price_usd_micros,
-                output_price_usd_micros, cache_read_price_usd_micros,
-                cache_write_price_usd_micros, billing_meter,
-                unit_price_usd_micros, pricing_basis, source, enabled,
+        "SELECT id, provider, model, input_price_micros,
+                output_price_micros, cache_read_price_micros,
+                cache_write_price_micros, billing_meter,
+                unit_price_micros, pricing_basis, source, enabled,
                 created_at, updated_at
          FROM pricing_template
          ORDER BY provider ASC, model ASC",
@@ -253,9 +272,9 @@ pub async fn list_model_reference_catalog(
 ) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
     let rows = sqlx::query(
         "SELECT pt.id, pt.provider, pt.model, pm.display_name,
-                pt.input_price_usd_micros, pt.output_price_usd_micros,
-                pt.cache_read_price_usd_micros, pt.cache_write_price_usd_micros,
-                pt.billing_meter, pt.unit_price_usd_micros, pt.pricing_basis,
+                pt.input_price_micros, pt.output_price_micros,
+                pt.cache_read_price_micros, pt.cache_write_price_micros,
+                pt.billing_meter, pt.unit_price_micros, pt.pricing_basis,
                 pt.source, pt.enabled, pm.capabilities, pm.source AS model_source,
                 pm.updated_at AS model_updated_at, pt.created_at, pt.updated_at
          FROM pricing_template pt
@@ -266,6 +285,76 @@ pub async fn list_model_reference_catalog(
     .fetch_all(&state.db.pool)
     .await?;
     rows.iter().map(model_reference_catalog_from_row).collect()
+}
+
+pub async fn live_model_reference_catalog(
+    state: &AppState,
+) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
+    let upstream = match state.config.billing_currency {
+        BillingCurrency::Usd => fetch_models_dev_pricing_json(state).await?,
+        BillingCurrency::Cny => fetch_local_cny_pricing_json(state).await?,
+    };
+    let provider_codes = enabled_provider_codes(state).await?;
+    let now = Utc::now();
+    let mut records = Vec::new();
+
+    for (upstream_provider, provider_data) in upstream {
+        let Some(provider) = normalize_template_provider(&upstream_provider) else {
+            continue;
+        };
+        if !provider_codes.contains(provider) {
+            continue;
+        }
+
+        for (model, model_data) in provider_data.models {
+            let template = match state.config.billing_currency {
+                BillingCurrency::Usd => {
+                    pricing_template_from_models_dev_model(provider, &model, &model_data)
+                }
+                BillingCurrency::Cny => {
+                    pricing_template_from_local_cny_model(provider, &model, &model_data)
+                }
+            };
+            let Some(template) = template else { continue };
+            let Some(prices) = template.prices else {
+                continue;
+            };
+            records.push(ModelReferenceCatalogRecord {
+                id: 0,
+                provider: provider.to_string(),
+                model: model.trim().to_string(),
+                display_name: model_data
+                    .name
+                    .clone()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| model.trim().to_string()),
+                input_price_micros: prices.input_price_micros,
+                output_price_micros: prices.output_price_micros,
+                cache_read_price_micros: prices.cache_read_price_micros,
+                cache_write_price_micros: prices.cache_write_price_micros,
+                billing_meter: template.billing_meter,
+                unit_price_micros: prices.unit_price_micros,
+                pricing_basis: prices.pricing_basis,
+                source: match state.config.billing_currency {
+                    BillingCurrency::Usd => PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
+                    BillingCurrency::Cny => PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+                },
+                enabled: true,
+                capabilities: template.capabilities,
+                model_source: "upstream".to_string(),
+                model_updated_at: now,
+                created_at: now,
+                updated_at: now,
+            });
+        }
+    }
+
+    records.sort_by(|left, right| {
+        left.provider
+            .cmp(&right.provider)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+    Ok(records)
 }
 
 pub async fn list_pricing_policies(state: &AppState) -> AppResult<Vec<PricingPolicyRecord>> {
@@ -285,7 +374,12 @@ pub async fn sync_pricing_templates(
     req: SyncPricingTemplatesRequest,
 ) -> AppResult<PricingTemplateSyncResult> {
     match req.source.trim() {
-        "" | PRICE_TEMPLATE_SOURCE_MODELS_DEV => sync_models_dev_pricing_templates(state).await,
+        "" => match state.config.billing_currency {
+            BillingCurrency::Usd => sync_models_dev_pricing_templates(state).await,
+            BillingCurrency::Cny => sync_local_cny_pricing_templates(state).await,
+        },
+        PRICE_TEMPLATE_SOURCE_MODELS_DEV => sync_models_dev_pricing_templates(state).await,
+        PRICE_TEMPLATE_SOURCE_LOCAL_CNY => sync_local_cny_pricing_templates(state).await,
         source => Err(AppError::BadRequest(format!(
             "unsupported pricing template source: {source}"
         ))),
@@ -300,35 +394,35 @@ pub async fn upsert_provider_price(
     ensure_model_is_known(state, &req.provider, &req.model).await?;
     let row = sqlx::query(
         "INSERT INTO provider_price
-         (provider, model, input_price_usd_micros,
-          output_price_usd_micros, cache_read_price_usd_micros,
-          cache_write_price_usd_micros, billing_meter,
-          unit_price_usd_micros, enabled)
+         (provider, model, input_price_micros,
+          output_price_micros, cache_read_price_micros,
+          cache_write_price_micros, billing_meter,
+          unit_price_micros, enabled)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (provider, model)
          DO UPDATE SET
-             input_price_usd_micros = EXCLUDED.input_price_usd_micros,
-             output_price_usd_micros = EXCLUDED.output_price_usd_micros,
-             cache_read_price_usd_micros = EXCLUDED.cache_read_price_usd_micros,
-             cache_write_price_usd_micros = EXCLUDED.cache_write_price_usd_micros,
+             input_price_micros = EXCLUDED.input_price_micros,
+             output_price_micros = EXCLUDED.output_price_micros,
+             cache_read_price_micros = EXCLUDED.cache_read_price_micros,
+             cache_write_price_micros = EXCLUDED.cache_write_price_micros,
              billing_meter = EXCLUDED.billing_meter,
-             unit_price_usd_micros = EXCLUDED.unit_price_usd_micros,
+             unit_price_micros = EXCLUDED.unit_price_micros,
              enabled = EXCLUDED.enabled,
              updated_at = now()
-         RETURNING id, provider, model, input_price_usd_micros,
-                   output_price_usd_micros, cache_read_price_usd_micros,
-                   cache_write_price_usd_micros, billing_meter,
-                   unit_price_usd_micros,
+         RETURNING id, provider, model, input_price_micros,
+                   output_price_micros, cache_read_price_micros,
+                   cache_write_price_micros, billing_meter,
+                   unit_price_micros,
                    enabled, created_at, updated_at",
     )
     .bind(req.provider)
     .bind(req.model)
-    .bind(req.input_price_usd_micros)
-    .bind(req.output_price_usd_micros)
-    .bind(req.cache_read_price_usd_micros)
-    .bind(req.cache_write_price_usd_micros)
+    .bind(req.input_price_micros)
+    .bind(req.output_price_micros)
+    .bind(req.cache_read_price_micros)
+    .bind(req.cache_write_price_micros)
     .bind(req.billing_meter.as_str())
-    .bind(req.unit_price_usd_micros)
+    .bind(req.unit_price_micros)
     .bind(req.enabled)
     .fetch_one(&state.db.pool)
     .await?;
@@ -347,8 +441,9 @@ async fn sync_channel_model_enabled_for_price(
              SET enabled = TRUE,
                  updated_at = now()
              FROM channel_endpoint ce
+             JOIN channel c ON c.id = ce.channel_id
              WHERE cm.channel_id = ce.channel_id
-               AND cm.provider = $1
+               AND c.provider = $1
                AND cm.model = $2
                AND cm.model = ANY(ce.models)
                AND cm.status = 'available'",
@@ -359,11 +454,13 @@ async fn sync_channel_model_enabled_for_price(
         .await?;
     } else {
         sqlx::query(
-            "UPDATE channel_model
+            "UPDATE channel_model cm
              SET enabled = FALSE,
                  updated_at = now()
-             WHERE provider = $1
-               AND model = $2",
+             FROM channel c
+             WHERE c.id = cm.channel_id
+               AND c.provider = $1
+               AND cm.model = $2",
         )
         .bind(&price.provider)
         .bind(&price.model)
@@ -406,7 +503,7 @@ async fn sync_models_dev_pricing_templates(
 
         for (model, model_data) in provider_data.models {
             let Some(template) =
-                pricing_template_from_models_dev_model(provider, &model, model_data)
+                pricing_template_from_models_dev_model(provider, &model, &model_data)
             else {
                 skipped += 1;
                 continue;
@@ -417,11 +514,105 @@ async fn sync_models_dev_pricing_templates(
         }
     }
 
+    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_LOCAL_CNY).await?;
+
     Ok(PricingTemplateSyncResult {
         source: PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
         fetched,
         saved,
         skipped,
+        removed,
+    })
+}
+
+const LOCAL_CNY_PRICING_JSON_PATH: &str = "/model-pricing.json";
+
+async fn sync_local_cny_pricing_templates(
+    state: &AppState,
+) -> AppResult<PricingTemplateSyncResult> {
+    let upstream = fetch_local_cny_pricing_json(state).await?;
+    apply_local_cny_pricing_templates(state, upstream).await
+}
+
+async fn fetch_local_cny_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    let Some(base_url) = state.config.public_base_url.as_deref() else {
+        return Err(AppError::BadRequest(
+            "PUBLIC_BASE_URL is not configured, cannot fetch local CNY pricing JSON".to_string(),
+        ));
+    };
+    let url = format!("{base_url}{LOCAL_CNY_PRICING_JSON_PATH}");
+    state
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(local_cny_pricing_unavailable)?
+        .error_for_status()
+        .map_err(local_cny_pricing_unavailable)?
+        .json::<HashMap<String, ModelsDevProvider>>()
+        .await
+        .map_err(local_cny_pricing_unavailable)
+}
+
+async fn fetch_models_dev_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    state
+        .http
+        .get(MODELS_DEV_PRICING_URL)
+        .send()
+        .await
+        .map_err(models_dev_pricing_unavailable)?
+        .error_for_status()
+        .map_err(models_dev_pricing_unavailable)?
+        .json::<HashMap<String, ModelsDevProvider>>()
+        .await
+        .map_err(models_dev_pricing_unavailable)
+}
+
+async fn apply_local_cny_pricing_templates(
+    state: &AppState,
+    upstream: HashMap<String, ModelsDevProvider>,
+) -> AppResult<PricingTemplateSyncResult> {
+    let provider_codes = enabled_provider_codes(state).await?;
+    let mut fetched = 0usize;
+    let mut skipped = 0usize;
+    let mut saved = 0u64;
+
+    for (upstream_provider, provider_data) in upstream {
+        fetched += provider_data.models.len();
+        let Some(provider) = normalize_template_provider(&upstream_provider) else {
+            skipped += provider_data.models.len();
+            continue;
+        };
+        if !provider_codes.contains(provider) {
+            skipped += provider_data.models.len();
+            continue;
+        }
+
+        for (model, model_data) in provider_data.models {
+            let Some(template) =
+                pricing_template_from_local_cny_model(provider, &model, &model_data)
+            else {
+                skipped += 1;
+                continue;
+            };
+            saved +=
+                upsert_synced_pricing_template(state, template, PRICE_TEMPLATE_SOURCE_LOCAL_CNY)
+                    .await?;
+        }
+    }
+
+    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MODELS_DEV).await?;
+
+    Ok(PricingTemplateSyncResult {
+        source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+        fetched,
+        saved,
+        skipped,
+        removed,
     })
 }
 
@@ -430,6 +621,14 @@ fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
         error = %err,
         error_debug = ?err,
         "failed to sync pricing templates from models.dev"
+    );
+    AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
+}
+fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
+    tracing::warn!(
+        error = %err,
+        error_debug = ?err,
+        "failed to sync local CNY pricing templates from public base url"
     );
     AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
 }
@@ -455,34 +654,161 @@ struct PricingTemplateUpsert<'a> {
 fn pricing_template_from_models_dev_model<'a>(
     provider: &'a str,
     model: &'a str,
-    model_data: ModelsDevModel,
+    model_data: &ModelsDevModel,
 ) -> Option<PricingTemplateUpsert<'a>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
-    let billing_meter = billing_meter_from_models_dev_model(&model_data);
-    let prices = pricing_micros_from_models_dev_model(&model_data);
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let prices = pricing_micros_from_models_dev_model(model_data);
     Some(PricingTemplateUpsert {
         provider,
         model,
         billing_meter,
-        capabilities: models_dev_capabilities(&model_data),
+        capabilities: models_dev_capabilities(model_data),
+        prices,
+    })
+}
+
+fn pricing_template_from_local_cny_model<'a>(
+    provider: &'a str,
+    model: &'a str,
+    model_data: &ModelsDevModel,
+) -> Option<PricingTemplateUpsert<'a>> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let prices = pricing_micros_from_local_pricing_model(model_data);
+    Some(PricingTemplateUpsert {
+        provider,
+        model,
+        billing_meter,
+        capabilities: local_pricing_capabilities(model_data),
         prices,
     })
 }
 
 fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<PricingMicros> {
-    let cost = model.cost.as_ref()?;
-    Some(PricingMicros {
-        input_price_usd_micros: usd_per_million_to_micros(cost.input)?,
-        output_price_usd_micros: usd_per_million_to_micros(cost.output)?,
-        cache_read_price_usd_micros: usd_per_million_to_micros(cost.cache_read),
-        cache_write_price_usd_micros: usd_per_million_to_micros(cost.cache_write),
-        billing_meter: BillingMeter::Token,
-        unit_price_usd_micros: None,
-        pricing_basis: BillingMeter::Token,
-    })
+    pricing_micros_from_cost(model.cost.as_ref()?)
+}
+
+fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<PricingMicros> {
+    pricing_micros_from_cost(model.cost.as_ref()?)
+}
+
+/// 按 `cost.basis` 口径分流构造参考价微单位。
+/// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
+/// `billing_meter` 仅 token/image,不引入新值,实际计费链路不受影响。
+fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
+    let basis = parse_pricing_basis(cost.basis.as_deref());
+    use PricingBasis::*;
+    match basis {
+        Image => {
+            let unit_price = cny_to_micros(cost.per_image)?;
+            Some(PricingMicros {
+                input_price_micros: 0,
+                output_price_micros: 0,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
+                billing_meter: BillingMeter::Image,
+                unit_price_micros: Some(unit_price),
+                pricing_basis: Image,
+            })
+        }
+        Call => {
+            let unit_price = cny_to_micros(cost.per_call)?;
+            Some(PricingMicros {
+                input_price_micros: 0,
+                output_price_micros: 0,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_micros: Some(unit_price),
+                pricing_basis: Call,
+            })
+        }
+        Hour => {
+            let unit_price = cny_to_micros(cost.per_hour)?;
+            Some(PricingMicros {
+                input_price_micros: 0,
+                output_price_micros: 0,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_micros: Some(unit_price),
+                pricing_basis: Hour,
+            })
+        }
+        Second => {
+            let unit_price = cny_to_micros(cost.per_second)?;
+            Some(PricingMicros {
+                input_price_micros: 0,
+                output_price_micros: 0,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_micros: Some(unit_price),
+                pricing_basis: Second,
+            })
+        }
+        Per10kToken => {
+            let input = per_10k_to_micros(cost.per_10k_token_input)?;
+            let output = per_10k_to_micros(cost.per_10k_token_output)
+                .or_else(|| per_10k_to_micros(cost.per_10k_token_input))?;
+            Some(PricingMicros {
+                input_price_micros: input,
+                output_price_micros: output,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_micros: None,
+                pricing_basis: Per10kToken,
+            })
+        }
+        MultiTierVideo => {
+            // input/output 已由抓取脚本取代表档(最低档)写入,按 token 微单位处理。
+            let input = per_million_to_micros(cost.input)?;
+            let output =
+                per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
+            Some(PricingMicros {
+                input_price_micros: input,
+                output_price_micros: output,
+                cache_read_price_micros: None,
+                cache_write_price_micros: None,
+                billing_meter: BillingMeter::Token,
+                unit_price_micros: None,
+                pricing_basis: MultiTierVideo,
+            })
+        }
+        Token => {
+            let input = per_million_to_micros(cost.input)?;
+            let output = per_million_to_micros(cost.output)?;
+            Some(PricingMicros {
+                input_price_micros: input,
+                output_price_micros: output,
+                cache_read_price_micros: per_million_to_micros(cost.cache_read),
+                cache_write_price_micros: per_million_to_micros(cost.cache_write),
+                billing_meter: BillingMeter::Token,
+                unit_price_micros: None,
+                pricing_basis: Token,
+            })
+        }
+    }
+}
+
+fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
+    match value {
+        Some("image") => PricingBasis::Image,
+        Some("call") => PricingBasis::Call,
+        Some("hour") => PricingBasis::Hour,
+        Some("second") => PricingBasis::Second,
+        Some("per_10k_token") => PricingBasis::Per10kToken,
+        Some("multi_tier_video") => PricingBasis::MultiTierVideo,
+        _ => PricingBasis::Token,
+    }
 }
 
 fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
@@ -522,6 +848,20 @@ fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
     })
 }
 
+fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
+    let mut payload = json!({
+        "id": model.id,
+        "name": model.name,
+        "modalities": model.modalities,
+    });
+    if let Some(cost) = model.cost.as_ref() {
+        if let Some(video_tiers) = cost.video_tiers.as_ref() {
+            payload["video_tiers"] = json!(video_tiers);
+        }
+    }
+    payload
+}
+
 async fn upsert_synced_pricing_template(
     state: &AppState,
     template: PricingTemplateUpsert<'_>,
@@ -550,19 +890,19 @@ async fn upsert_synced_pricing_template(
     };
     let result = sqlx::query(
         "INSERT INTO pricing_template
-         (provider, model, input_price_usd_micros,
-          output_price_usd_micros, cache_read_price_usd_micros,
-          cache_write_price_usd_micros, billing_meter,
-          unit_price_usd_micros, pricing_basis, source, enabled)
+         (provider, model, input_price_micros,
+          output_price_micros, cache_read_price_micros,
+          cache_write_price_micros, billing_meter,
+          unit_price_micros, pricing_basis, source, enabled)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE)
          ON CONFLICT (provider, model)
          DO UPDATE SET
-             input_price_usd_micros = EXCLUDED.input_price_usd_micros,
-             output_price_usd_micros = EXCLUDED.output_price_usd_micros,
-             cache_read_price_usd_micros = EXCLUDED.cache_read_price_usd_micros,
-             cache_write_price_usd_micros = EXCLUDED.cache_write_price_usd_micros,
+             input_price_micros = EXCLUDED.input_price_micros,
+             output_price_micros = EXCLUDED.output_price_micros,
+             cache_read_price_micros = EXCLUDED.cache_read_price_micros,
+             cache_write_price_micros = EXCLUDED.cache_write_price_micros,
              billing_meter = EXCLUDED.billing_meter,
-             unit_price_usd_micros = EXCLUDED.unit_price_usd_micros,
+             unit_price_micros = EXCLUDED.unit_price_micros,
              pricing_basis = EXCLUDED.pricing_basis,
              source = EXCLUDED.source,
              enabled = TRUE,
@@ -571,14 +911,28 @@ async fn upsert_synced_pricing_template(
     )
     .bind(template.provider)
     .bind(model)
-    .bind(prices.input_price_usd_micros)
-    .bind(prices.output_price_usd_micros)
-    .bind(prices.cache_read_price_usd_micros)
-    .bind(prices.cache_write_price_usd_micros)
+    .bind(prices.input_price_micros)
+    .bind(prices.output_price_micros)
+    .bind(prices.cache_read_price_micros)
+    .bind(prices.cache_write_price_micros)
     .bind(prices.billing_meter.as_str())
-    .bind(prices.unit_price_usd_micros)
+    .bind(prices.unit_price_micros)
     .bind(prices.pricing_basis.as_str())
     .bind(source)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 同步切换计费币种/数据源后,清理上一个自动同步源残留的参考价记录,
+/// 避免 CNY 计费下残留的 models.dev USD 价格被当作 CNY 展示(反之亦然)。
+/// 仅清理指定的旧自动源;手动确认价(confirmed_price)等其它来源不受影响。
+async fn prune_stale_pricing_templates(state: &AppState, stale_source: &str) -> AppResult<u64> {
+    let result = sqlx::query(
+        "DELETE FROM pricing_template
+         WHERE source = $1",
+    )
+    .bind(stale_source)
     .execute(&state.db.pool)
     .await?;
     Ok(result.rows_affected())
@@ -606,7 +960,7 @@ fn normalize_template_provider(provider: &str) -> Option<&'static str> {
     }
 }
 
-fn usd_per_million_to_micros(value: Option<f64>) -> Option<i64> {
+fn per_million_to_micros(value: Option<f64>) -> Option<i64> {
     let value = value?;
     if !value.is_finite() || value < 0.0 {
         return None;
@@ -616,6 +970,17 @@ fn usd_per_million_to_micros(value: Option<f64>) -> Option<i64> {
         return None;
     }
     Some(micros as i64)
+}
+
+/// 参考价展示用:按张/按次/按小时的 CNY 单价转 micro-CNY。
+/// 与 `per_million_to_micros` 同为 ×1_000_000,前端按 `pricing_basis` 标签区分单位语义。
+fn cny_to_micros(value: Option<f64>) -> Option<i64> {
+    per_million_to_micros(value)
+}
+
+/// 参考价展示用:按万 token 的 CNY 单价转 micro-CNY。前端按"万Token"口径展示。
+fn per_10k_to_micros(value: Option<f64>) -> Option<i64> {
+    per_million_to_micros(value)
 }
 
 pub async fn upsert_pricing_policy(
@@ -677,13 +1042,17 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         ));
     }
     let prices = PricingMicros {
-        input_price_usd_micros: req.input_price_usd_micros,
-        output_price_usd_micros: req.output_price_usd_micros,
-        cache_read_price_usd_micros: req.cache_read_price_usd_micros,
-        cache_write_price_usd_micros: req.cache_write_price_usd_micros,
+        input_price_micros: req.input_price_micros,
+        output_price_micros: req.output_price_micros,
+        cache_read_price_micros: req.cache_read_price_micros,
+        cache_write_price_micros: req.cache_write_price_micros,
         billing_meter: req.billing_meter,
-        unit_price_usd_micros: req.unit_price_usd_micros,
-        pricing_basis: req.billing_meter,
+        unit_price_micros: req.unit_price_micros,
+        // 手动录入价格默认按 token 口径展示;image 计费时展示口径同步为 image。
+        pricing_basis: match req.billing_meter {
+            BillingMeter::Image => PricingBasis::Image,
+            BillingMeter::Token => PricingBasis::Token,
+        },
     };
     if !prices_are_non_negative(prices) {
         return Err(AppError::BadRequest(
@@ -691,7 +1060,7 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         ));
     }
     if prices.billing_meter == BillingMeter::Image {
-        match prices.unit_price_usd_micros {
+        match prices.unit_price_micros {
             Some(price) if price > 0 => {}
             _ => {
                 return Err(AppError::BadRequest(
@@ -704,15 +1073,15 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
 }
 
 fn prices_are_non_negative(prices: PricingMicros) -> bool {
-    prices.input_price_usd_micros >= 0
-        && prices.output_price_usd_micros >= 0
+    prices.input_price_micros >= 0
+        && prices.output_price_micros >= 0
         && prices
-            .cache_read_price_usd_micros
+            .cache_read_price_micros
             .is_none_or(|price| price >= 0)
         && prices
-            .cache_write_price_usd_micros
+            .cache_write_price_micros
             .is_none_or(|price| price >= 0)
-        && prices.unit_price_usd_micros.is_none_or(|price| price >= 0)
+        && prices.unit_price_micros.is_none_or(|price| price >= 0)
 }
 
 fn validate_pricing_policy(req: &UpsertPricingPolicyRequest) -> AppResult<()> {
@@ -783,12 +1152,12 @@ fn provider_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderPri
         id: row.try_get("id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
-        input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-        output_price_usd_micros: row.try_get("output_price_usd_micros")?,
-        cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
-        cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+        input_price_micros: row.try_get("input_price_micros")?,
+        output_price_micros: row.try_get("output_price_micros")?,
+        cache_read_price_micros: row.try_get("cache_read_price_micros")?,
+        cache_write_price_micros: row.try_get("cache_write_price_micros")?,
         billing_meter: billing_meter_from_row(row)?,
-        unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+        unit_price_micros: row.try_get("unit_price_micros")?,
         enabled: row.try_get("enabled")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -800,12 +1169,12 @@ fn pricing_template_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingTe
         id: row.try_get("id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
-        input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-        output_price_usd_micros: row.try_get("output_price_usd_micros")?,
-        cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
-        cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+        input_price_micros: row.try_get("input_price_micros")?,
+        output_price_micros: row.try_get("output_price_micros")?,
+        cache_read_price_micros: row.try_get("cache_read_price_micros")?,
+        cache_write_price_micros: row.try_get("cache_write_price_micros")?,
         billing_meter: billing_meter_from_row(row)?,
-        unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+        unit_price_micros: row.try_get("unit_price_micros")?,
         pricing_basis: pricing_basis_from_row(row)?,
         source: row.try_get("source")?,
         enabled: row.try_get("enabled")?,
@@ -822,12 +1191,12 @@ fn model_reference_catalog_from_row(
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         display_name: row.try_get("display_name")?,
-        input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-        output_price_usd_micros: row.try_get("output_price_usd_micros")?,
-        cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
-        cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+        input_price_micros: row.try_get("input_price_micros")?,
+        output_price_micros: row.try_get("output_price_micros")?,
+        cache_read_price_micros: row.try_get("cache_read_price_micros")?,
+        cache_write_price_micros: row.try_get("cache_write_price_micros")?,
         billing_meter: billing_meter_from_row(row)?,
-        unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+        unit_price_micros: row.try_get("unit_price_micros")?,
         pricing_basis: pricing_basis_from_row(row)?,
         source: row.try_get("source")?,
         enabled: row.try_get("enabled")?,
@@ -844,9 +1213,9 @@ fn billing_meter_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, s
     BillingMeter::from_strict_str(&value).map_err(|err| sqlx::Error::Decode(err.into()))
 }
 
-fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, sqlx::Error> {
+fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<PricingBasis, sqlx::Error> {
     let value: String = row.try_get("pricing_basis")?;
-    BillingMeter::from_strict_str(&value).map_err(|err| sqlx::Error::Decode(err.into()))
+    Ok(PricingBasis::from_str_lenient(&value))
 }
 
 fn pricing_policy_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingPolicyRecord> {
@@ -867,11 +1236,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn converts_models_dev_usd_per_million_to_micros() {
-        assert_eq!(usd_per_million_to_micros(Some(0.1)), Some(100_000));
-        assert_eq!(usd_per_million_to_micros(Some(1.25)), Some(1_250_000));
-        assert_eq!(usd_per_million_to_micros(Some(-1.0)), None);
-        assert_eq!(usd_per_million_to_micros(None), None);
+    fn converts_models_dev_per_million_to_micros() {
+        assert_eq!(per_million_to_micros(Some(0.1)), Some(100_000));
+        assert_eq!(per_million_to_micros(Some(1.25)), Some(1_250_000));
+        assert_eq!(per_million_to_micros(Some(-1.0)), None);
+        assert_eq!(per_million_to_micros(None), None);
     }
 
     #[test]
@@ -894,10 +1263,10 @@ mod tests {
         .unwrap();
         let cost = model.cost.unwrap();
 
-        assert_eq!(usd_per_million_to_micros(cost.input), Some(5_000_000));
-        assert_eq!(usd_per_million_to_micros(cost.output), Some(30_000_000));
-        assert_eq!(usd_per_million_to_micros(cost.cache_read), Some(500_000));
-        assert_eq!(usd_per_million_to_micros(cost.cache_write), Some(6_250_000));
+        assert_eq!(per_million_to_micros(cost.input), Some(5_000_000));
+        assert_eq!(per_million_to_micros(cost.output), Some(30_000_000));
+        assert_eq!(per_million_to_micros(cost.cache_read), Some(500_000));
+        assert_eq!(per_million_to_micros(cost.cache_write), Some(6_250_000));
     }
 
     #[test]
@@ -916,9 +1285,69 @@ mod tests {
             BillingMeter::Image
         );
         assert_eq!(prices.billing_meter, BillingMeter::Token);
-        assert_eq!(prices.pricing_basis, BillingMeter::Token);
-        assert_eq!(prices.input_price_usd_micros, 8_000_000);
-        assert_eq!(prices.output_price_usd_micros, 30_000_000);
-        assert_eq!(prices.unit_price_usd_micros, None);
+        assert_eq!(prices.pricing_basis, PricingBasis::Token);
+        assert_eq!(prices.input_price_micros, 8_000_000);
+        assert_eq!(prices.output_price_micros, 30_000_000);
+        assert_eq!(prices.unit_price_micros, None);
+    }
+
+    #[test]
+    fn pricing_basis_image_uses_unit_price() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"per_image":0.22,"basis":"image"}}"#).unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Image);
+        assert_eq!(prices.billing_meter, BillingMeter::Image);
+        assert_eq!(prices.unit_price_micros, Some(220_000));
+        assert_eq!(prices.input_price_micros, 0);
+        assert_eq!(prices.output_price_micros, 0);
+    }
+
+    #[test]
+    fn pricing_basis_call_uses_unit_price() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"per_call":2.4,"basis":"call"}}"#).unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Call);
+        assert_eq!(prices.billing_meter, BillingMeter::Token);
+        assert_eq!(prices.unit_price_micros, Some(2_400_000));
+    }
+
+    #[test]
+    fn pricing_basis_per_10k_token_uses_input_output() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{"cost":{"per_10k_token_input":0.36,"per_10k_token_output":3.6,"basis":"per_10k_token"}}"#,
+        )
+        .unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Per10kToken);
+        assert_eq!(prices.input_price_micros, 360_000);
+        assert_eq!(prices.output_price_micros, 3_600_000);
+    }
+
+    #[test]
+    fn pricing_basis_multi_tier_video_uses_representative_tier() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"input":16,"output":16,"basis":"multi_tier_video"}}"#)
+                .unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::MultiTierVideo);
+        assert_eq!(prices.input_price_micros, 16_000_000);
+        assert_eq!(prices.output_price_micros, 16_000_000);
+    }
+
+    #[test]
+    fn pricing_basis_second_uses_unit_price() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"cost":{"per_second":0.9,"basis":"second"}}"#).unwrap();
+        let prices = pricing_micros_from_models_dev_model(&model).unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::Second);
+        assert_eq!(prices.billing_meter, BillingMeter::Token);
+        assert_eq!(prices.unit_price_micros, Some(900_000));
     }
 }

@@ -87,12 +87,12 @@ pub struct ChannelModelRecord {
     pub failure_count: i64,
     pub billing_enabled: bool,
     pub price_configured: bool,
-    pub input_price_usd_micros: Option<i64>,
-    pub output_price_usd_micros: Option<i64>,
-    pub cache_read_price_usd_micros: Option<i64>,
-    pub cache_write_price_usd_micros: Option<i64>,
+    pub input_price_micros: Option<i64>,
+    pub output_price_micros: Option<i64>,
+    pub cache_read_price_micros: Option<i64>,
+    pub cache_write_price_micros: Option<i64>,
     pub billing_meter: Option<String>,
-    pub unit_price_usd_micros: Option<i64>,
+    pub unit_price_micros: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -906,11 +906,10 @@ async fn sync_channel_models_for_channel(
             active_models.push(model.to_string());
             sqlx::query(
                 "INSERT INTO channel_model
-                 (channel_id, provider, model, enabled, status, runtime_status, last_seen_at)
-                 VALUES ($1, $2, $3, $4, 'available', 'normal', now())
+                 (channel_id, model, enabled, status, runtime_status, last_seen_at)
+                 VALUES ($1, $2, $3, 'available', 'normal', now())
                  ON CONFLICT (channel_id, model)
                  DO UPDATE SET
-                     provider = EXCLUDED.provider,
                      enabled = EXCLUDED.enabled,
                      status = 'available',
                      missing_since = NULL,
@@ -918,7 +917,6 @@ async fn sync_channel_models_for_channel(
                      updated_at = now()",
             )
             .bind(channel_id)
-            .bind(provider)
             .bind(model)
             .bind(price_configured)
             .execute(&mut **tx)
@@ -1048,7 +1046,7 @@ async fn models_by_channel(
     }
 
     let rows = sqlx::query(AssertSqlSafe(format!(
-        "SELECT cm.id, cm.channel_id, cm.provider, cm.model, cm.enabled,
+        "SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.enabled,
                 cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
                 cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
                 cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
@@ -1058,13 +1056,14 @@ async fn models_by_channel(
                     FALSE
                 ) AS billing_enabled,
                 (pp.id IS NOT NULL) AS price_configured,
-                pp.input_price_usd_micros, pp.output_price_usd_micros,
-                pp.cache_read_price_usd_micros, pp.cache_write_price_usd_micros,
+                pp.input_price_micros, pp.output_price_micros,
+                pp.cache_read_price_micros, pp.cache_write_price_micros,
                 pp.billing_meter,
-                pp.unit_price_usd_micros
+                pp.unit_price_micros
          FROM channel_model cm
+         JOIN channel c ON c.id = cm.channel_id
          LEFT JOIN provider_price pp
-           ON pp.provider = cm.provider
+           ON pp.provider = c.provider
           AND pp.model = cm.model
          WHERE cm.channel_id = ANY($1)
          ORDER BY cm.model ASC"
@@ -1089,8 +1088,9 @@ async fn ensure_channel_model_has_enabled_price(
     let row = sqlx::query(AssertSqlSafe(format!(
         "SELECT 1
          FROM channel_model cm
+         JOIN channel c ON c.id = cm.channel_id
          JOIN provider_price pp
-          ON pp.provider = cm.provider
+          ON pp.provider = c.provider
          AND pp.model = cm.model
          AND pp.enabled = TRUE
          AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
@@ -1175,12 +1175,12 @@ fn channel_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelModel
         failure_count: row.try_get("failure_count")?,
         billing_enabled: row.try_get("billing_enabled")?,
         price_configured: row.try_get("price_configured")?,
-        input_price_usd_micros: row.try_get("input_price_usd_micros")?,
-        output_price_usd_micros: row.try_get("output_price_usd_micros")?,
-        cache_read_price_usd_micros: row.try_get("cache_read_price_usd_micros")?,
-        cache_write_price_usd_micros: row.try_get("cache_write_price_usd_micros")?,
+        input_price_micros: row.try_get("input_price_micros")?,
+        output_price_micros: row.try_get("output_price_micros")?,
+        cache_read_price_micros: row.try_get("cache_read_price_micros")?,
+        cache_write_price_micros: row.try_get("cache_write_price_micros")?,
         billing_meter: row.try_get("billing_meter")?,
-        unit_price_usd_micros: row.try_get("unit_price_usd_micros")?,
+        unit_price_micros: row.try_get("unit_price_micros")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

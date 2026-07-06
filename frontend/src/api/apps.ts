@@ -10,7 +10,6 @@ export type AppEndpointInput = {
 
 export type AppModelOption = {
   model: string
-  providers: string[]
   channel_count: number
 }
 

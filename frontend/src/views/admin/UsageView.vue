@@ -17,6 +17,7 @@ import {
   type UsagePage
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
@@ -26,12 +27,12 @@ import {
   downloadBlob,
   formatDateTime,
   formatDurationMs,
-  formatMicroUsd,
   formatNumber,
   formatTokenRate
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
+const { formatMoney } = useBillingCurrency()
 
 const DEFAULT_PAGE_SIZE = 20
 
@@ -250,7 +251,7 @@ async function exportUsage() {
           />
         </label>
         <label class="admin-filter-field">
-          <span>{{ t('providerOrModel') }}</span>
+          <span>{{ t('channelOrModel') }}</span>
           <el-input
             v-model="filters.query"
             class="usage-search-input"
@@ -390,7 +391,7 @@ async function exportUsage() {
         </el-table-column>
         <el-table-column :label="t('cost')" min-width="104" align="right" header-align="right">
           <template #default="{ row }">
-            <span class="usage-cost-cell">{{ formatMicroUsd(row.cost_micro_usd, 6) }}</span>
+            <span class="usage-cost-cell">{{ formatMoney(row.cost_micros, locale, 6) }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('status')" min-width="110" align="center" header-align="center">
@@ -633,7 +634,6 @@ async function exportUsage() {
   gap: 4px;
 }
 
-.usage-provider,
 .usage-muted {
   color: #86909c;
   font-size: 12px;

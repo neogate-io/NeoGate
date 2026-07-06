@@ -41,6 +41,7 @@ import { getUsers } from '../../api/users'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
+import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
@@ -60,9 +61,7 @@ import { readError } from '../../utils/errors'
 import {
   formatCompactDateTime,
   formatDateTime,
-  formatMicroUsd,
-  maskApiKey,
-  usdToMicroUsd
+  maskApiKey
 } from '../../utils/format'
 
 defineOptions({
@@ -70,6 +69,7 @@ defineOptions({
 })
 
 const { locale, t } = useLocale()
+const { formatMoney, majorToMicroAmount } = useBillingCurrency()
 const confirmDialog = createConfirmAction(() => t('cancel'))
 
 type TranslationKey = Parameters<typeof t>[0]
@@ -106,7 +106,7 @@ type ProjectModelCandidateForm = {
 }
 
 const DEFAULT_PAGE_SIZE = 50
-const DEFAULT_RECHARGE_USD = 0
+const DEFAULT_RECHARGE_AMOUNT = 0
 const PROJECT_STATUS_META: Record<ProjectStatus, ProjectStatusMeta> = {
   enabled: {
     labelKey: 'enabled',
@@ -152,7 +152,7 @@ const smartAutoSource = ref('')
 const channelOptions = ref<Channel[]>([])
 const ownerOptions = ref<User[]>([])
 const ownerSearchLoading = ref(false)
-const amountUsd = ref(DEFAULT_RECHARGE_USD)
+const amountMajor = ref(DEFAULT_RECHARGE_AMOUNT)
 const servicePolicy = ref<ServicePolicy | null>(null)
 const projectForm = reactive<ProjectForm>({
   name: '',
@@ -228,9 +228,9 @@ const smartProjectModel = computed(
 const emptyDescription = computed(() =>
   search.value || statusFilter.value ? t('noMatchingProjects') : t('noProjects')
 )
-const rechargePreviewMicroUsd = computed(() => {
-  if (!selectedProject.value) return usdToMicroUsd(amountUsd.value)
-  return selectedProject.value.balance_micro_usd + usdToMicroUsd(amountUsd.value)
+const rechargePreviewMicros = computed(() => {
+  if (!selectedProject.value) return majorToMicroAmount(amountMajor.value)
+  return selectedProject.value.balance_micros + majorToMicroAmount(amountMajor.value)
 })
 const isCreditRequired = computed(() => servicePolicy.value?.credit_required ?? true)
 const isEditingProject = computed(() => Boolean(selectedProject.value))
@@ -270,25 +270,23 @@ function projectStatusIcon(status: ProjectStatus) {
 
 function creditTooltip(row: Project) {
   return [
-    `${t('totalCredit')}: ${formatMicroUsd(row.balance_micro_usd, 2)}`,
-    `${t('reservedCredit')}: ${formatMicroUsd(row.reserved_micro_usd, 2)}`,
-    `${t('remainingCredit')}: ${formatMicroUsd(row.available_micro_usd, 2)}`
+    `${t('totalCredit')}: ${formatMoney(row.balance_micros, locale.value, 2)}`,
+    `${t('reservedCredit')}: ${formatMoney(row.reserved_micros, locale.value, 2)}`,
+    `${t('remainingCredit')}: ${formatMoney(row.available_micros, locale.value, 2)}`
   ].join('\n')
 }
 
 function creditCellClass(row: Project): CreditClass {
-  return !isCreditRequired.value && row.available_micro_usd === 0 ? 'is-unlimited' : 'is-available'
+  return !isCreditRequired.value && row.available_micros === 0 ? 'is-unlimited' : 'is-available'
 }
 
-function formatAvailableUsd(row: Project) {
-  if (!isCreditRequired.value && row.available_micro_usd === 0) return t('unlimitedCredit')
-  return formatMicroUsd(row.available_micro_usd, 2)
+function formatAvailableCredit(row: Project) {
+  if (!isCreditRequired.value && row.available_micros === 0) return '-'
+  return formatMoney(row.available_micros, locale.value, 2)
 }
 
 function formatProjectModelCount(row: Project) {
-  return row.project_model_count === 0
-    ? t('unlimitedModels')
-    : row.project_model_count.toLocaleString(locale.value)
+  return row.project_model_count === 0 ? '-' : row.project_model_count.toLocaleString(locale.value)
 }
 
 function memberRoleText(role: ProjectMember['role']) {
@@ -350,7 +348,7 @@ function openEditDialog(row: Project) {
 
 function openCreditDialog(row: Project) {
   selectedProject.value = row
-  amountUsd.value = DEFAULT_RECHARGE_USD
+  amountMajor.value = DEFAULT_RECHARGE_AMOUNT
   creditDialogVisible.value = true
 }
 
@@ -890,7 +888,7 @@ async function submitCredit() {
   if (!projectId) return
   await withLoading(creditSaving, async () => {
     try {
-      await adjustCredit('project', projectId, usdToMicroUsd(amountUsd.value))
+      await adjustCredit('project', projectId, majorToMicroAmount(amountMajor.value))
       ElMessage.success(t('creditUpdated'))
       creditDialogVisible.value = false
       await reload()
@@ -1062,7 +1060,7 @@ onMounted(loadServicePolicy)
           <template #default="{ row }">
             <el-tooltip :content="creditTooltip(row)" placement="top" :show-after="600">
               <span class="project-credit-cell" :class="creditCellClass(row)">
-                {{ formatAvailableUsd(row) }}
+                {{ formatAvailableCredit(row) }}
               </span>
             </el-tooltip>
           </template>
@@ -1249,11 +1247,11 @@ onMounted(loadServicePolicy)
 
     <CreditAdjustDialog
       v-if="selectedProject"
-      v-model:amount="amountUsd"
+      v-model:amount="amountMajor"
       v-model:open="creditDialogVisible"
-      :adjusted-balance-micro-usd="rechargePreviewMicroUsd"
+      :adjusted-balance="rechargePreviewMicros"
       :confirm-text="t('confirmAdjustment')"
-      :current-balance-micro-usd="selectedProject.available_micro_usd"
+      :current-balance="selectedProject.available_micros"
       :hint="t('projectCreditAdjustHint')"
       :saving="creditSaving"
       :subject-label="t('project')"

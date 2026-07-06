@@ -40,6 +40,15 @@ pub(crate) enum AdapterResponseMode {
     OpenAiChatAsOpenAiResponse,
 }
 
+impl AdapterResponseMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Passthrough => "passthrough",
+            Self::OpenAiChatAsOpenAiResponse => "openai_chat_as_openai_response",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedUpstreamRequest {
     pub(crate) url: String,

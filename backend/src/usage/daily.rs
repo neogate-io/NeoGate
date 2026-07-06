@@ -108,13 +108,13 @@ async fn flush_usage_daily_aggregates(
 
     let mut query_builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO usage_daily
-         (day, user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, provider, model,
+         (day, user_id, project_id, user_key_id, channel_id, channel_key_id, credential_id, model,
           request_count, success_count, error_count, streamed_count,
           latency_ms_total, first_response_ms_total, first_response_count,
           input_tokens, output_tokens, total_tokens, cache_in_tokens,
           cache_create_in_tokens, cache_create_5m_in_tokens,
           cache_create_1h_in_tokens, reason_out_tokens, audio_in_tokens,
-          audio_out_tokens, billing_meter, billable_units, cost_micro_usd)
+          audio_out_tokens, billing_meter, billable_units, cost_micros)
          ",
     );
     query_builder.push_values(aggregates, |mut row, item| {
@@ -125,7 +125,6 @@ async fn flush_usage_daily_aggregates(
             .push_bind(item.key.channel_id)
             .push_bind(item.key.channel_key_id)
             .push_bind(item.key.credential_id)
-            .push_bind(&item.key.provider)
             .push_bind(&item.key.model)
             .push_bind(item.request_count)
             .push_bind(item.success_count)
@@ -146,7 +145,7 @@ async fn flush_usage_daily_aggregates(
             .push_bind(item.audio_out_tokens)
             .push_bind(item.billing_meter.as_str())
             .push_bind(item.billable_units)
-            .push_bind(item.cost_micro_usd);
+            .push_bind(item.cost_micros);
     });
     query_builder.push(
         " ON CONFLICT (
@@ -157,7 +156,6 @@ async fn flush_usage_daily_aggregates(
               COALESCE(channel_id, '-1'::BIGINT),
               COALESCE(channel_key_id, '-1'::BIGINT),
               COALESCE(credential_id, '-1'::BIGINT),
-              provider,
               model,
               billing_meter
           )
@@ -180,7 +178,7 @@ async fn flush_usage_daily_aggregates(
               audio_in_tokens = usage_daily.audio_in_tokens + EXCLUDED.audio_in_tokens,
               audio_out_tokens = usage_daily.audio_out_tokens + EXCLUDED.audio_out_tokens,
               billable_units = usage_daily.billable_units + EXCLUDED.billable_units,
-              cost_micro_usd = usage_daily.cost_micro_usd + EXCLUDED.cost_micro_usd,
+              cost_micros = usage_daily.cost_micros + EXCLUDED.cost_micros,
               updated_at = now()",
     );
     query_builder.build().execute(&mut **tx).await?;
@@ -196,7 +194,6 @@ struct DailyUsageKey {
     channel_id: DbId,
     channel_key_id: Option<DbId>,
     credential_id: Option<DbId>,
-    provider: String,
     model: String,
     billing_meter: BillingMeter,
 }
@@ -223,7 +220,7 @@ struct DailyUsageAggregate {
     audio_out_tokens: i64,
     billing_meter: BillingMeter,
     billable_units: i64,
-    cost_micro_usd: i64,
+    cost_micros: i64,
 }
 
 fn daily_usage_aggregates(
@@ -271,7 +268,6 @@ impl DailyUsageAggregate {
             channel_id: item.channel_id,
             channel_key_id: item.channel_key_id,
             credential_id: item.credential_id,
-            provider: item.provider.clone(),
             model: item.model.clone().unwrap_or_default(),
             billing_meter: fields.billing_meter,
         };
@@ -330,7 +326,7 @@ impl DailyUsageAggregate {
                 .max(0),
             billing_meter: fields.billing_meter,
             billable_units: fields.billable_units,
-            cost_micro_usd: fields.cost_micro_usd.unwrap_or(0).max(0),
+            cost_micros: fields.cost_micros.unwrap_or(0).max(0),
         }
     }
 
@@ -353,7 +349,7 @@ impl DailyUsageAggregate {
         self.audio_in_tokens += other.audio_in_tokens;
         self.audio_out_tokens += other.audio_out_tokens;
         self.billable_units += other.billable_units;
-        self.cost_micro_usd += other.cost_micro_usd;
+        self.cost_micros += other.cost_micros;
     }
 }
 

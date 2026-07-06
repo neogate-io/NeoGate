@@ -10,12 +10,20 @@ pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-pr
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum BillingCurrency {
+    Usd,
+    Cny,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
     pub bind_addr: SocketAddr,
     pub public_base_url: Option<String>,
     pub site_name: String,
+    pub billing_currency: BillingCurrency,
     pub runtime_mode: RuntimeMode,
     pub process_role: ProcessRole,
     pub admin_token_secret: String,
@@ -50,6 +58,7 @@ pub struct RuntimeProbe {
     pub redis_url: Option<String>,
     pub public_base_url: Option<String>,
     pub site_name: Option<String>,
+    pub billing_currency: Option<BillingCurrency>,
     pub admin_token_secret: Option<String>,
     pub upstream_secret_key: Option<String>,
     pub env_file: PathBuf,
@@ -134,6 +143,23 @@ impl ServiceMode {
     }
 }
 
+impl BillingCurrency {
+    pub fn from_env_value(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "USD" => Ok(Self::Usd),
+            "CNY" => Ok(Self::Cny),
+            _ => anyhow::bail!("BILLING_CURRENCY must be USD or CNY"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Usd => "USD",
+            Self::Cny => "CNY",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DbPoolConfig {
     pub min_connections: u32,
@@ -178,7 +204,7 @@ pub struct CacheConfig {
 
 #[derive(Clone, Debug)]
 pub struct BillingConfig {
-    pub credit_prefetch_micro_usd: i64,
+    pub credit_prefetch_micros: i64,
     pub credit_allocation_recovery_after: Duration,
     pub credit_allocation_recovery_interval: Duration,
     pub default_output_tokens: i64,
@@ -236,6 +262,12 @@ impl Config {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "NeoGate".to_string()),
+            billing_currency: env::var("BILLING_CURRENCY")
+                .ok()
+                .as_deref()
+                .map(BillingCurrency::from_env_value)
+                .transpose()?
+                .unwrap_or(BillingCurrency::Cny),
             runtime_mode,
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
@@ -295,7 +327,7 @@ impl Config {
             redis_key_prefix: env::var("REDIS_KEY_PREFIX")
                 .unwrap_or_else(|_| "neogate".to_string()),
             billing: BillingConfig {
-                credit_prefetch_micro_usd: parse_i64("CREDIT_PREFETCH_MICRO_USD", 100_000)?,
+                credit_prefetch_micros: parse_i64("CREDIT_PREFETCH_MICROS", 100_000)?,
                 credit_allocation_recovery_after: Duration::from_secs(parse_u64(
                     "CREDIT_RELEASE_AFTER_SECONDS",
                     900,
@@ -304,7 +336,7 @@ impl Config {
                     "CREDIT_RELEASE_INTERVAL_SECONDS",
                     60,
                 )?),
-                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 2048)?,
+                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 8192)?,
             },
             usage_queue: UsageQueueConfig {
                 flush_interval: Duration::from_millis(parse_u64("USAGE_FLUSH_INTERVAL_MS", 1000)?),
@@ -352,8 +384,8 @@ impl Config {
         if self.runtime_mode.is_distributed() && self.redis_url.is_none() {
             anyhow::bail!("REDIS_URL is required when RUNTIME_MODE=distributed");
         }
-        if self.billing.credit_prefetch_micro_usd <= 0 {
-            anyhow::bail!("CREDIT_PREFETCH_MICRO_USD must be positive");
+        if self.billing.credit_prefetch_micros <= 0 {
+            anyhow::bail!("CREDIT_PREFETCH_MICROS must be positive");
         }
         if self.billing.credit_allocation_recovery_after.is_zero() {
             anyhow::bail!("CREDIT_RELEASE_AFTER_SECONDS must be positive");
@@ -454,6 +486,10 @@ impl RuntimeProbe {
             redis_url: optional("REDIS_URL"),
             public_base_url,
             site_name: optional("SITE_NAME").map(|value| value.trim().to_string()),
+            billing_currency: optional("BILLING_CURRENCY")
+                .as_deref()
+                .map(BillingCurrency::from_env_value)
+                .transpose()?,
             admin_token_secret: optional("ADMIN_TOKEN_SECRET"),
             upstream_secret_key: optional("UPSTREAM_SECRET_KEY"),
             env_file,

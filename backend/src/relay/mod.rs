@@ -12,6 +12,9 @@ mod upstream;
 
 use std::{fmt::Write as _, sync::Arc};
 
+use async_compression::tokio::bufread::{
+    BrotliDecoder, DeflateDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder,
+};
 use axum::{
     body::Body,
     http::{header, HeaderValue, StatusCode},
@@ -23,13 +26,14 @@ use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, BufReader};
 use uuid::Uuid;
 
 use crate::provider::{anthropic, openai};
 use crate::{
     auth::UserAuth,
     billing::{
-        estimate_input_tokens, estimated_cost_micro_usd, parse_usage_from_bytes, BillingAccounts,
+        estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes, BillingAccounts,
         BillingCharge, DebitHold, Price, TokenUsage,
     },
     cache::InvalidationEvent,
@@ -397,8 +401,11 @@ fn format_upstream_http_failure_log(
     failure: &UpstreamHttpFailure,
     client_response: Option<&str>,
 ) -> String {
-    format!(
-        "upstream returned error | channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream={} upstream_status={} relay_status={} latency={}ms error_type={} retryable={} error={} client_response={}",
+    let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+    let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
+    let mut line = format!(
+        "upstream returned error | trace={} channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream_path={} response_mode={} upstream={} upstream_status={} relay_status={} latency={}ms streamed={} error_type={} retryable={} error={} client_response={}",
+        short_trace_id(ctx.relay_trace_id),
         ctx.upstream.channel_name,
         ctx.upstream.channel_id,
         ctx.upstream.channel_endpoint_id,
@@ -408,15 +415,20 @@ fn format_upstream_http_failure_log(
         ctx.protocol.as_str(),
         ctx.model,
         ctx.path,
+        upstream_path,
+        response_mode,
         ctx.upstream.base_url,
         status.as_u16(),
         failure.relay_status.as_u16(),
         ctx.started.elapsed().as_millis(),
+        ctx.streamed,
         failure.error_type,
         failure.retryable,
         failure.detail,
         client_response.unwrap_or("not_returned_attempting_reroute")
-    )
+    );
+    push_info_request_params(&mut line, &ctx.request_params);
+    line
 }
 
 pub(crate) async fn record_upstream_http_failure(
@@ -499,9 +511,14 @@ pub(crate) async fn record_upstream_transport_failure_for_failover(
 }
 
 pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {
+    let status = upstream_response.status();
+    let content_length = upstream_response.content_length();
+    let headers = upstream_response.headers().clone();
+    let content_encoding = header_for_log(&headers, "content-encoding");
     let mut stream = upstream_response.bytes_stream();
     let mut body = Vec::new();
     let mut truncated = false;
+    let mut read_err: Option<reqwest::Error> = None;
 
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -512,9 +529,40 @@ pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Respons
                 }
             }
             Err(err) => {
-                return Bytes::from(format!("failed to read upstream error body: {err}"));
+                read_err = Some(err);
+                break;
             }
         }
+    }
+
+    if let Some(err) = &read_err {
+        // reqwest's Kind::Decode Display is a fixed string with no underlying
+        // cause, so walk the source chain to surface the real failure (e.g.
+        // framing, timeout, or an unexpected gzip stream from an upstream that
+        // ignored `accept-encoding: identity`).
+        let mut chain = Vec::new();
+        let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(err);
+        while let Some(e) = cur {
+            if let Some(s) = e.source() {
+                chain.push(format!("{s}"));
+                cur = Some(s);
+            } else {
+                cur = None;
+            }
+        }
+        tracing::warn!(
+            upstream_status = status.as_u16(),
+            content_type = header_for_log(&headers, header::CONTENT_TYPE.as_str()),
+            content_encoding = %content_encoding,
+            transfer_encoding = header_for_log(&headers, "transfer-encoding"),
+            content_length,
+            bytes_read = body.len(),
+            is_decode = err.is_decode(),
+            is_body = err.is_body(),
+            error = %err,
+            source_chain = ?chain,
+            "failed to read upstream error body; keeping partial bytes"
+        );
     }
 
     if truncated {
@@ -523,7 +571,52 @@ pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Respons
             "upstream error body exceeded read limit; truncating"
         );
     }
-    Bytes::from(body)
+
+    // Some upstreams (e.g. jdcloud) ignore `accept-encoding: identity` and
+    // return a compressed error body. Decode it in-memory before handing the
+    // bytes to JSON parsing; the error body is bounded by
+    // UPSTREAM_ERROR_BODY_READ_LIMIT so a full in-memory decode is cheap.
+    let decoded = match content_encoding.as_str() {
+        "gzip" | "x-gzip" => decode_all(GzipDecoder::new(BufReader::new(&body[..]))).await,
+        "br" => decode_all(BrotliDecoder::new(BufReader::new(&body[..]))).await,
+        "zstd" => decode_all(ZstdDecoder::new(BufReader::new(&body[..]))).await,
+        "deflate" => {
+            // RFC 7230 defines `deflate` as the zlib format, but some servers
+            // emit raw deflate instead. Try zlib first, then fall back to raw.
+            let out = decode_all(ZlibDecoder::new(BufReader::new(&body[..]))).await;
+            if out.is_empty() {
+                decode_all(DeflateDecoder::new(BufReader::new(&body[..]))).await
+            } else {
+                out
+            }
+        }
+        _ => body.clone(),
+    };
+
+    if let (Some(err), true) = (&read_err, decoded.is_empty()) {
+        // No usable bytes survived; fall back to a synthetic detail so the
+        // client still gets a structured error instead of an empty body.
+        return Bytes::from(format!("failed to read upstream error body: {err}"));
+    }
+    Bytes::from(decoded)
+}
+
+async fn decode_all<R: AsyncReadExt + Unpin>(mut decoder: R) -> Vec<u8> {
+    let mut out = Vec::new();
+    match decoder.read_to_end(&mut out).await {
+        Ok(_) => out,
+        Err(_) => Vec::new(),
+    }
+}
+
+fn header_for_log(headers: &reqwest::header::HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-")
+        .to_string()
 }
 
 fn append_limited_error_body(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
@@ -567,7 +660,6 @@ pub(crate) fn usage_from_context(
         relay_trace_id: Some(ctx.relay_trace_id),
         relay_attempt: ctx.relay_attempt,
         relay_final: ctx.relay_final,
-        provider: ctx.upstream.provider.clone(),
         model: Some(ctx.external_model.clone()),
         upstream_model: Some(ctx.upstream_model.clone()),
         routing_phase: "relay".to_string(),
@@ -590,7 +682,7 @@ pub(crate) fn usage_from_context(
 fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let token_usage = usage.token_usage;
     let billing = usage.billing.as_ref();
-    let cost_micro_usd = billing.map(|billing| billing.cost_micro_usd);
+    let cost_micros = billing.map(|billing| billing.cost_micros);
     let input_tokens = billing
         .and_then(|billing| billing.input_tokens)
         .or_else(|| token_usage.map(|usage| usage.input_tokens));
@@ -629,7 +721,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_opt(&mut info, "out", output_tokens);
     push_opt(&mut info, "cached", cached_input_tokens);
     push_opt(&mut info, "reasoning", reasoning_output_tokens);
-    push_opt(&mut info, "cost", cost_micro_usd);
+    push_opt(&mut info, "cost", cost_micros);
     push_info_request_params(&mut info, &ctx.request_params);
     if usage.relay_attempt > 1 {
         push_field(&mut info, "attempt", usage.relay_attempt);
@@ -656,7 +748,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_field(&mut detail, "user_id", usage.user_id);
     push_field(&mut detail, "project_id", usage.project_id);
     push_field(&mut detail, "user_key_id", usage.user_key_id);
-    push_field(&mut detail, "provider", &usage.provider);
+    push_field(&mut detail, "provider", &ctx.upstream.provider);
     push_field(&mut detail, "protocol", ctx.protocol.as_str());
     push_field(
         &mut detail,
@@ -716,7 +808,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
         push_field(&mut detail, "billing_meter", usage.billing_meter.as_str());
         push_field(&mut detail, "billable_units", usage.billable_units);
     }
-    push_opt(&mut detail, "cost_micro_usd", cost_micro_usd);
+    push_opt(&mut detail, "cost_micros", cost_micros);
     if let Some(status) = billing.map(|billing| billing.status.as_str()) {
         push_field(&mut detail, "billing_status", status);
     }
@@ -881,11 +973,11 @@ pub(crate) async fn reserve_credit(
     price: &Price,
 ) -> AppResult<DebitHold> {
     let input_tokens = estimate_input_tokens(body);
-    let estimated = estimated_cost_micro_usd(input_tokens, output_tokens, price);
+    let estimated = estimated_cost_micros(input_tokens, output_tokens, price);
     if !policy::credit_required(state).await? {
         return Ok(DebitHold {
             transaction_id: Uuid::new_v4(),
-            estimated_micro_usd: estimated,
+            estimated_micros: estimated,
             parts: Vec::new(),
             charge_credit: false,
         });
@@ -911,13 +1003,13 @@ pub(crate) async fn reserve_billable_credit(
     state: &AppState,
     auth: &UserAuth,
     user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,
-    estimated_micro_usd: i64,
+    estimated_micros: i64,
 ) -> AppResult<DebitHold> {
-    let estimated = estimated_micro_usd.max(0);
+    let estimated = estimated_micros.max(0);
     if !policy::credit_required(state).await? {
         return Ok(DebitHold {
             transaction_id: Uuid::new_v4(),
-            estimated_micro_usd: estimated,
+            estimated_micros: estimated,
             parts: Vec::new(),
             charge_credit: false,
         });
@@ -993,5 +1085,27 @@ mod tests {
         assert!(append_limited_error_body(&mut body, &chunk));
 
         assert_eq!(body.len(), UPSTREAM_ERROR_BODY_READ_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn decode_all_decompresses_gzip_error_body() {
+        use async_compression::tokio::write::GzipEncoder;
+        use tokio::io::AsyncWriteExt;
+
+        let original = br#"{"error":{"message":"model not found","code":406}}"#;
+        let mut encoder = GzipEncoder::new(Vec::new());
+        encoder.write_all(original).await.unwrap();
+        encoder.shutdown().await.unwrap();
+        let compressed: Vec<u8> = encoder.into_inner();
+
+        let decoded = decode_all(GzipDecoder::new(BufReader::new(&compressed[..]))).await;
+        assert_eq!(decoded, original);
+    }
+
+    #[tokio::test]
+    async fn decode_all_returns_empty_for_corrupt_input() {
+        let corrupt = b"not a gzip stream at all";
+        let decoded = decode_all(GzipDecoder::new(BufReader::new(&corrupt[..]))).await;
+        assert!(decoded.is_empty());
     }
 }

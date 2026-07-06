@@ -86,6 +86,7 @@ pub struct BootstrapConfigInput {
     pub database_url: Option<String>,
     pub site_name: Option<String>,
     pub public_base_url: Option<String>,
+    pub billing_currency: Option<crate::config::BillingCurrency>,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +95,7 @@ pub struct PreparedRuntimeConfig {
     database_url: String,
     site_name: String,
     public_base_url: String,
+    billing_currency: crate::config::BillingCurrency,
     admin_token_secret: Option<String>,
     upstream_secret_key: Option<String>,
 }
@@ -227,12 +229,14 @@ pub async fn prepare_runtime_config(req: BootstrapConfigInput) -> AppResult<Prep
     let database_url = optional_trimmed(req.database_url).or(probe.database_url.clone());
     let public_base_url = optional_trimmed(req.public_base_url).or(probe.public_base_url.clone());
     let site_name = optional_trimmed(req.site_name).or(probe.site_name.clone());
+    let billing_currency = req.billing_currency.or(probe.billing_currency);
 
     let database_url =
         database_url.ok_or_else(|| AppError::BadRequest("DATABASE_URL is required".to_string()))?;
     let public_base_url = public_base_url
         .ok_or_else(|| AppError::BadRequest("PUBLIC_BASE_URL is required".to_string()))?;
     let site_name = site_name.unwrap_or_else(|| "NeoGate".to_string());
+    let billing_currency = billing_currency.unwrap_or(crate::config::BillingCurrency::Cny);
     validate_public_base_url(&public_base_url)?;
     test_database(&database_url).await?;
 
@@ -258,6 +262,7 @@ pub async fn prepare_runtime_config(req: BootstrapConfigInput) -> AppResult<Prep
         database_url,
         site_name,
         public_base_url,
+        billing_currency,
         admin_token_secret,
         upstream_secret_key,
     })
@@ -288,6 +293,10 @@ impl PreparedRuntimeConfig {
         let mut values = vec![
             ("PUBLIC_BASE_URL".to_string(), self.public_base_url.clone()),
             ("DATABASE_URL".to_string(), self.database_url.clone()),
+            (
+                "BILLING_CURRENCY".to_string(),
+                self.billing_currency.as_str().to_string(),
+            ),
         ];
         if let Some(secret) = &self.admin_token_secret {
             values.push(("ADMIN_TOKEN_SECRET".to_string(), secret.clone()));

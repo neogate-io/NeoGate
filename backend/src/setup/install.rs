@@ -288,6 +288,7 @@ mod tests {
         assert!(script.contains("run_switch_model_flow"));
         assert!(script.contains("run_change_key_flow"));
         assert!(script.contains("run_full_flow"));
+        assert!(script.contains(r#"printf 'openai_base_url = "%s"\n' "$escaped_base_url""#));
         assert!(script.contains(r#"printf '[model_providers."%s"]\n' "$escaped_provider_id""#));
         assert!(script.contains(r#""?neogate"?[[:space:]]*\]?[[:space:]]*$"#));
         assert!(script.contains(r#"switch_option) printf '1. 切换模型' ;"#));
@@ -317,6 +318,7 @@ mod tests {
         assert!(script.contains("function Get-CommandVersion"));
         assert!(script.contains("function Get-NpmGlobalPaths"));
         assert!(script.contains("npm config get prefix"));
+        assert!(script.contains("openai_base_url = `\"$(Escape-Toml $BaseUrl)`\""));
         assert!(script.contains("[model_providers.`\"$providerIdEscaped`\"]"));
         assert!(script.contains(r#""?neogate"?\s*\]?\s*$"#));
         assert!(script.contains("function Detect-Locale"));

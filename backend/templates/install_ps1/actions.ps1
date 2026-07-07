@@ -507,6 +507,7 @@ function Write-CodexConfig {
   $next = @(
     "model = `"$(Escape-Toml $CodexModel)`"",
     "model_provider = `"$providerIdEscaped`"",
+    "openai_base_url = `"$(Escape-Toml $BaseUrl)`"",
     ''
   ) + $lines + @(
     '',

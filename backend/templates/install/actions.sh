@@ -630,6 +630,7 @@ write_codex_config() {
   {
     printf 'model = "%s"\n' "$escaped_model"
     printf 'model_provider = "%s"\n' "$escaped_provider_id"
+    printf 'openai_base_url = "%s"\n' "$escaped_base_url"
     sed '/./,$!d' "$clean_file"
     printf '\n'
     printf '[model_providers."%s"]\n' "$escaped_provider_id"

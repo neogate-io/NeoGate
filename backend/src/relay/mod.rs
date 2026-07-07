@@ -713,6 +713,9 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
         "model",
         usage.model.as_deref().unwrap_or(&ctx.model),
     );
+    if ctx.upstream_model != usage.model.as_deref().unwrap_or(&ctx.model) {
+        push_field(&mut info, "upstream_model", &ctx.upstream_model);
+    }
     push_field(&mut info, "channel", usage.channel_id);
     push_opt(&mut info, "status", usage.status_code);
     push_field(&mut info, "latency_ms", usage.latency_ms);
@@ -755,6 +758,8 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
         "model",
         usage.model.as_deref().unwrap_or(&ctx.model),
     );
+    push_field(&mut detail, "external_model", &ctx.external_model);
+    push_field(&mut detail, "upstream_model", &ctx.upstream_model);
     push_field(&mut detail, "channel_id", usage.channel_id);
     push_field(&mut detail, "channel_name", &ctx.upstream.channel_name);
     push_field(

@@ -17,7 +17,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
-    enqueue_relay_usage, key_failure_from_context,
+    enqueue_relay_usage, is_model_error_text, key_failure_from_context,
     limit::UserRequestPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
@@ -383,6 +383,53 @@ impl StreamingRelay {
                 sse_error_raw = ?stream_error.as_ref().and_then(|error| error.raw.as_deref()),
                 "upstream stream ended with SSE error event"
             );
+        }
+        if stream_failed {
+            if let Some(summary) = stream_error.as_ref() {
+                // 与非流式 400 路径（mod.rs 路径 C）对称：上游在流式 responses 里返回
+                // 「模型不可用」类 SSE error 时，学习该 (endpoint, model) 不支持
+                // /v1/responses，使下一次请求在转发前降级到 chat。仅当本次以 responses
+                // 路由 + openai/openai_oauth 协议 + 未降级地走原生 responses 发出
+                // （responses_chat_fallback == false）时才标记，避免误伤已降级的 chat 路径。
+                if ctx.path == "/v1/responses"
+                    && matches!(
+                        ctx.protocol,
+                        UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
+                    )
+                    && !ctx.upstream.responses_chat_fallback
+                    && !ctx
+                        .state
+                        .selector
+                        .responses_unsupported(ctx.upstream.channel_endpoint_id, &ctx.model)
+                        .await
+                    && is_model_error_text(&sse_error_lowered(summary))
+                {
+                    let until = chrono::Utc::now()
+                        + chrono::Duration::seconds(
+                            ctx.state.config.relay.responses_support_block_seconds,
+                        );
+                    ctx.state
+                        .selector
+                        .mark_responses_unsupported(
+                            ctx.upstream.channel_endpoint_id,
+                            &ctx.model,
+                            until,
+                        )
+                        .await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        sse_error_code = ?summary.error_code,
+                        sse_error_message = ?summary.error_message,
+                        "upstream rejected responses for this model via SSE error; downgrading to chat on next request",
+                    );
+                }
+            }
         }
         let billing = if self.status.is_success() && !stream_failed {
             record_channel_affinity(&ctx);
@@ -1137,6 +1184,22 @@ impl StreamErrorSummary {
     }
 }
 
+/// 把 SSE error 的 code/type/message 拼成小写字符串，供 `is_model_error_text` 做关键词
+/// 匹配。code 和 type 也参与拼接，因为有些上游把 `model_not_found` 放在 code 而非
+/// message 里。
+fn sse_error_lowered(summary: &StreamErrorSummary) -> String {
+    [
+        summary.error_code.as_deref(),
+        summary.error_type.as_deref(),
+        summary.error_message.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase()
+}
+
 fn string_field(value: &Value, field: &str) -> Option<String> {
     value.get(field).and_then(|value| match value {
         Value::String(text) => Some(text.clone()),
@@ -1467,5 +1530,40 @@ data: {"type":"response.output_text.delta","delta":"hi"}
 
         assert!(parser.completed);
         assert!(parser.saw_done);
+    }
+
+    #[test]
+    fn sse_error_lowered_classifies_bailian_model_unsupported() {
+        // 复现阿里云百炼 /v1/responses 流式 SSE error：HTTP 200，错误藏在 event:error 里。
+        let summary = StreamErrorSummary::from_sse_data(
+            r#"{"code":"InvalidParameter","message":"Unsupported model: 'glm-5.2'.","request_id":"dacd5cbe-1f99-9ee3-a542-8bab2014bfc9"}"#,
+        );
+
+        let lowered = sse_error_lowered(&summary);
+        assert!(lowered.contains("unsupported model"));
+        assert!(is_model_error_text(&lowered));
+    }
+
+    #[test]
+    fn sse_error_lowered_ignores_generic_invalid_parameter_without_model_keyword() {
+        // 仅凭 InvalidParameter 这类通用错误码不应判定为模型不可用，避免把参数错误
+        // 误学习成 responses 不支持。
+        let summary = StreamErrorSummary::from_sse_data(
+            r#"{"error":{"code":"InvalidParameter","message":"missing required field: input","type":"invalid_request_error"}}"#,
+        );
+
+        let lowered = sse_error_lowered(&summary);
+        assert!(!is_model_error_text(&lowered));
+    }
+
+    #[test]
+    fn sse_error_lowered_matches_model_not_found_in_code() {
+        // 有些上游把模型错误放在 code 字段。
+        let summary = StreamErrorSummary::from_sse_data(
+            r#"{"error":{"code":"model_not_found","message":"qwen3.6-plus","type":"not_found_error"}}"#,
+        );
+
+        let lowered = sse_error_lowered(&summary);
+        assert!(is_model_error_text(&lowered));
     }
 }

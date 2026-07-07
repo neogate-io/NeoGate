@@ -240,27 +240,33 @@ fn is_auth_error(status: StatusCode, lowered: &str) -> bool {
 }
 
 fn is_model_error(status: StatusCode, lowered: &str) -> bool {
-    status == StatusCode::NOT_FOUND
-        || contains_any(
-            lowered,
-            &[
-                "model_not_found",
-                "model not found",
-                "model_not_available",
-                "model is not available",
-                "does not exist",
-                "doesn't exist",
-                "not supported",
-                "unsupported model",
-                "no such model",
-                "unknown provider for model",
-                "no provider for model",
-                "provider for model",
-                "模型不存在",
-                "模型不可用",
-                "不支持的模型",
-            ],
-        )
+    status == StatusCode::NOT_FOUND || is_model_error_text(lowered)
+}
+
+/// 仅按错误文案判定是否属于「模型不可用」类错误。供流式 SSE error 路径复用——
+/// 那里没有 HTTP 状态码（上游返回 200，错误藏在 SSE event 里），所以不能走带
+/// `status == NOT_FOUND` 判定的 `is_model_error`。
+pub(crate) fn is_model_error_text(lowered: &str) -> bool {
+    contains_any(
+        lowered,
+        &[
+            "model_not_found",
+            "model not found",
+            "model_not_available",
+            "model is not available",
+            "does not exist",
+            "doesn't exist",
+            "not supported",
+            "unsupported model",
+            "no such model",
+            "unknown provider for model",
+            "no provider for model",
+            "provider for model",
+            "模型不存在",
+            "模型不可用",
+            "不支持的模型",
+        ],
+    )
 }
 
 fn is_context_length_error(status: StatusCode, lowered: &str) -> bool {
@@ -396,6 +402,23 @@ mod tests {
         assert_eq!(failure.error_type, "upstream_model_unavailable");
         assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
         assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn is_model_error_text_matches_bailian_unsupported_model() {
+        // 复现阿里云百炼流式 SSE error 的文案：上游返回 200，错误藏在 event:error 里，
+        // is_model_error_text 必须仅凭文案命中。
+        assert!(is_model_error_text(
+            "invalidparameter unsupported model: 'glm-5.2'."
+        ));
+    }
+
+    #[test]
+    fn is_model_error_text_ignores_generic_parameter_errors() {
+        assert!(!is_model_error_text(
+            "invalidparameter missing required field: input"
+        ));
+        assert!(!is_model_error_text("invalid_request_error"));
     }
 
     #[test]

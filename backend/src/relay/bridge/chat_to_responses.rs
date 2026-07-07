@@ -61,22 +61,12 @@ pub(super) fn openai_chat_response_to_openai_response(
         .and_then(|choice| choice.get("finish_reason"))
         .and_then(Value::as_str);
     let output = openai_chat_message_to_response_output(message, id);
-    let status = if finish_reason == Some("length") {
-        "incomplete"
-    } else {
-        "completed"
-    };
-    let incomplete_details = if status == "incomplete" {
-        json!({ "reason": "max_output_tokens" })
-    } else {
-        Value::Null
-    };
+    let _ = finish_reason;
     let payload = json!({
         "id": id,
         "object": "response",
         "created_at": value.get("created").and_then(Value::as_i64).unwrap_or(0),
-        "status": status,
-        "incomplete_details": incomplete_details,
+        "status": "completed",
         "background": false,
         "model": model,
         "output": output,
@@ -255,9 +245,10 @@ impl OpenAiChatSseToOpenAiResponse {
         else {
             return;
         };
-        if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
-            self.status = "incomplete";
-        }
+        // Treat finish_reason "length" as completed instead of incomplete.
+        // Emitting response.incomplete here makes Codex CLI abort with
+        // "stream disconnected before completion", so always complete the stream.
+        // "length" may still carry a final usage chunk below.
         if matches!(
             choice.get("finish_reason").and_then(Value::as_str),
             Some("tool_calls" | "function_call")
@@ -592,11 +583,7 @@ impl OpenAiChatSseToOpenAiResponse {
     }
 
     fn finish_tool_calls(&mut self, out: &mut Vec<u8>) {
-        let item_status = if self.status == "incomplete" {
-            "incomplete"
-        } else {
-            "completed"
-        };
+        let item_status = "completed";
         for index in 0..self.current_tool_calls.len() {
             let Some(tool_call) = self.current_tool_calls[index].take() else {
                 continue;
@@ -701,11 +688,7 @@ impl OpenAiChatSseToOpenAiResponse {
         }
         self.stopped = true;
         self.finish_message_item(out);
-        let event_type = if self.status == "completed" {
-            "response.completed"
-        } else {
-            "response.incomplete"
-        };
+        let event_type = "response.completed";
         let sequence_number = self.next_sequence_number();
         self.push_event(
             out,
@@ -730,17 +713,11 @@ impl OpenAiChatSseToOpenAiResponse {
             }
             output.extend(self.completed_output.clone());
         }
-        let incomplete_details = if status == "incomplete" {
-            json!({ "reason": "max_output_tokens" })
-        } else {
-            Value::Null
-        };
         json!({
             "id": self.response_id,
             "object": "response",
             "created_at": 0,
             "status": status,
-            "incomplete_details": incomplete_details,
             "background": false,
             "model": self.model,
             "output": output,
@@ -851,9 +828,9 @@ mod tests {
         <OpenAiChatSseToOpenAiResponse as BridgeSseConverter>::finish(&mut converter, &mut output);
         let output = std::str::from_utf8(&output).unwrap();
 
-        assert!(output.contains("event: response.incomplete"));
-        assert!(output.contains(r#""status":"incomplete""#));
-        assert!(output.contains(r#""reason":"max_output_tokens""#));
+        assert!(output.contains("event: response.completed"));
+        assert!(output.contains(r#""status":"completed""#));
+        assert!(!output.contains(r#""reason":"max_output_tokens""#));
         assert!(converter.stopped());
     }
 }

@@ -152,6 +152,25 @@ function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')
   }
 }
 
+function Get-NpmGlobalPaths {
+  $paths = @()
+  try {
+    $prefixOutput = & npm config get prefix 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      foreach ($prefix in @($prefixOutput)) {
+        if ($prefix -and $prefix -ne 'undefined') {
+          $prefixPath = [string]$prefix
+          $paths += $prefixPath
+          $paths += (Join-Path $prefixPath 'bin')
+        }
+      }
+    }
+  } catch {
+    return @()
+  }
+  return $paths
+}
+
 function Get-ResponseErrorMessage([string]$Body) {
   # Extract the human-readable error message from a JSON response body.
   # Supports both flat {"error": "..."} and nested {"error": {"message": "..."}}.
@@ -174,6 +193,7 @@ function Update-SessionPath {
     [Environment]::GetEnvironmentVariable('Path', 'Machine'),
     [Environment]::GetEnvironmentVariable('Path', 'User'),
     $env:Path
+    Get-NpmGlobalPaths
   ) | Where-Object { $_ }
 
   $env:Path = (($paths -join ';') -split ';' | Where-Object { $_ } | Select-Object -Unique) -join ';'
@@ -181,14 +201,20 @@ function Update-SessionPath {
 
 function Run-Command {
   param([string]$FilePath, [string[]]$Arguments)
+  $exitCode = Invoke-CommandStatus $FilePath $Arguments
+  if ($exitCode -ne 0) {
+    Fail "$FilePath failed with exit code $exitCode"
+  }
+}
+
+function Invoke-CommandStatus {
+  param([string]$FilePath, [string[]]$Arguments)
   if ($DryRun) {
     Write-Host "+ $FilePath $($Arguments -join ' ')"
-    return
+    return 0
   }
   & $FilePath @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    Fail "$FilePath failed with exit code $LASTEXITCODE"
-  }
+  return $LASTEXITCODE
 }
 
 function Verify-ApiKey {
@@ -345,35 +371,65 @@ function Select-Model {
   Success (Selected-Model)
 }
 
-function Install-Node {
-  $nodeVersion = Get-CommandVersion 'node'
-  $npmVersion = Get-CommandVersion 'npm'
-  if ($nodeVersion -and $npmVersion) {
-    Detail (Get-Message node_found $nodeVersion)
-    Detail (Get-Message npm_found $npmVersion)
-    return
+function Get-NodeToolVersions {
+  return @{
+    Node = Get-CommandVersion 'node'
+    Npm = Get-CommandVersion 'npm'
   }
+}
+
+function Confirm-NodeReady {
+  $versions = Get-NodeToolVersions
+  if ($versions.Node -and $versions.Npm) {
+    Detail (Get-Message node_found $versions.Node)
+    Detail (Get-Message npm_found $versions.Npm)
+    return $true
+  }
+  return $false
+}
+
+function Install-Node {
+  Update-SessionPath
+  if (Confirm-NodeReady) { return }
 
   if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
   if (Assert-Command 'winget') {
-    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements')
+    $installExitCode = Invoke-CommandStatus 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements')
+    Update-SessionPath
+    if (Confirm-NodeReady) { return }
+
+    if ($installExitCode -ne 0) {
+      Warn "$((Get-Command winget).Name) failed with exit code $installExitCode"
+    }
+    Warn (Get-Message node_install_retrying)
+    [void](Invoke-CommandStatus 'winget' @('repair', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements', '--force'))
   } elseif (Assert-Command 'choco') {
-    Run-Command 'choco' @('install', 'nodejs-lts', '-y')
+    $installExitCode = Invoke-CommandStatus 'choco' @('install', 'nodejs-lts', '-y')
+    Update-SessionPath
+    if (Confirm-NodeReady) { return }
+
+    if ($installExitCode -ne 0) {
+      Warn "choco failed with exit code $installExitCode"
+    }
+    Warn (Get-Message node_install_retrying)
+    [void](Invoke-CommandStatus 'choco' @('upgrade', 'nodejs-lts', '-y', '--force'))
   } else {
     Fail (Get-Message node_pkg_missing_win)
   }
+
   Update-SessionPath
-  $nodeVersion = Get-CommandVersion 'node'
-  $npmVersion = Get-CommandVersion 'npm'
-  if (-not $nodeVersion) { Fail (Get-Message node_path_missing) }
-  if (-not $npmVersion) { Fail (Get-Message npm_path_missing) }
-  Detail (Get-Message node_found $nodeVersion)
-  Detail (Get-Message npm_found $npmVersion)
+  if (Confirm-NodeReady) { return }
+
+  $versions = Get-NodeToolVersions
+  if (-not $versions.Node) { Fail (Get-Message node_path_missing) }
+  if (-not $versions.Npm) { Fail (Get-Message npm_path_missing) }
+  Fail (Get-Message node_install_failed)
 }
 
 function Install-CodexCli {
+  Update-SessionPath
   if (Assert-Command 'codex') {
     Detail (Get-Message codex_found $(& codex --version 2>$null))
     return
@@ -387,6 +443,7 @@ function Install-CodexCli {
 }
 
 function Install-ClaudeCode {
+  Update-SessionPath
   if (Assert-Command 'claude') {
     Detail (Get-Message claude_found $(& claude --version 2>$null))
     return

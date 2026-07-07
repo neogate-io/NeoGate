@@ -315,6 +315,8 @@ mod tests {
             script.contains("[Parameter(ValueFromRemainingArguments=$true)][object[]]$MessageArgs")
         );
         assert!(script.contains("function Get-CommandVersion"));
+        assert!(script.contains("function Get-NpmGlobalPaths"));
+        assert!(script.contains("npm config get prefix"));
         assert!(script.contains("[model_providers.`\"$providerIdEscaped`\"]"));
         assert!(script.contains(r#""?neogate"?\s*\]?\s*$"#));
         assert!(script.contains("function Detect-Locale"));

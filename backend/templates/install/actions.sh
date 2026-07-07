@@ -183,6 +183,7 @@ load_existing_credentials() {
   [[ -n "$LOADED_CODEX_KEY" || -n "$LOADED_CODEX_MODEL" ]] && codex_present=1
   [[ -n "$LOADED_CLAUDE_KEY" || -n "$LOADED_CLAUDE_MODEL" ]] && claude_present=1
   [[ "$codex_present" == "1" || "$claude_present" == "1" ]] && HAS_EXISTING_CONFIG=1
+  return 0
 }
 
 loaded_api_key_for_selected_client() {

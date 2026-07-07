@@ -586,7 +586,7 @@ toml_escape() {
 
 write_codex_config() {
   local codex_home config_file timestamp backup_file clean_file next_file
-  local escaped_base_url escaped_model escaped_provider_name
+  local escaped_base_url escaped_model escaped_provider_id escaped_provider_name
 
   codex_home="${CODEX_HOME:-$HOME/.codex}"
   config_file="$codex_home/config.toml"
@@ -596,6 +596,7 @@ write_codex_config() {
 
   escaped_base_url="$(toml_escape "$BASE_URL")"
   escaped_model="$(toml_escape "$CODEX_MODEL")"
+  escaped_provider_id="$(toml_escape "$PROVIDER_ID")"
   escaped_provider_name="$(toml_escape "$PROVIDER_NAME")"
 
   if [[ "$DRY_RUN" == "0" ]]; then
@@ -610,7 +611,7 @@ write_codex_config() {
     run cp -p "$config_file" "$backup_file"
     awk '
       /^\[/ {
-        if ($0 == "[model_providers.neogate]" || $0 == "[model_providers.\"neogate\"]") {
+        if ($0 ~ /^[[:space:]]*\[[[:space:]]*model_providers[[:space:]]*\.[[:space:]]*"?neogate"?[[:space:]]*\]?[[:space:]]*$/) {
           skip = 1
           next
         }
@@ -627,10 +628,10 @@ write_codex_config() {
 
   {
     printf 'model = "%s"\n' "$escaped_model"
-    printf 'model_provider = "%s"\n' "$PROVIDER_ID"
+    printf 'model_provider = "%s"\n' "$escaped_provider_id"
     sed '/./,$!d' "$clean_file"
     printf '\n'
-    printf '[model_providers.%s]\n' "$PROVIDER_ID"
+    printf '[model_providers."%s"]\n' "$escaped_provider_id"
     printf 'name = "%s"\n' "$escaped_provider_name"
     printf 'base_url = "%s"\n' "$escaped_base_url"
     printf 'wire_api = "responses"\n'

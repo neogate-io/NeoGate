@@ -293,12 +293,16 @@ $MsgZh = @{
   installer_title_win = 'Windows 安装器'
 }
 
-function Get-Message([string]$Key, $Args = @()) {
+function Get-Message {
+  param(
+    [Parameter(Mandatory=$true, Position=0)][string]$Key,
+    [Parameter(ValueFromRemainingArguments=$true)][object[]]$MessageArgs
+  )
   $table = if ($InstallLang -eq 'zh') { $MsgZh } else { $MsgEn }
   $fmt = $table[$Key]
   if (-not $fmt) { return $Key }
-  if ($Args -and $Args.Count -gt 0) {
-    return ($fmt -f $Args)
+  if ($MessageArgs -and $MessageArgs.Count -gt 0) {
+    return ($fmt -f $MessageArgs)
   }
   return $fmt
 }

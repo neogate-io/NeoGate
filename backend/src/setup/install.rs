@@ -288,6 +288,8 @@ mod tests {
         assert!(script.contains("run_switch_model_flow"));
         assert!(script.contains("run_change_key_flow"));
         assert!(script.contains("run_full_flow"));
+        assert!(script.contains(r#"printf '[model_providers."%s"]\n' "$escaped_provider_id""#));
+        assert!(script.contains(r#""?neogate"?[[:space:]]*\]?[[:space:]]*$"#));
         assert!(script.contains(r#"switch_option) printf '1. 切换模型' ;"#));
         assert!(script.contains(r#"change_key_option) printf '2. 更换 API Key' ;"#));
         assert!(script.contains(r#"reinstall_option) printf '3. 重新安装' ;"#));
@@ -308,7 +310,13 @@ mod tests {
         assert!(!script.contains("__NEOGATE_INSTALL_ORIGIN__"));
         assert!(script.contains("api_key_prompt = 'Enter API key: '"));
         assert!(script.contains("api_key_prompt = '请输入 API 密钥：'"));
-        assert!(script.contains("function Get-Message([string]$Key"));
+        assert!(script.contains("function Get-Message"));
+        assert!(
+            script.contains("[Parameter(ValueFromRemainingArguments=$true)][object[]]$MessageArgs")
+        );
+        assert!(script.contains("function Get-CommandVersion"));
+        assert!(script.contains("[model_providers.`\"$providerIdEscaped`\"]"));
+        assert!(script.contains(r#""?neogate"?\s*\]?\s*$"#));
         assert!(script.contains("function Detect-Locale"));
         assert!(script.contains("function Load-ExistingCredentials"));
         assert!(script.contains("Load-ExistingCredentials"));

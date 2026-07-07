@@ -139,6 +139,19 @@ function Assert-Command([string]$Name) {
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')) {
+  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if (-not $cmd) { return $null }
+
+  try {
+    $output = & $Name @Arguments 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return (@($output) | Where-Object { $_ } | Select-Object -First 1)
+  } catch {
+    return $null
+  }
+}
+
 function Get-ResponseErrorMessage([string]$Body) {
   # Extract the human-readable error message from a JSON response body.
   # Supports both flat {"error": "..."} and nested {"error": {"message": "..."}}.
@@ -333,9 +346,11 @@ function Select-Model {
 }
 
 function Install-Node {
-  if ((Assert-Command 'node') -and (Assert-Command 'npm')) {
-    Detail (Get-Message node_found $(& node --version))
-    Detail (Get-Message npm_found $(& npm --version))
+  $nodeVersion = Get-CommandVersion 'node'
+  $npmVersion = Get-CommandVersion 'npm'
+  if ($nodeVersion -and $npmVersion) {
+    Detail (Get-Message node_found $nodeVersion)
+    Detail (Get-Message npm_found $npmVersion)
     return
   }
 
@@ -350,10 +365,12 @@ function Install-Node {
     Fail (Get-Message node_pkg_missing_win)
   }
   Update-SessionPath
-  if (-not (Assert-Command 'node')) { Fail (Get-Message node_path_missing) }
-  if (-not (Assert-Command 'npm')) { Fail (Get-Message npm_path_missing) }
-  Detail (Get-Message node_found $(& node --version))
-  Detail (Get-Message npm_found $(& npm --version))
+  $nodeVersion = Get-CommandVersion 'node'
+  $npmVersion = Get-CommandVersion 'npm'
+  if (-not $nodeVersion) { Fail (Get-Message node_path_missing) }
+  if (-not $npmVersion) { Fail (Get-Message npm_path_missing) }
+  Detail (Get-Message node_found $nodeVersion)
+  Detail (Get-Message npm_found $npmVersion)
 }
 
 function Install-CodexCli {
@@ -402,11 +419,16 @@ function Escape-Toml([string]$Value) {
   return $Value.Replace('\', '\\').Replace('"', '\"')
 }
 
+function Escape-TomlKey([string]$Value) {
+  return (Escape-Toml $Value)
+}
+
 function Write-CodexConfig {
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
   $configFile = Join-Path $codexHome 'config.toml'
   $authFile = Join-Path $codexHome 'auth.json'
   $timestamp = Get-Date -Format yyyyMMddHHmmss
+  $providerIdEscaped = Escape-TomlKey $ProviderId
 
   $existing = ''
   if (Test-Path $configFile) {
@@ -415,7 +437,7 @@ function Write-CodexConfig {
   $lines = @()
   $skip = $false
   foreach ($line in ($existing -split "`r?`n")) {
-    if ($line -match '^\[model_providers\.("?neogate"?)\]') {
+    if ($line -match '^\s*\[\s*model_providers\s*\.\s*"?neogate"?\s*\]?\s*$') {
       $skip = $true
       continue
     }
@@ -427,11 +449,11 @@ function Write-CodexConfig {
 
   $next = @(
     "model = `"$(Escape-Toml $CodexModel)`"",
-    "model_provider = `"$ProviderId`"",
+    "model_provider = `"$providerIdEscaped`"",
     ''
   ) + $lines + @(
     '',
-    "[model_providers.$ProviderId]",
+    "[model_providers.`"$providerIdEscaped`"]",
     "name = `"$(Escape-Toml $ProviderName)`"",
     "base_url = `"$(Escape-Toml $BaseUrl)`"",
     'wire_api = "responses"',

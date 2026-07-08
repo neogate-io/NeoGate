@@ -328,14 +328,13 @@ impl AnthropicSseToOpenAiResponse {
     }
 
     fn observe_message_delta(&mut self, value: &Value) {
-        match value
+        if let Some("tool_use") = value
             .get("delta")
             .and_then(|delta| delta.get("stop_reason"))
             .and_then(Value::as_str)
         {
             // "max_tokens" stop reason is treated as completed, not incomplete.
-            Some("tool_use") => self.status = "completed",
-            _ => {}
+            self.status = "completed";
         }
         self.observe_usage(value);
     }

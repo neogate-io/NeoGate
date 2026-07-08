@@ -798,7 +798,7 @@ fn record_channel_affinity(ctx: &RelayContext) {
 }
 
 enum ResponseUsageParser {
-    Sse(StreamUsageParser),
+    Sse(Box<StreamUsageParser>),
     Json {
         buffer: Option<Vec<u8>>,
         limit_bytes: usize,
@@ -817,7 +817,7 @@ impl ResponseUsageParser {
         if !status.is_success() || path.starts_with("/v1/images/") {
             Self::Disabled
         } else if streamed {
-            Self::Sse(StreamUsageParser::new(limit_bytes))
+            Self::Sse(Box::new(StreamUsageParser::new(limit_bytes)))
         } else {
             Self::Json {
                 buffer: Some(Vec::with_capacity(json_usage_buffer_capacity(

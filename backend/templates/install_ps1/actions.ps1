@@ -419,9 +419,11 @@ function Install-NodeZip {
   New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
   Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
 
-  $nodeBin = Join-Path $targetDir 'node-v-*-win-x64' | Get-Item | Select-Object -First 1
-  if (-not $nodeBin) { $nodeBin = $targetDir }
-  $nodeBin = $nodeBin.FullName
+  # The zip extracts into a top-level node-v*-win-x64/ directory; resolve the
+  # real directory that contains node.exe and npm.cmd.
+  $nodeExe = Get-ChildItem -Path $targetDir -Recurse -Filter 'node.exe' | Select-Object -First 1
+  if (-not $nodeExe) { Fail (Get-Message node_path_missing) }
+  $nodeBin = $nodeExe.DirectoryName
 
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ($userPath -notlike "*$nodeBin*") {

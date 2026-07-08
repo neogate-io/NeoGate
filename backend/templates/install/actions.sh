@@ -478,23 +478,61 @@ select_model() {
   success "$selected_model"
 }
 
-install_node_nodesource() {
-  local kind="$1" setup_url setup_script
-  if [[ "$kind" == "deb" ]]; then
-    setup_url="https://deb.nodesource.com/setup_lts.x"
-  else
-    setup_url="https://rpm.nodesource.com/setup_lts.x"
-  fi
-  setup_script="$TMP_DIR/nodesource-setup.sh"
-  run curl -fsSL "$setup_url" -o "$setup_script" || die "$(message connect_failed "$setup_url")"
-  run_as_root bash "$setup_script"
-  if [[ "$kind" == "deb" ]]; then
-    run_as_root apt-get install -y nodejs
-  elif have_cmd dnf; then
-    run_as_root dnf install -y nodejs
-  else
-    run_as_root yum install -y nodejs
-  fi
+NODE_MIRROR="https://registry.npmmirror.com/-/binary/node"
+NPM_REGISTRY="https://registry.npmmirror.com"
+
+node_arch_suffix() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) die "$(message unsupported_arch "$arch")" ;;
+  esac
+  case "$os" in
+    linux) printf 'linux-%s' "$arch" ;;
+    darwin) printf 'darwin-%s' "$arch" ;;
+    *) die "$(message unsupported_os "$os")" ;;
+  esac
+}
+
+node_lts_version() {
+  local index_file version
+  index_file="$TMP_DIR/node-index.json"
+  run curl -fsSL "$NODE_MIRROR/index.json" -o "$index_file" || die "$(message connect_failed "$NODE_MIRROR")"
+  version="$(node - "$index_file" <<'NODE'
+const fs = require('fs');
+const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const lts = data.find(v => v.lts);
+if (!lts) throw new Error('no LTS found');
+process.stdout.write(lts.version);
+NODE
+)"
+  [[ -n "$version" ]] || die "$(message node_lts_failed)"
+  printf '%s' "$version"
+}
+
+install_node_tarball() {
+  local version suffix url tarball target_dir
+  version="$(node_lts_version)"
+  suffix="$(node_arch_suffix)"
+  url="$NODE_MIRROR/$version/node-$version-$suffix.tar.gz"
+  tarball="$TMP_DIR/node.tar.gz"
+  target_dir="${NEOGATE_NODE_HOME:-$HOME/.neogate-node}"
+
+  log "$(message node_downloading "$version")"
+  run curl -fsSL "$url" -o "$tarball" || die "$(message connect_failed "$url")"
+  rm -rf "$target_dir"
+  mkdir -p "$target_dir"
+  run tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+
+  local bin_dir="$target_dir/bin"
+  case ":$PATH:" in
+    *:"$bin_dir":*) ;;
+    *) export PATH="$bin_dir:$PATH" ;;
+  esac
+  export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
 }
 
 install_node() {
@@ -507,28 +545,7 @@ install_node() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message node_missing_disabled)"
   confirm_default_yes "$(message node_missing_prompt)" || die "$(message node_required)"
 
-  local os
-  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  case "$os" in
-    darwin)
-      have_cmd brew || die "$(message homebrew_required)"
-      run brew install node
-      ;;
-    linux)
-      if have_cmd apt-get; then
-        install_node_nodesource "deb"
-      elif have_cmd dnf || have_cmd yum; then
-        install_node_nodesource "rpm"
-      elif have_cmd pacman; then
-        run_as_root pacman -Sy --noconfirm nodejs npm
-      else
-        die "$(message unsupported_pkg)"
-      fi
-      ;;
-    *)
-      die "$(message unsupported_os "$os")"
-      ;;
-  esac
+  install_node_tarball
 
   have_cmd node || die "$(message node_path_missing)"
   have_cmd npm || die "$(message npm_path_missing)"
@@ -545,12 +562,12 @@ install_codex_cli() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message codex_missing_disabled)"
   confirm_default_yes "$(message codex_missing_prompt)" || die "$(message codex_required)"
 
-  if run npm install -g @openai/codex; then
+  if run npm install -g --registry "$NPM_REGISTRY" @openai/codex; then
     :
   else
     warn "$(message npm_global_failed)"
     confirm_default_yes "$(message codex_sudo_prompt)" || die "$(message codex_install_failed)"
-    run_as_root npm install -g @openai/codex
+    run_as_root npm install -g --registry "$NPM_REGISTRY" @openai/codex
   fi
 
   have_cmd codex || die "$(message codex_path_missing)"
@@ -566,12 +583,12 @@ install_claude_code() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message claude_missing_disabled)"
   confirm_default_yes "$(message claude_missing_prompt)" || die "$(message claude_required)"
 
-  if run npm install -g @anthropic-ai/claude-code; then
+  if run npm install -g --registry "$NPM_REGISTRY" @anthropic-ai/claude-code; then
     :
   else
     warn "$(message npm_global_failed)"
     confirm_default_yes "$(message claude_sudo_prompt)" || die "$(message claude_install_failed)"
-    run_as_root npm install -g @anthropic-ai/claude-code
+    run_as_root npm install -g --registry "$NPM_REGISTRY" @anthropic-ai/claude-code
   fi
 
   have_cmd claude || die "$(message claude_path_missing)"

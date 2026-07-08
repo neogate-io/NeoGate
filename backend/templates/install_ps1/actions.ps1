@@ -1,3 +1,6 @@
+$NodeMirror = 'https://registry.npmmirror.com/-/binary/node'
+$NpmRegistry = 'https://registry.npmmirror.com'
+
 function Read-JsonField([string]$Path, [string]$Field) {
   if (-not (Test-Path $Path)) { return $null }
   try {
@@ -388,6 +391,47 @@ function Confirm-NodeReady {
   return $false
 }
 
+function Get-NodeLtsVersion {
+  $indexUrl = "$NodeMirror/index.json"
+  try {
+    $client = [System.Net.Http.HttpClient]::new()
+    $response = $client.GetStringAsync($indexUrl).GetAwaiter().GetResult()
+    $client.Dispose()
+    $data = $response | ConvertFrom-Json
+    $lts = $data | Where-Object { $_.lts } | Select-Object -First 1
+    if (-not $lts) { Fail (Get-Message node_lts_failed) }
+    return $lts.version
+  } catch {
+    Fail (Get-Message connect_failed $indexUrl)
+  }
+}
+
+function Install-NodeZip {
+  $version = Get-NodeLtsVersion
+  $zipUrl = "$NodeMirror/$version/node-$version-win-x64.zip"
+  $targetDir = if ($env:NEOGATE_NODE_HOME) { $env:NEOGATE_NODE_HOME } else { Join-Path $env:USERPROFILE '.neogate-node' }
+  $zipFile = Join-Path $env:TEMP "neogate-node-$version.zip"
+
+  Write-Host (Get-Message node_downloading $version)
+  Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+
+  if (Test-Path $targetDir) { Remove-Item -Recurse -Force $targetDir }
+  New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+  Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
+
+  $nodeBin = Join-Path $targetDir 'node-v-*-win-x64' | Get-Item | Select-Object -First 1
+  if (-not $nodeBin) { $nodeBin = $targetDir }
+  $nodeBin = $nodeBin.FullName
+
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  if ($userPath -notlike "*$nodeBin*") {
+    $newPath = if ($userPath) { "$nodeBin;$userPath" } else { $nodeBin }
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+  }
+  $env:Path = "$nodeBin;$env:Path"
+  $env:NPM_CONFIG_REGISTRY = $NpmRegistry
+}
+
 function Install-Node {
   Update-SessionPath
   if (Confirm-NodeReady) { return }
@@ -395,33 +439,10 @@ function Install-Node {
   if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
-  if (Assert-Command 'winget') {
-    $installExitCode = Invoke-CommandStatus 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements')
-    Update-SessionPath
-    if (Confirm-NodeReady) { return }
-
-    if ($installExitCode -ne 0) {
-      Warn "$((Get-Command winget).Name) failed with exit code $installExitCode"
-    }
-    Warn (Get-Message node_install_retrying)
-    [void](Invoke-CommandStatus 'winget' @('repair', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements', '--force'))
-  } elseif (Assert-Command 'choco') {
-    $installExitCode = Invoke-CommandStatus 'choco' @('install', 'nodejs-lts', '-y')
-    Update-SessionPath
-    if (Confirm-NodeReady) { return }
-
-    if ($installExitCode -ne 0) {
-      Warn "choco failed with exit code $installExitCode"
-    }
-    Warn (Get-Message node_install_retrying)
-    [void](Invoke-CommandStatus 'choco' @('upgrade', 'nodejs-lts', '-y', '--force'))
-  } else {
-    Fail (Get-Message node_pkg_missing_win)
-  }
-
+  Install-NodeZip
   Update-SessionPath
-  if (Confirm-NodeReady) { return }
 
+  if (Confirm-NodeReady) { return }
   $versions = Get-NodeToolVersions
   if (-not $versions.Node) { Fail (Get-Message node_path_missing) }
   if (-not $versions.Npm) { Fail (Get-Message npm_path_missing) }
@@ -436,7 +457,7 @@ function Install-CodexCli {
   }
   if ($SkipInstall) { Fail (Get-Message codex_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message codex_missing_prompt))) { Fail (Get-Message codex_required) }
-  Run-Command 'npm' @('install', '-g', '@openai/codex')
+  Run-Command 'npm' @('install', '-g', '--registry', $NpmRegistry, '@openai/codex')
   Update-SessionPath
   if (-not (Assert-Command 'codex')) { Fail (Get-Message codex_path_missing) }
   Detail (Get-Message codex_found $(& codex --version 2>$null))
@@ -450,7 +471,7 @@ function Install-ClaudeCode {
   }
   if ($SkipInstall) { Fail (Get-Message claude_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message claude_missing_prompt))) { Fail (Get-Message claude_required) }
-  Run-Command 'npm' @('install', '-g', '@anthropic-ai/claude-code')
+  Run-Command 'npm' @('install', '-g', '--registry', $NpmRegistry, '@anthropic-ai/claude-code')
   Update-SessionPath
   if (-not (Assert-Command 'claude')) { Fail (Get-Message claude_path_missing) }
   Detail (Get-Message claude_found $(& claude --version 2>$null))

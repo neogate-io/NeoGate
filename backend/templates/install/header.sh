@@ -137,6 +137,9 @@ message() {
       homebrew_required) printf '%s' "macOS 自动安装 Node.js 需要 Homebrew。" ;;
       unsupported_pkg) printf '%s' "不支持当前 Linux 包管理器。请安装 Node.js 和 npm 后重新运行此脚本。" ;;
       unsupported_os) printf '不支持的操作系统：%s' "$1" ;;
+      unsupported_arch) printf '不支持的 CPU 架构：%s' "$1" ;;
+      node_lts_failed) printf '%s' "未能获取 Node.js LTS 版本" ;;
+      node_downloading) printf '正在从国内镜像下载 Node.js %s...' "$1" ;;
       node_path_missing) printf '%s' "Node.js 安装后未在 PATH 中找到 node" ;;
       npm_path_missing) printf '%s' "Node.js 安装后未在 PATH 中找到 npm" ;;
       node_installed) printf 'Node.js %s' "$1" ;;
@@ -256,6 +259,9 @@ message() {
     homebrew_required) printf '%s' "Homebrew is required to install Node.js automatically on macOS." ;;
     unsupported_pkg) printf '%s' "Unsupported Linux package manager. Install Node.js and npm, then re-run this script." ;;
     unsupported_os) printf 'Unsupported operating system: %s' "$1" ;;
+    unsupported_arch) printf 'Unsupported CPU architecture: %s' "$1" ;;
+    node_lts_failed) printf '%s' "Failed to determine Node.js LTS version" ;;
+    node_downloading) printf 'Downloading Node.js %s from China mirror...' "$1" ;;
     node_path_missing) printf '%s' "Node.js installation did not put node on PATH" ;;
     npm_path_missing) printf '%s' "Node.js installation did not put npm on PATH" ;;
     node_installed) printf 'Node.js %s' "$1" ;;

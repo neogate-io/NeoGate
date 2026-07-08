@@ -64,6 +64,10 @@ pub struct BillingOutboxWriteStatus {
 pub struct BillingOutboxBacklogStatus {
     pub pending_count: i64,
     pub oldest_pending_age_seconds: i64,
+    /// Dead-lettered records that exhausted all retry attempts. Reported for
+    /// observability only — they are not retried and must NOT gate readiness,
+    /// otherwise stale data rows can permanently block service startup.
+    pub failed_count: i64,
 }
 
 struct PendingBillingRecord {
@@ -391,16 +395,23 @@ pub async fn backlog_status(
 ) -> AppResult<BillingOutboxBacklogStatus> {
     let sample_limit = max_pending.saturating_add(1).max(1);
     let row = sqlx::query(
+        // Only `pending` rows gate readiness — the drain worker retries them, so
+        // an aging pending backlog signals "the drain can't keep up". `failed`
+        // rows are dead-lettered (never retried) and are counted separately for
+        // observability; they must not block startup on stale data.
         "WITH pending AS (
              SELECT created_at
              FROM billing
-             WHERE status IN ('pending', 'failed')
+             WHERE status = 'pending'
              ORDER BY created_at ASC
              LIMIT $1
          )
          SELECT COUNT(*)::BIGINT AS pending_count,
                 COALESCE(EXTRACT(EPOCH FROM (now() - MIN(created_at)))::BIGINT, 0)
-                    AS oldest_pending_age_seconds
+                    AS oldest_pending_age_seconds,
+                (SELECT COUNT(*) FROM (
+                    SELECT 1 FROM billing WHERE status = 'failed' LIMIT $1
+                ) f)::BIGINT AS failed_count
          FROM pending",
     )
     .bind(sample_limit)
@@ -410,6 +421,7 @@ pub async fn backlog_status(
     Ok(BillingOutboxBacklogStatus {
         pending_count: row.try_get("pending_count")?,
         oldest_pending_age_seconds: row.try_get("oldest_pending_age_seconds")?,
+        failed_count: row.try_get("failed_count")?,
     })
 }
 

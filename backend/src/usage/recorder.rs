@@ -353,6 +353,18 @@ async fn flush_returned_billing_part(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     part: &DebitPart,
 ) -> AppResult<()> {
+    // Mirrors `flush_billing_part`: if the allocation was already recovered by
+    // the stale-allocation job, the unconsumed remainder was returned and the
+    // reserved hold was released at that time. Returning again would exceed the
+    // allocation's capacity (and double-release reserved credit), so skip it.
+    if account::allocation_is_recovered(tx, part.allocation_id).await? {
+        tracing::info!(
+            allocation_id = %part.allocation_id,
+            amount_micros = part.amount_micros,
+            "skipping returned billing part on already-recovered credit allocation; credit was already refunded"
+        );
+        return Ok(());
+    }
     account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
     account::decrement_reserved(tx, &part.credit_account, part.amount_micros).await?;
     Ok(())
@@ -509,6 +521,23 @@ async fn flush_billing_part(
     billing: &BillingCharge,
     part: &DebitPart,
 ) -> AppResult<()> {
+    // The stale-allocation recovery job may have already refunded this hold to
+    // the account when the request outlived the recovery window (the billing
+    // row is written at settle time, so the recovery job's pending-billing
+    // guard cannot see in-flight synchronous holds). If the allocation is
+    // already recovered, the credit was returned to the user — there is nothing
+    // to debit. Skip the charge instead of failing the billing record
+    // permanently. The usage row is still recorded above; only the charge is
+    // dropped, so the user is not double-charged for a refunded hold.
+    if account::allocation_is_recovered(tx, part.allocation_id).await? {
+        tracing::info!(
+            usage_id = %usage_id,
+            allocation_id = %part.allocation_id,
+            amount_micros = part.amount_micros,
+            "skipping billing charge on already-recovered credit allocation; credit was refunded to the account"
+        );
+        return Ok(());
+    }
     account::mark_allocation_consumed(tx, part.allocation_id, part.amount_micros).await?;
     let balance_after =
         account::debit_reserved_balance(tx, &part.credit_account, part.amount_micros).await?;

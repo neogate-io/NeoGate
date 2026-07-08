@@ -563,7 +563,7 @@ onMounted(load)
             <span class="reference-price-value">{{ formatCachePricePair(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('source')" width="118">
+        <el-table-column :label="t('source')" width="150">
           <template #default="{ row }">
             <span class="reference-source-text">{{ row.source }}</span>
           </template>

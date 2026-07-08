@@ -16,6 +16,7 @@ use crate::{
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
 const PRICE_TEMPLATE_SOURCE_MODELS_DEV: &str = "models_dev";
 const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
+const PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX: &str = "local_cny_fx";
 
 #[derive(Debug, Serialize)]
 pub struct ProviderPriceRecord {
@@ -145,6 +146,16 @@ pub struct SyncPricingTemplatesRequest {
 struct ModelsDevProvider {
     #[serde(default)]
     models: HashMap<String, ModelsDevModel>,
+    #[serde(default)]
+    metadata: Option<ModelsDevProviderMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevProviderMetadata {
+    /// 汇率换算脚本(fetch_modelsdev_pricing.py)写入的 USD->CNY 汇率。
+    /// 存在即表示该 provider 的价格为汇率换算价,非原生 CNY 官方价。
+    #[allow(dead_code)]
+    fx_rate: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,6 +317,10 @@ pub async fn live_model_reference_catalog(
             continue;
         }
 
+        let source = match state.config.billing_currency {
+            BillingCurrency::Usd => PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+            BillingCurrency::Cny => provider_source_for_local_cny(&provider_data),
+        };
         for (model, model_data) in provider_data.models {
             let template = match state.config.billing_currency {
                 BillingCurrency::Usd => {
@@ -335,10 +350,7 @@ pub async fn live_model_reference_catalog(
                 billing_meter: template.billing_meter,
                 unit_price_micros: prices.unit_price_micros,
                 pricing_basis: prices.pricing_basis,
-                source: match state.config.billing_currency {
-                    BillingCurrency::Usd => PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
-                    BillingCurrency::Cny => PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
-                },
+                source: source.to_string(),
                 enabled: true,
                 capabilities: template.capabilities,
                 model_source: "upstream".to_string(),
@@ -367,6 +379,20 @@ pub async fn list_pricing_policies(state: &AppState) -> AppResult<Vec<PricingPol
     .fetch_all(&state.db.pool)
     .await?;
     rows.iter().map(pricing_policy_from_row).collect()
+}
+
+/// 判断 local_cny 目录中的 provider 价格来源:含 `metadata.fx_rate` 的为汇率换算价,
+/// 否则为原生 CNY 官方价。返回对应的 `pricing_template.source` 值。
+fn provider_source_for_local_cny(provider_data: &ModelsDevProvider) -> &'static str {
+    if provider_data
+        .metadata
+        .as_ref()
+        .is_some_and(|meta| meta.fx_rate.is_some())
+    {
+        PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX
+    } else {
+        PRICE_TEMPLATE_SOURCE_LOCAL_CNY
+    }
 }
 
 pub async fn sync_pricing_templates(
@@ -592,6 +618,7 @@ async fn apply_local_cny_pricing_templates(
             continue;
         }
 
+        let source = provider_source_for_local_cny(&provider_data);
         for (model, model_data) in provider_data.models {
             let Some(template) =
                 pricing_template_from_local_cny_model(provider, &model, &model_data)
@@ -599,9 +626,7 @@ async fn apply_local_cny_pricing_templates(
                 skipped += 1;
                 continue;
             };
-            saved +=
-                upsert_synced_pricing_template(state, template, PRICE_TEMPLATE_SOURCE_LOCAL_CNY)
-                    .await?;
+            saved += upsert_synced_pricing_template(state, template, source).await?;
         }
     }
 

@@ -75,6 +75,9 @@ struct ProbeOutcome {
     latency_ms: Option<i64>,
     status_code: Option<u16>,
     error_summary: Option<String>,
+    /// 是否因探测失败而冷却 endpoint/key。仅鉴权/配置类硬错误才冷却，
+    /// 上游临时不可用(5xx/429 等)不冷却，避免误伤同端点上正常的模型。
+    cooldown: bool,
 }
 
 pub(crate) async fn run(context: &AppContext) -> Result<()> {
@@ -292,6 +295,7 @@ async fn run_channel_probe(
             latency_ms: None,
             status_code: None,
             error_summary: Some("没有可探测的文本模型端点".to_string()),
+            cooldown: false,
         };
     };
 
@@ -305,6 +309,7 @@ async fn run_channel_probe(
             latency_ms: None,
             status_code: None,
             error_summary: Some("通道已停用".to_string()),
+            cooldown: false,
         };
     }
 
@@ -318,24 +323,30 @@ async fn run_channel_probe(
             latency_ms: None,
             status_code: None,
             error_summary: Some("没有启用的上游 Key 或凭证".to_string()),
+            // 未配置可用 Key 属于本地配置问题，不冷却已存在的 endpoint/key。
+            cooldown: false,
         };
     };
 
     let model = probe_model(endpoint).unwrap_or_default();
     let step = run_probe_step(context, endpoint, key, &model).await;
+    let failed = step.status != DiagnosticStatus::Ok;
     ProbeOutcome {
         endpoint_id: Some(endpoint.id),
         key_id: key.id,
         protocol: endpoint.protocol.clone(),
         model,
-        status: if step.status == DiagnosticStatus::Ok {
-            ProbeStatus::Ok
-        } else {
+        status: if failed {
             ProbeStatus::Failed
+        } else {
+            ProbeStatus::Ok
         },
         latency_ms: Some(step.duration_ms),
         status_code: step.status_code,
-        error_summary: (step.status != DiagnosticStatus::Ok).then_some(step.message),
+        error_summary: failed.then_some(step.message),
+        // 仅鉴权/配置类硬错误冷却；上游临时不可用(5xx/429)等不冷却，
+        // 避免探针模型自身问题误伤同端点上正常的模型。
+        cooldown: failed && should_cooldown_on_failure(step.status_code),
     }
 }
 
@@ -548,7 +559,7 @@ async fn persist_endpoint_probe_health(
 ) -> Result<()> {
     match outcome.status {
         ProbeStatus::Ok => persist_endpoint_health(context, endpoint_id, true, None).await,
-        ProbeStatus::Failed => {
+        ProbeStatus::Failed if outcome.cooldown => {
             persist_endpoint_health(
                 context,
                 endpoint_id,
@@ -556,6 +567,11 @@ async fn persist_endpoint_probe_health(
                 outcome.error_summary.as_deref(),
             )
             .await
+        }
+        ProbeStatus::Failed => {
+            // 软失败(上游临时不可用等)：仅记录最近错误，不冷却、不置不健康。
+            persist_endpoint_soft_failure(context, endpoint_id, outcome.error_summary.as_deref())
+                .await
         }
         ProbeStatus::Skipped => Ok(()),
     }
@@ -568,8 +584,11 @@ async fn persist_key_probe_health(
 ) -> Result<()> {
     match outcome.status {
         ProbeStatus::Ok => persist_key_health(context, key_id, true, None).await,
-        ProbeStatus::Failed => {
+        ProbeStatus::Failed if outcome.cooldown => {
             persist_key_health(context, key_id, false, outcome.error_summary.as_deref()).await
+        }
+        ProbeStatus::Failed => {
+            persist_key_soft_failure(context, key_id, outcome.error_summary.as_deref()).await
         }
         ProbeStatus::Skipped => Ok(()),
     }
@@ -620,6 +639,55 @@ async fn persist_key_health(
     .bind(healthy)
     .bind((!healthy).then_some(summary.unwrap_or("定时探测失败")))
     .bind(cooldown_until)
+    .execute(&context.db)
+    .await?;
+    Ok(())
+}
+
+/// 判定一次探测失败是否应当冷却 endpoint/key。
+///
+/// 参考同类网关(new-api)的自动禁用策略：仅鉴权/配置类硬错误才禁用，
+/// 上游临时不可用(5xx)、限流(429)等不冷却——这些通常是瞬态的，
+/// 不应因探针模型一时的失败而牵连同端点上正常的模型。
+fn should_cooldown_on_failure(status_code: Option<u16>) -> bool {
+    // 鉴权失败(401/403)或接口不存在(404)才冷却；
+    // 上游临时不可用(5xx)、限流(429)、探针模型不支持(400)等瞬态/模型级问题不冷却。
+    matches!(status_code, Some(401) | Some(403) | Some(404))
+}
+
+/// 软失败记录：仅更新最近错误，保留 healthy 与 cooldown_until 现状。
+async fn persist_endpoint_soft_failure(
+    context: &AppContext,
+    endpoint_id: DbId,
+    summary: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET last_error = $2,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(endpoint_id)
+    .bind(summary)
+    .execute(&context.db)
+    .await?;
+    Ok(())
+}
+
+/// 软失败记录：仅更新最近错误，保留 healthy 与 cooldown_until 现状。
+async fn persist_key_soft_failure(
+    context: &AppContext,
+    key_id: DbId,
+    summary: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE channel_key
+         SET last_error = $2,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(key_id)
+    .bind(summary)
     .execute(&context.db)
     .await?;
     Ok(())

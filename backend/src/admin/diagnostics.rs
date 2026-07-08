@@ -1065,9 +1065,12 @@ async fn persist_model_probe_failure(
     model: &str,
     summary: &ModelProbeSummary,
 ) -> AppResult<()> {
+    // 鉴权/配置类硬错误才禁用模型；上游临时不可用(5xx)、限流(429)等软失败
+    // 仅记录错误并累加失败计数，不禁用——避免探针瞬时失败误伤正常模型。
+    let should_disable = should_disable_model_on_failure(summary.status_code);
     sqlx::query(
         "UPDATE channel_model cm
-         SET enabled = FALSE,
+         SET enabled = CASE WHEN $5 THEN FALSE ELSE cm.enabled END,
              runtime_status = 'failed',
              cooldown_until = NULL,
              last_error = $3,
@@ -1084,9 +1087,18 @@ async fn persist_model_probe_failure(
     .bind(model)
     .bind(summary.message.chars().take(500).collect::<String>())
     .bind(summary.status_code.map(i32::from))
+    .bind(should_disable)
     .execute(&state.db.pool)
     .await?;
     Ok(())
+}
+
+/// 判定模型探测失败是否应当禁用该模型。
+///
+/// 仅鉴权/配置类硬错误才禁用；上游临时不可用(5xx)、限流(429)等不禁用，
+/// 与定时探测的冷却门槛保持一致，避免瞬态错误误伤正常模型。
+fn should_disable_model_on_failure(status_code: Option<u16>) -> bool {
+    matches!(status_code, Some(401) | Some(403) | Some(404))
 }
 
 fn aggregate_status(statuses: impl Iterator<Item = DiagnosticStatus>) -> DiagnosticStatus {

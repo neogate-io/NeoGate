@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   ArrowLeft,
   ArrowRight,
@@ -33,6 +34,7 @@ import {
 
 const { locale, t } = useLocale()
 const { formatMoney } = useBillingCurrency()
+const route = useRoute()
 
 const DEFAULT_PAGE_SIZE = 20
 
@@ -43,7 +45,7 @@ type UsageFilters = {
 }
 
 const filters = reactive<UsageFilters>({
-  dateRange: [],
+  dateRange: initialRouteDateRange(),
   query: '',
   status: 'all'
 })
@@ -64,11 +66,20 @@ const usageQueryRange = computed(() => {
     end: end ? new Date(`${end}T23:59:59.999`).toISOString() : undefined
   }
 })
+const routeUsageContext = computed<AdminUsageQuery>(() => ({
+  project_id: numberQueryValue('project_id'),
+  user_id: numberQueryValue('user_id'),
+  user_key_id: numberQueryValue('user_key_id'),
+  channel_id: numberQueryValue('channel_id'),
+  model: stringQueryValue('model'),
+  billing_meter: billingMeterQueryValue()
+}))
 const usageBaseQuery = computed<AdminUsageQuery>(() => ({
   start: usageQueryRange.value.start,
   end: usageQueryRange.value.end,
   query: filters.query.trim() || undefined,
-  status: filters.status
+  status: filters.status,
+  ...routeUsageContext.value
 }))
 
 const {
@@ -205,6 +216,29 @@ function routingRuleText(ruleId: string) {
   if (ruleId === 'extraction_signal') return t('routingRule_extraction_signal')
   if (ruleId === 'short_plain_text') return t('routingRule_short_plain_text')
   return ruleId
+}
+
+function initialRouteDateRange() {
+  const start = stringQueryValue('start')
+  const end = stringQueryValue('end')
+  return start && end ? [start, end] : []
+}
+
+function stringQueryValue(key: string) {
+  const value = route.query[key]
+  return Array.isArray(value) ? value[0] ?? undefined : value ?? undefined
+}
+
+function numberQueryValue(key: string) {
+  const value = stringQueryValue(key)
+  if (!value) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function billingMeterQueryValue() {
+  const value = stringQueryValue('billing_meter')
+  return value === 'token' || value === 'image' ? value : undefined
 }
 
 function routingRulesText(row: UsageRecord) {

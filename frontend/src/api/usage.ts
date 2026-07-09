@@ -15,6 +15,11 @@ export type AdminUsageQuery = {
   end?: string
   query?: string
   model?: string
+  project_id?: number
+  user_id?: number
+  user_key_id?: number
+  channel_id?: number
+  billing_meter?: 'token' | 'image'
   status?: AdminUsageStatus
   cursor?: string
 }
@@ -35,6 +40,8 @@ export type UsageStatisticsQuery = {
   end?: string
   user_id?: number
   project_id?: number
+  user_key_id?: number
+  channel_id?: number
   project_query?: string
   user_query?: string
   model?: string
@@ -112,6 +119,7 @@ export type UserUsageStatistics = {
 }
 
 export type ModelUsageStatistics = {
+  channel_id?: number | null
   channel_name: string
   model: string
   billing_meter: 'token' | 'image'
@@ -264,6 +272,11 @@ export function getAdminUsage(query: AdminUsageQuery = {}) {
   if (query.end) params.set('end', query.end)
   if (query.query) params.set('query', query.query)
   if (query.model) params.set('model', query.model)
+  if (query.project_id != null) params.set('project_id', String(query.project_id))
+  if (query.user_id != null) params.set('user_id', String(query.user_id))
+  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
+  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
+  if (query.billing_meter) params.set('billing_meter', query.billing_meter)
   if (query.status && query.status !== 'all') params.set('status', query.status)
   if (query.cursor) params.set('cursor', query.cursor)
   return adminRequest<UsagePage>(`/api/admin/usage?${params}`)
@@ -354,6 +367,11 @@ function adminUsageParams(query: AdminUsageQuery) {
   if (query.end) params.set('end', query.end)
   if (query.query) params.set('query', query.query)
   if (query.model) params.set('model', query.model)
+  if (query.project_id != null) params.set('project_id', String(query.project_id))
+  if (query.user_id != null) params.set('user_id', String(query.user_id))
+  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
+  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
+  if (query.billing_meter) params.set('billing_meter', query.billing_meter)
   if (query.status && query.status !== 'all') params.set('status', query.status)
   return params
 }
@@ -364,6 +382,8 @@ function usageStatisticsParams(query: UsageStatisticsQuery) {
   if (query.end) params.set('end', query.end)
   if (query.user_id != null) params.set('user_id', String(query.user_id))
   if (query.project_id != null) params.set('project_id', String(query.project_id))
+  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
+  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
   if (query.project_query) params.set('project_query', query.project_query)
   if (query.user_query) params.set('user_query', query.user_query)
   if (query.model) params.set('model', query.model)

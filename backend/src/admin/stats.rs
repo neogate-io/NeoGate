@@ -43,6 +43,8 @@ pub(crate) struct UsageStatsParams {
     end: Option<NaiveDate>,
     user_id: Option<DbId>,
     project_id: Option<DbId>,
+    user_key_id: Option<DbId>,
+    channel_id: Option<DbId>,
     project_query: Option<String>,
     user_query: Option<String>,
     model: Option<String>,
@@ -62,6 +64,8 @@ struct UsageStatsFilter {
     end: NaiveDate,
     user_id: Option<DbId>,
     project_id: Option<DbId>,
+    user_key_id: Option<DbId>,
+    channel_id: Option<DbId>,
     project_query_pattern: Option<String>,
     user_query_pattern: Option<String>,
     model: Option<String>,
@@ -157,6 +161,7 @@ struct UserUsageStats {
 
 #[derive(Debug, Serialize)]
 struct ModelUsageStats {
+    channel_id: Option<DbId>,
     channel_name: String,
     model: String,
     billing_meter: String,
@@ -498,6 +503,8 @@ impl UsageStatsFilter {
             end,
             user_id: params.user_id,
             project_id: params.project_id,
+            user_key_id: params.user_key_id,
+            channel_id: params.channel_id,
             project_query_pattern: trimmed_non_empty(params.project_query.as_deref())
                 .map(|value| format!("%{value}%")),
             user_query_pattern: trimmed_non_empty(params.user_query.as_deref())
@@ -948,10 +955,13 @@ async fn user_stats(
           WHERE ud.day >= $1
             AND ud.day <= $2
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
-            AND ($4::TEXT IS NULL OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
+            AND ($4::TEXT IS NULL OR u.username ILIKE $4 OR u.email::TEXT ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
             AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
             AND ($6::TEXT IS NULL OR ud.model = $6)
             AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+            AND ($8::BIGINT IS NULL OR ud.project_id = $8)
+            AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+            AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
           GROUP BY ud.user_id
         ) grouped
         "#,
@@ -963,6 +973,9 @@ async fn user_stats(
     .bind(filter.project_query_pattern.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
+    .bind(filter.project_id)
+    .bind(filter.user_key_id)
+    .bind(filter.channel_id)
     .fetch_one(pool)
     .await?;
 
@@ -989,14 +1002,17 @@ async fn user_stats(
         WHERE ud.day >= $1
           AND ud.day <= $2
           AND ($3::BIGINT IS NULL OR ud.user_id = $3)
-          AND ($4::TEXT IS NULL OR u.username ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
+          AND ($4::TEXT IS NULL OR u.username ILIKE $4 OR u.email::TEXT ILIKE $4 OR ud.user_id::TEXT ILIKE $4)
           AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
           AND ($6::TEXT IS NULL OR ud.model = $6)
           AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+          AND ($8::BIGINT IS NULL OR ud.project_id = $8)
+          AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+          AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
         GROUP BY ud.user_id, u.email, u.username
         ORDER BY {}
-        OFFSET $8
-        LIMIT $9
+        OFFSET $11
+        LIMIT $12
         "#,
         sort.user_order_by()
     );
@@ -1009,6 +1025,9 @@ async fn user_stats(
         .bind(filter.project_query_pattern.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
+        .bind(filter.project_id)
+        .bind(filter.user_key_id)
+        .bind(filter.channel_id)
         .bind(offset)
         .bind(limit)
         .fetch_all(pool)
@@ -1155,6 +1174,9 @@ async fn model_stats_page(
             AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
             AND ($6::TEXT IS NULL OR ud.model = $6)
             AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
+            AND ($8::BIGINT IS NULL OR ud.project_id = $8)
+            AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+            AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
           GROUP BY COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
         ) grouped
         "#,
@@ -1166,12 +1188,16 @@ async fn model_stats_page(
     .bind(filter.project_query_pattern.as_deref())
     .bind(filter.model.as_deref())
     .bind(filter.billing_meter.as_deref())
+    .bind(filter.project_id)
+    .bind(filter.user_key_id)
+    .bind(filter.channel_id)
     .fetch_one(pool)
     .await?;
 
     let sql = format!(
         r#"
         SELECT
+          ud.channel_id,
           COALESCE(c.name, '') AS channel_name,
           ud.model,
           ud.billing_meter,
@@ -1196,10 +1222,13 @@ async fn model_stats_page(
           AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
           AND ($6::TEXT IS NULL OR ud.model = $6)
           AND ($7::TEXT IS NULL OR ud.billing_meter = $7)
-        GROUP BY COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
+          AND ($8::BIGINT IS NULL OR ud.project_id = $8)
+          AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+          AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
+        GROUP BY ud.channel_id, COALESCE(ud.channel_id, -1), COALESCE(c.name, ''), ud.model, ud.billing_meter
         ORDER BY {}
-        OFFSET $8
-        LIMIT $9
+        OFFSET $11
+        LIMIT $12
         "#,
         sort.model_order_by()
     );
@@ -1212,6 +1241,9 @@ async fn model_stats_page(
         .bind(filter.project_query_pattern.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
+        .bind(filter.project_id)
+        .bind(filter.user_key_id)
+        .bind(filter.channel_id)
         .bind(offset)
         .bind(limit)
         .fetch_all(pool)
@@ -1268,16 +1300,18 @@ async fn project_stats(
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
             AND ($4::BIGINT IS NULL OR ud.project_id = $4)
             AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
-            AND ($6::TEXT IS NULL OR u.username ILIKE $6 OR ud.user_id::TEXT ILIKE $6)
+            AND ($6::TEXT IS NULL OR u.username ILIKE $6 OR u.email::TEXT ILIKE $6 OR ud.user_id::TEXT ILIKE $6)
             AND ($7::TEXT IS NULL OR ud.model = $7)
             AND ($8::TEXT IS NULL OR ud.billing_meter = $8)
+            AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+            AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
           GROUP BY ud.project_id, p.name, p.owner_user_id
         )
         SELECT grouped.*, COUNT(*) OVER()::BIGINT AS total
         FROM grouped
         ORDER BY {}
-        OFFSET $9
-        LIMIT $10
+        OFFSET $11
+        LIMIT $12
         "#,
         sort.project_order_by()
     );
@@ -1291,6 +1325,8 @@ async fn project_stats(
         .bind(filter.user_query_pattern.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
+        .bind(filter.user_key_id)
+        .bind(filter.channel_id)
         .bind(offset)
         .bind(limit)
         .fetch_all(pool)
@@ -1355,16 +1391,18 @@ async fn project_member_stats(
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
             AND ($4::BIGINT IS NULL OR ud.project_id = $4)
             AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
-            AND ($6::TEXT IS NULL OR u.username ILIKE $6 OR ud.user_id::TEXT ILIKE $6)
+            AND ($6::TEXT IS NULL OR u.username ILIKE $6 OR u.email::TEXT ILIKE $6 OR ud.user_id::TEXT ILIKE $6)
             AND ($7::TEXT IS NULL OR ud.model = $7)
             AND ($8::TEXT IS NULL OR ud.billing_meter = $8)
+            AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+            AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
           GROUP BY ud.project_id, p.name, ud.user_id, u.email, u.username
         )
         SELECT grouped.*, COUNT(*) OVER()::BIGINT AS total
         FROM grouped
         ORDER BY {}
-        OFFSET $9
-        LIMIT $10
+        OFFSET $11
+        LIMIT $12
         "#,
         sort.user_order_by()
     );
@@ -1378,6 +1416,8 @@ async fn project_member_stats(
         .bind(filter.user_query_pattern.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
+        .bind(filter.user_key_id)
+        .bind(filter.channel_id)
         .bind(offset)
         .bind(limit)
         .fetch_all(pool)
@@ -1448,16 +1488,18 @@ async fn key_stats(
             AND ($3::BIGINT IS NULL OR ud.user_id = $3)
             AND ($4::BIGINT IS NULL OR ud.project_id = $4)
             AND ($5::TEXT IS NULL OR p.name ILIKE $5 OR ud.project_id::TEXT ILIKE $5)
-            AND ($6::TEXT IS NULL OR u.username ILIKE $6 OR ud.user_id::TEXT ILIKE $6)
+            AND ($6::TEXT IS NULL OR u.username ILIKE $6 OR u.email::TEXT ILIKE $6 OR ud.user_id::TEXT ILIKE $6)
             AND ($7::TEXT IS NULL OR ud.model = $7)
             AND ($8::TEXT IS NULL OR ud.billing_meter = $8)
+            AND ($9::BIGINT IS NULL OR ud.user_key_id = $9)
+            AND ($10::BIGINT IS NULL OR ud.channel_id = $10)
           GROUP BY ud.user_key_id, uk.name, uk.key_prefix, ud.project_id, p.name, ud.user_id, u.email, u.username
         )
         SELECT grouped.*, COUNT(*) OVER()::BIGINT AS total
         FROM grouped
         ORDER BY {}
-        OFFSET $9
-        LIMIT $10
+        OFFSET $11
+        LIMIT $12
         "#,
         sort.key_order_by()
     );
@@ -1471,6 +1513,8 @@ async fn key_stats(
         .bind(filter.user_query_pattern.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
+        .bind(filter.user_key_id)
+        .bind(filter.channel_id)
         .bind(offset)
         .bind(limit)
         .fetch_all(pool)
@@ -1883,6 +1927,7 @@ async fn export_models(
     let items = model_stats(pool, filter, EXPORT_LIMIT + 1, sort).await?;
     ensure_export_limit(items.len())?;
     let mut rows = vec![vec![
+        "channel_id".into(),
         "channel_name".into(),
         "model".into(),
         "billing_meter".into(),
@@ -1899,6 +1944,7 @@ async fn export_models(
     ]];
     rows.extend(items.into_iter().map(|item| {
         vec![
+            optional_id(item.channel_id),
             item.channel_name,
             item.model,
             item.billing_meter,
@@ -1981,6 +2027,7 @@ fn user_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<UserUsageStats, sq
 
 fn model_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ModelUsageStats, sqlx::Error> {
     Ok(ModelUsageStats {
+        channel_id: row.try_get("channel_id")?,
         channel_name: row.try_get("channel_name")?,
         model: row.try_get("model")?,
         billing_meter: row.try_get("billing_meter")?,
@@ -2228,6 +2275,8 @@ mod tests {
             end: Some(end),
             user_id: None,
             project_id: None,
+            user_key_id: None,
+            channel_id: None,
             project_query: None,
             user_query: None,
             model: None,
@@ -2252,6 +2301,8 @@ mod tests {
             end: NaiveDate::from_ymd_opt(2026, 6, 14).unwrap(),
             user_id: None,
             project_id: None,
+            user_key_id: None,
+            channel_id: None,
             project_query_pattern: None,
             user_query_pattern: None,
             model: None,
@@ -2270,6 +2321,8 @@ mod tests {
             end: NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
             user_id: None,
             project_id: None,
+            user_key_id: None,
+            channel_id: None,
             project_query_pattern: None,
             user_query_pattern: None,
             model: None,
@@ -2288,6 +2341,8 @@ mod tests {
             end: NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
             user_id: None,
             project_id: None,
+            user_key_id: None,
+            channel_id: None,
             project_query_pattern: None,
             user_query_pattern: None,
             model: None,

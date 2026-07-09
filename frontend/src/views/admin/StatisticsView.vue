@@ -1098,9 +1098,11 @@ function chartNumericValue(value: unknown) {
   white-space: nowrap;
 }
 
-.statistics-toolbar .usage-date-range.el-date-editor.el-input__wrapper {
-  flex-basis: 220px;
-  width: 220px;
+.statistics-toolbar :deep(.usage-date-range.el-date-editor.el-input__wrapper) {
+  --el-date-editor-width: 240px;
+  flex: 0 0 240px;
+  max-width: 240px;
+  width: 240px;
 }
 
 .statistics-toolbar .usage-search-input.el-input {

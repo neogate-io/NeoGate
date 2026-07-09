@@ -6,6 +6,7 @@ import {
   downloadAdminUsageStatisticsCsv,
   getAdminUsageStatisticsKeys,
   getAdminUsageStatisticsModels,
+  getAdminUsageStatisticsOptions,
   getAdminUsageStatisticsProjectMembers,
   getAdminUsageStatisticsProjects,
   getAdminUsageStatisticsUsers,
@@ -35,7 +36,6 @@ type AttributionFilters = {
   projectQuery: string
   userQuery: string
   model: string
-  billingMeter: '' | 'token' | 'image'
 }
 
 type DrilldownContext = {
@@ -57,8 +57,7 @@ const filters = reactive<AttributionFilters>({
   dateRange: defaultRange(30),
   projectQuery: '',
   userQuery: '',
-  model: '',
-  billingMeter: ''
+  model: ''
 })
 
 const primaryDimension = ref<PrimaryDimension>('project')
@@ -87,7 +86,6 @@ const baseQuery = computed<UsageStatisticsQuery>(() => {
     project_query: filters.projectQuery.trim() || undefined,
     user_query: filters.userQuery.trim() || undefined,
     model: filters.model || undefined,
-    billing_meter: filters.billingMeter || undefined,
     sort: 'cost_desc'
   }
 })
@@ -157,6 +155,11 @@ const hasSelection = computed(
     (primaryDimension.value === 'user' && selectedUser.value != null) ||
     (primaryDimension.value === 'model' && selectedModel.value != null)
 )
+const selectedAnalysisTitle = computed(() => {
+  if (primaryDimension.value === 'project') return t('projectAnalysis')
+  if (primaryDimension.value === 'user') return t('userAnalysis')
+  return t('modelAnalysis')
+})
 
 const activeQuickRange = computed(() => {
   for (const days of [7, 30, 90]) {
@@ -289,6 +292,14 @@ const {
   },
   emptyPage<ModelUsageStatistics>()
 )
+const {
+  data: attributionOptions,
+  loading: attributionOptionsLoading,
+  reload: reloadAttributionOptions
+} = useAsyncData(
+  () => getAdminUsageStatisticsOptions(baseQuery.value),
+  { models: [], users: [] }
+)
 
 const primaryLoading = computed(
   () => primaryProjectsLoading.value || primaryUsersLoading.value || primaryModelsLoading.value
@@ -300,7 +311,10 @@ const detailLoading = computed(
     detailKeysLoading.value ||
     detailModelsLoading.value
 )
-const loading = computed(() => primaryLoading.value || detailLoading.value)
+const loading = computed(
+  () => primaryLoading.value || detailLoading.value || attributionOptionsLoading.value
+)
+const filteredModelOptions = computed(() => attributionOptions.value.models)
 
 async function reloadPrimary() {
   if (primaryDimension.value === 'project') await reloadPrimaryProjects()
@@ -322,6 +336,7 @@ async function reloadDetails() {
 async function reloadAttribution() {
   primaryPage.value = 1
   resetDetailPages()
+  await reloadAttributionOptions()
   await reloadPrimary()
   await reloadDetails()
 }
@@ -341,6 +356,10 @@ async function applyQuickRange(days: number) {
 
 async function selectProject(row: ProjectUsageStatistics) {
   if (row.project_id == null) return
+  if (selectedProject.value?.project_id === row.project_id) {
+    await clearSelection()
+    return
+  }
   selectedProject.value = row
   selectedUser.value = null
   selectedModel.value = null
@@ -353,6 +372,10 @@ async function selectProject(row: ProjectUsageStatistics) {
 async function selectUser(row: UserUsageStatistics | ProjectMemberUsageStatistics) {
   if (row.user_id == null) return
   if (primaryDimension.value === 'user') {
+    if (selectedUser.value?.user_id === row.user_id) {
+      await clearSelection()
+      return
+    }
     selectedUser.value = row as UserUsageStatistics
     selectedProject.value = null
     selectedModel.value = null
@@ -373,6 +396,14 @@ async function selectUser(row: UserUsageStatistics | ProjectMemberUsageStatistic
 
 async function selectModel(row: ModelUsageStatistics) {
   if (primaryDimension.value === 'model') {
+    if (
+      selectedModel.value?.model === row.model &&
+      (selectedModel.value.channel_id ?? null) === (row.channel_id ?? null) &&
+      selectedModel.value.billing_meter === row.billing_meter
+    ) {
+      await clearSelection()
+      return
+    }
     selectedModel.value = row
     selectedProject.value = null
     selectedUser.value = null
@@ -464,7 +495,7 @@ async function exportAttribution(scope: string | number | object) {
 function openUsageDetails(extra: DrilldownContext = {}) {
   const [start, end] = filters.dateRange ?? []
   const context = { ...selectedContext.value, ...extra }
-  void router.push({
+  const route = router.resolve({
     path: '/admin/usage',
     query: compactQuery({
       start,
@@ -477,6 +508,7 @@ function openUsageDetails(extra: DrilldownContext = {}) {
       billing_meter: context.billing_meter
     })
   })
+  window.open(route.href, '_blank', 'noopener,noreferrer')
 }
 
 async function handlePrimaryPageChange(page: number) {
@@ -635,13 +667,6 @@ function userSecondaryCount(row: UserUsageStatistics | ProjectMemberUsageStatist
   return 'key_count' in row ? row.key_count : row.model_count
 }
 
-function selectedTitle() {
-  if (selectedProject.value) return selectedProject.value.project_name
-  if (selectedUser.value) return selectedUser.value.user_display_name
-  if (selectedModel.value) return modelDisplay(selectedModel.value)
-  return ''
-}
-
 function successRate(success: number, total: number) {
   if (total <= 0) return '-'
   return `${((success / total) * 100).toFixed(1)}%`
@@ -687,20 +712,19 @@ function successRate(success: number, total: number) {
           </label>
           <label class="admin-filter-field">
             <span>{{ t('model') }}</span>
-            <el-input
+            <el-select
               v-model="filters.model"
-              class="usage-search-input"
+              class="usage-model-filter"
               clearable
-              :prefix-icon="Search"
+              filterable
               :placeholder="t('allModels')"
-            />
-          </label>
-          <label class="admin-filter-field">
-            <span>{{ t('billingMeter') }}</span>
-            <el-select v-model="filters.billingMeter" class="usage-meter-filter">
-              <el-option :label="t('billingMeterAll')" value="" />
-              <el-option :label="t('billingMeterToken')" value="token" />
-              <el-option :label="t('billingMeterImageGeneration')" value="image" />
+            >
+              <el-option
+                v-for="item in filteredModelOptions"
+                :key="`${item.channel_name}/${item.model}`"
+                :label="modelDisplay(item)"
+                :value="item.model"
+              />
             </el-select>
           </label>
           <el-button class="admin-action-button" type="primary" native-type="submit" :icon="Search" :loading="loading">
@@ -770,20 +794,22 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
-          <el-table-column :label="t('memberCount')" min-width="100" align="right">
-            <template #default="{ row }">{{ formatNumber(row.member_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('keyCount')" min-width="90" align="right">
-            <template #default="{ row }">{{ formatNumber(row.key_count, locale) }}</template>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
+          <el-table-column :label="t('successRate')" min-width="100" align="right">
+            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+          </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          <el-table-column :label="t('membersAndKeys')" min-width="110" align="right">
+            <template #default="{ row }">
+              {{ formatNumber(row.member_count, locale) }} / {{ formatNumber(row.key_count, locale) }}
+            </template>
           </el-table-column>
           <el-table-column min-width="90" align="right">
             <template #default="{ row }">
@@ -813,6 +839,9 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
@@ -821,9 +850,6 @@ function successRate(success: number, total: number) {
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
           </el-table-column>
           <el-table-column :label="t('modelCount')" min-width="100" align="right">
             <template #default="{ row }">{{ formatNumber(row.model_count, locale) }}</template>
@@ -856,17 +882,17 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
+          <el-table-column :label="t('successRate')" min-width="100" align="right">
+            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+          </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('billingUnits')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
           </el-table-column>
           <el-table-column :label="t('userCount')" min-width="100" align="right">
             <template #default="{ row }">{{ formatNumber(row.user_count, locale) }}</template>
@@ -897,8 +923,7 @@ function successRate(success: number, total: number) {
 
       <section v-if="hasSelection" class="attribution-panel">
         <header class="attribution-panel-header">
-          <span>{{ t('drilldownAnalysis') }}</span>
-          <small>{{ selectedTitle() }}</small>
+          <span>{{ selectedAnalysisTitle }}</span>
           <div class="attribution-actions">
             <el-button class="admin-action-button" :icon="Tickets" @click="openUsageDetails()">
               {{ t('viewUsageDetails') }}
@@ -995,17 +1020,20 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
-          <el-table-column :label="t('keyCount')" min-width="90" align="right">
-            <template #default="{ row }">{{ formatNumber(userSecondaryCount(row), locale) }}</template>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
+          <el-table-column :label="t('successRate')" min-width="100" align="right">
+            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+          </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          <el-table-column :label="t('keyCount')" min-width="90" align="right">
+            <template #default="{ row }">{{ formatNumber(userSecondaryCount(row), locale) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
@@ -1036,20 +1064,26 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
-          <el-table-column :label="t('project')" min-width="160">
+          <el-table-column v-if="selectedContext.project_id == null" :label="t('project')" min-width="160">
             <template #default="{ row }">{{ row.project_name }}</template>
           </el-table-column>
           <el-table-column :label="t('usageUser')" min-width="150">
             <template #default="{ row }">{{ row.user_display_name }}</template>
           </el-table-column>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
+          </el-table-column>
+          <el-table-column :label="t('successRate')" min-width="100" align="right">
+            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          <el-table-column :label="t('modelCount')" min-width="100" align="right">
+            <template #default="{ row }">{{ formatNumber(row.model_count, locale) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
@@ -1080,17 +1114,20 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+          </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
+          </el-table-column>
+          <el-table-column :label="t('successRate')" min-width="100" align="right">
+            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('billingUnits')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
@@ -1149,11 +1186,12 @@ function successRate(success: number, total: number) {
 }
 
 .attribution-toolbar .usage-toolbar-filters {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   row-gap: 10px;
 }
 
 .attribution-toolbar .admin-filter-field {
+  flex: 0 1 auto;
   gap: 6px;
 }
 
@@ -1165,22 +1203,27 @@ function successRate(success: number, total: number) {
   white-space: nowrap;
 }
 
-.attribution-toolbar .usage-date-range.el-date-editor.el-input__wrapper {
-  flex-basis: 220px;
-  width: 220px;
+.attribution-toolbar :deep(.usage-date-range.el-date-editor.el-input__wrapper) {
+  --el-date-editor-width: 240px;
+  flex: 0 0 240px;
+  max-width: 240px;
+  width: 240px;
 }
 
 .attribution-toolbar .usage-search-input.el-input {
-  flex-basis: 170px;
-  width: 170px;
+  flex-basis: 180px;
+  width: 180px;
 }
 
-.attribution-toolbar .usage-meter-filter {
-  width: 138px;
+.attribution-toolbar .usage-model-filter {
+  flex-basis: 180px;
+  width: 180px;
 }
 
 .attribution-toolbar-actions {
   align-self: start;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
 }
 
 .attribution-quick-ranges,
@@ -1193,12 +1236,37 @@ function successRate(success: number, total: number) {
 }
 
 .attribution-quick-ranges {
+  gap: 4px;
   grid-column: 1 / -1;
   padding-top: 2px;
 }
 
-.attribution-tabs .el-button,
 .attribution-quick-ranges .el-button {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: #f2f6fb;
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: #475467;
+  --el-button-text-color: #667085;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 620;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.attribution-quick-ranges .el-button + .el-button {
+  margin-left: 0;
+}
+
+.attribution-quick-ranges .el-button.is-active {
+  --el-button-bg-color: #eef7ff;
+  --el-button-border-color: #b7d8f3;
+  --el-button-text-color: #168bd3;
+}
+
+.attribution-tabs .el-button {
   --el-button-bg-color: transparent;
   --el-button-border-color: transparent;
   --el-button-hover-bg-color: #f2f6fb;
@@ -1213,13 +1281,11 @@ function successRate(success: number, total: number) {
   padding: 0 9px;
 }
 
-.attribution-tabs .el-button + .el-button,
-.attribution-quick-ranges .el-button + .el-button {
+.attribution-tabs .el-button + .el-button {
   margin-left: 0;
 }
 
-.attribution-tabs .el-button.is-active,
-.attribution-quick-ranges .el-button.is-active {
+.attribution-tabs .el-button.is-active {
   --el-button-bg-color: #eef7ff;
   --el-button-border-color: #b7d8f3;
   --el-button-text-color: #168bd3;
@@ -1260,10 +1326,7 @@ function successRate(success: number, total: number) {
 }
 
 .attribution-context-bar {
-  background: #f8fafc;
-  border: 1px solid #e4ebf3;
-  border-radius: 8px;
-  padding: 10px;
+  padding: 0;
 }
 
 .attribution-context-chip {
@@ -1332,9 +1395,14 @@ function successRate(success: number, total: number) {
   padding-top: 4px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
   .attribution-toolbar {
-    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .attribution-toolbar .usage-toolbar-filters {
+    flex-wrap: wrap;
   }
 
   .attribution-toolbar-actions,
@@ -1348,6 +1416,25 @@ function successRate(success: number, total: number) {
 
   .attribution-actions {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .attribution-toolbar,
+  .attribution-panel {
+    padding: 14px;
+  }
+
+  .attribution-toolbar .usage-toolbar-filters,
+  .attribution-toolbar .usage-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .attribution-toolbar .admin-filter-field {
+    align-items: stretch;
+    display: grid;
+    gap: 5px;
   }
 }
 </style>

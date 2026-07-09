@@ -199,24 +199,24 @@ const requestTrendOption = computed<EChartsCoreOption>(() => ({
   ]
 }))
 const topUsersOption = computed<EChartsCoreOption>(() => {
-  const rows = [...statisticsSummary.value.top_users].reverse()
+  const rows = statisticsSummary.value.top_users
   return {
     color: ['#0f766e'],
-    grid: { left: 12, right: 24, top: 18, bottom: 24, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
+    grid: { left: 12, right: 18, top: 28, bottom: 58, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
       formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
     },
     xAxis: {
+      type: 'category',
+      data: rows.map((item) => item.user_display_name),
+      axisLabel: { color: '#667085', rotate: 24, width: 92, overflow: 'truncate' }
+    },
+    yAxis: {
       type: 'value',
       axisLabel: { color: '#667085', formatter: (value: number) => `$${value}` },
       splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
-    yAxis: {
-      type: 'category',
-      data: rows.map((item) => item.user_display_name),
-      axisLabel: { color: '#667085', width: 110, overflow: 'truncate' }
     },
     series: [
       {
@@ -351,8 +351,7 @@ const modelFailureRateOption = computed<EChartsCoreOption>(() => {
           percentValue(left.error_count, left.request_count) || right.error_count - left.error_count
     )
     .slice(0, 12)
-    .reverse()
-  return horizontalMetricOption({
+  return verticalMetricOption({
     rows,
     label: t('failureRate'),
     value: (item) => percentValue(item.error_count, item.request_count),
@@ -365,8 +364,7 @@ const modelLatencyRankOption = computed<EChartsCoreOption>(() => {
     .filter((item) => item.avg_latency_ms != null)
     .sort((left, right) => (right.avg_latency_ms ?? 0) - (left.avg_latency_ms ?? 0))
     .slice(0, 12)
-    .reverse()
-  return horizontalMetricOption({
+  return verticalMetricOption({
     rows,
     label: t('averageLatency'),
     value: (item) => item.avg_latency_ms ?? 0,
@@ -642,7 +640,7 @@ function modelLineOption(options: {
   }
 }
 
-function horizontalMetricOption(options: {
+function verticalMetricOption(options: {
   rows: ModelUsageStatistics[]
   label: string
   value: (item: ModelUsageStatistics) => number
@@ -651,24 +649,24 @@ function horizontalMetricOption(options: {
 }): EChartsCoreOption {
   return {
     color: [options.color],
-    grid: { left: 12, right: 24, top: 18, bottom: 24, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
+    grid: { left: 12, right: 18, top: 28, bottom: 62, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
       formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
     },
     xAxis: {
+      type: 'category',
+      data: options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
+      axisLabel: { color: '#667085', rotate: 28, width: 96, overflow: 'truncate' }
+    },
+    yAxis: {
       type: 'value',
       axisLabel: {
         color: '#667085',
         formatter: (value: number) => axisValueLabel(value, options.valueMode)
       },
       splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
-    yAxis: {
-      type: 'category',
-      data: options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
-      axisLabel: { color: '#667085', width: 130, overflow: 'truncate' }
     },
     series: [
       {
@@ -1101,8 +1099,8 @@ function chartNumericValue(value: unknown) {
 }
 
 .statistics-toolbar .usage-date-range.el-date-editor.el-input__wrapper {
-  flex-basis: 240px;
-  width: 240px;
+  flex-basis: 220px;
+  width: 220px;
 }
 
 .statistics-toolbar .usage-search-input.el-input {

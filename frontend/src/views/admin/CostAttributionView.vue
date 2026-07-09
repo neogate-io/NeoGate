@@ -5,6 +5,7 @@ import {
   downloadAdminUsageStatisticsCsv,
   getAdminUsageStatisticsKeys,
   getAdminUsageStatisticsModels,
+  getAdminUsageStatisticsOptions,
   getAdminUsageStatisticsProjectMembers,
   getAdminUsageStatisticsProjects,
   getAdminUsageStatisticsUsers,
@@ -29,12 +30,14 @@ type AttributionFilters = {
   dateRange: string[] | null
   projectQuery: string
   userQuery: string
+  model: string
 }
 
 const filters = reactive<AttributionFilters>({
   dateRange: defaultRange(30),
   projectQuery: '',
-  userQuery: ''
+  userQuery: '',
+  model: ''
 })
 const projectsPage = ref(1)
 const projectsPageSize = ref(20)
@@ -57,6 +60,7 @@ const baseQuery = computed<UsageStatisticsQuery>(() => {
     end,
     project_query: filters.projectQuery.trim() || undefined,
     user_query: filters.userQuery.trim() || undefined,
+    model: filters.model || undefined,
     sort: 'cost_desc'
   }
 })
@@ -142,14 +146,25 @@ const {
   emptyPage<ModelUsageStatistics>()
 )
 
+const {
+  data: options,
+  loading: optionsLoading,
+  reload: reloadOptions
+} = useAsyncData(
+  () => getAdminUsageStatisticsOptions(baseQuery.value),
+  { models: [], users: [] }
+)
+
 const loading = computed(
   () =>
     projectsLoading.value ||
     membersLoading.value ||
     keysLoading.value ||
     usersLoading.value ||
-    modelsLoading.value
+    modelsLoading.value ||
+    optionsLoading.value
 )
+const filteredModelOptions = computed(() => options.value.models)
 const activeQuickRange = computed(() => {
   for (const days of [7, 30, 90]) {
     const [start, end] = defaultRange(days)
@@ -164,7 +179,7 @@ async function reloadAttribution() {
   keysPage.value = 1
   usersPage.value = 1
   modelsPage.value = 1
-  await Promise.all([reloadProjects(), reloadUsers(), reloadModels()])
+  await Promise.all([reloadProjects(), reloadUsers(), reloadModels(), reloadOptions()])
   if (selectedProject.value) {
     await Promise.all([reloadMembers(), reloadKeys()])
   }
@@ -328,6 +343,10 @@ function modelRowKey(row: ModelUsageStatistics) {
   return `${row.channel_name}/${row.model}/${row.billing_meter}`
 }
 
+function modelDisplay(channelName: string, model: string) {
+  return model ? `${channelName}/${model}` : channelName
+}
+
 function successRate(success: number, total: number) {
   if (total <= 0) return '-'
   return `${((success / total) * 100).toFixed(1)}%`
@@ -371,11 +390,28 @@ function successRate(success: number, total: number) {
               :placeholder="t('userSearchPlaceholder')"
             />
           </label>
+          <label class="admin-filter-field">
+            <span>{{ t('model') }}</span>
+            <el-select
+              v-model="filters.model"
+              class="usage-model-filter"
+              clearable
+              filterable
+              :placeholder="t('allModels')"
+            >
+              <el-option
+                v-for="item in filteredModelOptions"
+                :key="`${item.channel_name}/${item.model}`"
+                :label="modelDisplay(item.channel_name, item.model)"
+                :value="item.model"
+              />
+            </el-select>
+          </label>
           <el-button class="admin-action-button" type="primary" native-type="submit" :icon="Search" :loading="loading">
             {{ t('search') }}
           </el-button>
         </div>
-        <div class="attribution-toolbar-actions">
+        <div class="usage-toolbar-actions attribution-toolbar-actions">
           <el-dropdown trigger="click" @command="exportAttribution">
             <el-button
               class="admin-action-button"
@@ -791,17 +827,54 @@ function successRate(success: number, total: number) {
   display: flex;
   gap: 4px;
   grid-column: 1 / -1;
+  padding-top: 2px;
+}
+
+.attribution-quick-ranges > .el-button + .el-button {
+  margin-left: 0;
 }
 
 .attribution-toolbar-actions {
   align-self: start;
   display: flex;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
+.attribution-toolbar .usage-toolbar-filters,
+.attribution-toolbar .usage-toolbar-actions {
+  row-gap: 10px;
+}
+
+.attribution-toolbar .usage-toolbar-filters {
+  flex-wrap: nowrap;
+}
+
+.attribution-toolbar .admin-filter-field {
+  flex: 0 1 auto;
+  gap: 6px;
+}
+
+.attribution-toolbar .admin-filter-field > span {
+  color: #667085;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.attribution-toolbar .usage-date-range.el-date-editor.el-input__wrapper {
+  flex-basis: 220px;
+  width: 220px;
+}
+
 .attribution-toolbar .usage-search-input.el-input {
-  flex-basis: 150px;
-  width: 150px;
+  flex-basis: 180px;
+  width: 180px;
+}
+
+.attribution-toolbar .usage-model-filter {
+  width: 180px;
 }
 
 .attribution-quick-ranges .el-button {
@@ -965,6 +1038,21 @@ function successRate(success: number, total: number) {
   padding-top: 16px;
 }
 
+@media (max-width: 1180px) {
+  .attribution-toolbar {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .attribution-toolbar .usage-toolbar-filters {
+    flex-wrap: wrap;
+  }
+
+  .attribution-toolbar .usage-toolbar-actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 760px) {
   .attribution-toolbar,
   .attribution-panel {
@@ -978,6 +1066,18 @@ function successRate(success: number, total: number) {
 
   .attribution-toolbar-actions {
     justify-content: flex-start;
+  }
+
+  .attribution-toolbar .usage-toolbar-filters,
+  .attribution-toolbar .usage-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .attribution-toolbar .admin-filter-field {
+    align-items: stretch;
+    display: grid;
+    gap: 5px;
   }
 
   .attribution-breakdown {

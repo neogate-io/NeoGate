@@ -1501,6 +1501,7 @@ async fn resolve_admin_text_model(
                 model,
                 channel_id,
                 &[],
+                &[],
             )
             .await
         {

@@ -101,6 +101,7 @@ pub(crate) async fn anthropic_messages(
                     &resolved.target_model,
                     channel_id,
                     &attempted_upstreams,
+                    &[],
                 )
                 .await?
         } else {
@@ -115,6 +116,7 @@ pub(crate) async fn anthropic_messages(
                     SelectionConstraints {
                         affinity_key: channel_affinity_key.as_ref(),
                         attempted: &attempted_upstreams,
+                        excluded_endpoint_ids: &[],
                     },
                 )
                 .await?
@@ -303,6 +305,7 @@ pub(crate) async fn create_anthropic_message_batch(
                 &[UpstreamProtocol::Anthropic],
                 &resolved.target_model,
                 channel_id,
+                &[],
                 &[],
             )
             .await?

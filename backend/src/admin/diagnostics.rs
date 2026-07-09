@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
+    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
+    cache::InvalidationEvent,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
@@ -197,7 +199,7 @@ pub async fn diagnose_channel_with_progress(
     if let Some(endpoint) = select_diagnostic_endpoint(&endpoints) {
         let report = diagnose_endpoint(state, &channel, endpoint, &keys, progress.as_ref()).await;
         if report.status != DiagnosticStatus::Skipped {
-            persist_endpoint_health(state, endpoint.id, report.status, &report.summary).await?;
+            persist_endpoint_health(state, endpoint.id, &report).await?;
         }
         endpoint_reports.push(report);
     }
@@ -353,7 +355,7 @@ async fn diagnose_endpoint(
             }
         }
         if let Some(key_id) = key.id {
-            let _ = persist_key_health(state, key_id, report.status, &report.summary).await;
+            let _ = persist_key_health(state, key_id, &report).await;
         }
         key_reports.push(report);
     }
@@ -907,53 +909,118 @@ async fn load_keys(
 async fn persist_key_health(
     state: &AppState,
     key_id: DbId,
-    status: DiagnosticStatus,
-    summary: &str,
+    report: &KeyDiagnosticReport,
 ) -> AppResult<()> {
-    let healthy = status == DiagnosticStatus::Ok || status == DiagnosticStatus::Warning;
+    let recovered =
+        report.status == DiagnosticStatus::Ok || report.status == DiagnosticStatus::Warning;
+    if !recovered
+        && (!key_report_has_hard_cooldown_failure(report)
+            || !can_cooldown_key(state, key_id).await?)
+    {
+        tracing::info!(
+            key_id,
+            "skipping diagnostic key cooldown because it would remove the last routable path or the error is not key-scoped"
+        );
+        persist_key_soft_failure(state, key_id, Some(&report.summary)).await?;
+        return Ok(());
+    }
     let cooldown_until =
-        (!healthy).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
+        (!recovered).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
     sqlx::query(
         "UPDATE channel_key
-         SET healthy = $2,
-             last_error = $3,
-             cooldown_until = $4,
+         SET healthy = TRUE,
+             last_error = $2,
+             cooldown_until = $3,
              updated_at = now()
          WHERE id = $1",
     )
     .bind(key_id)
-    .bind(healthy)
-    .bind((!healthy).then_some(summary))
+    .bind((!recovered).then_some(report.summary.as_str()))
     .bind(cooldown_until)
     .execute(&state.db.pool)
     .await?;
+    invalidate_routing(state).await;
     Ok(())
 }
 
 async fn persist_endpoint_health(
     state: &AppState,
     endpoint_id: DbId,
-    status: DiagnosticStatus,
-    summary: &str,
+    report: &EndpointDiagnosticReport,
 ) -> AppResult<()> {
-    let healthy = status == DiagnosticStatus::Ok || status == DiagnosticStatus::Warning;
+    let recovered =
+        report.status == DiagnosticStatus::Ok || report.status == DiagnosticStatus::Warning;
+    if !recovered
+        && (!endpoint_report_has_hard_cooldown_failure(report)
+            || !can_cooldown_endpoint(state, endpoint_id).await?)
+    {
+        tracing::info!(
+            endpoint_id,
+            "skipping diagnostic endpoint cooldown because it would remove the last routable path or the error is soft"
+        );
+        persist_endpoint_soft_failure(state, endpoint_id, Some(&report.summary)).await?;
+        return Ok(());
+    }
     let cooldown_until =
-        (!healthy).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
+        (!recovered).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
     sqlx::query(
         "UPDATE channel_endpoint
-         SET healthy = $2,
-             last_error = $3,
-             cooldown_until = $4,
+         SET healthy = TRUE,
+             last_error = $2,
+             cooldown_until = $3,
              updated_at = now()
          WHERE id = $1",
     )
     .bind(endpoint_id)
-    .bind(healthy)
-    .bind((!healthy).then_some(summary))
+    .bind((!recovered).then_some(report.summary.as_str()))
     .bind(cooldown_until)
     .execute(&state.db.pool)
     .await?;
+    invalidate_routing(state).await;
     Ok(())
+}
+
+async fn persist_endpoint_soft_failure(
+    state: &AppState,
+    endpoint_id: DbId,
+    summary: Option<&str>,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET last_error = $2,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(endpoint_id)
+    .bind(summary)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn persist_key_soft_failure(
+    state: &AppState,
+    key_id: DbId,
+    summary: Option<&str>,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE channel_key
+         SET last_error = $2,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(key_id)
+    .bind(summary)
+    .execute(&state.db.pool)
+    .await?;
+    Ok(())
+}
+
+async fn invalidate_routing(state: &AppState) {
+    state
+        .cache_invalidator
+        .invalidate(state, InvalidationEvent::Routing)
+        .await;
 }
 
 async fn persist_model_probe_results_best_effort(
@@ -1067,12 +1134,22 @@ async fn persist_model_probe_failure(
 ) -> AppResult<()> {
     // 鉴权/配置类硬错误才禁用模型；上游临时不可用(5xx)、限流(429)等软失败
     // 仅记录错误并累加失败计数，不禁用——避免探针瞬时失败误伤正常模型。
-    let should_disable = should_disable_model_on_failure(summary.status_code);
+    let should_disable = should_disable_model_on_failure(summary.status_code)
+        && can_disable_channel_model_for_endpoint(state, endpoint.id, model).await?;
+    if should_disable_model_on_failure(summary.status_code) && !should_disable {
+        tracing::info!(
+            endpoint_id = endpoint.id,
+            provider = %endpoint.provider,
+            protocol = %endpoint.protocol,
+            model,
+            "skipping diagnostic model disable because it would remove the last routable path"
+        );
+    }
     sqlx::query(
         "UPDATE channel_model cm
          SET enabled = CASE WHEN $5 THEN FALSE ELSE cm.enabled END,
-             runtime_status = 'failed',
-             cooldown_until = NULL,
+             runtime_status = CASE WHEN $5 THEN 'failed' ELSE cm.runtime_status END,
+             cooldown_until = CASE WHEN $5 THEN NULL ELSE cm.cooldown_until END,
              last_error = $3,
              last_status_code = $4,
              last_probe_at = now(),
@@ -1090,6 +1167,9 @@ async fn persist_model_probe_failure(
     .bind(should_disable)
     .execute(&state.db.pool)
     .await?;
+    if should_disable {
+        invalidate_routing(state).await;
+    }
     Ok(())
 }
 
@@ -1099,6 +1179,395 @@ async fn persist_model_probe_failure(
 /// 与定时探测的冷却门槛保持一致，避免瞬态错误误伤正常模型。
 fn should_disable_model_on_failure(status_code: Option<u16>) -> bool {
     matches!(status_code, Some(401) | Some(403) | Some(404))
+}
+
+fn should_cooldown_endpoint_on_failure(status_code: Option<u16>) -> bool {
+    matches!(status_code, Some(401) | Some(403) | Some(404))
+}
+
+fn should_cooldown_key_on_failure(status_code: Option<u16>) -> bool {
+    matches!(status_code, Some(401) | Some(403))
+}
+
+fn endpoint_report_has_hard_cooldown_failure(report: &EndpointDiagnosticReport) -> bool {
+    report
+        .keys
+        .iter()
+        .flat_map(|key| key.steps.iter())
+        .filter(|step| step.status == DiagnosticStatus::Failed)
+        .any(|step| should_cooldown_endpoint_on_failure(step.status_code))
+}
+
+fn key_report_has_hard_cooldown_failure(report: &KeyDiagnosticReport) -> bool {
+    report
+        .steps
+        .iter()
+        .filter(|step| step.status == DiagnosticStatus::Failed)
+        .any(|step| should_cooldown_key_on_failure(step.status_code))
+}
+
+async fn can_cooldown_endpoint(state: &AppState, endpoint_id: DbId) -> AppResult<bool> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        r#"
+        WITH target AS (
+            SELECT ce.id, ce.channel_id, ce.protocol, ce.models
+            FROM channel_endpoint ce
+            WHERE ce.id = $1
+              AND ce.enabled = TRUE
+              AND ce.healthy = TRUE
+        ),
+        affected AS (
+            SELECT DISTINCT target.protocol, cm.model
+            FROM target
+            JOIN channel c ON c.id = target.channel_id
+            JOIN channel_model cm ON cm.channel_id = target.channel_id
+            JOIN provider_price pp ON pp.provider = c.provider
+                                  AND pp.model = cm.model
+                                  AND pp.enabled = TRUE
+                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            WHERE cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM unnest(target.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) = cm.model
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(target.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) <> ''
+                  )
+              )
+        )
+        SELECT
+            (SELECT count(*) FROM affected) AS affected_count,
+            (
+                SELECT count(*)
+                FROM affected a
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM channel c
+                    JOIN provider p ON p.code = c.provider
+                    JOIN channel_endpoint ce ON ce.channel_id = c.id
+                    JOIN channel_model cm ON cm.channel_id = c.id
+                    WHERE p.enabled = TRUE
+                      AND c.enabled = TRUE
+                      AND ce.id <> $1
+                      AND ce.protocol = a.protocol
+                      AND ce.enabled = TRUE
+                      AND ce.healthy = TRUE
+                      AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+                      AND cm.model = a.model
+                      AND cm.enabled = TRUE
+                      AND cm.status = 'available'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM provider_price pp
+                          WHERE pp.provider = c.provider
+                            AND pp.model = cm.model
+                            AND pp.enabled = TRUE
+                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                      )
+                      AND (
+                          cm.runtime_status = 'normal'
+                          OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+                      )
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) = cm.model
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) <> ''
+                          )
+                      )
+                      AND (
+                          (
+                              c.use_credentials = FALSE
+                              AND EXISTS (
+                                  SELECT 1 FROM channel_key ck
+                                  WHERE ck.channel_id = c.id
+                                    AND ck.enabled = TRUE
+                                    AND ck.healthy = TRUE
+                                    AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+                              )
+                          )
+                          OR (
+                              c.use_credentials = TRUE
+                              AND EXISTS (
+                                  SELECT 1 FROM credential cr
+                                  WHERE cr.provider = c.provider
+                                    AND cr.enabled = TRUE
+                              )
+                          )
+                      )
+                )
+            ) AS covered_count
+        "#,
+    )))
+    .bind(endpoint_id)
+    .fetch_one(&state.db.pool)
+    .await?;
+
+    let affected_count: i64 = row.try_get("affected_count")?;
+    let covered_count: i64 = row.try_get("covered_count")?;
+    Ok(affected_count > 0 && affected_count == covered_count)
+}
+
+async fn can_cooldown_key(state: &AppState, key_id: DbId) -> AppResult<bool> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        r#"
+        WITH target_key AS (
+            SELECT ck.id, ck.channel_id
+            FROM channel_key ck
+            WHERE ck.id = $1
+              AND ck.enabled = TRUE
+              AND ck.healthy = TRUE
+              AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+        ),
+        affected AS (
+            SELECT DISTINCT ce.protocol, cm.model
+            FROM target_key tk
+            JOIN channel c ON c.id = tk.channel_id
+            JOIN provider p ON p.code = c.provider
+            JOIN channel_endpoint ce ON ce.channel_id = c.id
+            JOIN channel_model cm ON cm.channel_id = c.id
+            JOIN provider_price pp ON pp.provider = c.provider
+                                  AND pp.model = cm.model
+                                  AND pp.enabled = TRUE
+                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            WHERE p.enabled = TRUE
+              AND c.enabled = TRUE
+              AND ce.enabled = TRUE
+              AND ce.healthy = TRUE
+              AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+              AND cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM unnest(ce.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) = cm.model
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(ce.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) <> ''
+                  )
+              )
+        )
+        SELECT
+            (SELECT count(*) FROM affected) AS affected_count,
+            (
+                SELECT count(*)
+                FROM affected a
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM channel c
+                    JOIN provider p ON p.code = c.provider
+                    JOIN channel_endpoint ce ON ce.channel_id = c.id
+                    JOIN channel_model cm ON cm.channel_id = c.id
+                    WHERE p.enabled = TRUE
+                      AND c.enabled = TRUE
+                      AND ce.protocol = a.protocol
+                      AND ce.enabled = TRUE
+                      AND ce.healthy = TRUE
+                      AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+                      AND cm.model = a.model
+                      AND cm.enabled = TRUE
+                      AND cm.status = 'available'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM provider_price pp
+                          WHERE pp.provider = c.provider
+                            AND pp.model = cm.model
+                            AND pp.enabled = TRUE
+                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                      )
+                      AND (
+                          cm.runtime_status = 'normal'
+                          OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+                      )
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) = cm.model
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) <> ''
+                          )
+                      )
+                      AND (
+                          (
+                              c.use_credentials = FALSE
+                              AND EXISTS (
+                                  SELECT 1 FROM channel_key ck
+                                  WHERE ck.channel_id = c.id
+                                    AND ck.id <> $1
+                                    AND ck.enabled = TRUE
+                                    AND ck.healthy = TRUE
+                                    AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+                              )
+                          )
+                          OR (
+                              c.use_credentials = TRUE
+                              AND EXISTS (
+                                  SELECT 1 FROM credential cr
+                                  WHERE cr.provider = c.provider
+                                    AND cr.enabled = TRUE
+                              )
+                          )
+                      )
+                )
+            ) AS covered_count
+        "#,
+    )))
+    .bind(key_id)
+    .fetch_one(&state.db.pool)
+    .await?;
+
+    let affected_count: i64 = row.try_get("affected_count")?;
+    let covered_count: i64 = row.try_get("covered_count")?;
+    Ok(affected_count > 0 && affected_count == covered_count)
+}
+
+async fn can_disable_channel_model_for_endpoint(
+    state: &AppState,
+    endpoint_id: DbId,
+    model: &str,
+) -> AppResult<bool> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        r#"
+        WITH target AS (
+            SELECT ce.channel_id
+            FROM channel_endpoint ce
+            WHERE ce.id = $1
+        ),
+        affected AS (
+            SELECT DISTINCT ce.protocol, cm.model
+            FROM target
+            JOIN channel c ON c.id = target.channel_id
+            JOIN channel_endpoint ce ON ce.channel_id = c.id
+            JOIN channel_model cm ON cm.channel_id = c.id
+            JOIN provider_price pp ON pp.provider = c.provider
+                                  AND pp.model = cm.model
+                                  AND pp.enabled = TRUE
+                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            WHERE ce.enabled = TRUE
+              AND ce.healthy = TRUE
+              AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+              AND cm.model = $2
+              AND cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM unnest(ce.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) = cm.model
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(ce.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) <> ''
+                  )
+              )
+        )
+        SELECT
+            (SELECT count(*) FROM affected) AS affected_count,
+            (
+                SELECT count(*)
+                FROM affected a
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM target
+                    JOIN channel c ON c.id <> target.channel_id
+                    JOIN provider p ON p.code = c.provider
+                    JOIN channel_endpoint ce ON ce.channel_id = c.id
+                    JOIN channel_model cm ON cm.channel_id = c.id
+                    WHERE p.enabled = TRUE
+                      AND c.enabled = TRUE
+                      AND ce.protocol = a.protocol
+                      AND ce.enabled = TRUE
+                      AND ce.healthy = TRUE
+                      AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+                      AND cm.model = a.model
+                      AND cm.enabled = TRUE
+                      AND cm.status = 'available'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM provider_price pp
+                          WHERE pp.provider = c.provider
+                            AND pp.model = cm.model
+                            AND pp.enabled = TRUE
+                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                      )
+                      AND (
+                          cm.runtime_status = 'normal'
+                          OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+                      )
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) = cm.model
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) <> ''
+                          )
+                      )
+                      AND (
+                          (
+                              c.use_credentials = FALSE
+                              AND EXISTS (
+                                  SELECT 1 FROM channel_key ck
+                                  WHERE ck.channel_id = c.id
+                                    AND ck.enabled = TRUE
+                                    AND ck.healthy = TRUE
+                                    AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+                              )
+                          )
+                          OR (
+                              c.use_credentials = TRUE
+                              AND EXISTS (
+                                  SELECT 1 FROM credential cr
+                                  WHERE cr.provider = c.provider
+                                    AND cr.enabled = TRUE
+                              )
+                          )
+                      )
+                )
+            ) AS covered_count
+        "#,
+    )))
+    .bind(endpoint_id)
+    .bind(model)
+    .fetch_one(&state.db.pool)
+    .await?;
+
+    let affected_count: i64 = row.try_get("affected_count")?;
+    let covered_count: i64 = row.try_get("covered_count")?;
+    Ok(affected_count > 0 && affected_count == covered_count)
 }
 
 fn aggregate_status(statuses: impl Iterator<Item = DiagnosticStatus>) -> DiagnosticStatus {
@@ -1263,5 +1732,71 @@ fn probe_status_from_str(status: &str) -> ProbeStatus {
         "ok" => ProbeStatus::Ok,
         "skipped" => ProbeStatus::Skipped,
         _ => ProbeStatus::Failed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failed_step(status_code: Option<u16>) -> DiagnosticStep {
+        DiagnosticStep {
+            name: "probe:gpt-test".to_string(),
+            status: DiagnosticStatus::Failed,
+            message: "failed".to_string(),
+            duration_ms: 1,
+            status_code,
+        }
+    }
+
+    #[test]
+    fn endpoint_and_key_hard_cooldown_classification_differs_for_404() {
+        assert!(should_cooldown_endpoint_on_failure(Some(404)));
+        assert!(!should_cooldown_key_on_failure(Some(404)));
+
+        for code in [Some(401), Some(403)] {
+            assert!(should_cooldown_endpoint_on_failure(code));
+            assert!(should_cooldown_key_on_failure(code));
+        }
+
+        for code in [None, Some(400), Some(429), Some(500)] {
+            assert!(!should_cooldown_endpoint_on_failure(code));
+            assert!(!should_cooldown_key_on_failure(code));
+        }
+    }
+
+    #[test]
+    fn reports_detect_hard_cooldown_failures_from_steps() {
+        let key_report_404 = KeyDiagnosticReport {
+            key_id: Some(1),
+            key_name: "key".to_string(),
+            key_prefix: None,
+            status: DiagnosticStatus::Failed,
+            summary: "failed".to_string(),
+            discovered_models: Vec::new(),
+            steps: vec![failed_step(Some(404))],
+        };
+        let endpoint_report_404 = EndpointDiagnosticReport {
+            endpoint_id: 1,
+            protocol: "openai".to_string(),
+            base_url: "https://example.com".to_string(),
+            status: DiagnosticStatus::Failed,
+            summary: "failed".to_string(),
+            discovered_models: Vec::new(),
+            configured_models: Vec::new(),
+            missing_configured_models: Vec::new(),
+            keys: vec![key_report_404.clone()],
+        };
+
+        assert!(endpoint_report_has_hard_cooldown_failure(
+            &endpoint_report_404
+        ));
+        assert!(!key_report_has_hard_cooldown_failure(&key_report_404));
+
+        let key_report_401 = KeyDiagnosticReport {
+            steps: vec![failed_step(Some(401))],
+            ..key_report_404
+        };
+        assert!(key_report_has_hard_cooldown_failure(&key_report_401));
     }
 }

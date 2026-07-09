@@ -558,15 +558,25 @@ async fn persist_endpoint_probe_health(
     outcome: &ProbeOutcome,
 ) -> Result<()> {
     match outcome.status {
-        ProbeStatus::Ok => persist_endpoint_health(context, endpoint_id, true, None).await,
+        ProbeStatus::Ok => persist_endpoint_recovery(context, endpoint_id).await,
         ProbeStatus::Failed if outcome.cooldown => {
-            persist_endpoint_health(
-                context,
-                endpoint_id,
-                false,
-                outcome.error_summary.as_deref(),
-            )
-            .await
+            if can_cooldown_endpoint(context, endpoint_id).await? {
+                persist_endpoint_cooldown(context, endpoint_id, outcome.error_summary.as_deref())
+                    .await
+            } else {
+                tracing::info!(
+                    endpoint_id,
+                    protocol = %outcome.protocol,
+                    model = %outcome.model,
+                    "skipping endpoint cooldown because it would remove the last routable path"
+                );
+                persist_endpoint_soft_failure(
+                    context,
+                    endpoint_id,
+                    outcome.error_summary.as_deref(),
+                )
+                .await
+            }
         }
         ProbeStatus::Failed => {
             // 软失败(上游临时不可用等)：仅记录最近错误，不冷却、不置不健康。
@@ -583,9 +593,19 @@ async fn persist_key_probe_health(
     outcome: &ProbeOutcome,
 ) -> Result<()> {
     match outcome.status {
-        ProbeStatus::Ok => persist_key_health(context, key_id, true, None).await,
-        ProbeStatus::Failed if outcome.cooldown => {
-            persist_key_health(context, key_id, false, outcome.error_summary.as_deref()).await
+        ProbeStatus::Ok => persist_key_recovery(context, key_id).await,
+        ProbeStatus::Failed if should_cooldown_key_on_failure(outcome.status_code) => {
+            if can_cooldown_key(context, key_id).await? {
+                persist_key_cooldown(context, key_id, outcome.error_summary.as_deref()).await
+            } else {
+                tracing::info!(
+                    key_id,
+                    protocol = %outcome.protocol,
+                    model = %outcome.model,
+                    "skipping key cooldown because it would remove the last routable path"
+                );
+                persist_key_soft_failure(context, key_id, outcome.error_summary.as_deref()).await
+            }
         }
         ProbeStatus::Failed => {
             persist_key_soft_failure(context, key_id, outcome.error_summary.as_deref()).await
@@ -594,53 +614,81 @@ async fn persist_key_probe_health(
     }
 }
 
-async fn persist_endpoint_health(
-    context: &AppContext,
-    endpoint_id: DbId,
-    healthy: bool,
-    summary: Option<&str>,
-) -> Result<()> {
-    let cooldown_until =
-        (!healthy).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
+async fn persist_endpoint_recovery(context: &AppContext, endpoint_id: DbId) -> Result<()> {
     sqlx::query(
         "UPDATE channel_endpoint
-         SET healthy = $2,
-             last_error = $3,
-             cooldown_until = $4,
+         SET healthy = TRUE,
+             last_error = NULL,
+             cooldown_until = NULL,
              updated_at = now()
          WHERE id = $1",
     )
     .bind(endpoint_id)
-    .bind(healthy)
-    .bind((!healthy).then_some(summary.unwrap_or("定时探测失败")))
-    .bind(cooldown_until)
     .execute(&context.db)
     .await?;
+    context.cache_invalidator.invalidate_routing().await;
     Ok(())
 }
 
-async fn persist_key_health(
+async fn persist_endpoint_cooldown(
     context: &AppContext,
-    key_id: DbId,
-    healthy: bool,
+    endpoint_id: DbId,
     summary: Option<&str>,
 ) -> Result<()> {
-    let cooldown_until =
-        (!healthy).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
+    let cooldown_until = Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES);
+    sqlx::query(
+        "UPDATE channel_endpoint
+         SET healthy = TRUE,
+             last_error = $2,
+             cooldown_until = $3,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(endpoint_id)
+    .bind(summary.unwrap_or("定时探测失败"))
+    .bind(cooldown_until)
+    .execute(&context.db)
+    .await?;
+    context.cache_invalidator.invalidate_routing().await;
+    Ok(())
+}
+
+async fn persist_key_recovery(context: &AppContext, key_id: DbId) -> Result<()> {
     sqlx::query(
         "UPDATE channel_key
-         SET healthy = $2,
-             last_error = $3,
-             cooldown_until = $4,
+         SET healthy = TRUE,
+             last_error = NULL,
+             cooldown_until = NULL,
              updated_at = now()
          WHERE id = $1",
     )
     .bind(key_id)
-    .bind(healthy)
-    .bind((!healthy).then_some(summary.unwrap_or("定时探测失败")))
+    .execute(&context.db)
+    .await?;
+    context.cache_invalidator.invalidate_routing().await;
+    Ok(())
+}
+
+async fn persist_key_cooldown(
+    context: &AppContext,
+    key_id: DbId,
+    summary: Option<&str>,
+) -> Result<()> {
+    let cooldown_until = Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES);
+    sqlx::query(
+        "UPDATE channel_key
+         SET healthy = TRUE,
+             last_error = $2,
+             cooldown_until = $3,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(key_id)
+    .bind(summary.unwrap_or("定时探测失败"))
     .bind(cooldown_until)
     .execute(&context.db)
     .await?;
+    context.cache_invalidator.invalidate_routing().await;
     Ok(())
 }
 
@@ -653,6 +701,274 @@ fn should_cooldown_on_failure(status_code: Option<u16>) -> bool {
     // 鉴权失败(401/403)或接口不存在(404)才冷却；
     // 上游临时不可用(5xx)、限流(429)、探针模型不支持(400)等瞬态/模型级问题不冷却。
     matches!(status_code, Some(401) | Some(403) | Some(404))
+}
+
+fn should_cooldown_key_on_failure(status_code: Option<u16>) -> bool {
+    matches!(status_code, Some(401) | Some(403))
+}
+
+async fn can_cooldown_endpoint(context: &AppContext, endpoint_id: DbId) -> Result<bool> {
+    let row = sqlx::query(
+        r#"
+        WITH target AS (
+            SELECT ce.id, ce.channel_id, ce.protocol, ce.models
+            FROM channel_endpoint ce
+            WHERE ce.id = $1
+              AND ce.enabled = TRUE
+              AND ce.healthy = TRUE
+        ),
+        affected AS (
+            SELECT DISTINCT target.protocol, cm.model
+            FROM target
+            JOIN channel c ON c.id = target.channel_id
+            JOIN channel_model cm ON cm.channel_id = target.channel_id
+            JOIN provider_price pp ON pp.provider = c.provider
+                                  AND pp.model = cm.model
+                                  AND pp.enabled = TRUE
+                                  AND (
+                                      (pp.billing_meter = 'token'
+                                          AND pp.input_price_micros >= 0
+                                          AND pp.output_price_micros >= 0)
+                                      OR (pp.billing_meter = 'image'
+                                          AND pp.unit_price_micros > 0)
+                                  )
+            WHERE cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM unnest(target.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) = cm.model
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(target.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) <> ''
+                  )
+              )
+        )
+        SELECT
+            (SELECT count(*) FROM affected) AS affected_count,
+            (
+                SELECT count(*)
+                FROM affected a
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM channel c
+                    JOIN provider p ON p.code = c.provider
+                    JOIN channel_endpoint ce ON ce.channel_id = c.id
+                    JOIN channel_model cm ON cm.channel_id = c.id
+                    WHERE p.enabled = TRUE
+                      AND c.enabled = TRUE
+                      AND ce.id <> $1
+                      AND ce.protocol = a.protocol
+                      AND ce.enabled = TRUE
+                      AND ce.healthy = TRUE
+                      AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+                      AND cm.model = a.model
+                      AND cm.enabled = TRUE
+                      AND cm.status = 'available'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM provider_price pp
+                          WHERE pp.provider = c.provider
+                            AND pp.model = cm.model
+                            AND pp.enabled = TRUE
+                            AND (
+                                (pp.billing_meter = 'token'
+                                    AND pp.input_price_micros >= 0
+                                    AND pp.output_price_micros >= 0)
+                                OR (pp.billing_meter = 'image'
+                                    AND pp.unit_price_micros > 0)
+                            )
+                      )
+                      AND (
+                          cm.runtime_status = 'normal'
+                          OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+                      )
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) = cm.model
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) <> ''
+                          )
+                      )
+                      AND (
+                          (
+                              c.use_credentials = FALSE
+                              AND EXISTS (
+                                  SELECT 1 FROM channel_key ck
+                                  WHERE ck.channel_id = c.id
+                                    AND ck.enabled = TRUE
+                                    AND ck.healthy = TRUE
+                                    AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+                              )
+                          )
+                          OR (
+                              c.use_credentials = TRUE
+                              AND EXISTS (
+                                  SELECT 1 FROM credential cr
+                                  WHERE cr.provider = c.provider
+                                    AND cr.enabled = TRUE
+                              )
+                          )
+                      )
+                )
+            ) AS covered_count
+        "#,
+    )
+    .bind(endpoint_id)
+    .fetch_one(&context.db)
+    .await?;
+
+    let affected_count: i64 = row.try_get("affected_count")?;
+    let covered_count: i64 = row.try_get("covered_count")?;
+    Ok(affected_count > 0 && affected_count == covered_count)
+}
+
+async fn can_cooldown_key(context: &AppContext, key_id: DbId) -> Result<bool> {
+    let row = sqlx::query(
+        r#"
+        WITH target_key AS (
+            SELECT ck.id, ck.channel_id
+            FROM channel_key ck
+            WHERE ck.id = $1
+              AND ck.enabled = TRUE
+              AND ck.healthy = TRUE
+              AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+        ),
+        affected AS (
+            SELECT DISTINCT ce.protocol, cm.model
+            FROM target_key tk
+            JOIN channel c ON c.id = tk.channel_id
+            JOIN provider p ON p.code = c.provider
+            JOIN channel_endpoint ce ON ce.channel_id = c.id
+            JOIN channel_model cm ON cm.channel_id = c.id
+            JOIN provider_price pp ON pp.provider = c.provider
+                                  AND pp.model = cm.model
+                                  AND pp.enabled = TRUE
+                                  AND (
+                                      (pp.billing_meter = 'token'
+                                          AND pp.input_price_micros >= 0
+                                          AND pp.output_price_micros >= 0)
+                                      OR (pp.billing_meter = 'image'
+                                          AND pp.unit_price_micros > 0)
+                                  )
+            WHERE p.enabled = TRUE
+              AND c.enabled = TRUE
+              AND ce.enabled = TRUE
+              AND ce.healthy = TRUE
+              AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+              AND cm.enabled = TRUE
+              AND cm.status = 'available'
+              AND (
+                  cm.runtime_status = 'normal'
+                  OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+              )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM unnest(ce.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) = cm.model
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(ce.models) AS endpoint_model(model)
+                      WHERE btrim(endpoint_model.model) <> ''
+                  )
+              )
+        )
+        SELECT
+            (SELECT count(*) FROM affected) AS affected_count,
+            (
+                SELECT count(*)
+                FROM affected a
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM channel c
+                    JOIN provider p ON p.code = c.provider
+                    JOIN channel_endpoint ce ON ce.channel_id = c.id
+                    JOIN channel_model cm ON cm.channel_id = c.id
+                    WHERE p.enabled = TRUE
+                      AND c.enabled = TRUE
+                      AND ce.protocol = a.protocol
+                      AND ce.enabled = TRUE
+                      AND ce.healthy = TRUE
+                      AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
+                      AND cm.model = a.model
+                      AND cm.enabled = TRUE
+                      AND cm.status = 'available'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM provider_price pp
+                          WHERE pp.provider = c.provider
+                            AND pp.model = cm.model
+                            AND pp.enabled = TRUE
+                            AND (
+                                (pp.billing_meter = 'token'
+                                    AND pp.input_price_micros >= 0
+                                    AND pp.output_price_micros >= 0)
+                                OR (pp.billing_meter = 'image'
+                                    AND pp.unit_price_micros > 0)
+                            )
+                      )
+                      AND (
+                          cm.runtime_status = 'normal'
+                          OR (cm.runtime_status = 'cooldown' AND cm.cooldown_until <= now())
+                      )
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) = cm.model
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM unnest(ce.models) AS endpoint_model(model)
+                              WHERE btrim(endpoint_model.model) <> ''
+                          )
+                      )
+                      AND (
+                          (
+                              c.use_credentials = FALSE
+                              AND EXISTS (
+                                  SELECT 1 FROM channel_key ck
+                                  WHERE ck.channel_id = c.id
+                                    AND ck.id <> $1
+                                    AND ck.enabled = TRUE
+                                    AND ck.healthy = TRUE
+                                    AND (ck.cooldown_until IS NULL OR ck.cooldown_until <= now())
+                              )
+                          )
+                          OR (
+                              c.use_credentials = TRUE
+                              AND EXISTS (
+                                  SELECT 1 FROM credential cr
+                                  WHERE cr.provider = c.provider
+                                    AND cr.enabled = TRUE
+                              )
+                          )
+                      )
+                )
+            ) AS covered_count
+        "#,
+    )
+    .bind(key_id)
+    .fetch_one(&context.db)
+    .await?;
+
+    let affected_count: i64 = row.try_get("affected_count")?;
+    let covered_count: i64 = row.try_get("covered_count")?;
+    Ok(affected_count > 0 && affected_count == covered_count)
 }
 
 /// 软失败记录：仅更新最近错误，保留 healthy 与 cooldown_until 现状。
@@ -726,5 +1042,26 @@ fn transport_error_message(err: &reqwest::Error) -> String {
         "无法连接上游，请检查网络、防火墙或 Base URL".to_string()
     } else {
         "上游请求失败，请检查网络和配置".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_and_key_cooldown_use_different_hard_failure_sets() {
+        for code in [Some(401), Some(403)] {
+            assert!(should_cooldown_on_failure(code));
+            assert!(should_cooldown_key_on_failure(code));
+        }
+
+        assert!(should_cooldown_on_failure(Some(404)));
+        assert!(!should_cooldown_key_on_failure(Some(404)));
+
+        for code in [None, Some(400), Some(429), Some(500), Some(503)] {
+            assert!(!should_cooldown_on_failure(code));
+            assert!(!should_cooldown_key_on_failure(code));
+        }
     }
 }

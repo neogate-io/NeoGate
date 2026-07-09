@@ -29,7 +29,7 @@ import {
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
-const { billingCurrency, formatMoney } = useBillingCurrency()
+const { currencySymbol, formatMoney } = useBillingCurrency()
 const AdminUsageChart = defineAsyncComponent(
   () => import('../../components/admin/common/AdminUsageChart.vue')
 )
@@ -158,7 +158,7 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
     type: 'value',
     axisLabel: {
       color: '#667085',
-      formatter: (value: number) => `${billingCurrency.value === 'CNY' ? '¥' : '$'}${value}`
+      formatter: (value: number) => formatChartMoney(value)
     },
     splitLine: { lineStyle: { color: '#edf2f7' } }
   },
@@ -168,7 +168,7 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
       type: 'line',
       smooth: true,
       areaStyle: { opacity: 0.12 },
-      data: dailyChartRows.value.map((item) => Number(microAmountToMajor(item.cost_micros).toFixed(6)))
+      data: dailyChartRows.value.map((item) => roundMoney(microAmountToMajor(item.cost_micros)))
     }
   ]
 }))
@@ -215,7 +215,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
     },
     yAxis: {
       type: 'value',
-      axisLabel: { color: '#667085', formatter: (value: number) => `$${value}` },
+      axisLabel: { color: '#667085', formatter: (value: number) => formatChartMoney(value) },
       splitLine: { lineStyle: { color: '#edf2f7' } }
     },
     series: [
@@ -224,7 +224,7 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
         type: 'bar',
         barMaxWidth: 16,
         data: rows.map((item) => ({
-          value: Number(microAmountToMajor(item.cost_micros).toFixed(6)),
+          value: roundMoney(microAmountToMajor(item.cost_micros)),
           userQuery: item.user_id != null ? String(item.user_id) : item.user_display_name
         }))
       }
@@ -248,7 +248,7 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
   },
   yAxis: {
     type: 'value',
-    axisLabel: { color: '#667085', formatter: (value: number) => `$${value}` },
+    axisLabel: { color: '#667085', formatter: (value: number) => formatChartMoney(value) },
     splitLine: { lineStyle: { color: '#edf2f7' } }
   },
   series: [
@@ -257,7 +257,7 @@ const topModelsOption = computed<EChartsCoreOption>(() => ({
       type: 'bar',
       barMaxWidth: 22,
       data: statisticsSummary.value.top_models.map((item) => ({
-        value: Number(microAmountToMajor(item.cost_micros).toFixed(6)),
+        value: roundMoney(microAmountToMajor(item.cost_micros)),
         channelName: item.channel_name,
         model: item.model
       }))
@@ -680,7 +680,7 @@ function verticalMetricOption(options: {
 }
 
 function axisValueLabel(value: number, mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate') {
-  if (mode === 'cost') return `$${value}`
+  if (mode === 'cost') return formatChartMoney(value)
   if (mode === 'duration') return formatDurationMs(value)
   if (mode === 'percent') return `${value.toFixed(value >= 10 ? 0 : 1)}%`
   if (mode === 'tokenRate') return formatTokenRate(value, locale.value)
@@ -709,7 +709,7 @@ function tooltipValueLabel(
   value: number,
   mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate'
 ) {
-  if (mode === 'cost') return `$${value.toFixed(6)}`
+  if (mode === 'cost') return formatChartMoney(value)
   if (mode === 'duration') return formatDurationMs(value)
   if (mode === 'percent') return `${value.toFixed(2)}%`
   if (mode === 'tokenRate') return formatTokenRate(value, locale.value)
@@ -722,6 +722,17 @@ function chartNumericValue(value: unknown) {
     return Number((value as { value?: unknown }).value ?? 0)
   }
   return Number(value ?? 0)
+}
+
+function roundMoney(value: number) {
+  return Number(value.toFixed(2))
+}
+
+function formatChartMoney(value: number) {
+  return `${currencySymbol.value}${value.toLocaleString(locale.value, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`
 }
 
 </script>
@@ -837,7 +848,7 @@ function chartNumericValue(value: unknown) {
           <div class="statistics-metric-grid">
             <div class="statistics-metric">
               <span>{{ t('totalCost') }}</span>
-              <strong>{{ formatMoney(statisticsSummary.totals.cost_micros, locale, 6) }}</strong>
+              <strong>{{ formatMoney(statisticsSummary.totals.cost_micros, locale) }}</strong>
             </div>
             <div class="statistics-metric">
               <span>{{ t('requestCount') }}</span>

@@ -4,13 +4,11 @@ import { useRouter } from 'vue-router'
 import { ArrowRight, Close, Download, Search, Tickets } from '@element-plus/icons-vue'
 import {
   downloadAdminUsageStatisticsCsv,
-  getAdminUsageStatisticsKeys,
   getAdminUsageStatisticsModels,
   getAdminUsageStatisticsOptions,
   getAdminUsageStatisticsProjectMembers,
   getAdminUsageStatisticsProjects,
   getAdminUsageStatisticsUsers,
-  type KeyUsageStatistics,
   type ModelUsageStatistics,
   type ProjectMemberUsageStatistics,
   type ProjectUsageStatistics,
@@ -29,7 +27,7 @@ const { formatMoney } = useBillingCurrency()
 const router = useRouter()
 
 type PrimaryDimension = 'project' | 'user' | 'model'
-type DetailTab = 'projects' | 'users' | 'keys' | 'models'
+type DetailTab = 'projects' | 'users' | 'models'
 
 type AttributionFilters = {
   dateRange: string[] | null
@@ -43,8 +41,6 @@ type DrilldownContext = {
   project_name?: string
   user_id?: number
   user_name?: string
-  user_key_id?: number
-  key_name?: string
   model?: string
   channel_id?: number
   channel_name?: string
@@ -68,8 +64,6 @@ const detailProjectsPage = ref(1)
 const detailProjectsPageSize = ref(DEFAULT_PAGE_SIZE)
 const detailUsersPage = ref(1)
 const detailUsersPageSize = ref(DEFAULT_PAGE_SIZE)
-const detailKeysPage = ref(1)
-const detailKeysPageSize = ref(DEFAULT_PAGE_SIZE)
 const detailModelsPage = ref(1)
 const detailModelsPageSize = ref(DEFAULT_PAGE_SIZE)
 const selectedProject = ref<ProjectUsageStatistics | null>(null)
@@ -123,16 +117,15 @@ const detailQuery = computed<UsageStatisticsQuery>(() => ({
   ...baseQuery.value,
   project_id: selectedContext.value.project_id,
   user_id: selectedContext.value.user_id,
-  user_key_id: selectedContext.value.user_key_id,
   channel_id: selectedContext.value.channel_id,
   model: selectedContext.value.model ?? baseQuery.value.model,
   billing_meter: selectedContext.value.billing_meter ?? baseQuery.value.billing_meter
 }))
 
 const detailTabs = computed<DetailTab[]>(() => {
-  if (primaryDimension.value === 'project') return ['users', 'keys', 'models']
-  if (primaryDimension.value === 'user') return ['projects', 'keys', 'models']
-  return ['projects', 'users', 'keys']
+  if (primaryDimension.value === 'project') return ['users', 'models']
+  if (primaryDimension.value === 'user') return ['projects', 'models']
+  return ['projects', 'users']
 })
 
 const activeDetailPage = computed({
@@ -258,24 +251,6 @@ const {
 )
 
 const {
-  data: detailKeys,
-  loading: detailKeysLoading,
-  reload: reloadDetailKeys
-} = useAsyncData(
-  () => {
-    if (!hasSelection.value || !detailTabs.value.includes('keys')) {
-      return Promise.resolve(emptyPage<KeyUsageStatistics>())
-    }
-    return getAdminUsageStatisticsKeys({
-      ...detailQuery.value,
-      page: detailKeysPage.value,
-      limit: detailKeysPageSize.value
-    })
-  },
-  emptyPage<KeyUsageStatistics>()
-)
-
-const {
   data: detailModels,
   loading: detailModelsLoading,
   reload: reloadDetailModels
@@ -308,7 +283,6 @@ const detailLoading = computed(
   () =>
     detailProjectsLoading.value ||
     detailUsersLoading.value ||
-    detailKeysLoading.value ||
     detailModelsLoading.value
 )
 const loading = computed(
@@ -328,7 +302,6 @@ async function reloadDetails() {
   const reloads: Array<Promise<void>> = []
   if (detailTabs.value.includes('projects')) reloads.push(reloadDetailProjects())
   if (detailTabs.value.includes('users')) reloads.push(reloadDetailUsers())
-  if (detailTabs.value.includes('keys')) reloads.push(reloadDetailKeys())
   if (detailTabs.value.includes('models')) reloads.push(reloadDetailModels())
   await Promise.all(reloads)
 }
@@ -435,17 +408,6 @@ async function refineProject(row: ProjectUsageStatistics) {
   await reloadDetails()
 }
 
-async function refineKey(row: KeyUsageStatistics) {
-  if (row.user_key_id == null) return
-  refinements.value = {
-    ...refinements.value,
-    user_key_id: row.user_key_id,
-    key_name: row.user_key_name
-  }
-  resetDetailPages()
-  await reloadDetails()
-}
-
 async function clearRefinement(kind?: keyof DrilldownContext) {
   if (!kind) {
     refinements.value = {}
@@ -457,9 +419,6 @@ async function clearRefinement(kind?: keyof DrilldownContext) {
     refinements.value = rest
   } else if (kind === 'user_id') {
     const { user_id: _userId, user_name: _userName, ...rest } = refinements.value
-    refinements.value = rest
-  } else if (kind === 'user_key_id') {
-    const { user_key_id: _keyId, key_name: _keyName, ...rest } = refinements.value
     refinements.value = rest
   }
   resetDetailPages()
@@ -474,7 +433,6 @@ async function clearSelection() {
   resetDetailPages()
   detailProjects.value = emptyPage<ProjectUsageStatistics>()
   detailUsers.value = emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>()
-  detailKeys.value = emptyPage<KeyUsageStatistics>()
   detailModels.value = emptyPage<ModelUsageStatistics>()
 }
 
@@ -502,7 +460,6 @@ function openUsageDetails(extra: DrilldownContext = {}) {
       end,
       project_id: context.project_id,
       user_id: context.user_id,
-      user_key_id: context.user_key_id,
       channel_id: context.channel_id,
       model: context.model,
       billing_meter: context.billing_meter
@@ -536,28 +493,24 @@ async function handleDetailPageSizeChange(tab: DetailTab, size: number) {
 async function reloadDetailTab(tab: DetailTab) {
   if (tab === 'projects') await reloadDetailProjects()
   if (tab === 'users') await reloadDetailUsers()
-  if (tab === 'keys') await reloadDetailKeys()
   if (tab === 'models') await reloadDetailModels()
 }
 
 function detailPage(tab: DetailTab) {
   if (tab === 'projects') return detailProjectsPage
   if (tab === 'users') return detailUsersPage
-  if (tab === 'keys') return detailKeysPage
   return detailModelsPage
 }
 
 function detailPageSize(tab: DetailTab) {
   if (tab === 'projects') return detailProjectsPageSize
   if (tab === 'users') return detailUsersPageSize
-  if (tab === 'keys') return detailKeysPageSize
   return detailModelsPageSize
 }
 
 function detailPageData(tab: DetailTab) {
   if (tab === 'projects') return detailProjects.value
   if (tab === 'users') return detailUsers.value
-  if (tab === 'keys') return detailKeys.value
   return detailModels.value
 }
 
@@ -569,7 +522,6 @@ function defaultDetailTab(dimension: PrimaryDimension): DetailTab {
 function resetDetailPages() {
   detailProjectsPage.value = 1
   detailUsersPage.value = 1
-  detailKeysPage.value = 1
   detailModelsPage.value = 1
 }
 
@@ -602,7 +554,6 @@ function exportScopeFromCommand(command: string): UsageStatisticsExportScope | n
   if (command === 'detail') {
     if (detailTab.value === 'projects') return 'projects'
     if (detailTab.value === 'users') return detailQuery.value.project_id != null ? 'project_members' : 'users'
-    if (detailTab.value === 'keys') return 'keys'
     return 'models'
   }
   return null
@@ -647,10 +598,6 @@ function userRowKey(row: UserUsageStatistics | ProjectMemberUsageStatistics) {
   return row.user_id ?? row.user_display_name
 }
 
-function keyRowKey(row: KeyUsageStatistics) {
-  return row.user_key_id ?? `${row.project_id ?? 'project'}/${row.user_key_name}`
-}
-
 function modelRowKey(row: ModelUsageStatistics) {
   return `${row.channel_id ?? 'channel'}/${row.channel_name}/${row.model}/${row.billing_meter}`
 }
@@ -661,10 +608,6 @@ function modelDisplay(row: Pick<ModelUsageStatistics, 'channel_name' | 'model'>)
 
 function userDisplay(row: UserUsageStatistics | ProjectMemberUsageStatistics) {
   return row.user_display_name || row.user_email || row.user_username || '-'
-}
-
-function userSecondaryCount(row: UserUsageStatistics | ProjectMemberUsageStatistics) {
-  return 'key_count' in row ? row.key_count : row.model_count
 }
 
 function successRate(success: number, total: number) {
@@ -795,7 +738,7 @@ function successRate(success: number, total: number) {
             </template>
           </el-table-column>
           <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
@@ -806,10 +749,8 @@ function successRate(success: number, total: number) {
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
-          <el-table-column :label="t('membersAndKeys')" min-width="110" align="right">
-            <template #default="{ row }">
-              {{ formatNumber(row.member_count, locale) }} / {{ formatNumber(row.key_count, locale) }}
-            </template>
+          <el-table-column :label="t('userCount')" min-width="100" align="right">
+            <template #default="{ row }">{{ formatNumber(row.member_count, locale) }}</template>
           </el-table-column>
           <el-table-column min-width="90" align="right">
             <template #default="{ row }">
@@ -840,7 +781,7 @@ function successRate(success: number, total: number) {
             </template>
           </el-table-column>
           <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
@@ -883,7 +824,7 @@ function successRate(success: number, total: number) {
             </template>
           </el-table-column>
           <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
@@ -941,10 +882,6 @@ function successRate(success: number, total: number) {
             {{ t('userSearch') }}: {{ selectedContext.user_name || `#${selectedContext.user_id}` }}
             <button v-if="refinements.user_id != null" type="button" @click="clearRefinement('user_id')">x</button>
           </span>
-          <span v-if="selectedContext.user_key_id != null" class="attribution-context-chip">
-            {{ t('apiKey') }}: {{ selectedContext.key_name || `#${selectedContext.user_key_id}` }}
-            <button type="button" @click="clearRefinement('user_key_id')">x</button>
-          </span>
           <span v-if="selectedContext.model" class="attribution-context-chip">
             {{ t('model') }}: {{ selectedContext.channel_name || '-' }}/{{ selectedContext.model }}
             <button v-if="refinements.model" type="button" @click="clearRefinement('model')">x</button>
@@ -982,14 +919,17 @@ function successRate(success: number, total: number) {
               </div>
             </template>
           </el-table-column>
+          <el-table-column :label="t('cost')" min-width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
+          </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
+          <el-table-column :label="t('successRate')" min-width="100" align="right">
+            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+          </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
@@ -1021,7 +961,7 @@ function successRate(success: number, total: number) {
             </template>
           </el-table-column>
           <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
@@ -1031,63 +971,10 @@ function successRate(success: number, total: number) {
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('keyCount')" min-width="90" align="right">
-            <template #default="{ row }">{{ formatNumber(userSecondaryCount(row), locale) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
               <el-button class="admin-action-button" :icon="Tickets" @click.stop="openUsageDetails({ user_id: row.user_id, user_name: row.user_display_name })">
-                {{ t('details') }}
-              </el-button>
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
-
-        <el-table
-          v-else-if="detailTab === 'keys'"
-          v-loading="detailKeysLoading"
-          class="admin-table service-table attribution-table"
-          :data="detailKeys.items"
-          :row-key="keyRowKey"
-          stripe
-          @row-click="refineKey"
-        >
-          <el-table-column :label="t('apiKey')" min-width="190">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ row.user_key_name }}</strong>
-                <span>{{ row.key_prefix || '-' }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="selectedContext.project_id == null" :label="t('project')" min-width="160">
-            <template #default="{ row }">{{ row.project_name }}</template>
-          </el-table-column>
-          <el-table-column :label="t('usageUser')" min-width="150">
-            <template #default="{ row }">{{ row.user_display_name }}</template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('modelCount')" min-width="100" align="right">
-            <template #default="{ row }">{{ formatNumber(row.model_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="130" align="right">
-            <template #default="{ row }">
-              <el-button class="admin-action-button" :icon="Tickets" @click.stop="openUsageDetails({ user_key_id: row.user_key_id, key_name: row.user_key_name })">
                 {{ t('details') }}
               </el-button>
             </template>
@@ -1115,7 +1002,7 @@ function successRate(success: number, total: number) {
             </template>
           </el-table-column>
           <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
+            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('requestCount')" min-width="110" align="right">
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
@@ -1125,9 +1012,6 @@ function successRate(success: number, total: number) {
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('billingUnits')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">

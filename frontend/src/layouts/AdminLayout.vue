@@ -43,8 +43,6 @@ const navGroups = computed(() => {
     operationItems.push({ path: '/admin/credentials', key: 'credentialManagement', icon: Key })
     operationItems.push({ path: '/admin/keys', key: 'userManagement', icon: User })
   }
-  operationItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
-  operationItems.push({ path: '/admin/statistics', key: 'usageStatistics', icon: DataAnalysis })
   const groups: AdminNavGroup[] = [
     {
       key: 'adminNavOperations',
@@ -60,6 +58,14 @@ const navGroups = computed(() => {
       ]
     })
   }
+  groups.push({
+    key: 'adminNavUsage',
+    items: [
+      { path: '/admin/statistics', key: 'consumptionOverview', icon: DataAnalysis },
+      { path: '/admin/cost-attribution', key: 'costAttribution', icon: FolderOpened },
+      { path: '/admin/usage', key: 'usage', icon: Monitor }
+    ]
+  })
   return groups
 })
 

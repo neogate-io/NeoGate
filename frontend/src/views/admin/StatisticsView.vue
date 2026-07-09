@@ -8,15 +8,13 @@ import {
   getAdminUsageStatisticsOptions,
   getAdminUsageStatisticsSummary,
   getAdminUsageStatisticsTimeSeries,
-  getAdminUsageStatisticsUsers,
   type ModelUsageStatistics,
   type ModelUsageTimeSeriesPoint,
-  type UsageStatisticsExportScope,
+  type UsageStatisticsGranularity,
   type UsageStatisticsPage,
   type UsageStatisticsQuery,
   type UsageStatisticsSummary,
-  type UsageStatisticsTimeSeries,
-  type UserUsageStatistics
+  type UsageStatisticsTimeSeries
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
@@ -38,19 +36,19 @@ const AdminUsageChart = defineAsyncComponent(
 
 type StatisticsFilters = {
   dateRange: string[] | null
+  trendGranularity: Extract<UsageStatisticsGranularity, 'day' | 'month'>
+  projectQuery: string
   userQuery: string
   model: string
-  billingMeter: '' | 'token' | 'image'
 }
 
 const statisticsFilters = reactive<StatisticsFilters>({
   dateRange: defaultStatisticsRange(30),
+  trendGranularity: 'day',
+  projectQuery: '',
   userQuery: '',
-  model: '',
-  billingMeter: ''
+  model: ''
 })
-const statisticsUsersPage = ref(1)
-const statisticsUsersPageSize = ref(20)
 const statisticsModelsPage = ref(1)
 const statisticsModelsPageSize = ref(20)
 const statisticsExporting = ref(false)
@@ -63,9 +61,10 @@ const statisticsBaseQuery = computed<UsageStatisticsQuery>(() => {
   return {
     start,
     end,
+    granularity: statisticsFilters.trendGranularity,
+    project_query: statisticsFilters.projectQuery.trim() || undefined,
     user_query: statisticsFilters.userQuery.trim() || undefined,
     model: statisticsFilters.model || undefined,
-    billing_meter: statisticsFilters.billingMeter || undefined,
     sort: 'cost_desc'
   }
 })
@@ -78,19 +77,6 @@ const {
 } = useAsyncData(
   () => getAdminUsageStatisticsSummary(statisticsBaseQuery.value),
   emptyStatisticsSummary()
-)
-const {
-  data: statisticsUsers,
-  loading: statisticsUsersLoading,
-  reload: reloadStatisticsUsers
-} = useAsyncData(
-  () =>
-    getAdminUsageStatisticsUsers({
-      ...statisticsBaseQuery.value,
-      page: statisticsUsersPage.value,
-      limit: statisticsUsersPageSize.value
-    }),
-  emptyStatisticsPage<UserUsageStatistics>()
 )
 const {
   data: statisticsModels,
@@ -121,7 +107,6 @@ const {
   () =>
     getAdminUsageStatisticsTimeSeries({
       ...statisticsBaseQuery.value,
-      granularity: 'auto',
       series_limit: 8
     }),
   emptyStatisticsTimeSeries()
@@ -130,7 +115,6 @@ const {
 const statisticsLoading = computed(
   () =>
     statisticsSummaryLoading.value ||
-    statisticsUsersLoading.value ||
     statisticsModelsLoading.value ||
     statisticsTimeSeriesLoading.value ||
     statisticsOptionsLoading.value
@@ -391,37 +375,13 @@ const modelLatencyRankOption = computed<EChartsCoreOption>(() => {
   })
 })
 async function reloadStatistics() {
-  statisticsUsersPage.value = 1
   statisticsModelsPage.value = 1
   await Promise.all([
     reloadStatisticsSummary(),
-    reloadStatisticsUsers(),
     reloadStatisticsModels(),
     reloadStatisticsTimeSeries(),
     reloadStatisticsOptions()
   ])
-}
-
-async function handleStatisticsUserPageChange(page: number) {
-  statisticsUsersPage.value = page
-  await reloadStatisticsUsers()
-}
-
-async function handleStatisticsModelPageChange(page: number) {
-  statisticsModelsPage.value = page
-  await reloadStatisticsModels()
-}
-
-async function handleStatisticsUserPageSizeChange(size: number) {
-  statisticsUsersPageSize.value = size
-  statisticsUsersPage.value = 1
-  await reloadStatisticsUsers()
-}
-
-async function handleStatisticsModelPageSizeChange(size: number) {
-  statisticsModelsPageSize.value = size
-  statisticsModelsPage.value = 1
-  await reloadStatisticsModels()
 }
 
 async function applyQuickRange(days: number) {
@@ -429,23 +389,19 @@ async function applyQuickRange(days: number) {
   await reloadStatistics()
 }
 
-async function resetStatisticsFilters() {
-  statisticsFilters.dateRange = defaultStatisticsRange(30)
-  statisticsFilters.userQuery = ''
-  statisticsFilters.model = ''
-  statisticsFilters.billingMeter = ''
+async function applyTrendGranularity(
+  granularity: Extract<UsageStatisticsGranularity, 'day' | 'month'>
+) {
+  if (statisticsFilters.trendGranularity === granularity) return
+  statisticsFilters.trendGranularity = granularity
   await reloadStatistics()
 }
 
-async function exportStatistics(scope: string | number | object) {
-  if (typeof scope !== 'string') return
+async function exportStatisticsTrend() {
   statisticsExporting.value = true
   try {
-    const result = await downloadAdminUsageStatisticsCsv(
-      scope as UsageStatisticsExportScope,
-      statisticsBaseQuery.value
-    )
-    downloadBlob(result.filename ?? `usage-statistics-${scope}.csv`, result.blob)
+    const result = await downloadAdminUsageStatisticsCsv('daily', statisticsBaseQuery.value)
+    downloadBlob(result.filename ?? 'usage-statistics-trend.csv', result.blob)
   } finally {
     statisticsExporting.value = false
   }
@@ -530,27 +486,43 @@ function filledDailyRows(summary: UsageStatisticsSummary) {
   if (!startValue || !endValue) return summary.daily
   const values = new Map(summary.daily.map((item) => [item.date, item]))
   const rows = []
+  if (statisticsFilters.trendGranularity === 'month') {
+    const current = new Date(`${startValue.slice(0, 7)}-01T00:00:00`)
+    const end = new Date(`${endValue.slice(0, 7)}-01T00:00:00`)
+    while (current <= end && rows.length <= 120) {
+      const date = monthKey(current)
+      rows.push(values.get(date) ?? emptyDailyUsageStatistics(date))
+      current.setMonth(current.getMonth() + 1, 1)
+    }
+    return rows
+  }
   const current = new Date(`${startValue}T00:00:00`)
   const end = new Date(`${endValue}T00:00:00`)
   while (current <= end && rows.length <= 366) {
     const date = toDateKey(current)
-    rows.push(
-      values.get(date) ?? {
-        date,
-        request_count: 0,
-        success_count: 0,
-        error_count: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
-        billable_units: 0,
-        cost_micros: 0,
-        avg_latency_ms: null
-      }
-    )
+    rows.push(values.get(date) ?? emptyDailyUsageStatistics(date))
     current.setDate(current.getDate() + 1)
   }
   return rows
+}
+
+function emptyDailyUsageStatistics(date: string) {
+  return {
+    date,
+    request_count: 0,
+    success_count: 0,
+    error_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    billable_units: 0,
+    cost_micros: 0,
+    avg_latency_ms: null
+  }
+}
+
+function monthKey(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}`
 }
 
 function modelDisplay(channelName: string, model: string) {
@@ -561,10 +533,6 @@ function billingMeterLabel(value?: string | null) {
   if (value === 'image') return t('billingMeterImageGeneration')
   if (value === 'token') return t('billingMeterToken')
   return t('billingMeterAll')
-}
-
-function modelStatisticsRowKey(row: ModelUsageStatistics) {
-  return `${row.channel_name}/${row.model}/${row.billing_meter}`
 }
 
 function successRate(success: number, total: number) {
@@ -778,6 +746,16 @@ function chartNumericValue(value: unknown) {
                 />
               </label>
               <label class="admin-filter-field">
+                <span>{{ t('project') }}</span>
+                <el-input
+                  v-model="statisticsFilters.projectQuery"
+                  class="usage-search-input"
+                  clearable
+                  :prefix-icon="Search"
+                  :placeholder="t('costProjectSearchPlaceholder')"
+                />
+              </label>
+              <label class="admin-filter-field">
                 <span>{{ t('userSearch') }}</span>
                 <el-input
                   v-model="statisticsFilters.userQuery"
@@ -804,14 +782,6 @@ function chartNumericValue(value: unknown) {
                   />
                 </el-select>
               </label>
-              <label class="admin-filter-field">
-                <span>{{ t('billingMeter') }}</span>
-                <el-select v-model="statisticsFilters.billingMeter" class="usage-status-filter">
-                  <el-option :label="t('allBillingMeters')" value="" />
-                  <el-option :label="t('billingMeterToken')" value="token" />
-                  <el-option :label="t('billingMeterImageGeneration')" value="image" />
-                </el-select>
-              </label>
               <el-button
                 class="admin-action-button"
                 type="primary"
@@ -821,28 +791,17 @@ function chartNumericValue(value: unknown) {
               >
                 {{ t('search') }}
               </el-button>
-              <el-button class="admin-action-button statistics-reset-button" @click="resetStatisticsFilters">
-                {{ t('reset') }}
-              </el-button>
             </div>
             <div class="usage-toolbar-actions">
-              <el-dropdown trigger="click" @command="exportStatistics">
-                <el-button
-                  class="admin-action-button"
-                  :icon="Download"
-                  :loading="statisticsExporting"
-                  :disabled="statisticsEmpty"
-                >
-                  {{ t('exportStatistics') }}
-                </el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="users">{{ t('exportUserSummary') }}</el-dropdown-item>
-                    <el-dropdown-item command="daily">{{ t('exportDailyTrend') }}</el-dropdown-item>
-                    <el-dropdown-item command="models">{{ t('exportModelSummary') }}</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <el-button
+                class="admin-action-button"
+                :icon="Download"
+                :loading="statisticsExporting"
+                :disabled="statisticsEmpty"
+                @click="exportStatisticsTrend"
+              >
+                {{ t('exportTrend') }}
+              </el-button>
             </div>
             <div class="statistics-quick-ranges">
               <el-button :class="{ 'is-active': activeQuickRange === 7 }" @click="applyQuickRange(7)">
@@ -860,6 +819,20 @@ function chartNumericValue(value: unknown) {
               >
                 {{ t('quickRange90') }}
               </el-button>
+              <div class="statistics-granularity-field">
+                <el-button
+                  :class="{ 'is-active': statisticsFilters.trendGranularity === 'day' }"
+                  @click="applyTrendGranularity('day')"
+                >
+                  {{ t('granularityDay') }}
+                </el-button>
+                <el-button
+                  :class="{ 'is-active': statisticsFilters.trendGranularity === 'month' }"
+                  @click="applyTrendGranularity('month')"
+                >
+                  {{ t('granularityMonth') }}
+                </el-button>
+              </div>
             </div>
           </el-form>
 
@@ -983,26 +956,6 @@ function chartNumericValue(value: unknown) {
                 />
               </section>
               <section class="statistics-panel">
-                <header>{{ t('modelFailureRateRank') }}</header>
-                <AdminUsageChart
-                  :option="modelFailureRateOption"
-                  :loading="statisticsModelsLoading"
-                  :empty="statisticsModels.items.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="340px"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header>{{ t('modelLatencyRank') }}</header>
-                <AdminUsageChart
-                  :option="modelLatencyRankOption"
-                  :loading="statisticsModelsLoading"
-                  :empty="statisticsModels.items.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="340px"
-                />
-              </section>
-              <section class="statistics-panel">
                 <header>{{ t('topUsersByCost') }}</header>
                 <AdminUsageChart
                   :option="topUsersOption"
@@ -1024,142 +977,30 @@ function chartNumericValue(value: unknown) {
                   @chart-click="handleTopModelChartClick"
                 />
               </section>
+              <section class="statistics-panel">
+                <header>{{ t('modelFailureRateRank') }}</header>
+                <AdminUsageChart
+                  :option="modelFailureRateOption"
+                  :loading="statisticsModelsLoading"
+                  :empty="statisticsModels.items.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="340px"
+                />
+              </section>
+              <section class="statistics-panel">
+                <header>{{ t('modelLatencyRank') }}</header>
+                <AdminUsageChart
+                  :option="modelLatencyRankOption"
+                  :loading="statisticsModelsLoading"
+                  :empty="statisticsModels.items.length === 0"
+                  :empty-text="t('noStatisticsData')"
+                  height="340px"
+                />
+              </section>
             </div>
 
-            <section class="statistics-panel">
-              <header class="statistics-panel-header">
-                <span>{{ t('userSummary') }}</span>
-                <small>{{ t('defaultSortByCost') }}</small>
-                <el-button
-                  class="icon-only-action statistics-panel-action"
-                  :aria-label="t('exportUserSummary')"
-                  :icon="Download"
-                  :loading="statisticsExporting"
-                  :disabled="statisticsEmpty"
-                  @click="exportStatistics('users')"
-                />
-              </header>
-              <el-table
-                v-loading="statisticsUsersLoading"
-                class="admin-table service-table statistics-table"
-                :data="statisticsUsers.items"
-                row-key="user_id"
-                stripe
-              >
-                <el-table-column :label="t('usageUser')" min-width="190">
-                  <template #default="{ row }">
-                    <div class="statistics-user-cell">
-                      <strong>{{ row.user_display_name }}</strong>
-                      <span v-if="row.user_id != null">#{{ row.user_id }}</span>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column :label="t('requestCount')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('successRate')" min-width="110" align="right">
-                  <template #default="{ row }">{{
-                    successRate(row.success_count, row.request_count)
-                  }}</template>
-                </el-table-column>
-                <el-table-column :label="t('tokens')" min-width="130" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('billingUnits')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.billable_units, locale) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('modelCount')" min-width="100" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.model_count, locale) }}</template>
-                </el-table-column>
-                <template #empty>
-                  <el-empty :description="t('noStatisticsData')" />
-                </template>
-              </el-table>
-              <div class="statistics-pagination">
-                <el-pagination
-                  v-model:current-page="statisticsUsersPage"
-                  v-model:page-size="statisticsUsersPageSize"
-                  background
-                  layout="total, sizes, prev, pager, next"
-                  :total="statisticsUsers.total"
-                  :page-sizes="[20, 50, 100]"
-                  @current-change="handleStatisticsUserPageChange"
-                  @size-change="handleStatisticsUserPageSizeChange"
-                />
-              </div>
-            </section>
-
-            <section class="statistics-panel">
-              <header class="statistics-panel-header">
-                <span>{{ t('modelSummary') }}</span>
-                <small>{{ t('defaultSortByCost') }}</small>
-                <el-button
-                  class="icon-only-action statistics-panel-action"
-                  :aria-label="t('exportModelSummary')"
-                  :icon="Download"
-                  :loading="statisticsExporting"
-                  :disabled="statisticsEmpty"
-                  @click="exportStatistics('models')"
-                />
-              </header>
-              <el-table
-                v-loading="statisticsModelsLoading"
-                class="admin-table service-table statistics-table"
-                :data="statisticsModels.items"
-                :row-key="modelStatisticsRowKey"
-                stripe
-              >
-                <el-table-column :label="t('channelAndModel')" min-width="220">
-                  <template #default="{ row }">
-                    <div class="usage-model">
-                      <span class="usage-provider">{{ row.channel_name || '-' }}</span>
-                      <span class="usage-separator">/</span>
-                      <span>{{ row.model || '-' }}</span>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column :label="t('billingMeter')" min-width="110">
-                  <template #default="{ row }">{{ billingMeterLabel(row.billing_meter) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('requestCount')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('tokens')" min-width="130" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('cost')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatMoney(row.cost_micros, locale, 6) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('averageLatencyShort')" min-width="120" align="right">
-                  <template #default="{ row }">{{ formatDurationMs(row.avg_latency_ms) }}</template>
-                </el-table-column>
-                <el-table-column :label="t('userCount')" min-width="100" align="right">
-                  <template #default="{ row }">{{ formatNumber(row.user_count, locale) }}</template>
-                </el-table-column>
-                <template #empty>
-                  <el-empty :description="t('noStatisticsData')" />
-                </template>
-              </el-table>
-              <div class="statistics-pagination">
-                <el-pagination
-                  v-model:current-page="statisticsModelsPage"
-                  v-model:page-size="statisticsModelsPageSize"
-                  background
-                  layout="total, sizes, prev, pager, next"
-                  :total="statisticsModels.total"
-                  :page-sizes="[20, 50, 100]"
-                  @current-change="handleStatisticsModelPageChange"
-                  @size-change="handleStatisticsModelPageSizeChange"
-                />
-              </div>
-            </section>
           </template>
+
         </div>
   </section>
 </template>
@@ -1191,6 +1032,10 @@ function chartNumericValue(value: unknown) {
   padding-top: 2px;
 }
 
+.statistics-quick-ranges > .el-button + .el-button {
+  margin-left: 0;
+}
+
 .statistics-quick-ranges .el-button {
   --el-button-bg-color: transparent;
   --el-button-border-color: transparent;
@@ -1212,8 +1057,15 @@ function chartNumericValue(value: unknown) {
   --el-button-text-color: #168bd3;
 }
 
-.statistics-reset-button.el-button {
-  color: #667085;
+.statistics-granularity-field {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  margin-left: 20px;
+}
+
+.statistics-granularity-field .el-button + .el-button {
+  margin-left: 0;
 }
 
 .statistics-toolbar .usage-toolbar-filters,
@@ -1249,18 +1101,13 @@ function chartNumericValue(value: unknown) {
 }
 
 .statistics-toolbar .usage-date-range.el-date-editor.el-input__wrapper {
-  flex-basis: 250px;
-  width: 250px;
+  flex-basis: 240px;
+  width: 240px;
 }
 
 .statistics-toolbar .usage-search-input.el-input {
-  flex-basis: 190px;
-  width: 190px;
-}
-
-.statistics-toolbar .usage-status-filter.el-select {
-  flex-basis: 118px;
-  width: 118px;
+  flex-basis: 180px;
+  width: 180px;
 }
 
 .statistics-metric-grid {
@@ -1407,11 +1254,8 @@ function chartNumericValue(value: unknown) {
 
 @media (max-width: 1180px) {
   .statistics-metric-grid,
-  .statistics-chart-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .statistics-toolbar {
+  .statistics-chart-grid,
+    .statistics-toolbar {
     align-items: stretch;
     grid-template-columns: 1fr;
   }
@@ -1448,16 +1292,8 @@ function chartNumericValue(value: unknown) {
   }
 
   .statistics-metric-grid,
-  .statistics-chart-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .statistics-metric-grid,
-  .statistics-chart-grid {
-    gap: 14px;
-  }
-
-  .statistics-panel.is-wide {
+  .statistics-chart-grid,
+    .statistics-panel.is-wide {
     grid-column: auto;
   }
 
@@ -1470,6 +1306,14 @@ function chartNumericValue(value: unknown) {
     flex: 1 1 0;
     height: 32px;
     min-width: 0;
+  }
+
+  .statistics-granularity-field {
+    align-items: stretch;
+    display: grid;
+    flex: 1 1 100%;
+    gap: 5px;
+    margin-left: 0;
   }
 
   .statistics-chart-header {

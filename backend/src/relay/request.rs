@@ -42,6 +42,8 @@ pub(crate) struct RelayRequestParams {
     pub(crate) image_size: Option<String>,
     pub(crate) image_quality: Option<String>,
     pub(crate) image_style: Option<String>,
+    pub(crate) video_size: Option<String>,
+    pub(crate) video_seconds: Option<i64>,
 }
 
 impl RelayRequestParams {
@@ -56,6 +58,14 @@ impl RelayRequestParams {
             image_size: size.map(|value| safe_log_label(&value)),
             image_quality: quality.map(|value| safe_log_label(&value)),
             image_style: style.map(|value| safe_log_label(&value)),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn video(size: Option<String>, seconds: Option<i64>) -> Self {
+        Self {
+            video_size: size.map(|value| safe_log_label(&value)),
+            video_seconds: seconds.filter(|value| *value > 0),
             ..Self::default()
         }
     }
@@ -177,6 +187,8 @@ fn request_params_from_value(value: &Value, kind: BodyKind) -> RelayRequestParam
         image_size: None,
         image_quality: None,
         image_style: None,
+        video_size: None,
+        video_seconds: None,
     }
 }
 
@@ -270,7 +282,7 @@ fn response_format_summary(value: &Value) -> Option<String> {
         .map(safe_log_label)
 }
 
-fn safe_log_label(value: &str) -> String {
+pub(crate) fn safe_log_label(value: &str) -> String {
     value
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))

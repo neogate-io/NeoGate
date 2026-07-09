@@ -1,6 +1,6 @@
 use super::{
-    bailian::BAILIAN_ADAPTER, compatible::COMPATIBLE_ADAPTER, jdcloud::JDCLOUD_ADAPTER,
-    ProviderAdapter,
+    bailian::BAILIAN_ADAPTER, compatible::COMPATIBLE_ADAPTER, doubao::DOUBAO_ADAPTER,
+    jdcloud::JDCLOUD_ADAPTER, ProviderAdapter,
 };
 
 pub(crate) fn adapter_for_provider(provider: &str) -> &'static dyn ProviderAdapter {
@@ -8,6 +8,8 @@ pub(crate) fn adapter_for_provider(provider: &str) -> &'static dyn ProviderAdapt
         &BAILIAN_ADAPTER
     } else if provider.eq_ignore_ascii_case("jdcloud") {
         &JDCLOUD_ADAPTER
+    } else if provider.eq_ignore_ascii_case("doubao") {
+        &DOUBAO_ADAPTER
     } else {
         &COMPATIBLE_ADAPTER
     }
@@ -27,6 +29,12 @@ mod tests {
     fn registry_selects_jdcloud_for_jdcloud() {
         assert_eq!(adapter_for_provider("jdcloud").name(), "jdcloud");
         assert_eq!(adapter_for_provider("JDCLOUD").name(), "jdcloud");
+    }
+
+    #[test]
+    fn registry_selects_doubao_for_doubao_provider() {
+        assert_eq!(adapter_for_provider("doubao").name(), "doubao");
+        assert_eq!(adapter_for_provider("DOUBAO").name(), "doubao");
     }
 
     #[test]

@@ -116,6 +116,16 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             )
             .await?
         }
+        UpstreamTaskType::OpenAiVideo => {
+            let path = format!("/v1/videos/{}", task.upstream_task_id);
+            poll_upstream_response(
+                state,
+                forward_openai_bound(state, &upstream, Method::GET, &path, None),
+                task.id,
+                task.task_type,
+            )
+            .await?
+        }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {
             let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
@@ -170,6 +180,15 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             };
             usage = Some(results_usage);
         }
+        let task = if task.task_type == UpstreamTaskType::OpenAiVideo {
+            UpstreamTask {
+                status: status_text,
+                terminal,
+                ..task
+            }
+        } else {
+            task
+        };
         task_billing::finalize_polled(state, task, upstream, usage).await?;
     }
     Ok(())
@@ -271,6 +290,15 @@ fn task_status_from_value(value: &Value, task: &UpstreamTask) -> (String, bool) 
                 .unwrap_or(&task.status)
                 .to_string();
             let terminal = openai_response_terminal(&status);
+            (status, terminal)
+        }
+        UpstreamTaskType::OpenAiVideo => {
+            let status = value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.status)
+                .to_string();
+            let terminal = crate::provider::openai::video_terminal(&status);
             (status, terminal)
         }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),

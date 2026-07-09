@@ -104,7 +104,14 @@ async fn finalize_loaded(
     billing_context: AsyncTaskBillingContext,
     usage: Option<TokenUsage>,
 ) -> AppResult<()> {
-    let target = if usage.is_some() {
+    let usage = if task.task_type == UpstreamTaskType::OpenAiVideo && task.status != "completed" {
+        None
+    } else {
+        usage
+    };
+    let settle_without_usage =
+        task.task_type == UpstreamTaskType::OpenAiVideo && task.status == "completed";
+    let target = if usage.is_some() || settle_without_usage {
         "settled"
     } else {
         "released"
@@ -113,7 +120,7 @@ async fn finalize_loaded(
     else {
         return Ok(());
     };
-    if let Some(usage) = usage {
+    if usage.is_some() || settle_without_usage {
         let Some(model) = task.model.as_deref() else {
             fail_settled_task_billing(state, task.id, hold, "async task missing model").await?;
             return Ok(());
@@ -152,7 +159,7 @@ async fn finalize_loaded(
                         project_credit_account: &billing_context.project_credit_account,
                     },
                     hold: hold.clone(),
-                    usage: Some(BillableUsage::token(usage)),
+                    usage: usage.map(BillableUsage::token),
                     price: &price,
                 },
             )
@@ -185,7 +192,7 @@ async fn finalize_loaded(
             first_response_ms: None,
             output_tokens_per_second: None,
             error_summary: None,
-            token_usage: Some(usage),
+            token_usage: usage,
             billing_meter: billing.billing_meter,
             billable_units: billing.billable_units,
             billing: Some(billing),

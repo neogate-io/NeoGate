@@ -1,5 +1,6 @@
 mod bailian;
 mod compatible;
+mod doubao;
 mod jdcloud;
 mod registry;
 mod types;

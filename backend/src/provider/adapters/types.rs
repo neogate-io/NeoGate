@@ -4,6 +4,7 @@ use bytes::Bytes;
 use crate::{
     error::AppResult,
     relay::selector::{SelectedUpstream, UpstreamProtocol},
+    relay::upstream_url,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub(crate) enum RelayRoute {
     ImageGenerations,
     ImageEdits,
     ImageVariations,
+    Videos,
 }
 
 impl RelayRoute {
@@ -30,6 +32,7 @@ impl RelayRoute {
             Self::ImageGenerations => "/v1/images/generations",
             Self::ImageEdits => "/v1/images/edits",
             Self::ImageVariations => "/v1/images/variations",
+            Self::Videos => "/v1/videos",
         }
     }
 }
@@ -65,6 +68,10 @@ pub(crate) trait ProviderAdapter: Sync {
     fn name(&self) -> &'static str;
 
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String;
+
+    fn resolve_bound_url(&self, base_url: &str, path: &str) -> (String, String) {
+        (upstream_url(base_url, path), path.to_string())
+    }
 
     fn prepare_openai_request(
         &self,

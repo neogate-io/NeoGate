@@ -1,7 +1,10 @@
 mod background;
 mod images;
+mod multipart;
+mod videos;
 
 pub(crate) use background::response_terminal;
+pub(crate) use videos::video_terminal;
 
 use std::{sync::Arc, time::Instant};
 
@@ -164,6 +167,31 @@ pub(crate) async fn openai_image_variations(
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
     images::relay_openai_image(state, auth, headers, body, "/v1/images/variations").await
+}
+
+pub(crate) async fn openai_videos(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    body: RelayBody,
+) -> AppResult<Response> {
+    videos::openai_videos(state, auth, headers, body).await
+}
+
+pub(crate) async fn openai_video(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    path: Path<String>,
+) -> AppResult<Response> {
+    videos::openai_video(state, auth, path).await
+}
+
+pub(crate) async fn openai_video_content(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    path: Path<String>,
+) -> AppResult<Response> {
+    videos::openai_video_content(state, auth, path).await
 }
 
 pub(crate) async fn openai_response(

@@ -198,6 +198,39 @@ const openAiImageVariation = computed(
   -F "size=1024x1024"`
 )
 
+const openAiVideoCreate = computed(
+  () => `curl ${openAiBaseUrl.value}/videos \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "sora-2",
+    "prompt": "Wide tracking shot of a teal coupe driving through a desert highway",
+    "size": "1280x720",
+    "seconds": "8"
+  }'`
+)
+
+const openAiVideoCreateWithReference = computed(
+  () => `curl ${openAiBaseUrl.value}/videos \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -F "model=sora-2" \\
+  -F "prompt=A lantern-lit street slowly filling with rain reflections" \\
+  -F "size=720x1280" \\
+  -F "seconds=4" \\
+  -F "input_reference=@reference.png;type=image/png"`
+)
+
+const openAiVideoRetrieve = computed(
+  () => `curl ${openAiBaseUrl.value}/videos/video_123 \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY"`
+)
+
+const openAiVideoContent = computed(
+  () => `curl ${openAiBaseUrl.value}/videos/video_123/content \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  --output video.mp4`
+)
+
 const openAiEmbeddings = computed(
   () => `curl ${openAiBaseUrl.value}/embeddings \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -354,9 +387,10 @@ const content = computed(() => {
         ['openai-text-async', '文本生成（异步）', '2.3 文本生成（异步）', 'sub'],
         ['openai-images', '图片生成', '2.4 图片生成', 'sub'],
         ['openai-images-async', '图片生成（异步）', '2.5 图片生成（异步）', 'sub'],
-        ['openai-embeddings', '向量嵌入', '2.6 向量嵌入', 'sub'],
-        ['openai-models', '模型列表', '2.7 模型列表', 'sub'],
-        ['openai-sdk', 'SDK 示例', '2.8 SDK 示例', 'sub'],
+        ['openai-videos', '视频生成', '2.6 视频生成', 'sub'],
+        ['openai-embeddings', '向量嵌入', '2.7 向量嵌入', 'sub'],
+        ['openai-models', '模型列表', '2.8 模型列表', 'sub'],
+        ['openai-sdk', 'SDK 示例', '2.9 SDK 示例', 'sub'],
         ['anthropic', 'Anthropic 兼容接口', '3. Anthropic 兼容接口'],
         ['anthropic-quick-start', '快速开始', '3.1 快速开始', 'sub'],
         ['anthropic-text', '文本生成', '3.2 文本生成', 'sub'],
@@ -391,7 +425,7 @@ const content = computed(() => {
       openAiAuthItems: [
         ['Base URL', openAiBaseUrl.value],
         ['认证头', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
-        ['Content-Type', 'application/json；图片上传接口使用 multipart/form-data']
+        ['Content-Type', 'application/json；图片和视频上传接口使用 multipart/form-data']
       ],
       openAiEndpoints: [
         ['Models', 'GET', '/v1/models', '-', '已支持'],
@@ -464,6 +498,14 @@ const content = computed(() => {
           '已支持（含流式）'
         ],
         ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', '已支持'],
+        ['Videos', 'POST', '/v1/videos', 'model, prompt, input_reference, size, seconds', '已支持'],
+        ['Videos', 'GET', '/v1/videos', 'limit, after, order', '开发中'],
+        ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', '已支持'],
+        ['Videos', 'DELETE', '/v1/videos/{video_id}', 'video_id', '开发中'],
+        ['Videos', 'GET', '/v1/videos/{video_id}/content', 'video_id', '已支持'],
+        ['Videos', 'POST', '/v1/videos/edits', 'prompt, video.id', '开发中'],
+        ['Videos', 'POST', '/v1/videos/extensions', 'prompt, seconds, video.id', '开发中'],
+        ['Videos', 'POST', '/v1/videos/{video_id}/remix', 'video_id, prompt', '开发中'],
         [
           'Embeddings',
           'POST',
@@ -669,6 +711,7 @@ const content = computed(() => {
       imageAsyncTitle: '图片生成（异步）',
       openAiImageAsync:
         '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。NeoGate 扩展支持通过 image_format 控制异步图片结果返回 base64 或 URL。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
+      openAiVideo: `Videos API 按 OpenAI 官方异步任务模型转发。创建视频后会返回 video job，可通过查询接口轮询状态；任务完成后使用 content 接口下载 MP4。${siteName.value} 当前支持创建、查询和下载内容，列表、删除、编辑、扩展和 remix 仍在开发中。`,
       requestParamsTitle: '调用参数',
       responseParamsTitle: '返回参数',
       paramFieldHeaders: ['参数', '类型 / 示例', '说明'],
@@ -722,7 +765,11 @@ const content = computed(() => {
         ['input', 'string | array，必填', '后台任务的输入内容。'],
         ['instructions', 'string', '系统级指令，适合放置任务要求或输出约束。'],
         ['background', 'boolean，必填 true', '设置为 true 创建后台 Response。'],
-        ['store', 'boolean', `background=true 时需要保存响应；${siteName.value} 要求 store 不能为 false。`],
+        [
+          'store',
+          'boolean',
+          `background=true 时需要保存响应；${siteName.value} 要求 store 不能为 false。`
+        ],
         [
           'stream',
           'boolean',
@@ -804,7 +851,11 @@ const content = computed(() => {
           'boolean',
           `设置为 true 创建后台 Response；${siteName.value} 的图片异步任务使用该模式。`
         ],
-        ['store', 'boolean', `background=true 时需要保存响应；${siteName.value} 要求 store 不能为 false。`],
+        [
+          'store',
+          'boolean',
+          `background=true 时需要保存响应；${siteName.value} 要求 store 不能为 false。`
+        ],
         [
           'stream',
           'boolean',
@@ -828,6 +879,40 @@ const content = computed(() => {
         ['output[].url', 'string', '仅在 image_format 为 url 或 both 时返回。'],
         ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
         ['usage', 'object | null', `终态返回的用量信息，${siteName.value} 会用于记录和结算。`]
+      ],
+      videoRequestParams: [
+        [
+          'model',
+          'string',
+          `视频模型，例如 sora-2 或 sora-2-pro；会按 ${siteName.value} 模型权限和渠道能力转发。`
+        ],
+        ['prompt', 'string，必填', '描述要生成或编辑的视频内容、镜头、动作、场景和光线。'],
+        [
+          'input_reference',
+          'object | file',
+          '可选参考图；官方 JSON 结构可传 image_url 或 file_id，multipart 调用可上传参考文件。'
+        ],
+        [
+          'size',
+          'string',
+          '视频尺寸，例如 720x1280、1280x720、1024x1792 或 1792x1024；可用尺寸以模型和上游为准。'
+        ],
+        ['seconds', 'string | number', '视频时长，例如 4、8 或 12 秒；可用时长以模型和上游为准。'],
+        ['video.id', 'string', '编辑或扩展视频时引用已完成的视频 ID。'],
+        ['after / limit / order', 'string | number', '列表接口分页和排序参数；当前仍在开发中。']
+      ],
+      videoResponseParams: [
+        ['id', 'string', '视频任务 ID，例如 video_123；用于查询状态、下载内容或后续引用。'],
+        ['object', '"video"', '返回对象类型。'],
+        ['created_at / completed_at', 'integer | null', '任务创建和完成时间，Unix 秒级时间戳。'],
+        ['status', 'string', '任务状态，例如 queued、in_progress、completed 或 failed。'],
+        ['progress', 'number', '上游返回的近似完成百分比。'],
+        ['model', 'string', '实际使用的视频模型。'],
+        ['prompt', 'string', '创建、编辑、扩展或 remix 使用的提示词。'],
+        ['size', 'string', '输出视频尺寸。'],
+        ['seconds', 'string', '输出视频时长；扩展任务可能表示拼接后的总时长。'],
+        ['expires_at', 'integer | null', '可下载资产过期时间，若上游返回则透传。'],
+        ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。']
       ],
       embeddingTitle: '向量嵌入',
       openAiEmbeddings: `Embeddings 接口按 OpenAI 官方 JSON 请求体转发，适合 RAG、语义搜索、去重和召回场景。请求中的 model 会走 ${siteName.value} 的模型权限、渠道选择、计费和用量记录。`,
@@ -954,9 +1039,10 @@ const content = computed(() => {
       ['openai-text-async', 'Text generation async', '2.3 Text generation async', 'sub'],
       ['openai-images', 'Images', '2.4 Images', 'sub'],
       ['openai-images-async', 'Images async', '2.5 Images async', 'sub'],
-      ['openai-embeddings', 'Embeddings', '2.6 Embeddings', 'sub'],
-      ['openai-models', 'Models', '2.7 Models', 'sub'],
-      ['openai-sdk', 'SDK examples', '2.8 SDK examples', 'sub'],
+      ['openai-videos', 'Videos', '2.6 Videos', 'sub'],
+      ['openai-embeddings', 'Embeddings', '2.7 Embeddings', 'sub'],
+      ['openai-models', 'Models', '2.8 Models', 'sub'],
+      ['openai-sdk', 'SDK examples', '2.9 SDK examples', 'sub'],
       ['anthropic', 'Anthropic Compatible', '3. Anthropic-compatible APIs'],
       ['anthropic-quick-start', 'Quick start', '3.1 Quick start', 'sub'],
       ['anthropic-text', 'Text generation', '3.2 Text generation', 'sub'],
@@ -1003,7 +1089,7 @@ const content = computed(() => {
     openAiAuthItems: [
       ['Base URL', openAiBaseUrl.value],
       ['Auth header', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
-      ['Content-Type', 'application/json; image upload APIs use multipart/form-data']
+      ['Content-Type', 'application/json; image and video upload APIs use multipart/form-data']
     ],
     openAiEndpoints: [
       ['Models', 'GET', '/v1/models', '-', 'Supported'],
@@ -1082,6 +1168,20 @@ const content = computed(() => {
         'Supported (streaming)'
       ],
       ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', 'Supported'],
+      [
+        'Videos',
+        'POST',
+        '/v1/videos',
+        'model, prompt, input_reference, size, seconds',
+        'Supported'
+      ],
+      ['Videos', 'GET', '/v1/videos', 'limit, after, order', 'In development'],
+      ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', 'Supported'],
+      ['Videos', 'DELETE', '/v1/videos/{video_id}', 'video_id', 'In development'],
+      ['Videos', 'GET', '/v1/videos/{video_id}/content', 'video_id', 'Supported'],
+      ['Videos', 'POST', '/v1/videos/edits', 'prompt, video.id', 'In development'],
+      ['Videos', 'POST', '/v1/videos/extensions', 'prompt, seconds, video.id', 'In development'],
+      ['Videos', 'POST', '/v1/videos/{video_id}/remix', 'video_id, prompt', 'In development'],
       [
         'Embeddings',
         'POST',
@@ -1317,6 +1417,7 @@ const content = computed(() => {
     imageAsyncTitle: 'Image generation async',
     openAiImageAsync:
       'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. NeoGate extends the request with image_format so async image results can return base64 or a URL. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
+    openAiVideo: `The Videos API is forwarded using OpenAI's official async job model. Create returns a video job, retrieve polls status, and content downloads the completed MP4. ${siteName.value} currently supports create, retrieve, and content download; list, delete, edits, extensions, and remix are still in development.`,
     requestParamsTitle: 'Request parameters',
     responseParamsTitle: 'Response parameters',
     paramFieldHeaders: ['Parameter', 'Type / example', 'Description'],
@@ -1395,7 +1496,11 @@ const content = computed(() => {
         'object | null',
         'Responses error information on failure; usually null on success.'
       ],
-      ['usage', 'object | null', `Token usage used by ${siteName.value} for records and settlement.`]
+      [
+        'usage',
+        'object | null',
+        `Token usage used by ${siteName.value} for records and settlement.`
+      ]
     ],
     textAsyncRequestParams: [
       ['model', 'string, required', 'Responses model, for example gpt-5.5.'],
@@ -1577,13 +1682,71 @@ const content = computed(() => {
         'string',
         'Base64 image content returned when generation completes; omitted when image_format=url.'
       ],
-      [
-        'output[].url',
-        'string',
-        'Returned when image_format is url or both.'
-      ],
+      ['output[].url', 'string', 'Returned when image_format is url or both.'],
       ['error', 'object | null', 'On failure, includes code and message; usually null on success.'],
-      ['usage', 'object | null', `Final usage data used by ${siteName.value} for records and settlement.`]
+      [
+        'usage',
+        'object | null',
+        `Final usage data used by ${siteName.value} for records and settlement.`
+      ]
+    ],
+    videoRequestParams: [
+      [
+        'model',
+        'string',
+        `Video model, such as sora-2 or sora-2-pro. ${siteName.value} still applies model permissions and upstream routing.`
+      ],
+      [
+        'prompt',
+        'string, required',
+        'Describes the video content, shot, motion, setting, and lighting.'
+      ],
+      [
+        'input_reference',
+        'object | file',
+        'Optional reference image. Official JSON accepts image_url or file_id; multipart requests can upload a reference file.'
+      ],
+      [
+        'size',
+        'string',
+        'Video size, such as 720x1280, 1280x720, 1024x1792, or 1792x1024. Availability depends on the model and upstream.'
+      ],
+      [
+        'seconds',
+        'string | number',
+        'Clip duration, such as 4, 8, or 12 seconds. Availability depends on the model and upstream.'
+      ],
+      ['video.id', 'string', 'Completed video ID used by edit or extension requests.'],
+      [
+        'after / limit / order',
+        'string | number',
+        'Pagination and sort parameters for list videos; currently in development.'
+      ]
+    ],
+    videoResponseParams: [
+      [
+        'id',
+        'string',
+        'Video job ID, such as video_123, used to retrieve status, download content, or reference later.'
+      ],
+      ['object', '"video"', 'Object type returned by the Videos API.'],
+      [
+        'created_at / completed_at',
+        'integer | null',
+        'Unix timestamps for when the job was created and completed.'
+      ],
+      ['status', 'string', 'Task status, such as queued, in_progress, completed, or failed.'],
+      ['progress', 'number', 'Approximate completion percentage returned by the upstream.'],
+      ['model', 'string', 'Video model that produced the job.'],
+      ['prompt', 'string', 'Prompt used for creation, editing, extension, or remix.'],
+      ['size', 'string', 'Output video size.'],
+      ['seconds', 'string', 'Output duration; extensions may return the stitched total duration.'],
+      [
+        'expires_at',
+        'integer | null',
+        'Downloadable asset expiration time when returned by the upstream.'
+      ],
+      ['error', 'object | null', 'On failure, includes code and message; usually null on success.']
     ],
     embeddingTitle: 'Embeddings',
     openAiEmbeddings: `Embeddings are forwarded with the official OpenAI JSON request body and are useful for RAG, semantic search, deduplication, and retrieval. The requested model still uses ${siteName.value} model permissions, routing, billing, and usage records.`,
@@ -2324,9 +2487,124 @@ const content = computed(() => {
                 </article>
               </section>
 
-              <section id="openai-embeddings" class="docs-subsection">
+              <section id="openai-videos" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
                   <h2>{{ content.menu[7][2] }}</h2>
+                  <p>{{ content.openAiVideo }}</p>
+                </div>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.requestParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.videoRequestParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="docs-step-card docs-params-card">
+                  <h3>{{ content.responseParamsTitle }}</h3>
+                  <div class="docs-params-table-wrap">
+                    <table class="docs-params-table">
+                      <thead>
+                        <tr>
+                          <th v-for="header in content.paramFieldHeaders" :key="header">
+                            {{ header }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="[name, type, description] in content.videoResponseParams"
+                          :key="name"
+                        >
+                          <td>
+                            <code>{{ name }}</code>
+                          </td>
+                          <td>{{ type }}</td>
+                          <td>{{ description }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Create Video</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiVideoCreate)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiVideoCreate }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Create Video With Reference</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiVideoCreateWithReference)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiVideoCreateWithReference }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Retrieve Video</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiVideoRetrieve)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiVideoRetrieve }}</code></pre>
+                  </div>
+                </article>
+                <article class="docs-step-card">
+                  <h3>Download Video Content</h3>
+                  <div class="docs-copy-block">
+                    <el-button
+                      :icon="DocumentCopy"
+                      text
+                      :aria-label="t('copy')"
+                      @click="copyDocText(openAiVideoContent)"
+                    />
+                    <pre
+                      class="docs-code-sample docs-inner-code"
+                    ><code>{{ openAiVideoContent }}</code></pre>
+                  </div>
+                </article>
+              </section>
+
+              <section id="openai-embeddings" class="docs-subsection">
+                <div class="docs-section-heading docs-subsection-heading">
+                  <h2>{{ content.menu[8][2] }}</h2>
                   <p>{{ content.openAiEmbeddings }}</p>
                 </div>
                 <article class="docs-step-card">
@@ -2347,7 +2625,7 @@ const content = computed(() => {
 
               <section id="openai-models" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[8][2] }}</h2>
+                  <h2>{{ content.menu[9][2] }}</h2>
                 </div>
                 <article class="docs-step-card">
                   <h3>Models</h3>
@@ -2367,7 +2645,7 @@ const content = computed(() => {
 
               <section id="openai-sdk" class="docs-subsection">
                 <div class="docs-section-heading docs-subsection-heading">
-                  <h2>{{ content.menu[9][2] }}</h2>
+                  <h2>{{ content.menu[10][2] }}</h2>
                 </div>
                 <article class="docs-step-card">
                   <el-tabs>
@@ -2431,7 +2709,7 @@ const content = computed(() => {
 
           <section id="anthropic" class="docs-section">
             <div class="docs-section-heading">
-              <h2>3. {{ content.menu[10][1] }}</h2>
+              <h2>3. {{ content.menu[11][1] }}</h2>
               <p>{{ content.anthropicIntro }}</p>
             </div>
             <div class="interface-meta-grid">

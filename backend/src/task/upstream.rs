@@ -434,6 +434,7 @@ fn task_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UpstreamTask> {
         id: row.try_get("id")?,
         task_type: match task_type.as_str() {
             "openai_response" => UpstreamTaskType::OpenAiResponse,
+            "openai_video" => UpstreamTaskType::OpenAiVideo,
             "neogate_response" => UpstreamTaskType::NeogateResponse,
             "anthropic_message_batch" => UpstreamTaskType::AnthropicMessageBatch,
             other => return Err(AppError::BadRequest(format!("invalid task type: {other}"))),

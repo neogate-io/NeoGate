@@ -51,7 +51,8 @@ pub(crate) use error::{describe_upstream_http_failure, is_model_error_text, Upst
 pub(crate) use limit::UserRequestLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{
-    prepare_relay_body, rewrite_relay_body_model, BodyKind, PreparedRelayBody, RelayRequestParams,
+    prepare_relay_body, rewrite_relay_body_model, safe_log_label, BodyKind, PreparedRelayBody,
+    RelayRequestParams,
 };
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::{
@@ -96,6 +97,12 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/images/variations",
             post(openai::openai_image_variations),
         )
+        .route("/v1/videos", post(openai::openai_videos))
+        .route(
+            "/v1/videos/{video_id}/content",
+            get(openai::openai_video_content),
+        )
+        .route("/v1/videos/{video_id}", get(openai::openai_video))
         .route(
             "/anthropic",
             get(anthropic_gateway_probe).head(anthropic_gateway_probe),
@@ -217,6 +224,15 @@ pub(crate) fn task_status_from_value(
                 .unwrap_or(&task.status)
                 .to_string();
             let terminal = openai::response_terminal(&status);
+            (status, terminal)
+        }
+        UpstreamTaskType::OpenAiVideo => {
+            let status = value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.status)
+                .to_string();
+            let terminal = openai::video_terminal(&status);
             (status, terminal)
         }
         UpstreamTaskType::AnthropicMessageBatch => {
@@ -864,6 +880,8 @@ fn push_request_params(line: &mut String, params: &RelayRequestParams) {
         params.image_quality.as_deref(),
     );
     push_opt_str(line, "request_image_style", params.image_style.as_deref());
+    push_opt_str(line, "request_video_size", params.video_size.as_deref());
+    push_opt(line, "request_video_seconds", params.video_seconds);
 }
 
 fn push_info_request_params(line: &mut String, params: &RelayRequestParams) {

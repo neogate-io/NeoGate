@@ -238,7 +238,7 @@ function numberQueryValue(key: string) {
 
 function billingMeterQueryValue() {
   const value = stringQueryValue('billing_meter')
-  return value === 'token' || value === 'image' ? value : undefined
+  return value === 'token' || value === 'image' || value === 'video' ? value : undefined
 }
 
 function routingRulesText(row: UsageRecord) {
@@ -400,6 +400,12 @@ async function exportUsage() {
                 {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
               </span>
               <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+            </div>
+            <div v-else-if="row.billing_meter === 'video' && (row.total_tokens ?? 0) === 0" class="usage-stack">
+              <span class="usage-mono">
+                {{ formatNumber(row.billable_units, locale) }} {{ t('perSecond') }}
+              </span>
+              <span class="usage-muted">{{ t('billingMeterVideo') }}</span>
             </div>
             <div v-else class="usage-stack">
               <span class="usage-mono">

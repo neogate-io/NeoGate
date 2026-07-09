@@ -493,7 +493,7 @@ impl UsageStatsFilter {
 
         let billing_meter = trimmed_non_empty(params.billing_meter.as_deref()).map(str::to_string);
         if let Some(value) = billing_meter.as_deref() {
-            if value != "token" && value != "image" {
+            if value != "token" && value != "image" && value != "video" {
                 return Err(AppError::BadRequest("invalid billing_meter".to_string()));
             }
         }

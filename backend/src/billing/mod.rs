@@ -22,6 +22,7 @@ mod credit;
 mod metering;
 pub mod outbox;
 mod types;
+pub mod video;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
 pub use metering::{
@@ -30,7 +31,7 @@ pub use metering::{
 };
 pub use types::{
     BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
-    DebitPart, Price, PricingBasis, TokenUsage,
+    DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode, VideoPriceTier,
 };
 
 pub const MICROS_PER_MAJOR_UNIT: i64 = 1_000_000;
@@ -41,6 +42,13 @@ pub const BILLABLE_PROVIDER_PRICE_CONDITION: &str = r#"
         AND output_price_micros >= 0)
     OR (billing_meter = 'image'
         AND unit_price_micros > 0)
+    OR (billing_meter = 'video'
+        AND video_billing_mode IS NOT NULL
+        AND CASE
+            WHEN jsonb_typeof(video_price_tiers) = 'array'
+            THEN jsonb_array_length(video_price_tiers) > 0
+            ELSE FALSE
+        END)
 )
 "#;
 pub const BILLABLE_PROVIDER_PRICE_CONDITION_PP: &str = r#"
@@ -50,6 +58,13 @@ pub const BILLABLE_PROVIDER_PRICE_CONDITION_PP: &str = r#"
         AND pp.output_price_micros >= 0)
     OR (pp.billing_meter = 'image'
         AND pp.unit_price_micros > 0)
+    OR (pp.billing_meter = 'video'
+        AND pp.video_billing_mode IS NOT NULL
+        AND CASE
+            WHEN jsonb_typeof(pp.video_price_tiers) = 'array'
+            THEN jsonb_array_length(pp.video_price_tiers) > 0
+            ELSE FALSE
+        END)
 )
 "#;
 const ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT: usize = 20;
@@ -644,7 +659,9 @@ impl PriceCache {
                        cache_read_price_micros,
                        cache_write_price_micros,
                        billing_meter,
-                       unit_price_micros
+                       unit_price_micros,
+                       video_billing_mode,
+                       video_price_tiers
                 FROM provider_price
                 WHERE provider = $1 AND model = $2 AND enabled = TRUE
             ),
@@ -680,7 +697,10 @@ impl PriceCache {
                     WHEN base_price.unit_price_micros IS NULL THEN NULL
                     ELSE (base_price.unit_price_micros *
                         COALESCE(policy.multiplier_micros, 1000000) + 500000) / 1000000
-                END AS unit_price_micros
+                END AS unit_price_micros,
+                base_price.video_billing_mode,
+                base_price.video_price_tiers,
+                COALESCE(policy.multiplier_micros, 1000000) AS multiplier_micros
             FROM base_price
             LEFT JOIN policy ON TRUE
             "#,
@@ -694,6 +714,13 @@ impl PriceCache {
             AppError::BadRequest(format!("price is not configured for {provider}/{model}"))
         })?;
 
+        let multiplier_micros: i64 = row.try_get("multiplier_micros")?;
+        let video_billing_mode = row
+            .try_get::<Option<String>, _>("video_billing_mode")?
+            .map(|value| VideoBillingMode::from_strict_str(&value).map_err(AppError::BadRequest))
+            .transpose()?;
+        let video_price_tiers: Vec<VideoPriceTier> =
+            serde_json::from_value(row.try_get("video_price_tiers")?).map_err(AppError::from)?;
         let price = Price {
             input_price_micros: row.try_get("input_price_micros")?,
             output_price_micros: row.try_get("output_price_micros")?,
@@ -704,6 +731,8 @@ impl PriceCache {
             )
             .map_err(AppError::BadRequest)?,
             unit_price_micros: row.try_get("unit_price_micros")?,
+            video_billing_mode,
+            video_price_tiers: scale_video_price_tiers(video_price_tiers, multiplier_micros),
         };
         if !self.ttl.is_zero() {
             let now = Instant::now();
@@ -735,6 +764,31 @@ fn trim_price_cache_for_insert(
         };
         entries.remove(&evict);
     }
+}
+
+fn scale_video_price_tiers(
+    mut tiers: Vec<VideoPriceTier>,
+    multiplier_micros: i64,
+) -> Vec<VideoPriceTier> {
+    for tier in &mut tiers {
+        tier.input_with_video_micros =
+            scale_optional_micros(tier.input_with_video_micros, multiplier_micros);
+        tier.input_without_video_micros =
+            scale_optional_micros(tier.input_without_video_micros, multiplier_micros);
+        tier.input_with_video_unit_micros =
+            scale_optional_micros(tier.input_with_video_unit_micros, multiplier_micros);
+        tier.input_without_video_unit_micros =
+            scale_optional_micros(tier.input_without_video_unit_micros, multiplier_micros);
+    }
+    tiers
+}
+
+fn scale_optional_micros(value: Option<i64>, multiplier_micros: i64) -> Option<i64> {
+    value.map(|value| {
+        let product = (value as i128).saturating_mul(multiplier_micros as i128);
+        let rounded = (product + 500_000) / 1_000_000;
+        i64::try_from(rounded).unwrap_or(i64::MAX)
+    })
 }
 
 async fn allocate_user_key(
@@ -1021,6 +1075,8 @@ mod tests {
             cache_write_price_micros: None,
             billing_meter: BillingMeter::Token,
             unit_price_micros: None,
+            video_billing_mode: None,
+            video_price_tiers: Vec::new(),
         }
     }
 

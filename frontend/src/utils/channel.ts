@@ -89,9 +89,12 @@ export function withCustomProviderLast(providers: ChannelProviderOption[]) {
 }
 
 export function sortProvidersForDisplay(providers: ProviderRecord[]) {
-  const custom = providers.filter((provider) => isCustomProvider(provider.code))
-  const rest = providers.filter((provider) => !isCustomProvider(provider.code))
-  return [...rest, ...custom]
+  const manualProviderOrder = ['newapi', 'sub2api', 'custom']
+  const manualProviders = manualProviderOrder
+    .map((code) => providers.find((provider) => provider.code === code))
+    .filter((provider): provider is ProviderRecord => Boolean(provider))
+  const rest = providers.filter((provider) => !isManualBaseUrlProvider(provider.code))
+  return [...rest, ...manualProviders]
 }
 
 export function findProviderOption(

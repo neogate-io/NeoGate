@@ -345,6 +345,8 @@ pub async fn complete_setup_for_state(
                 cache_write_price_micros: None,
                 billing_meter: BillingMeter::Token,
                 unit_price_micros: None,
+                video_billing_mode: None,
+                video_price_tiers: Vec::new(),
                 enabled: price.enabled,
             },
         )

@@ -151,7 +151,10 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         return Ok(());
     }
     let body = read_response_bytes(state, response, task.id, task.task_type).await?;
-    let value: Value = serde_json::from_slice(&body)?;
+    let mut value: Value = serde_json::from_slice(&body)?;
+    if task.task_type == UpstreamTaskType::OpenAiVideo {
+        crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
+    }
     let (status_text, terminal) = task_status_from_value(&value, &task);
     let mut usage = parse_usage_from_bytes(&body, false);
     upstream::update_task_from_upstream_value(
@@ -162,7 +165,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             upstream_task_id: task.upstream_task_id.clone(),
             status: status_text.clone(),
             terminal,
-            metadata: value,
+            metadata: value.clone(),
             usage,
             poll_interval: state.config.task.upstream_poll_interval,
         },
@@ -184,6 +187,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             UpstreamTask {
                 status: status_text,
                 terminal,
+                upstream_metadata: value,
                 ..task
             }
         } else {

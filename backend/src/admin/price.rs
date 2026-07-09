@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    billing::{BillingMeter, PricingBasis},
+    billing::{BillingMeter, PricingBasis, VideoBillingMode, VideoPriceTier},
     config::BillingCurrency,
     error::{AppError, AppResult},
     id::DbId,
@@ -29,6 +29,8 @@ pub struct ProviderPriceRecord {
     pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_micros: Option<i64>,
+    pub video_billing_mode: Option<VideoBillingMode>,
+    pub video_price_tiers: Vec<VideoPriceTier>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -120,6 +122,9 @@ pub struct UpsertProviderPriceRequest {
     pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_micros: Option<i64>,
+    pub video_billing_mode: Option<VideoBillingMode>,
+    #[serde(default)]
+    pub video_price_tiers: Vec<VideoPriceTier>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -253,7 +258,7 @@ pub async fn list_provider_prices(state: &AppState) -> AppResult<Vec<ProviderPri
         "SELECT id, provider, model, input_price_micros,
                 output_price_micros, cache_read_price_micros,
                 cache_write_price_micros, billing_meter,
-                unit_price_micros,
+                unit_price_micros, video_billing_mode, video_price_tiers,
                 enabled, created_at, updated_at
          FROM provider_price
          ORDER BY provider ASC, model ASC",
@@ -423,8 +428,8 @@ pub async fn upsert_provider_price(
          (provider, model, input_price_micros,
           output_price_micros, cache_read_price_micros,
           cache_write_price_micros, billing_meter,
-          unit_price_micros, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          unit_price_micros, video_billing_mode, video_price_tiers, enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (provider, model)
          DO UPDATE SET
              input_price_micros = EXCLUDED.input_price_micros,
@@ -433,12 +438,14 @@ pub async fn upsert_provider_price(
              cache_write_price_micros = EXCLUDED.cache_write_price_micros,
              billing_meter = EXCLUDED.billing_meter,
              unit_price_micros = EXCLUDED.unit_price_micros,
+             video_billing_mode = EXCLUDED.video_billing_mode,
+             video_price_tiers = EXCLUDED.video_price_tiers,
              enabled = EXCLUDED.enabled,
              updated_at = now()
          RETURNING id, provider, model, input_price_micros,
                    output_price_micros, cache_read_price_micros,
                    cache_write_price_micros, billing_meter,
-                   unit_price_micros,
+                   unit_price_micros, video_billing_mode, video_price_tiers,
                    enabled, created_at, updated_at",
     )
     .bind(req.provider)
@@ -449,6 +456,8 @@ pub async fn upsert_provider_price(
     .bind(req.cache_write_price_micros)
     .bind(req.billing_meter.as_str())
     .bind(req.unit_price_micros)
+    .bind(req.video_billing_mode.map(VideoBillingMode::as_str))
+    .bind(serde_json::to_value(&req.video_price_tiers)?)
     .bind(req.enabled)
     .fetch_one(&state.db.pool)
     .await?;
@@ -726,7 +735,7 @@ fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<Pri
 
 /// 按 `cost.basis` 口径分流构造参考价微单位。
 /// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
-/// `billing_meter` 仅 token/image,不引入新值,实际计费链路不受影响。
+/// `pricing_basis` 只影响参考价展示文案;实际计费链路仍以 `billing_meter` 为准。
 fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
     let basis = parse_pricing_basis(cost.basis.as_deref());
     use PricingBasis::*;
@@ -1076,6 +1085,7 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         // 手动录入价格默认按 token 口径展示;image 计费时展示口径同步为 image。
         pricing_basis: match req.billing_meter {
             BillingMeter::Image => PricingBasis::Image,
+            BillingMeter::Video => PricingBasis::MultiTierVideo,
             BillingMeter::Token => PricingBasis::Token,
         },
     };
@@ -1094,7 +1104,78 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
             }
         }
     }
+    validate_video_price(req)?;
     Ok(())
+}
+
+fn validate_video_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
+    if req.billing_meter == BillingMeter::Video && req.video_billing_mode.is_none() {
+        return Err(AppError::BadRequest(
+            "video billing mode is required for video billing".to_string(),
+        ));
+    }
+    if req.video_billing_mode.is_none() {
+        if !req.video_price_tiers.is_empty() {
+            return Err(AppError::BadRequest(
+                "video billing mode is required for video price tiers".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+    if req.provider != "doubao" {
+        return Err(AppError::BadRequest(
+            "video billing mode is only supported for doubao provider".to_string(),
+        ));
+    }
+    if req.billing_meter != BillingMeter::Video {
+        return Err(AppError::BadRequest(
+            "video billing mode requires video billing meter".to_string(),
+        ));
+    }
+    if req.video_price_tiers.is_empty() {
+        return Err(AppError::BadRequest(
+            "video price tiers are required".to_string(),
+        ));
+    }
+    for tier in &req.video_price_tiers {
+        if tier.resolutions.iter().all(|value| value.trim().is_empty()) {
+            return Err(AppError::BadRequest(
+                "video price tier resolutions are required".to_string(),
+            ));
+        }
+        match req.video_billing_mode {
+            Some(VideoBillingMode::OfficialToken) => {
+                require_positive(tier.input_with_video_micros, "input_with_video_micros")?;
+                require_positive(
+                    tier.input_without_video_micros,
+                    "input_without_video_micros",
+                )?;
+                require_positive(
+                    tier.estimated_tokens_per_second,
+                    "estimated_tokens_per_second",
+                )?;
+            }
+            Some(VideoBillingMode::PerSecond) => {
+                require_positive(
+                    tier.input_with_video_unit_micros,
+                    "input_with_video_unit_micros",
+                )?;
+                require_positive(
+                    tier.input_without_video_unit_micros,
+                    "input_without_video_unit_micros",
+                )?;
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+fn require_positive(value: Option<i64>, field: &str) -> AppResult<()> {
+    match value {
+        Some(value) if value > 0 => Ok(()),
+        _ => Err(AppError::BadRequest(format!("{field} must be positive"))),
+    }
 }
 
 fn prices_are_non_negative(prices: PricingMicros) -> bool {
@@ -1183,6 +1264,8 @@ fn provider_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderPri
         cache_write_price_micros: row.try_get("cache_write_price_micros")?,
         billing_meter: billing_meter_from_row(row)?,
         unit_price_micros: row.try_get("unit_price_micros")?,
+        video_billing_mode: video_billing_mode_from_row(row)?,
+        video_price_tiers: serde_json::from_value(row.try_get("video_price_tiers")?)?,
         enabled: row.try_get("enabled")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -1241,6 +1324,16 @@ fn billing_meter_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, s
 fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<PricingBasis, sqlx::Error> {
     let value: String = row.try_get("pricing_basis")?;
     Ok(PricingBasis::from_str_lenient(&value))
+}
+
+fn video_billing_mode_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<VideoBillingMode>, sqlx::Error> {
+    let value: Option<String> = row.try_get("video_billing_mode")?;
+    value
+        .map(|value| VideoBillingMode::from_strict_str(&value))
+        .transpose()
+        .map_err(|err| sqlx::Error::Decode(err.into()))
 }
 
 fn pricing_policy_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingPolicyRecord> {

@@ -5,7 +5,9 @@ import type {
   PricingTemplate,
   PricingTemplateSyncResult,
   ProviderModel,
-  ProviderPrice
+  ProviderPrice,
+  VideoBillingMode,
+  VideoPriceTier
 } from '../types/admin'
 import { adminRequest } from './request'
 
@@ -51,6 +53,8 @@ export function upsertProviderPrice(input: {
   cache_write_price_micros?: number | null
   billing_meter: BillingMeter
   unit_price_micros?: number | null
+  video_billing_mode?: VideoBillingMode | null
+  video_price_tiers?: VideoPriceTier[]
   enabled: boolean
 }) {
   return adminRequest<ProviderPrice>('/api/admin/provider-prices', {

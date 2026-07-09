@@ -11,16 +11,18 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
+    billing::video::{self, VideoBillingInput, VideoBillingMetadata},
     error::{AppError, AppResult},
     provider::adapters::{adapter_for_provider, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_task_json_response, forward_openai_bound,
         forward_openai_with_content_type, forward_prepared_openai, raw_upstream_response,
         read_upstream_error_body, record_upstream_http_failure,
-        record_upstream_transport_failure_for_failover, release_empty_hold, reserve_credit,
-        respond_upstream_http_failure, response_from_bytes, rewrite_relay_body_model,
-        selector::AttemptedUpstream, should_failover_retryable_upstream_failure, BodyKind,
-        RelayBody, RelayContext, RelayRequestParams,
+        record_upstream_transport_failure_for_failover, release_empty_hold,
+        reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
+        response_from_bytes, rewrite_relay_body_model, selector::AttemptedUpstream,
+        should_failover_retryable_upstream_failure, BodyKind, RelayBody, RelayContext,
+        RelayRequestParams,
     },
     task::{
         billing as task_billing,
@@ -45,6 +47,7 @@ struct VideoRequestMeta {
     model: String,
     content_type: HeaderValue,
     request_params: RelayRequestParams,
+    video_billing_input: VideoBillingInput,
     is_json: bool,
 }
 
@@ -132,15 +135,31 @@ async fn relay_openai_video_create(
                 &auth.user_group,
             )
             .await?;
-        let hold = reserve_credit(
-            &state,
-            &auth,
-            user_key_model_credit_account.as_ref(),
-            &upstream_body,
-            state.billing.default_output_tokens(),
+        let prepared_video_billing = video::prepare_seedance_video_billing(
+            &upstream.provider,
+            &resolved.target_model,
             &price,
-        )
-        .await?;
+            &meta.video_billing_input,
+        )?;
+        let hold = if let Some(prepared) = &prepared_video_billing {
+            reserve_billable_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                prepared.estimated_micros,
+            )
+            .await?
+        } else {
+            reserve_credit(
+                &state,
+                &auth,
+                user_key_model_credit_account.as_ref(),
+                &upstream_body,
+                state.billing.default_output_tokens(),
+                &price,
+            )
+            .await?
+        };
         let mut ctx = RelayContext {
             state: Arc::clone(&state),
             auth: auth.clone(),
@@ -197,7 +216,12 @@ async fn relay_openai_video_create(
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 if status.is_success() {
                     ctx.mark_final_with_permit(&mut request_permit);
-                    return finish_video_create_success(ctx, upstream_response).await;
+                    return finish_video_create_success(
+                        ctx,
+                        upstream_response,
+                        prepared_video_billing.map(|prepared| prepared.metadata),
+                    )
+                    .await;
                 }
 
                 let error_body = read_upstream_error_body(upstream_response).await;
@@ -259,6 +283,7 @@ async fn relay_openai_video_create(
 async fn finish_video_create_success(
     ctx: RelayContext,
     upstream_response: reqwest::Response,
+    video_billing_metadata: Option<VideoBillingMetadata>,
 ) -> AppResult<Response> {
     let status = StatusCode::from_u16(upstream_response.status().as_u16())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -281,6 +306,10 @@ async fn finish_video_create_success(
             return Err(err.into());
         }
     };
+    let mut task_metadata = value.clone();
+    if let Some(metadata) = &video_billing_metadata {
+        video::attach_video_billing_metadata(&mut task_metadata, metadata);
+    }
     let video_id = match value
         .get("id")
         .or_else(|| value.get("task_id"))
@@ -312,7 +341,7 @@ async fn finish_video_create_success(
             status: status_text,
             terminal,
             hold: &ctx.hold,
-            upstream_metadata: value.clone(),
+            upstream_metadata: task_metadata,
         },
         ctx.state.config.task.upstream_poll_interval,
         ctx.state.config.task.upstream_retention,
@@ -375,6 +404,7 @@ fn json_video_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
             positive_i64_field(&value, "seconds")
                 .or_else(|| positive_i64_field(&value, "duration")),
         ),
+        video_billing_input: video::json_video_billing_input(&value),
         content_type,
         is_json: true,
     })
@@ -400,9 +430,11 @@ fn multipart_video_request_meta(
         }
     }
     let model = model.ok_or_else(|| AppError::BadRequest("model is required".to_string()))?;
+    let video_billing_input = video::video_billing_input(size.as_deref(), seconds, false);
     Ok(VideoRequestMeta {
         model,
         request_params: RelayRequestParams::video(size, seconds),
+        video_billing_input,
         content_type,
         is_json: false,
     })
@@ -416,10 +448,16 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
 }
 
 fn positive_i64_field(value: &Value, key: &str) -> Option<i64> {
-    value
-        .get(key)
-        .and_then(Value::as_i64)
-        .filter(|value| *value > 0)
+    value.get(key).and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+            })
+            .filter(|value| *value > 0)
+    })
 }
 
 pub(crate) fn video_terminal(status: &str) -> bool {

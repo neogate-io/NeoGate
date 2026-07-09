@@ -15,6 +15,9 @@ export function isProviderPriceConfigured(price?: ProviderPrice) {
   if (price.billing_meter === 'image') {
     return price.unit_price_micros !== undefined && price.unit_price_micros !== null
   }
+  if (price.billing_meter === 'video') {
+    return Boolean(price.video_billing_mode && price.video_price_tiers.length > 0)
+  }
   return price.input_price_micros >= 0 && price.output_price_micros >= 0
 }
 

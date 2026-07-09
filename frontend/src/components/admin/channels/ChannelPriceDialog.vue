@@ -1,12 +1,23 @@
 <script setup lang="ts">
 import { useLocale } from '../../../composables/useLocale'
 import { useBillingCurrency } from '../../../composables/useBillingCurrency'
-import type { BillingMeter } from '../../../types/admin'
+import type { BillingMeter, VideoBillingMode } from '../../../types/admin'
+
+export type ChannelVideoPriceTierForm = {
+  resolutionsText: string
+  inputWithVideo: number
+  inputWithoutVideo: number
+  estimatedTokensPerSecond: number
+  inputWithVideoUnit: number
+  inputWithoutVideoUnit: number
+}
 
 export type ChannelPriceForm = {
   provider: string
   model: string
   billingMeter: BillingMeter | null
+  videoBillingMode: VideoBillingMode | null
+  videoPriceTiers: ChannelVideoPriceTierForm[]
   inputPerMillion: number
   outputPerMillion: number
   cacheReadPerMillion: number
@@ -17,6 +28,7 @@ export type ChannelPriceForm = {
   hasPriceRecord: boolean
   billingMeterLocked: boolean
   canUseImageBilling: boolean
+  canUseSeedanceVideoBilling: boolean
 }
 
 const open = defineModel<boolean>('open', { required: true })
@@ -44,6 +56,31 @@ function formatCurrencyInput(value: number | string) {
 
 function parseCurrencyInput(value: string) {
   return value.replace(/^[¥$]/, '')
+}
+
+function billingMeterLabel(row: ChannelPriceForm) {
+  if (row.billingMeter === 'image') return t('billingMeterImageGeneration')
+  if (row.billingMeter === 'video') return t('billingMeterVideo')
+  return t('billingMeterToken')
+}
+
+function applyVideoBillingMode(row: ChannelPriceForm) {
+  row.billingMeter = 'video'
+}
+
+function addVideoTier(row: ChannelPriceForm) {
+  row.videoPriceTiers.push({
+    resolutionsText: '480p',
+    inputWithVideo: 0,
+    inputWithoutVideo: 0,
+    estimatedTokensPerSecond: 1_000_000,
+    inputWithVideoUnit: 0,
+    inputWithoutVideoUnit: 0
+  })
+}
+
+function removeVideoTier(row: ChannelPriceForm, index: number) {
+  row.videoPriceTiers.splice(index, 1)
 }
 </script>
 
@@ -80,11 +117,7 @@ function parseCurrencyInput(value: string) {
           </div>
           <div class="price-meter-cell">
             <span v-if="row.billingMeterLocked" class="price-meter-static">
-              {{
-                row.billingMeter === 'image'
-                  ? t('billingMeterImageGeneration')
-                  : t('billingMeterToken')
-              }}
+              {{ billingMeterLabel(row) }}
             </span>
             <el-select
               v-else
@@ -134,6 +167,9 @@ function parseCurrencyInput(value: string) {
               />
               <span class="price-unit-label">{{ t('perImage') }}</span>
             </div>
+            <span v-else-if="row.billingMeter === 'video'" class="price-muted-cell">
+              {{ t('billingBasisMultiTierVideo') }}
+            </span>
             <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>
           </div>
           <div class="price-pair-field">
@@ -171,6 +207,95 @@ function parseCurrencyInput(value: string) {
             >
               {{ referencePriceFallbackLabel(row) }}
             </el-tag>
+          </div>
+          <div v-if="row.canUseSeedanceVideoBilling" class="video-tier-panel">
+            <div class="video-tier-toolbar">
+              <el-select
+                v-model="row.videoBillingMode"
+                class="video-mode-select"
+                :placeholder="t('videoBillingMode')"
+                @change="applyVideoBillingMode(row)"
+              >
+                <el-option :label="t('videoBillingOfficialToken')" value="official_token" />
+                <el-option :label="t('videoBillingPerSecond')" value="per_second" />
+              </el-select>
+              <el-button size="small" @click="addVideoTier(row)">
+                {{ t('addVideoTier') }}
+              </el-button>
+            </div>
+
+            <div
+              v-for="(tier, tierIndex) in row.videoPriceTiers"
+              :key="tierIndex"
+              class="video-tier-row"
+            >
+              <el-input
+                v-model="tier.resolutionsText"
+                class="video-resolution-input"
+                :placeholder="t('videoTierResolutions')"
+              />
+              <template v-if="row.videoBillingMode === 'official_token'">
+                <el-input-number
+                  v-model="tier.inputWithoutVideo"
+                  class="video-tier-number"
+                  :controls="false"
+                  :formatter="formatCurrencyInput"
+                  :min="0"
+                  :parser="parseCurrencyInput"
+                  :placeholder="t('videoInputWithoutVideo')"
+                  :step="0.01"
+                />
+                <el-input-number
+                  v-model="tier.inputWithVideo"
+                  class="video-tier-number"
+                  :controls="false"
+                  :formatter="formatCurrencyInput"
+                  :min="0"
+                  :parser="parseCurrencyInput"
+                  :placeholder="t('videoInputWithVideo')"
+                  :step="0.01"
+                />
+                <el-input-number
+                  v-model="tier.estimatedTokensPerSecond"
+                  class="video-tier-token-input"
+                  :controls="false"
+                  :min="1"
+                  :step="1000"
+                  :placeholder="t('estimatedTokensPerSecond')"
+                />
+              </template>
+              <template v-else>
+                <el-input-number
+                  v-model="tier.inputWithoutVideoUnit"
+                  class="video-tier-number"
+                  :controls="false"
+                  :formatter="formatCurrencyInput"
+                  :min="0"
+                  :parser="parseCurrencyInput"
+                  :placeholder="t('videoInputWithoutVideo')"
+                  :step="0.01"
+                />
+                <el-input-number
+                  v-model="tier.inputWithVideoUnit"
+                  class="video-tier-number"
+                  :controls="false"
+                  :formatter="formatCurrencyInput"
+                  :min="0"
+                  :parser="parseCurrencyInput"
+                  :placeholder="t('videoInputWithVideo')"
+                  :step="0.01"
+                />
+              </template>
+              <el-button
+                class="video-tier-remove"
+                size="small"
+                text
+                type="danger"
+                @click="removeVideoTier(row, tierIndex)"
+              >
+                {{ t('delete') }}
+              </el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -400,6 +525,57 @@ function parseCurrencyInput(value: string) {
   white-space: nowrap;
 }
 
+.video-tier-panel {
+  border-top: 1px dashed #d9e2ef;
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  padding: 10px 8px 12px;
+}
+
+.video-tier-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.video-mode-select {
+  width: 180px;
+}
+
+.video-tier-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns:
+    minmax(110px, 0.9fr)
+    minmax(116px, 0.8fr)
+    minmax(116px, 0.8fr)
+    minmax(132px, 0.8fr)
+    auto;
+}
+
+.video-resolution-input {
+  min-width: 0;
+}
+
+.video-tier-number {
+  width: 116px;
+}
+
+.video-tier-token-input {
+  width: 132px;
+}
+
+.video-tier-number :deep(.el-input__inner),
+.video-tier-token-input :deep(.el-input__inner) {
+  text-align: right;
+}
+
+.video-tier-remove {
+  justify-self: start;
+}
+
 .dialog-footer {
   display: flex;
   gap: 12px;
@@ -488,6 +664,26 @@ function parseCurrencyInput(value: string) {
     display: grid;
     gap: 10px;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .video-tier-panel {
+    padding: 10px 0 0;
+  }
+
+  .video-tier-toolbar,
+  .video-tier-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .video-tier-toolbar {
+    display: grid;
+  }
+
+  .video-mode-select,
+  .video-tier-number,
+  .video-tier-token-input {
+    width: 100%;
   }
 }
 </style>

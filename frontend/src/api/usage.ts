@@ -1,4 +1,4 @@
-import type { CursorPage, UsageRecord } from '../types/admin'
+import type { BillingMeter, CursorPage, UsageRecord } from '../types/admin'
 import { adminFileRequest, adminRequest, userRequest } from './request'
 
 export type UsagePage = CursorPage<UsageRecord> & {
@@ -19,7 +19,7 @@ export type AdminUsageQuery = {
   user_id?: number
   user_key_id?: number
   channel_id?: number
-  billing_meter?: 'token' | 'image'
+  billing_meter?: BillingMeter
   status?: AdminUsageStatus
   cursor?: string
 }
@@ -45,7 +45,7 @@ export type UsageStatisticsQuery = {
   project_query?: string
   user_query?: string
   model?: string
-  billing_meter?: 'token' | 'image'
+  billing_meter?: BillingMeter
   page?: number
   limit?: number
   sort?: UsageStatisticsSort
@@ -122,7 +122,7 @@ export type ModelUsageStatistics = {
   channel_id?: number | null
   channel_name: string
   model: string
-  billing_meter: 'token' | 'image'
+  billing_meter: BillingMeter
   request_count: number
   success_count: number
   error_count: number
@@ -138,7 +138,7 @@ export type ModelUsageStatistics = {
 export type ModelUsageTimeSeriesPoint = UsageTimeSeriesPoint & {
   channel_name: string
   model: string
-  billing_meter: 'token' | 'image'
+  billing_meter: BillingMeter
 }
 
 export type UserModelUsageStatistics = {
@@ -148,7 +148,7 @@ export type UserModelUsageStatistics = {
   user_display_name: string
   channel_name: string
   model: string
-  billing_meter: 'token' | 'image'
+  billing_meter: BillingMeter
   request_count: number
   success_count: number
   error_count: number

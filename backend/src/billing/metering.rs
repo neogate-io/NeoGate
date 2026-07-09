@@ -48,9 +48,21 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
         BillingMeter::Image => usage.billable_units.max(0).saturating_mul(
             price
                 .unit_price_micros
-                .expect("image billing requires unit_price_micros")
+                .expect("unit billing requires unit_price_micros")
                 .max(0),
         ),
+        BillingMeter::Video => {
+            if let Some(token_usage) = usage.token_usage {
+                cost_for_usage(token_usage, price)
+            } else {
+                usage.billable_units.max(0).saturating_mul(
+                    price
+                        .unit_price_micros
+                        .expect("video unit billing requires unit_price_micros")
+                        .max(0),
+                )
+            }
+        }
     }
 }
 
@@ -232,6 +244,8 @@ mod tests {
             cache_write_price_micros: None,
             billing_meter: BillingMeter::Token,
             unit_price_micros: None,
+            video_billing_mode: None,
+            video_price_tiers: Vec::new(),
         };
 
         assert_eq!(
@@ -250,6 +264,8 @@ mod tests {
             cache_write_price_micros: None,
             billing_meter: BillingMeter::Token,
             unit_price_micros: None,
+            video_billing_mode: None,
+            video_price_tiers: Vec::new(),
         };
         let usage = TokenUsage {
             input_tokens: 77_931,

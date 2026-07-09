@@ -1,7 +1,8 @@
 use crate::{
     auth::UserAuth,
     billing::{
-        BillableUsage, BillingAccounts, CreditAccountId, DebitHold, SettleRequest, TokenUsage,
+        video, BillableUsage, BillingAccounts, CreditAccountId, DebitHold, SettleRequest,
+        TokenUsage,
     },
     error::AppResult,
     id::DbId,
@@ -104,45 +105,75 @@ async fn finalize_loaded(
     billing_context: AsyncTaskBillingContext,
     usage: Option<TokenUsage>,
 ) -> AppResult<()> {
-    let usage = if task.task_type == UpstreamTaskType::OpenAiVideo && task.status != "completed" {
+    let video_success = task.task_type == UpstreamTaskType::OpenAiVideo
+        && openai_video_success_status(&task.status);
+    let video_billing_metadata = (task.task_type == UpstreamTaskType::OpenAiVideo)
+        .then(|| video::video_billing_metadata(&task.upstream_metadata))
+        .flatten();
+    let video_settlement = video_billing_metadata
+        .as_ref()
+        .and_then(|metadata| {
+            video_success
+                .then(|| video::settlement_usage_and_price(metadata, &task.upstream_metadata))
+        })
+        .flatten();
+    if video_billing_metadata.is_some() && video_success && video_settlement.is_none() {
+        tracing::warn!(
+            task_id = task.id,
+            upstream_task_id = %task.upstream_task_id,
+            status = %task.status,
+            "seedance official token video task finished without usage.total_tokens; releasing hold"
+        );
+    }
+    let usage = if task.task_type == UpstreamTaskType::OpenAiVideo && !video_success {
         None
     } else {
         usage
     };
-    let settle_without_usage =
-        task.task_type == UpstreamTaskType::OpenAiVideo && task.status == "completed";
-    let target = if usage.is_some() || settle_without_usage {
-        "settled"
-    } else {
-        "released"
-    };
+    let settle_without_usage = task.task_type == UpstreamTaskType::OpenAiVideo
+        && video_billing_metadata.is_none()
+        && video_success
+        && usage.is_none();
+    let should_settle = video_settlement.is_some() || usage.is_some() || settle_without_usage;
+    let target = if should_settle { "settled" } else { "released" };
     let Some(hold) = upstream::mark_billing_status(&state.db.pool, task.id, "held", target).await?
     else {
         return Ok(());
     };
-    if usage.is_some() || settle_without_usage {
+    if should_settle {
         let Some(model) = task.model.as_deref() else {
             fail_settled_task_billing(state, task.id, hold, "async task missing model").await?;
             return Ok(());
         };
         let upstream_model = task.upstream_model.as_deref().unwrap_or(model);
-        let price = match state
-            .billing
-            .price_for(
-                &state.db.pool,
-                &task.provider,
-                upstream_model,
-                &billing_context.user_group,
-            )
-            .await
-        {
-            Ok(price) => price,
-            Err(err) => {
-                fail_settled_task_billing(state, task.id, hold, "async task price lookup error")
+        let (billable_usage, price) = if let Some((billable_usage, price)) = video_settlement {
+            (Some(billable_usage), price)
+        } else {
+            let price = match state
+                .billing
+                .price_for(
+                    &state.db.pool,
+                    &task.provider,
+                    upstream_model,
+                    &billing_context.user_group,
+                )
+                .await
+            {
+                Ok(price) => price,
+                Err(err) => {
+                    fail_settled_task_billing(
+                        state,
+                        task.id,
+                        hold,
+                        "async task price lookup error",
+                    )
                     .await?;
-                return Err(err);
-            }
+                    return Err(err);
+                }
+            };
+            (usage.map(BillableUsage::token), price)
         };
+        let token_usage = billable_usage.and_then(|usage| usage.token_usage);
         let billing = match state
             .billing
             .settle(
@@ -159,7 +190,7 @@ async fn finalize_loaded(
                         project_credit_account: &billing_context.project_credit_account,
                     },
                     hold: hold.clone(),
-                    usage: usage.map(BillableUsage::token),
+                    usage: billable_usage,
                     price: &price,
                 },
             )
@@ -192,7 +223,7 @@ async fn finalize_loaded(
             first_response_ms: None,
             output_tokens_per_second: None,
             error_summary: None,
-            token_usage: usage,
+            token_usage,
             billing_meter: billing.billing_meter,
             billable_units: billing.billable_units,
             billing: Some(billing),
@@ -214,8 +245,26 @@ async fn fail_settled_task_billing(
     Ok(())
 }
 
+fn openai_video_success_status(status: &str) -> bool {
+    matches!(status, "completed" | "succeeded" | "success")
+}
+
 async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
     if let Err(err) = state.billing.release_hold(&state.db.pool, hold).await {
         tracing::warn!("failed to release {context} hold: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openai_video_success_status;
+
+    #[test]
+    fn seedance_success_statuses_are_billable_video_terminals() {
+        assert!(openai_video_success_status("completed"));
+        assert!(openai_video_success_status("succeeded"));
+        assert!(openai_video_success_status("success"));
+        assert!(!openai_video_success_status("failed"));
+        assert!(!openai_video_success_status("cancelled"));
     }
 }

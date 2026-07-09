@@ -46,7 +46,11 @@ import {
   readModelFetchError,
   readSmtpTestError
 } from '../../utils/errors'
-import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
+import {
+  isManualBaseUrlProvider,
+  sortProvidersForDisplay,
+  splitCommaList
+} from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
@@ -364,8 +368,8 @@ const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
 const providerOptions = computed(() => sortProvidersForDisplay(providers.value))
-const isManualBaseUrlProviderSelected = computed(
-  () => selectedProvider.value?.code === 'custom' || selectedProvider.value?.code === 'newapi'
+const isManualBaseUrlProviderSelected = computed(() =>
+  Boolean(selectedProvider.value && isManualBaseUrlProvider(selectedProvider.value.code))
 )
 const bootstrapMissingDatabase = computed(() => !status.value?.database_configured)
 const clusterBlocked = computed(
@@ -982,7 +986,7 @@ function isBusinessStepDone(step: BusinessSetupStep) {
 function applyProviderDefaults() {
   const provider = selectedProvider.value
   if (!provider) return
-  if (provider.code === 'custom' || provider.code === 'newapi') {
+  if (isManualBaseUrlProvider(provider.code)) {
     setupForm.channelName = ''
     setupForm.baseUrl = ''
     setupForm.openAiBaseUrl = ''
@@ -1006,7 +1010,7 @@ function applyProviderDefaults() {
 function setupEndpointsForSubmit(models: string[]) {
   const provider = selectedProvider.value
   const endpointModels = [...models]
-  if (!provider || provider.code === 'custom' || provider.code === 'newapi') {
+  if (!provider || isManualBaseUrlProvider(provider.code)) {
     const endpoints: SetupEndpointPayload[] = []
     const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
     const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()

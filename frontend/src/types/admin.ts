@@ -3,7 +3,16 @@ export type EndpointProtocol = 'openai' | 'openai_oauth' | 'anthropic'
 export type UserStatus = 'enabled' | 'disabled' | 'pending'
 export type UserKeyStatus = 'enabled' | 'disabled'
 export type ProjectStatus = 'enabled' | 'disabled'
-export type BillingMeter = 'token' | 'image'
+export type BillingMeter = 'token' | 'image' | 'video'
+export type VideoBillingMode = 'official_token' | 'per_second'
+export type VideoPriceTier = {
+  resolutions: string[]
+  input_with_video_micros?: number | null
+  input_without_video_micros?: number | null
+  estimated_tokens_per_second?: number | null
+  input_with_video_unit_micros?: number | null
+  input_without_video_unit_micros?: number | null
+}
 export type PricingBasis =
   | 'token'
   | 'image'
@@ -433,6 +442,8 @@ export type ProviderPrice = {
   cache_write_price_micros?: number | null
   billing_meter: BillingMeter
   unit_price_micros?: number | null
+  video_billing_mode?: VideoBillingMode | null
+  video_price_tiers: VideoPriceTier[]
   enabled: boolean
   created_at: string
   updated_at: string

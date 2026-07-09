@@ -8,6 +8,7 @@ use crate::id::DbId;
 pub enum BillingMeter {
     Token,
     Image,
+    Video,
 }
 
 impl BillingMeter {
@@ -15,6 +16,7 @@ impl BillingMeter {
         match self {
             Self::Token => "token",
             Self::Image => "image",
+            Self::Video => "video",
         }
     }
 
@@ -22,6 +24,7 @@ impl BillingMeter {
         match value {
             "token" => Ok(Self::Token),
             "image" => Ok(Self::Image),
+            "video" => Ok(Self::Video),
             _ => Err(format!("invalid billing meter: {value}")),
         }
     }
@@ -131,6 +134,43 @@ pub struct Price {
     pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_micros: Option<i64>,
+    pub video_billing_mode: Option<VideoBillingMode>,
+    pub video_price_tiers: Vec<VideoPriceTier>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoBillingMode {
+    OfficialToken,
+    PerSecond,
+}
+
+impl VideoBillingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OfficialToken => "official_token",
+            Self::PerSecond => "per_second",
+        }
+    }
+
+    pub fn from_strict_str(value: &str) -> Result<Self, String> {
+        match value {
+            "official_token" => Ok(Self::OfficialToken),
+            "per_second" => Ok(Self::PerSecond),
+            _ => Err(format!("invalid video billing mode: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoPriceTier {
+    #[serde(default)]
+    pub resolutions: Vec<String>,
+    pub input_with_video_micros: Option<i64>,
+    pub input_without_video_micros: Option<i64>,
+    pub estimated_tokens_per_second: Option<i64>,
+    pub input_with_video_unit_micros: Option<i64>,
+    pub input_without_video_unit_micros: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -173,6 +213,22 @@ impl BillableUsage {
             meter: BillingMeter::Image,
             token_usage: None,
             billable_units: image_count.max(0),
+        }
+    }
+
+    pub fn video_tokens(usage: TokenUsage) -> Self {
+        Self {
+            meter: BillingMeter::Video,
+            token_usage: Some(usage),
+            billable_units: usage.total_tokens().max(0),
+        }
+    }
+
+    pub fn video_seconds(seconds: i64) -> Self {
+        Self {
+            meter: BillingMeter::Video,
+            token_usage: None,
+            billable_units: seconds.max(0),
         }
     }
 }

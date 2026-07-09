@@ -15,18 +15,34 @@ export type AdminUsageQuery = {
   end?: string
   query?: string
   model?: string
+  project_id?: number
+  user_id?: number
+  user_key_id?: number
+  channel_id?: number
+  billing_meter?: 'token' | 'image'
   status?: AdminUsageStatus
   cursor?: string
 }
 
 export type UsageStatisticsSort = 'cost_desc' | 'tokens_desc' | 'requests_desc'
-export type UsageStatisticsExportScope = 'users' | 'user_models' | 'daily' | 'models'
-export type UsageStatisticsGranularity = 'auto' | 'hour' | 'day'
+export type UsageStatisticsExportScope =
+  | 'projects'
+  | 'project_members'
+  | 'keys'
+  | 'users'
+  | 'user_models'
+  | 'daily'
+  | 'models'
+export type UsageStatisticsGranularity = 'auto' | 'hour' | 'day' | 'month'
 
 export type UsageStatisticsQuery = {
   start?: string
   end?: string
   user_id?: number
+  project_id?: number
+  user_key_id?: number
+  channel_id?: number
+  project_query?: string
   user_query?: string
   model?: string
   billing_meter?: 'token' | 'image'
@@ -35,6 +51,7 @@ export type UsageStatisticsQuery = {
   sort?: UsageStatisticsSort
   granularity?: UsageStatisticsGranularity
   series_limit?: number
+  group_by?: 'project' | 'user'
 }
 
 export type UsageStatisticsAggregate = {
@@ -102,6 +119,7 @@ export type UserUsageStatistics = {
 }
 
 export type ModelUsageStatistics = {
+  channel_id?: number | null
   channel_name: string
   model: string
   billing_meter: 'token' | 'image'
@@ -142,6 +160,75 @@ export type UserModelUsageStatistics = {
   avg_latency_ms?: number | null
 }
 
+export type UsageCostBreakdown = {
+  chat_cost_micros: number
+  image_cost_micros: number
+  coding_cost_micros: number
+  other_cost_micros: number
+}
+
+export type ProjectUsageStatistics = {
+  project_id?: number | null
+  project_name: string
+  owner_user_id?: number | null
+  member_count: number
+  key_count: number
+  request_count: number
+  success_count: number
+  error_count: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  billable_units: number
+  cost_micros: number
+  cost_breakdown: UsageCostBreakdown
+  avg_latency_ms?: number | null
+}
+
+export type ProjectMemberUsageStatistics = {
+  project_id?: number | null
+  project_name: string
+  user_id?: number | null
+  user_email?: string | null
+  user_username?: string | null
+  user_display_name: string
+  key_count: number
+  model_count: number
+  request_count: number
+  success_count: number
+  error_count: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  billable_units: number
+  cost_micros: number
+  cost_breakdown: UsageCostBreakdown
+  avg_latency_ms?: number | null
+}
+
+export type KeyUsageStatistics = {
+  user_key_id?: number | null
+  user_key_name: string
+  key_prefix?: string | null
+  project_id?: number | null
+  project_name: string
+  user_id?: number | null
+  user_email?: string | null
+  user_username?: string | null
+  user_display_name: string
+  model_count: number
+  request_count: number
+  success_count: number
+  error_count: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  billable_units: number
+  cost_micros: number
+  cost_breakdown: UsageCostBreakdown
+  avg_latency_ms?: number | null
+}
+
 export type UsageStatisticsSummary = {
   start: string
   end: string
@@ -154,7 +241,7 @@ export type UsageStatisticsSummary = {
 export type UsageStatisticsTimeSeries = {
   start: string
   end: string
-  granularity: 'hour' | 'day'
+  granularity: 'hour' | 'day' | 'month'
   points: UsageTimeSeriesPoint[]
   model_points: ModelUsageTimeSeriesPoint[]
 }
@@ -185,6 +272,11 @@ export function getAdminUsage(query: AdminUsageQuery = {}) {
   if (query.end) params.set('end', query.end)
   if (query.query) params.set('query', query.query)
   if (query.model) params.set('model', query.model)
+  if (query.project_id != null) params.set('project_id', String(query.project_id))
+  if (query.user_id != null) params.set('user_id', String(query.user_id))
+  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
+  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
+  if (query.billing_meter) params.set('billing_meter', query.billing_meter)
   if (query.status && query.status !== 'all') params.set('status', query.status)
   if (query.cursor) params.set('cursor', query.cursor)
   return adminRequest<UsagePage>(`/api/admin/usage?${params}`)
@@ -211,6 +303,24 @@ export function getAdminUsageStatisticsUserModels(query: UsageStatisticsQuery = 
 export function getAdminUsageStatisticsModels(query: UsageStatisticsQuery = {}) {
   return adminRequest<UsageStatisticsPage<ModelUsageStatistics>>(
     `/api/admin/usage/statistics/models?${usageStatisticsParams(query)}`
+  )
+}
+
+export function getAdminUsageStatisticsProjects(query: UsageStatisticsQuery = {}) {
+  return adminRequest<UsageStatisticsPage<ProjectUsageStatistics>>(
+    `/api/admin/usage/statistics/projects?${usageStatisticsParams(query)}`
+  )
+}
+
+export function getAdminUsageStatisticsProjectMembers(query: UsageStatisticsQuery = {}) {
+  return adminRequest<UsageStatisticsPage<ProjectMemberUsageStatistics>>(
+    `/api/admin/usage/statistics/projects?${usageStatisticsParams({ ...query, group_by: 'user' })}`
+  )
+}
+
+export function getAdminUsageStatisticsKeys(query: UsageStatisticsQuery = {}) {
+  return adminRequest<UsageStatisticsPage<KeyUsageStatistics>>(
+    `/api/admin/usage/statistics/keys?${usageStatisticsParams(query)}`
   )
 }
 
@@ -257,6 +367,11 @@ function adminUsageParams(query: AdminUsageQuery) {
   if (query.end) params.set('end', query.end)
   if (query.query) params.set('query', query.query)
   if (query.model) params.set('model', query.model)
+  if (query.project_id != null) params.set('project_id', String(query.project_id))
+  if (query.user_id != null) params.set('user_id', String(query.user_id))
+  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
+  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
+  if (query.billing_meter) params.set('billing_meter', query.billing_meter)
   if (query.status && query.status !== 'all') params.set('status', query.status)
   return params
 }
@@ -266,6 +381,10 @@ function usageStatisticsParams(query: UsageStatisticsQuery) {
   if (query.start) params.set('start', query.start)
   if (query.end) params.set('end', query.end)
   if (query.user_id != null) params.set('user_id', String(query.user_id))
+  if (query.project_id != null) params.set('project_id', String(query.project_id))
+  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
+  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
+  if (query.project_query) params.set('project_query', query.project_query)
   if (query.user_query) params.set('user_query', query.user_query)
   if (query.model) params.set('model', query.model)
   if (query.billing_meter) params.set('billing_meter', query.billing_meter)
@@ -274,5 +393,6 @@ function usageStatisticsParams(query: UsageStatisticsQuery) {
   if (query.sort) params.set('sort', query.sort)
   if (query.granularity) params.set('granularity', query.granularity)
   if (query.series_limit) params.set('series_limit', String(query.series_limit))
+  if (query.group_by) params.set('group_by', query.group_by)
   return params
 }

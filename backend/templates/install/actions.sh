@@ -183,6 +183,7 @@ load_existing_credentials() {
   [[ -n "$LOADED_CODEX_KEY" || -n "$LOADED_CODEX_MODEL" ]] && codex_present=1
   [[ -n "$LOADED_CLAUDE_KEY" || -n "$LOADED_CLAUDE_MODEL" ]] && claude_present=1
   [[ "$codex_present" == "1" || "$claude_present" == "1" ]] && HAS_EXISTING_CONFIG=1
+  return 0
 }
 
 loaded_api_key_for_selected_client() {
@@ -477,23 +478,61 @@ select_model() {
   success "$selected_model"
 }
 
-install_node_nodesource() {
-  local kind="$1" setup_url setup_script
-  if [[ "$kind" == "deb" ]]; then
-    setup_url="https://deb.nodesource.com/setup_lts.x"
-  else
-    setup_url="https://rpm.nodesource.com/setup_lts.x"
-  fi
-  setup_script="$TMP_DIR/nodesource-setup.sh"
-  run curl -fsSL "$setup_url" -o "$setup_script" || die "$(message connect_failed "$setup_url")"
-  run_as_root bash "$setup_script"
-  if [[ "$kind" == "deb" ]]; then
-    run_as_root apt-get install -y nodejs
-  elif have_cmd dnf; then
-    run_as_root dnf install -y nodejs
-  else
-    run_as_root yum install -y nodejs
-  fi
+NODE_MIRROR="https://registry.npmmirror.com/-/binary/node"
+NPM_REGISTRY="https://registry.npmmirror.com"
+
+node_arch_suffix() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) die "$(message unsupported_arch "$arch")" ;;
+  esac
+  case "$os" in
+    linux) printf 'linux-%s' "$arch" ;;
+    darwin) printf 'darwin-%s' "$arch" ;;
+    *) die "$(message unsupported_os "$os")" ;;
+  esac
+}
+
+node_lts_version() {
+  local index_file version
+  index_file="$TMP_DIR/node-index.json"
+  run curl -fsSL "$NODE_MIRROR/index.json" -o "$index_file" || die "$(message connect_failed "$NODE_MIRROR")"
+  version="$(node - "$index_file" <<'NODE'
+const fs = require('fs');
+const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const lts = data.find(v => v.lts);
+if (!lts) throw new Error('no LTS found');
+process.stdout.write(lts.version);
+NODE
+)"
+  [[ -n "$version" ]] || die "$(message node_lts_failed)"
+  printf '%s' "$version"
+}
+
+install_node_tarball() {
+  local version suffix url tarball target_dir
+  version="$(node_lts_version)"
+  suffix="$(node_arch_suffix)"
+  url="$NODE_MIRROR/$version/node-$version-$suffix.tar.gz"
+  tarball="$TMP_DIR/node.tar.gz"
+  target_dir="${NEOGATE_NODE_HOME:-$HOME/.neogate-node}"
+
+  log "$(message node_downloading "$version")"
+  run curl -fsSL "$url" -o "$tarball" || die "$(message connect_failed "$url")"
+  rm -rf "$target_dir"
+  mkdir -p "$target_dir"
+  run tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+
+  local bin_dir="$target_dir/bin"
+  case ":$PATH:" in
+    *:"$bin_dir":*) ;;
+    *) export PATH="$bin_dir:$PATH" ;;
+  esac
+  export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
 }
 
 install_node() {
@@ -506,28 +545,7 @@ install_node() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message node_missing_disabled)"
   confirm_default_yes "$(message node_missing_prompt)" || die "$(message node_required)"
 
-  local os
-  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  case "$os" in
-    darwin)
-      have_cmd brew || die "$(message homebrew_required)"
-      run brew install node
-      ;;
-    linux)
-      if have_cmd apt-get; then
-        install_node_nodesource "deb"
-      elif have_cmd dnf || have_cmd yum; then
-        install_node_nodesource "rpm"
-      elif have_cmd pacman; then
-        run_as_root pacman -Sy --noconfirm nodejs npm
-      else
-        die "$(message unsupported_pkg)"
-      fi
-      ;;
-    *)
-      die "$(message unsupported_os "$os")"
-      ;;
-  esac
+  install_node_tarball
 
   have_cmd node || die "$(message node_path_missing)"
   have_cmd npm || die "$(message npm_path_missing)"
@@ -544,12 +562,12 @@ install_codex_cli() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message codex_missing_disabled)"
   confirm_default_yes "$(message codex_missing_prompt)" || die "$(message codex_required)"
 
-  if run npm install -g @openai/codex; then
+  if run npm install -g --registry "$NPM_REGISTRY" @openai/codex; then
     :
   else
     warn "$(message npm_global_failed)"
     confirm_default_yes "$(message codex_sudo_prompt)" || die "$(message codex_install_failed)"
-    run_as_root npm install -g @openai/codex
+    run_as_root npm install -g --registry "$NPM_REGISTRY" @openai/codex
   fi
 
   have_cmd codex || die "$(message codex_path_missing)"
@@ -565,12 +583,12 @@ install_claude_code() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message claude_missing_disabled)"
   confirm_default_yes "$(message claude_missing_prompt)" || die "$(message claude_required)"
 
-  if run npm install -g @anthropic-ai/claude-code; then
+  if run npm install -g --registry "$NPM_REGISTRY" @anthropic-ai/claude-code; then
     :
   else
     warn "$(message npm_global_failed)"
     confirm_default_yes "$(message claude_sudo_prompt)" || die "$(message claude_install_failed)"
-    run_as_root npm install -g @anthropic-ai/claude-code
+    run_as_root npm install -g --registry "$NPM_REGISTRY" @anthropic-ai/claude-code
   fi
 
   have_cmd claude || die "$(message claude_path_missing)"
@@ -586,7 +604,7 @@ toml_escape() {
 
 write_codex_config() {
   local codex_home config_file timestamp backup_file clean_file next_file
-  local escaped_base_url escaped_model escaped_provider_name
+  local escaped_base_url escaped_model escaped_provider_id escaped_provider_name
 
   codex_home="${CODEX_HOME:-$HOME/.codex}"
   config_file="$codex_home/config.toml"
@@ -596,6 +614,7 @@ write_codex_config() {
 
   escaped_base_url="$(toml_escape "$BASE_URL")"
   escaped_model="$(toml_escape "$CODEX_MODEL")"
+  escaped_provider_id="$(toml_escape "$PROVIDER_ID")"
   escaped_provider_name="$(toml_escape "$PROVIDER_NAME")"
 
   if [[ "$DRY_RUN" == "0" ]]; then
@@ -610,7 +629,7 @@ write_codex_config() {
     run cp -p "$config_file" "$backup_file"
     awk '
       /^\[/ {
-        if ($0 == "[model_providers.neogate]" || $0 == "[model_providers.\"neogate\"]") {
+        if ($0 ~ /^[[:space:]]*\[[[:space:]]*model_providers[[:space:]]*\.[[:space:]]*"?neogate"?[[:space:]]*\]?[[:space:]]*$/) {
           skip = 1
           next
         }
@@ -627,10 +646,11 @@ write_codex_config() {
 
   {
     printf 'model = "%s"\n' "$escaped_model"
-    printf 'model_provider = "%s"\n' "$PROVIDER_ID"
+    printf 'model_provider = "%s"\n' "$escaped_provider_id"
+    printf 'openai_base_url = "%s"\n' "$escaped_base_url"
     sed '/./,$!d' "$clean_file"
     printf '\n'
-    printf '[model_providers.%s]\n' "$PROVIDER_ID"
+    printf '[model_providers."%s"]\n' "$escaped_provider_id"
     printf 'name = "%s"\n' "$escaped_provider_name"
     printf 'base_url = "%s"\n' "$escaped_base_url"
     printf 'wire_api = "responses"\n'

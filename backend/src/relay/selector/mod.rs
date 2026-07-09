@@ -42,6 +42,7 @@ type WildcardRouteIndex = HashMap<UpstreamProtocol, Vec<usize>>;
 pub(crate) struct SelectionConstraints<'a> {
     pub(crate) affinity_key: Option<&'a ChannelAffinityKey>,
     pub(crate) attempted: &'a [AttemptedUpstream],
+    pub(crate) excluded_endpoint_ids: &'a [DbId],
 }
 
 struct SelectionScope<'a> {
@@ -52,6 +53,7 @@ struct SelectionScope<'a> {
     now: DateTime<Utc>,
     model_blocks: ModelBlockLookup<'a>,
     attempted: &'a [AttemptedUpstream],
+    excluded_endpoint_ids: &'a [DbId],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -260,6 +262,27 @@ impl Selector {
             .mark_unsupported(endpoint_id, model, unsupported_until);
     }
 
+    pub(crate) async fn responses_unsupported_endpoint_ids(
+        &self,
+        pool: &PgPool,
+        protocols: &[UpstreamProtocol],
+        model: &str,
+    ) -> AppResult<Vec<DbId>> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        Ok(snapshot
+            .channels
+            .iter()
+            .filter(|channel| protocols.contains(&channel.protocol))
+            .filter(|channel| choose::channel_matches_model(channel, model))
+            .filter(|channel| {
+                self.responses_support
+                    .is_unsupported(channel.endpoint_id, model, now)
+            })
+            .map(|channel| channel.endpoint_id)
+            .collect())
+    }
+
     pub async fn invalidate_refreshed_credential(&self, credential_id: DbId) {
         self.credential_runtime_secrets.remove(credential_id);
         let mut cache = self.routing_cache.write().await;
@@ -284,6 +307,7 @@ impl Selector {
             now: Utc::now(),
             model_blocks: ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks),
             attempted: &[],
+            excluded_endpoint_ids: &[],
         };
         self.select_from_snapshot(&scope)
     }
@@ -326,6 +350,7 @@ impl Selector {
             now: Utc::now(),
             model_blocks: ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks),
             attempted: constraints.attempted,
+            excluded_endpoint_ids: constraints.excluded_endpoint_ids,
         };
         if let Some(affinity_key) = constraints.affinity_key {
             if let Some(target) = affinity_cache.get(affinity_key) {
@@ -370,6 +395,7 @@ impl Selector {
                 now,
                 model_blocks: ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks),
                 attempted: constraints.attempted,
+                excluded_endpoint_ids: constraints.excluded_endpoint_ids,
             };
 
             if let Some(affinity_key) = constraints.affinity_key {
@@ -413,6 +439,7 @@ impl Selector {
         model: &str,
         channel_id: DbId,
         attempted: &[AttemptedUpstream],
+        excluded_endpoint_ids: &[DbId],
     ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
@@ -433,6 +460,7 @@ impl Selector {
                     now,
                     &model_blocks,
                     attempted,
+                    Some(excluded_endpoint_ids),
                 ) {
                     continue;
                 }
@@ -478,6 +506,7 @@ impl Selector {
             scope.now,
             &scope.model_blocks,
             scope.attempted,
+            Some(scope.excluded_endpoint_ids),
         ) {
             return Ok(None);
         }
@@ -505,6 +534,7 @@ impl Selector {
             scope.now,
             &scope.model_blocks,
             scope.attempted,
+            Some(scope.excluded_endpoint_ids),
         )
         .ok_or_else(|| {
             AppError::UpstreamUnavailable(unavailable_channel_message(
@@ -707,9 +737,15 @@ impl Selector {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
         let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
-        let Some(channel) =
-            choose_channel_for_request(&snapshot, protocol, model, now, &model_blocks, attempted)
-        else {
+        let Some(channel) = choose_channel_for_request(
+            &snapshot,
+            protocol,
+            model,
+            now,
+            &model_blocks,
+            attempted,
+            None,
+        ) else {
             return Ok(false);
         };
         let keys = channel_keys(&snapshot, channel);

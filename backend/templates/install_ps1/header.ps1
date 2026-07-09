@@ -84,8 +84,13 @@ $MsgEn = @{
   homebrew_required = 'Homebrew is required to install Node.js automatically on macOS.'
   unsupported_pkg = 'Unsupported Linux package manager. Install Node.js and npm, then re-run this script.'
   unsupported_os = 'Unsupported operating system: {0}'
+  unsupported_arch = 'Unsupported CPU architecture: {0}'
+  node_lts_failed = 'Failed to determine Node.js LTS version'
+  node_downloading = 'Downloading Node.js {0} from China mirror...'
   node_path_missing = 'Node.js installation did not put node on PATH. Open a new terminal, then re-run this script.'
   npm_path_missing = 'Node.js installation did not put npm on PATH. Open a new terminal, then re-run this script.'
+  node_install_retrying = 'Node.js/npm is still not usable; trying to repair the existing Node.js installation.'
+  node_install_failed = 'Node.js/npm is still not usable. Repair or reinstall Node.js LTS, open a new terminal, then re-run this script.'
   node_installed = 'Node.js {0}'
   codex_found = 'Codex CLI {0}'
   codex_missing_disabled = 'Codex CLI is missing and installation is disabled.'
@@ -204,8 +209,13 @@ $MsgZh = @{
   homebrew_required = 'macOS 自动安装 Node.js 需要 Homebrew。'
   unsupported_pkg = '不支持当前 Linux 包管理器。请安装 Node.js 和 npm 后重新运行此脚本。'
   unsupported_os = '不支持的操作系统：{0}'
+  unsupported_arch = '不支持的 CPU 架构：{0}'
+  node_lts_failed = '未能获取 Node.js LTS 版本'
+  node_downloading = '正在从国内镜像下载 Node.js {0}...'
   node_path_missing = 'Node.js 安装后未在 PATH 中找到 node。请打开新终端后重新运行此脚本。'
   npm_path_missing = 'Node.js 安装后未在 PATH 中找到 npm。请打开新终端后重新运行此脚本。'
+  node_install_retrying = 'Node.js/npm 仍不可用，正在尝试修复现有 Node.js 安装。'
+  node_install_failed = 'Node.js/npm 仍不可用。请修复或重新安装 Node.js LTS，打开新终端后重新运行此脚本。'
   node_installed = 'Node.js {0}'
   codex_found = 'Codex CLI {0}'
   codex_missing_disabled = '缺少 Codex CLI，且安装已禁用。'
@@ -293,12 +303,16 @@ $MsgZh = @{
   installer_title_win = 'Windows 安装器'
 }
 
-function Get-Message([string]$Key, $Args = @()) {
+function Get-Message {
+  param(
+    [Parameter(Mandatory=$true, Position=0)][string]$Key,
+    [Parameter(ValueFromRemainingArguments=$true)][object[]]$MessageArgs
+  )
   $table = if ($InstallLang -eq 'zh') { $MsgZh } else { $MsgEn }
   $fmt = $table[$Key]
   if (-not $fmt) { return $Key }
-  if ($Args -and $Args.Count -gt 0) {
-    return ($fmt -f $Args)
+  if ($MessageArgs -and $MessageArgs.Count -gt 0) {
+    return ($fmt -f $MessageArgs)
   }
   return $fmt
 }

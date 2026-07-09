@@ -692,8 +692,31 @@ async fn select_upstream_excluding(
         "/v1/responses" => &OPENAI_RESPONSES_PROTOCOLS[..],
         _ => &OPENAI_PROTOCOLS[..],
     };
+    let excluded_endpoint_ids = if path == "/v1/responses" {
+        state
+            .selector
+            .responses_unsupported_endpoint_ids(&state.db.pool, protocols, model)
+            .await?
+    } else {
+        Vec::new()
+    };
 
     if let Some(channel_id) = target_channel_id {
+        let selected = state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                protocols,
+                model,
+                channel_id,
+                attempted,
+                &excluded_endpoint_ids,
+            )
+            .await;
+        if selected.is_ok() || excluded_endpoint_ids.is_empty() {
+            return selected;
+        }
         return state
             .selector
             .select_bound_channel_protocols(
@@ -703,10 +726,29 @@ async fn select_upstream_excluding(
                 model,
                 channel_id,
                 attempted,
+                &[],
             )
             .await;
     }
 
+    let selected = state
+        .selector
+        .select_with_affinity_excluding_protocols(
+            &state.db.pool,
+            &state.secrets,
+            &state.channel_affinity,
+            protocols,
+            model,
+            SelectionConstraints {
+                affinity_key,
+                attempted,
+                excluded_endpoint_ids: &excluded_endpoint_ids,
+            },
+        )
+        .await;
+    if selected.is_ok() || excluded_endpoint_ids.is_empty() {
+        return selected;
+    }
     state
         .selector
         .select_with_affinity_excluding_protocols(
@@ -718,6 +760,7 @@ async fn select_upstream_excluding(
             SelectionConstraints {
                 affinity_key,
                 attempted,
+                excluded_endpoint_ids: &[],
             },
         )
         .await

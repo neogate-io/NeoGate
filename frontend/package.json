@@ -1,7 +1,7 @@
 {
   "name": "neogate-admin",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.25.0",
   "type": "module",

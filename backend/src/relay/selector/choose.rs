@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use rand::RngExt;
 use std::sync::atomic::Ordering;
 
-use crate::admin::channel::KeySelectionMode;
+use crate::{admin::channel::KeySelectionMode, id::DbId};
 
 use super::{
     AttemptedUpstream, ChannelCandidate, KeyCandidate, ModelBlockKey, ModelBlockLookup,
@@ -63,6 +63,7 @@ pub(super) fn choose_channel_for_request<'a>(
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
     attempted: &[AttemptedUpstream],
+    excluded_endpoint_ids: Option<&[DbId]>,
 ) -> Option<&'a ChannelCandidate> {
     let indexed = cache
         .route_index
@@ -86,6 +87,7 @@ pub(super) fn choose_channel_for_request<'a>(
             now,
             model_blocks,
             attempted,
+            excluded_endpoint_ids,
         ) {
             continue;
         }
@@ -122,9 +124,11 @@ pub(super) fn channel_is_available(
     now: DateTime<Utc>,
     model_blocks: &ModelBlockLookup<'_>,
     attempted: &[AttemptedUpstream],
+    excluded_endpoint_ids: Option<&[DbId]>,
 ) -> bool {
     channel.protocol == protocol
         && channel_matches_model(channel, model)
+        && !excluded_endpoint_ids.is_some_and(|excluded| excluded.contains(&channel.endpoint_id))
         && ready_at(channel.cooldown_until, now)
         && channel_keys(cache, channel).iter().any(|key| {
             key_is_available(channel, key, model, now, model_blocks)

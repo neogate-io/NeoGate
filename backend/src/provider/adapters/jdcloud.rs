@@ -36,9 +36,6 @@ impl ProviderAdapter for JdcloudAdapter {
         streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest> {
         let mut extra_headers = HeaderMap::new();
-        if streamed {
-            extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
-        }
         let (route, prepared_body, response_mode) = if route == RelayRoute::Responses {
             // JDCloud documents /responses as a non-standard endpoint with only
             // model/input/stream support, not as full OpenAI Responses compatibility.
@@ -60,6 +57,21 @@ impl ProviderAdapter for JdcloudAdapter {
                 AdapterResponseMode::Passthrough,
             )
         };
+        let body_streamed = stream_from_body(&prepared_body)?;
+        if body_streamed {
+            extra_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+        }
+        if streamed != body_streamed {
+            tracing::warn!(
+                provider = upstream.provider.as_str(),
+                channel_id = upstream.channel_id,
+                channel_name = upstream.channel_name.as_str(),
+                upstream_path = route.path(),
+                requested_streamed = streamed,
+                body_streamed,
+                "jdcloud stream flag mismatch before upstream request"
+            );
+        }
         if let Some(session_id) = session_id_from_body(&prepared_body)? {
             if let Ok(value) = HeaderValue::from_str(&session_id) {
                 extra_headers.insert(HeaderName::from_static("session_id"), value);
@@ -74,6 +86,15 @@ impl ProviderAdapter for JdcloudAdapter {
             response_mode,
         })
     }
+}
+
+fn stream_from_body(body: &[u8]) -> AppResult<bool> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
+    Ok(value
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false))
 }
 
 fn jdcloud_openai_body(body: Bytes, route: RelayRoute) -> AppResult<Bytes> {
@@ -375,6 +396,40 @@ mod tests {
 
         assert_eq!(
             prepared.extra_headers.get(ACCEPT).unwrap(),
+            "text/event-stream"
+        );
+    }
+
+    #[test]
+    fn jdcloud_accept_event_stream_follows_final_body_stream_flag() {
+        let non_stream_body =
+            Bytes::from_static(br#"{"model":"deepseek-v3.2","messages":[],"stream":false}"#);
+        let non_stream_prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::ChatCompletions,
+                non_stream_body,
+                &HeaderMap::new(),
+                true,
+            )
+            .unwrap();
+        assert!(non_stream_prepared.extra_headers.get(ACCEPT).is_none());
+
+        let stream_body =
+            Bytes::from_static(br#"{"model":"deepseek-v3.2","messages":[],"stream":true}"#);
+        let stream_prepared = JDCLOUD_ADAPTER
+            .prepare_openai_request(
+                &upstream(),
+                UpstreamProtocol::Openai,
+                RelayRoute::ChatCompletions,
+                stream_body,
+                &HeaderMap::new(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            stream_prepared.extra_headers.get(ACCEPT).unwrap(),
             "text/event-stream"
         );
     }

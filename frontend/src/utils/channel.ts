@@ -89,9 +89,9 @@ export function withCustomProviderLast(providers: ChannelProviderOption[]) {
 }
 
 export function sortProvidersForDisplay(providers: ProviderRecord[]) {
-  const manual = providers.filter((provider) => isManualBaseUrlProvider(provider.code))
-  const rest = providers.filter((provider) => !isManualBaseUrlProvider(provider.code))
-  return [...rest, ...manual]
+  const custom = providers.filter((provider) => isCustomProvider(provider.code))
+  const rest = providers.filter((provider) => !isCustomProvider(provider.code))
+  return [...rest, ...custom]
 }
 
 export function findProviderOption(

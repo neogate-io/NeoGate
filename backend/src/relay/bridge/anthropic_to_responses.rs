@@ -54,16 +54,14 @@ pub(super) fn anthropic_response_to_openai_response(
     let input_tokens = anthropic_usage_input_tokens(usage);
     let output_tokens = anthropic_usage_output_tokens(usage);
     let output = anthropic_content_to_openai_response_output(value.get("content"), id);
-    let status = if value.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
-        "incomplete"
-    } else {
-        "completed"
-    };
+    // Treat stop_reason "max_tokens" as completed instead of incomplete.
+    // Emitting response.incomplete for token-limit stops makes Codex CLI abort
+    // with "stream disconnected before completion".
     let payload = json!({
         "id": id,
         "object": "response",
         "created_at": 0,
-        "status": status,
+        "status": "completed",
         "background": false,
         "model": model,
         "output": output,
@@ -330,14 +328,13 @@ impl AnthropicSseToOpenAiResponse {
     }
 
     fn observe_message_delta(&mut self, value: &Value) {
-        match value
+        if let Some("tool_use") = value
             .get("delta")
             .and_then(|delta| delta.get("stop_reason"))
             .and_then(Value::as_str)
         {
-            Some("max_tokens") => self.status = "incomplete",
-            Some("tool_use") => self.status = "completed",
-            _ => {}
+            // "max_tokens" stop reason is treated as completed, not incomplete.
+            self.status = "completed";
         }
         self.observe_usage(value);
     }
@@ -735,11 +732,7 @@ impl AnthropicSseToOpenAiResponse {
             self.completed_output
                 .push(self.output_item_payload("completed"));
         }
-        let event_type = if self.status == "completed" {
-            "response.completed"
-        } else {
-            "response.incomplete"
-        };
+        let event_type = "response.completed";
         let sequence_number = self.next_sequence_number();
         self.push_event(
             out,

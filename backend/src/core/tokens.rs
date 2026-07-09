@@ -458,11 +458,13 @@ impl FromRequestParts<Arc<AppState>> for UserAuth {
         let key_status: String = row.try_get("key_status")?;
         let project_status: String = row.try_get("project_status")?;
         if user_status != "enabled" || project_status != "enabled" || key_status != "enabled" {
-            return Err(AppError::Forbidden);
+            return Err(AppError::Forbidden(format!(
+                "access disabled (user={user_status}, project={project_status}, key={key_status})"
+            )));
         }
         let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
         if expires_at.is_some_and(|value| value <= Utc::now()) {
-            return Err(AppError::Forbidden);
+            return Err(AppError::Forbidden("api key has expired".to_string()));
         }
 
         let user_key_id: DbId = row.try_get("user_key_id")?;
@@ -536,11 +538,13 @@ pub(crate) async fn user_auth_for_key_id(
     let key_status: String = row.try_get("key_status")?;
     let project_status: String = row.try_get("project_status")?;
     if user_status != "enabled" || project_status != "enabled" || key_status != "enabled" {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden(format!(
+            "access disabled (user={user_status}, project={project_status}, key={key_status})"
+        )));
     }
     let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
     if expires_at.is_some_and(|value| value <= Utc::now()) {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden("api key has expired".to_string()));
     }
 
     Ok(UserAuth {

@@ -68,6 +68,7 @@ pub(super) async fn create_background_response(
                 &target_model,
                 channel_id,
                 &[],
+                &[],
             )
             .await?
             .1
@@ -83,6 +84,7 @@ pub(super) async fn create_background_response(
                 SelectionConstraints {
                     affinity_key: channel_affinity_key.as_ref(),
                     attempted: &[],
+                    excluded_endpoint_ids: &[],
                 },
             )
             .await?

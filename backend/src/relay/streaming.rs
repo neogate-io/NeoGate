@@ -17,7 +17,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
-    enqueue_relay_usage, key_failure_from_context,
+    enqueue_relay_usage, is_model_error_text, key_failure_from_context,
     limit::UserRequestPermit,
     release_empty_hold,
     selector::{SelectedUpstream, UpstreamProtocol},
@@ -112,6 +112,8 @@ pub(crate) fn body_from_stream(
         credential_id = ?ctx.upstream.credential_id,
         protocol = ctx.protocol.as_str(),
         model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
         path = ctx.path,
         base_url = %ctx.upstream.base_url,
         status = status.as_u16(),
@@ -230,6 +232,8 @@ impl StreamingRelay {
                 credential_id = ?ctx.upstream.credential_id,
                 protocol = ctx.protocol.as_str(),
                 model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
                 path = ctx.path,
                 status = self.status.as_u16(),
                 streamed = ctx.streamed,
@@ -250,6 +254,8 @@ impl StreamingRelay {
                 credential_id = ?ctx.upstream.credential_id,
                 protocol = ctx.protocol.as_str(),
                 model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
                 path = ctx.path,
                 status = self.status.as_u16(),
                 streamed = ctx.streamed,
@@ -270,6 +276,8 @@ impl StreamingRelay {
             channel_endpoint_id = ctx.upstream.channel_endpoint_id,
             protocol = ctx.protocol.as_str(),
             model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
             path = ctx.path,
             status = self.status.as_u16(),
             streamed = ctx.streamed,
@@ -289,6 +297,12 @@ impl StreamingRelay {
         let ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let stream_complete = self.usage.response_complete();
+        let stream_failed = self.usage.response_failed();
+        let stream_error = self.usage.stream_error_summary();
+        let stream_error_summary = stream_error
+            .as_ref()
+            .map(StreamErrorSummary::to_error_summary)
+            .unwrap_or_else(|| "upstream stream ended with SSE error event".to_string());
         tracing::debug!(
             relay_trace_id = %ctx.relay_trace_id,
             relay_attempt = ctx.relay_attempt,
@@ -301,6 +315,8 @@ impl StreamingRelay {
             credential_id = ?ctx.upstream.credential_id,
             protocol = ctx.protocol.as_str(),
             model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
             path = ctx.path,
             base_url = %ctx.upstream.base_url,
             status = self.status.as_u16(),
@@ -324,6 +340,8 @@ impl StreamingRelay {
                 credential_id = ?ctx.upstream.credential_id,
                 protocol = ctx.protocol.as_str(),
                 model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
                 path = ctx.path,
                 base_url = %ctx.upstream.base_url,
                 status = self.status.as_u16(),
@@ -337,24 +355,109 @@ impl StreamingRelay {
                 "upstream stream ended before terminal SSE event"
             );
         }
-        let billing = if self.status.is_success() {
+        if stream_failed {
+            tracing::warn!(
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_name = %ctx.upstream.channel_name,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                channel_key_id = ?ctx.upstream.channel_key_id,
+                credential_id = ?ctx.upstream.credential_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
+                path = ctx.path,
+                base_url = %ctx.upstream.base_url,
+                status = self.status.as_u16(),
+                first_response_ms = self.first_response_ms,
+                last_chunk_ms = self.last_chunk_ms,
+                chunks_sent = self.chunks_sent,
+                bytes_sent = self.bytes_sent,
+                largest_chunk_bytes = self.largest_chunk_bytes,
+                latency_ms = ctx.started.elapsed().as_millis() as i64,
+                last_signal = ?self.usage.last_signal_summary(),
+                sse_error_type = ?stream_error.as_ref().and_then(|error| error.error_type.as_deref()),
+                sse_error_code = ?stream_error.as_ref().and_then(|error| error.error_code.as_deref()),
+                sse_error_message = ?stream_error.as_ref().and_then(|error| error.error_message.as_deref()),
+                sse_error_raw = ?stream_error.as_ref().and_then(|error| error.raw.as_deref()),
+                "upstream stream ended with SSE error event"
+            );
+        }
+        if stream_failed {
+            if let Some(summary) = stream_error.as_ref() {
+                // 与非流式 400 路径（mod.rs 路径 C）对称：上游在流式 responses 里返回
+                // 「模型不可用」类 SSE error 时，学习该 (endpoint, model) 不支持
+                // /v1/responses，使下一次请求在转发前降级到 chat。仅当本次以 responses
+                // 路由 + openai/openai_oauth 协议 + 未降级地走原生 responses 发出
+                // （responses_chat_fallback == false）时才标记，避免误伤已降级的 chat 路径。
+                if ctx.path == "/v1/responses"
+                    && matches!(
+                        ctx.protocol,
+                        UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
+                    )
+                    && !ctx.upstream.responses_chat_fallback
+                    && !ctx
+                        .state
+                        .selector
+                        .responses_unsupported(ctx.upstream.channel_endpoint_id, &ctx.model)
+                        .await
+                    && is_model_error_text(&sse_error_lowered(summary))
+                {
+                    let until = chrono::Utc::now()
+                        + chrono::Duration::seconds(
+                            ctx.state.config.relay.responses_support_block_seconds,
+                        );
+                    ctx.state
+                        .selector
+                        .mark_responses_unsupported(
+                            ctx.upstream.channel_endpoint_id,
+                            &ctx.model,
+                            until,
+                        )
+                        .await;
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        sse_error_code = ?summary.error_code,
+                        sse_error_message = ?summary.error_message,
+                        "upstream rejected responses for this model via SSE error; downgrading to chat on next request",
+                    );
+                }
+            }
+        }
+        let billing = if self.status.is_success() && !stream_failed {
             record_channel_affinity(&ctx);
             settle_successful_hold(&ctx, token_usage, "streamed relay").await
         } else {
-            release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream error").await;
+            let release_context = if stream_failed {
+                "stream SSE error"
+            } else {
+                "upstream error"
+            };
+            release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
             None
         };
         let error_summary = if !self.status.is_success() {
             Some("upstream error".to_string())
+        } else if stream_failed {
+            Some(stream_error_summary.clone())
         } else if streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete) {
             Some("upstream stream ended before terminal SSE event".to_string())
         } else {
             None
         };
-        let failure = if self.status.is_success() {
-            None
-        } else {
+        let failure = if !self.status.is_success() {
             key_failure_from_context(&ctx, "upstream error".to_string()).await
+        } else if stream_failed {
+            key_failure_from_context(&ctx, stream_error_summary).await
+        } else {
+            None
         };
         let usage = usage_from_context(
             &ctx,
@@ -378,6 +481,8 @@ impl StreamingRelay {
                 credential_id = ?ctx.upstream.credential_id,
                 protocol = ctx.protocol.as_str(),
                 model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
                 path = ctx.path,
                 base_url = %ctx.upstream.base_url,
                 status = self.status.as_u16(),
@@ -408,6 +513,8 @@ impl StreamingRelay {
             credential_id = ?ctx.upstream.credential_id,
             protocol = ctx.protocol.as_str(),
             model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
             path = ctx.path,
             base_url = %ctx.upstream.base_url,
             status = self.status.as_u16(),
@@ -613,6 +720,8 @@ impl Drop for StreamingRelay {
                     credential_id = ?ctx.upstream.credential_id,
                     protocol = ctx.protocol.as_str(),
                     model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
                     path = ctx.path,
                     base_url = %ctx.upstream.base_url,
                     status = status.as_u16(),
@@ -638,6 +747,8 @@ impl Drop for StreamingRelay {
                     credential_id = ?ctx.upstream.credential_id,
                     protocol = ctx.protocol.as_str(),
                     model = %ctx.model,
+                external_model = %ctx.external_model,
+                upstream_model = %ctx.upstream_model,
                     path = ctx.path,
                     base_url = %ctx.upstream.base_url,
                     status = status.as_u16(),
@@ -687,7 +798,7 @@ fn record_channel_affinity(ctx: &RelayContext) {
 }
 
 enum ResponseUsageParser {
-    Sse(StreamUsageParser),
+    Sse(Box<StreamUsageParser>),
     Json {
         buffer: Option<Vec<u8>>,
         limit_bytes: usize,
@@ -706,7 +817,7 @@ impl ResponseUsageParser {
         if !status.is_success() || path.starts_with("/v1/images/") {
             Self::Disabled
         } else if streamed {
-            Self::Sse(StreamUsageParser::new(limit_bytes))
+            Self::Sse(Box::new(StreamUsageParser::new(limit_bytes)))
         } else {
             Self::Json {
                 buffer: Some(Vec::with_capacity(json_usage_buffer_capacity(
@@ -756,6 +867,17 @@ impl ResponseUsageParser {
             || matches!(self, Self::Json { buffer: Some(bytes), .. } if json_body_is_complete(bytes))
     }
 
+    fn response_failed(&self) -> bool {
+        matches!(self, Self::Sse(parser) if parser.failed)
+    }
+
+    fn stream_error_summary(&self) -> Option<StreamErrorSummary> {
+        match self {
+            Self::Sse(parser) => parser.last_error.clone(),
+            Self::Json { .. } | Self::Disabled => None,
+        }
+    }
+
     /// Returns a short human-readable summary of the last observed stream
     /// signal so we can include it in the "stream ended before terminal SSE
     /// event" warning. Helps distinguish an upstream that emitted an
@@ -803,8 +925,10 @@ fn json_body_is_complete(bytes: &[u8]) -> bool {
 struct ParsedLine {
     usage: Option<TokenUsage>,
     event: Option<String>,
+    data: Option<String>,
     data_type: Option<String>,
     completed: bool,
+    failed: bool,
     done: bool,
 }
 
@@ -817,6 +941,8 @@ struct StreamUsageParser {
     last_event: Option<String>,
     last_type: Option<String>,
     saw_done: bool,
+    failed: bool,
+    last_error: Option<StreamErrorSummary>,
 }
 
 impl StreamUsageParser {
@@ -830,6 +956,8 @@ impl StreamUsageParser {
             last_event: None,
             last_type: None,
             saw_done: false,
+            failed: false,
+            last_error: None,
         }
     }
 
@@ -898,6 +1026,15 @@ impl StreamUsageParser {
         if parsed.completed {
             self.completed = true;
         }
+        if parsed.failed {
+            self.failed = true;
+        }
+        if let Some(data) = parsed.data.as_deref() {
+            let is_error_data = parsed.failed || self.last_event.as_deref() == Some("error");
+            if is_error_data {
+                self.last_error = Some(StreamErrorSummary::from_sse_data(data));
+            }
+        }
     }
 
     fn parse_line(line: &[u8]) -> ParsedLine {
@@ -908,6 +1045,7 @@ impl StreamUsageParser {
             return ParsedLine {
                 event: Some(event.to_string()),
                 completed: stream_event_is_terminal(event),
+                failed: stream_event_is_failure(event),
                 ..Default::default()
             };
         }
@@ -926,8 +1064,10 @@ impl StreamUsageParser {
         }
         ParsedLine {
             usage: parse_usage_from_sse_data(data),
+            data: Some(data.to_string()),
             data_type: sse_data_type_name(data),
             completed: sse_data_has_terminal_type(data),
+            failed: sse_data_has_failure_type(data),
             ..Default::default()
         }
     }
@@ -952,7 +1092,12 @@ fn stream_event_is_terminal(event: &str) -> bool {
             | "response.incomplete"
             | "response.failed"
             | "response.cancelled"
+            | "error"
     )
+}
+
+fn stream_event_is_failure(event: &str) -> bool {
+    matches!(event, "error" | "response.failed")
 }
 
 fn sse_data_has_terminal_type(data: &str) -> bool {
@@ -961,6 +1106,12 @@ fn sse_data_has_terminal_type(data: &str) -> bool {
         || data.contains("response.incomplete") && sse_data_type_is(data, "response.incomplete")
         || data.contains("response.failed") && sse_data_type_is(data, "response.failed")
         || data.contains("response.cancelled") && sse_data_type_is(data, "response.cancelled")
+        || data.contains("\"error\"") && sse_data_type_is(data, "error")
+}
+
+fn sse_data_has_failure_type(data: &str) -> bool {
+    data.contains("response.failed") && sse_data_type_is(data, "response.failed")
+        || data.contains("\"error\"") && sse_data_type_is(data, "error")
 }
 
 fn sse_data_type_name(data: &str) -> Option<String> {
@@ -973,6 +1124,101 @@ fn sse_data_type_name(data: &str) -> Option<String> {
 
 fn sse_data_type_is(data: &str, expected: &str) -> bool {
     sse_data_type_name(data).is_some_and(|type_| type_ == expected)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StreamErrorSummary {
+    error_type: Option<String>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+    raw: Option<String>,
+}
+
+impl StreamErrorSummary {
+    fn from_sse_data(data: &str) -> Self {
+        let raw = Some(truncate_for_log(data, 1000));
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return Self {
+                error_type: None,
+                error_code: None,
+                error_message: Some(truncate_for_log(data, 500)),
+                raw,
+            };
+        };
+        let error = value.get("error").unwrap_or(&value);
+        let error_type = string_field(error, "type")
+            .or_else(|| string_field(&value, "type"))
+            .map(|value| truncate_for_log(&value, 128));
+        let error_code = string_field(error, "code")
+            .or_else(|| string_field(&value, "code"))
+            .map(|value| truncate_for_log(&value, 128));
+        let error_message = string_field(error, "message")
+            .or_else(|| string_field(&value, "message"))
+            .or_else(|| string_field(error, "msg"))
+            .or_else(|| string_field(&value, "msg"))
+            .map(|value| truncate_for_log(&value, 500));
+
+        Self {
+            error_type,
+            error_code,
+            error_message,
+            raw,
+        }
+    }
+
+    fn to_error_summary(&self) -> String {
+        let mut summary = String::from("upstream stream ended with SSE error event");
+        if let Some(code) = self.error_code.as_deref() {
+            summary.push_str(" code=");
+            summary.push_str(code);
+        }
+        if let Some(error_type) = self.error_type.as_deref() {
+            summary.push_str(" type=");
+            summary.push_str(error_type);
+        }
+        if let Some(message) = self.error_message.as_deref() {
+            summary.push_str(": ");
+            summary.push_str(message);
+        }
+        summary
+    }
+}
+
+/// 把 SSE error 的 code/type/message 拼成小写字符串，供 `is_model_error_text` 做关键词
+/// 匹配。code 和 type 也参与拼接，因为有些上游把 `model_not_found` 放在 code 而非
+/// message 里。
+fn sse_error_lowered(summary: &StreamErrorSummary) -> String {
+    [
+        summary.error_code.as_deref(),
+        summary.error_type.as_deref(),
+        summary.error_message.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase()
+}
+
+fn string_field(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(|value| match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(boolean) => Some(boolean.to_string()),
+        _ => None,
+    })
+}
+
+fn truncate_for_log(value: &str, limit: usize) -> String {
+    let mut out = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if index >= limit {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1162,6 +1408,55 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"outpu
     }
 
     #[test]
+    fn stream_usage_parser_detects_sse_error_event_as_failed_terminal() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: error
+data: {"error":{"code":"InvalidParameter","message":"model does not support responses","type":"invalid_request_error"}}
+"#,
+        );
+
+        assert!(parser.completed);
+        assert!(parser.failed);
+        assert_eq!(parser.last_event.as_deref(), Some("error"));
+        assert_eq!(parser.last_type.as_deref(), None);
+        let error = parser.last_error.as_ref().expect("error summary");
+        assert_eq!(error.error_code.as_deref(), Some("InvalidParameter"));
+        assert_eq!(
+            error.error_message.as_deref(),
+            Some("model does not support responses")
+        );
+        assert_eq!(error.error_type.as_deref(), Some("invalid_request_error"));
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_error_data_type_as_failed_terminal() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"type":"error","error":{"message":"model does not support responses"}}
+"#,
+        );
+
+        assert!(parser.completed);
+        assert!(parser.failed);
+        assert_eq!(parser.last_type.as_deref(), Some("error"));
+    }
+
+    #[test]
+    fn stream_error_summary_includes_code_type_and_message() {
+        let error = StreamErrorSummary::from_sse_data(
+            r#"{"type":"error","code":"unsupported_parameter","message":"tools is not supported"}"#,
+        );
+
+        assert_eq!(
+            error.to_error_summary(),
+            "upstream stream ended with SSE error event code=unsupported_parameter type=error: tools is not supported"
+        );
+    }
+
+    #[test]
     fn stream_usage_parser_detects_anthropic_message_stop() {
         let mut parser = StreamUsageParser::new(1024);
 
@@ -1235,5 +1530,40 @@ data: {"type":"response.output_text.delta","delta":"hi"}
 
         assert!(parser.completed);
         assert!(parser.saw_done);
+    }
+
+    #[test]
+    fn sse_error_lowered_classifies_bailian_model_unsupported() {
+        // 复现阿里云百炼 /v1/responses 流式 SSE error：HTTP 200，错误藏在 event:error 里。
+        let summary = StreamErrorSummary::from_sse_data(
+            r#"{"code":"InvalidParameter","message":"Unsupported model: 'glm-5.2'.","request_id":"dacd5cbe-1f99-9ee3-a542-8bab2014bfc9"}"#,
+        );
+
+        let lowered = sse_error_lowered(&summary);
+        assert!(lowered.contains("unsupported model"));
+        assert!(is_model_error_text(&lowered));
+    }
+
+    #[test]
+    fn sse_error_lowered_ignores_generic_invalid_parameter_without_model_keyword() {
+        // 仅凭 InvalidParameter 这类通用错误码不应判定为模型不可用，避免把参数错误
+        // 误学习成 responses 不支持。
+        let summary = StreamErrorSummary::from_sse_data(
+            r#"{"error":{"code":"InvalidParameter","message":"missing required field: input","type":"invalid_request_error"}}"#,
+        );
+
+        let lowered = sse_error_lowered(&summary);
+        assert!(!is_model_error_text(&lowered));
+    }
+
+    #[test]
+    fn sse_error_lowered_matches_model_not_found_in_code() {
+        // 有些上游把模型错误放在 code 字段。
+        let summary = StreamErrorSummary::from_sse_data(
+            r#"{"error":{"code":"model_not_found","message":"qwen3.6-plus","type":"not_found_error"}}"#,
+        );
+
+        let lowered = sse_error_lowered(&summary);
+        assert!(is_model_error_text(&lowered));
     }
 }

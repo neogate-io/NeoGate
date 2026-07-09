@@ -30,7 +30,9 @@ pub(super) async fn run_app_message(
 ) -> AppResult<AppRunOutcome> {
     let started = Instant::now();
     if runtime.status != "enabled" || !runtime.endpoint_enabled {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden(
+            "app or endpoint is not enabled".to_string(),
+        ));
     }
     if message.content.trim() == "/clear" {
         let conversation_id = ensure_conversation(&state, &runtime, &message).await?;

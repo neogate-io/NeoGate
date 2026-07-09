@@ -145,7 +145,13 @@ export const router = createRouter({
           path: 'statistics',
           name: 'statistics',
           component: () => import('../views/admin/StatisticsView.vue'),
-          meta: { messageKey: 'usageStatistics', subtitleKey: 'adminStatisticsSubtitle' }
+          meta: { messageKey: 'consumptionOverview', subtitleKey: 'adminConsumptionOverviewSubtitle' }
+        },
+        {
+          path: 'cost-attribution',
+          name: 'costAttribution',
+          component: () => import('../views/admin/CostAttributionView.vue'),
+          meta: { messageKey: 'costAttribution', subtitleKey: 'adminCostAttributionSubtitle' }
         },
         { path: 'settings', redirect: '/admin/settings/pricing-policies' },
         {

@@ -36,6 +36,7 @@ import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { setSiteBrand } from '../../composables/useSiteBrand'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
 import { majorToMicroAmount, microAmountToMajor } from '../../utils/format'
 import {
@@ -688,7 +689,7 @@ async function submitSetup() {
             secret: setupForm.secret
           }
         : null
-      await completeSetupWizard({
+      const completedStatus = await completeSetupWizard({
         admin_username: setupForm.adminUsername.trim(),
         admin_password: setupForm.adminPassword,
         service_mode: setupForm.serviceMode,
@@ -717,6 +718,13 @@ async function submitSetup() {
                 zpay_site_name: paymentForm.siteName
               }
             : null
+      })
+      setSiteBrand({
+        site_name: completedStatus.site_name || bootstrapForm.siteName,
+        public_base_url: completedStatus.public_base_url || bootstrapForm.publicBaseUrl,
+        logo_url: '/logos/logo.svg',
+        billing_currency: completedStatus.billing_currency,
+        env_write_supported: completedStatus.env_write_supported
       })
       ElMessage.success(t('setupCompleted'))
       await router.replace('/login')

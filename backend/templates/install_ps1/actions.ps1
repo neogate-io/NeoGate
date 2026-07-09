@@ -1,3 +1,6 @@
+$NodeMirror = 'https://registry.npmmirror.com/-/binary/node'
+$NpmRegistry = 'https://registry.npmmirror.com'
+
 function Read-JsonField([string]$Path, [string]$Field) {
   if (-not (Test-Path $Path)) { return $null }
   try {
@@ -139,6 +142,38 @@ function Assert-Command([string]$Name) {
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')) {
+  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if (-not $cmd) { return $null }
+
+  try {
+    $output = & $Name @Arguments 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return (@($output) | Where-Object { $_ } | Select-Object -First 1)
+  } catch {
+    return $null
+  }
+}
+
+function Get-NpmGlobalPaths {
+  $paths = @()
+  try {
+    $prefixOutput = & npm config get prefix 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      foreach ($prefix in @($prefixOutput)) {
+        if ($prefix -and $prefix -ne 'undefined') {
+          $prefixPath = [string]$prefix
+          $paths += $prefixPath
+          $paths += (Join-Path $prefixPath 'bin')
+        }
+      }
+    }
+  } catch {
+    return @()
+  }
+  return $paths
+}
+
 function Get-ResponseErrorMessage([string]$Body) {
   # Extract the human-readable error message from a JSON response body.
   # Supports both flat {"error": "..."} and nested {"error": {"message": "..."}}.
@@ -161,6 +196,7 @@ function Update-SessionPath {
     [Environment]::GetEnvironmentVariable('Path', 'Machine'),
     [Environment]::GetEnvironmentVariable('Path', 'User'),
     $env:Path
+    Get-NpmGlobalPaths
   ) | Where-Object { $_ }
 
   $env:Path = (($paths -join ';') -split ';' | Where-Object { $_ } | Select-Object -Unique) -join ';'
@@ -168,14 +204,20 @@ function Update-SessionPath {
 
 function Run-Command {
   param([string]$FilePath, [string[]]$Arguments)
+  $exitCode = Invoke-CommandStatus $FilePath $Arguments
+  if ($exitCode -ne 0) {
+    Fail "$FilePath failed with exit code $exitCode"
+  }
+}
+
+function Invoke-CommandStatus {
+  param([string]$FilePath, [string[]]$Arguments)
   if ($DryRun) {
     Write-Host "+ $FilePath $($Arguments -join ' ')"
-    return
+    return 0
   }
   & $FilePath @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    Fail "$FilePath failed with exit code $LASTEXITCODE"
-  }
+  return $LASTEXITCODE
 }
 
 function Verify-ApiKey {
@@ -332,51 +374,106 @@ function Select-Model {
   Success (Selected-Model)
 }
 
-function Install-Node {
-  if ((Assert-Command 'node') -and (Assert-Command 'npm')) {
-    Detail (Get-Message node_found $(& node --version))
-    Detail (Get-Message npm_found $(& npm --version))
-    return
+function Get-NodeToolVersions {
+  return @{
+    Node = Get-CommandVersion 'node'
+    Npm = Get-CommandVersion 'npm'
   }
+}
+
+function Confirm-NodeReady {
+  $versions = Get-NodeToolVersions
+  if ($versions.Node -and $versions.Npm) {
+    Detail (Get-Message node_found $versions.Node)
+    Detail (Get-Message npm_found $versions.Npm)
+    return $true
+  }
+  return $false
+}
+
+function Get-NodeLtsVersion {
+  $indexUrl = "$NodeMirror/index.json"
+  try {
+    $client = [System.Net.Http.HttpClient]::new()
+    $response = $client.GetStringAsync($indexUrl).GetAwaiter().GetResult()
+    $client.Dispose()
+    $data = $response | ConvertFrom-Json
+    $lts = $data | Where-Object { $_.lts } | Select-Object -First 1
+    if (-not $lts) { Fail (Get-Message node_lts_failed) }
+    return $lts.version
+  } catch {
+    Fail (Get-Message connect_failed $indexUrl)
+  }
+}
+
+function Install-NodeZip {
+  $version = Get-NodeLtsVersion
+  $zipUrl = "$NodeMirror/$version/node-$version-win-x64.zip"
+  $targetDir = if ($env:NEOGATE_NODE_HOME) { $env:NEOGATE_NODE_HOME } else { Join-Path $env:USERPROFILE '.neogate-node' }
+  $zipFile = Join-Path $env:TEMP "neogate-node-$version.zip"
+
+  Write-Host (Get-Message node_downloading $version)
+  Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+
+  if (Test-Path $targetDir) { Remove-Item -Recurse -Force $targetDir }
+  New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+  Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
+
+  # The zip extracts into a top-level node-v*-win-x64/ directory; resolve the
+  # real directory that contains node.exe and npm.cmd.
+  $nodeExe = Get-ChildItem -Path $targetDir -Recurse -Filter 'node.exe' | Select-Object -First 1
+  if (-not $nodeExe) { Fail (Get-Message node_path_missing) }
+  $nodeBin = $nodeExe.DirectoryName
+
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  if ($userPath -notlike "*$nodeBin*") {
+    $newPath = if ($userPath) { "$nodeBin;$userPath" } else { $nodeBin }
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+  }
+  $env:Path = "$nodeBin;$env:Path"
+  $env:NPM_CONFIG_REGISTRY = $NpmRegistry
+}
+
+function Install-Node {
+  Update-SessionPath
+  if (Confirm-NodeReady) { return }
 
   if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
-  if (Assert-Command 'winget') {
-    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-package-agreements', '--accept-source-agreements')
-  } elseif (Assert-Command 'choco') {
-    Run-Command 'choco' @('install', 'nodejs-lts', '-y')
-  } else {
-    Fail (Get-Message node_pkg_missing_win)
-  }
+  Install-NodeZip
   Update-SessionPath
-  if (-not (Assert-Command 'node')) { Fail (Get-Message node_path_missing) }
-  if (-not (Assert-Command 'npm')) { Fail (Get-Message npm_path_missing) }
-  Detail (Get-Message node_found $(& node --version))
-  Detail (Get-Message npm_found $(& npm --version))
+
+  if (Confirm-NodeReady) { return }
+  $versions = Get-NodeToolVersions
+  if (-not $versions.Node) { Fail (Get-Message node_path_missing) }
+  if (-not $versions.Npm) { Fail (Get-Message npm_path_missing) }
+  Fail (Get-Message node_install_failed)
 }
 
 function Install-CodexCli {
+  Update-SessionPath
   if (Assert-Command 'codex') {
     Detail (Get-Message codex_found $(& codex --version 2>$null))
     return
   }
   if ($SkipInstall) { Fail (Get-Message codex_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message codex_missing_prompt))) { Fail (Get-Message codex_required) }
-  Run-Command 'npm' @('install', '-g', '@openai/codex')
+  Run-Command 'npm' @('install', '-g', '--registry', $NpmRegistry, '@openai/codex')
   Update-SessionPath
   if (-not (Assert-Command 'codex')) { Fail (Get-Message codex_path_missing) }
   Detail (Get-Message codex_found $(& codex --version 2>$null))
 }
 
 function Install-ClaudeCode {
+  Update-SessionPath
   if (Assert-Command 'claude') {
     Detail (Get-Message claude_found $(& claude --version 2>$null))
     return
   }
   if ($SkipInstall) { Fail (Get-Message claude_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message claude_missing_prompt))) { Fail (Get-Message claude_required) }
-  Run-Command 'npm' @('install', '-g', '@anthropic-ai/claude-code')
+  Run-Command 'npm' @('install', '-g', '--registry', $NpmRegistry, '@anthropic-ai/claude-code')
   Update-SessionPath
   if (-not (Assert-Command 'claude')) { Fail (Get-Message claude_path_missing) }
   Detail (Get-Message claude_found $(& claude --version 2>$null))
@@ -402,11 +499,16 @@ function Escape-Toml([string]$Value) {
   return $Value.Replace('\', '\\').Replace('"', '\"')
 }
 
+function Escape-TomlKey([string]$Value) {
+  return (Escape-Toml $Value)
+}
+
 function Write-CodexConfig {
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
   $configFile = Join-Path $codexHome 'config.toml'
   $authFile = Join-Path $codexHome 'auth.json'
   $timestamp = Get-Date -Format yyyyMMddHHmmss
+  $providerIdEscaped = Escape-TomlKey $ProviderId
 
   $existing = ''
   if (Test-Path $configFile) {
@@ -415,7 +517,7 @@ function Write-CodexConfig {
   $lines = @()
   $skip = $false
   foreach ($line in ($existing -split "`r?`n")) {
-    if ($line -match '^\[model_providers\.("?neogate"?)\]') {
+    if ($line -match '^\s*\[\s*model_providers\s*\.\s*"?neogate"?\s*\]?\s*$') {
       $skip = $true
       continue
     }
@@ -427,11 +529,12 @@ function Write-CodexConfig {
 
   $next = @(
     "model = `"$(Escape-Toml $CodexModel)`"",
-    "model_provider = `"$ProviderId`"",
+    "model_provider = `"$providerIdEscaped`"",
+    "openai_base_url = `"$(Escape-Toml $BaseUrl)`"",
     ''
   ) + $lines + @(
     '',
-    "[model_providers.$ProviderId]",
+    "[model_providers.`"$providerIdEscaped`"]",
     "name = `"$(Escape-Toml $ProviderName)`"",
     "base_url = `"$(Escape-Toml $BaseUrl)`"",
     'wire_api = "responses"',

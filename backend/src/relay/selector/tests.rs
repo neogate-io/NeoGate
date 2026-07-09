@@ -134,6 +134,99 @@ fn choose_channel_by_slot_respects_weight_ranges() {
 }
 
 #[test]
+fn choose_channel_skips_excluded_endpoint_ids() {
+    let mut excluded = candidate("excluded", 1, 1, vec!["gpt-5.4"]);
+    excluded.id = 1;
+    excluded.endpoint_id = 10;
+    let mut alternate = candidate("alternate", 1, 1, vec!["gpt-5.4"]);
+    alternate.id = 2;
+    alternate.endpoint_id = 20;
+    let (route_index, wildcard_index) = build_route_indexes(&[excluded.clone(), alternate.clone()]);
+    let cache = RoutingCache {
+        loaded_at: None,
+        channels: vec![excluded, alternate],
+        keys: HashMap::from([
+            (
+                1,
+                vec![KeyCandidate {
+                    id: 101,
+                    channel_id: 1,
+                    credential_id: None,
+                    secret_ciphertext: "excluded-key".to_string(),
+                    cooldown_until: None,
+                    plan_type: None,
+                    plan_models: Vec::new(),
+                }],
+            ),
+            (
+                2,
+                vec![KeyCandidate {
+                    id: 201,
+                    channel_id: 2,
+                    credential_id: None,
+                    secret_ciphertext: "alternate-key".to_string(),
+                    cooldown_until: None,
+                    plan_type: None,
+                    plan_models: Vec::new(),
+                }],
+            ),
+        ]),
+        model_blocks: HashMap::new(),
+        route_index,
+        wildcard_index,
+    };
+
+    let selected = choose_channel_for_request(
+        &cache,
+        UpstreamProtocol::Openai,
+        "gpt-5.4",
+        Utc::now(),
+        &empty_block_lookup(),
+        &[],
+        Some(&[10]),
+    )
+    .expect("alternate channel");
+
+    assert_eq!(selected.endpoint_id, 20);
+}
+
+#[test]
+fn choose_channel_returns_none_when_all_candidates_are_excluded() {
+    let channel = candidate("excluded", 1, 1, vec!["gpt-5.4"]);
+    let (route_index, wildcard_index) = build_route_indexes(std::slice::from_ref(&channel));
+    let cache = RoutingCache {
+        loaded_at: None,
+        channels: vec![channel],
+        keys: HashMap::from([(
+            1,
+            vec![KeyCandidate {
+                id: 101,
+                channel_id: 1,
+                credential_id: None,
+                secret_ciphertext: "key".to_string(),
+                cooldown_until: None,
+                plan_type: None,
+                plan_models: Vec::new(),
+            }],
+        )]),
+        model_blocks: HashMap::new(),
+        route_index,
+        wildcard_index,
+    };
+
+    assert!(choose_channel_for_request(
+        &cache,
+        UpstreamProtocol::Openai,
+        "gpt-5.4",
+        Utc::now(),
+        &empty_block_lookup(),
+        &[],
+        Some(&[10]),
+    )
+    .is_none());
+}
+
+#[test]
 fn matching_channel_count_counts_model_and_wildcard_channels() {
     let mut exact = candidate("exact", 0, 1, vec!["gpt-5.5"]);
     exact.id = 1;

@@ -315,6 +315,19 @@ impl Billing {
             if part.amount_micros <= 0 {
                 continue;
             }
+            // If the stale-allocation job already recovered this allocation, the
+            // held credit was already returned to the account and `reserved` was
+            // already released at recovery time. Releasing again would fail the
+            // capacity constraint and double-release reserved credit. Skip it —
+            // the hold is already settled. See `flush_billing_part`.
+            if account::allocation_is_recovered(&mut tx, part.allocation_id).await? {
+                tracing::info!(
+                    allocation_id = %part.allocation_id,
+                    amount_micros = part.amount_micros,
+                    "skipping hold release on already-recovered credit allocation; credit was already refunded"
+                );
+                continue;
+            }
             account::decrement_reserved(&mut tx, &part.credit_account, part.amount_micros).await?;
             account::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micros)
                 .await?;

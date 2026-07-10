@@ -29,6 +29,7 @@ const { billingCurrency, formatMoney } = useBillingCurrency()
   <el-dialog
     v-model="open"
     class="user-admin-dialog user-credit-dialog credit-adjust-dialog"
+    :close-on-click-modal="false"
     :title="title"
     width="380px"
   >

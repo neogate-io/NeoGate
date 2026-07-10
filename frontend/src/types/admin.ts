@@ -489,6 +489,8 @@ export type VideoTierDimension =
 
 export type VideoTier = {
   resolution: string
+  label?: string
+  unit?: string
   tiers: Partial<Record<VideoTierDimension, number>>
 }
 

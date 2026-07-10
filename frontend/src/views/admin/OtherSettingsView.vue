@@ -17,10 +17,7 @@ import {
   syncPricingTemplates
 } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
-import {
-  getAdminModelSetting,
-  saveAdminModelSetting
-} from '../../api/settings'
+import { getAdminModelSetting, saveAdminModelSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { type MessageKey } from '../../i18n'
 import { withLoading } from '../../composables/useLoadingTask'
@@ -116,11 +113,7 @@ const textModelOptions = computed(() => {
   for (const channel of channels.value) {
     if (!channel.enabled) continue
     for (const model of channel.models) {
-      if (
-        !model.enabled ||
-        model.status !== 'available' ||
-        model.runtime_status === 'failed'
-      ) {
+      if (!model.enabled || model.status !== 'available' || model.runtime_status === 'failed') {
         continue
       }
       const key = `${channel.id}:${model.model}`
@@ -182,11 +175,30 @@ const VIDEO_TIER_DIMENSION_LABELS: Record<string, string> = {
 
 function videoTiersOf(template: ModelReferenceCatalogRecord) {
   const value = template.capabilities?.video_tiers
-  return Array.isArray(value) ? (value as VideoTier[]) : []
+  const tiers = Array.isArray(value) ? (value as VideoTier[]) : []
+  return filterVideoTiersForCurrency(tiers)
+}
+
+function isMainlandVideoTier(tier: { label?: string }) {
+  const label = tier.label?.trim() ?? ''
+  return (
+    label.includes('中国内地') ||
+    label.includes('中国大陆') ||
+    /mainland\s*china|china\s*mainland|chinese\s*mainland/i.test(label)
+  )
+}
+
+function filterVideoTiersForCurrency<T extends { label?: string }>(tiers: T[]) {
+  if (billingCurrency.value !== 'CNY') return tiers
+  const mainlandTiers = tiers.filter(isMainlandVideoTier)
+  return mainlandTiers.length > 0 ? mainlandTiers : tiers
 }
 
 function formatVideoTier(tier: VideoTier) {
-  const dimensions = Object.keys(tier.tiers ?? {}) as string[]
+  const hasAudioTier = tier.tiers?.with_audio != null || tier.tiers?.without_audio != null
+  const dimensions = (
+    hasAudioTier ? ['with_audio', 'without_audio'] : Object.keys(tier.tiers ?? {})
+  ) as string[]
   const parts = dimensions
     .filter((d) => tier.tiers?.[d as VideoTierDimension] != null)
     .map((d) => {
@@ -194,9 +206,26 @@ function formatVideoTier(tier: VideoTier) {
       const amount = formatReferenceMicros(
         microsFromCny(tier.tiers?.[d as VideoTierDimension] ?? null)
       )
-      return `${t(labelKey)} ${amount}/${t('pricePerMillionTokens')}`
+      const unit = videoTierPriceUnit(tier, d)
+      return `${t(labelKey)} ${amount}/${unit}`
     })
-  return { resolution: tier.resolution || '', parts }
+  return { resolution: videoTierDisplayLabel(tier), parts, hasAudioTier }
+}
+
+function videoTierPriceUnit(tier: VideoTier, dimension: string) {
+  if (dimension !== 'price') return t('pricePerMillionTokens')
+  return tier.unit === 'per_video' ? t('perVideo') : t('perSecond')
+}
+
+function videoTierDisplayLabel(tier: VideoTier) {
+  const label = tier.label?.trim()
+  if (!label) return tier.resolution || ''
+  if (billingCurrency.value !== 'CNY' || !isMainlandVideoTier(tier)) return label
+  const strippedLabel = label
+    .replace(/^(中国内地|中国大陆)\s*(?:[·・|/\\-]\s*)?/u, '')
+    .replace(/^(mainland\s*china|china\s*mainland|chinese\s*mainland)\s*(?:[·・|/\\-]\s*)?/iu, '')
+    .trim()
+  return strippedLabel || tier.resolution || label
 }
 
 function microsFromCny(value: number | null | undefined) {
@@ -486,6 +515,7 @@ onMounted(load)
     <el-dialog
       v-model="referencePricesDialogOpen"
       class="reference-prices-dialog"
+      :close-on-click-modal="false"
       :title="t('modelReferencePrices')"
       width="1120px"
     >
@@ -510,7 +540,7 @@ onMounted(load)
         stripe
       >
         <el-table-column prop="provider" :label="t('provider')" width="112" />
-        <el-table-column prop="model" :label="t('modelName')" min-width="240" />
+        <el-table-column prop="model" :label="t('modelName')" min-width="220" />
         <el-table-column :label="t('pricingBasis')" width="92" align="center" header-align="center">
           <template #default="{ row }">
             <span class="reference-meter-badge">{{ pricingBasisLabel(row) }}</span>
@@ -518,7 +548,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column
           class-name="reference-price-column"
-          min-width="200"
+          min-width="230"
           align="right"
           header-align="right"
         >
@@ -534,9 +564,10 @@ onMounted(load)
                 v-for="(tier, idx) in videoTiersOf(row)"
                 :key="idx"
                 class="reference-video-tier"
+                :class="{ 'has-audio-tier': formatVideoTier(tier).hasAudioTier }"
               >
-                <span v-if="tier.resolution" class="reference-video-tier-res">
-                  {{ tier.resolution }}
+                <span v-if="formatVideoTier(tier).resolution" class="reference-video-tier-res">
+                  {{ formatVideoTier(tier).resolution }}
                 </span>
                 <span
                   v-for="(part, pIdx) in formatVideoTier(tier).parts"
@@ -788,6 +819,10 @@ onMounted(load)
   font-size: 12px;
   font-weight: 620;
   white-space: nowrap;
+}
+
+.reference-video-tier.has-audio-tier .reference-video-tier-price {
+  flex-basis: 100%;
 }
 
 .reference-video-tier-note {

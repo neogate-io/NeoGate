@@ -14,6 +14,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
+  getModelReferenceCatalog,
   getProviderModels,
   getPricingTemplates,
   getProviderPrices,
@@ -27,7 +28,8 @@ import ChannelDiagnosticDialog from '../../components/admin/channels/ChannelDiag
 import ChannelExpandPanel from '../../components/admin/channels/ChannelExpandPanel.vue'
 import ChannelProbeTrendCell from '../../components/admin/channels/ChannelProbeTrendCell.vue'
 import ChannelPriceDialog, {
-  type ChannelPriceForm
+  type ChannelPriceForm,
+  type ChannelVideoPriceTierForm
 } from '../../components/admin/channels/ChannelPriceDialog.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
@@ -42,6 +44,7 @@ import type {
   Channel,
   ChannelKey,
   ChannelModel,
+  ModelReferenceCatalogRecord,
   PricingTemplate,
   ProviderModel,
   ProviderPrice,
@@ -50,10 +53,23 @@ import type {
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
-import { derivedCacheReadPrice, findPricingTemplate, isProviderPriceConfigured, priceKey } from '../../utils/pricing'
+import {
+  derivedCacheReadPrice,
+  findPricingTemplate,
+  isProviderPriceConfigured,
+  priceKey,
+  pricingReferenceModelAliases,
+  resolvedVideoTokensPerSecondEstimate
+} from '../../utils/pricing'
 
 const { locale, t } = useLocale()
-const { currencySymbol, formatPricePerMillion, majorToMicroAmount, microAmountToMajor } = useBillingCurrency()
+const {
+  billingCurrency,
+  currencySymbol,
+  formatPricePerMillion,
+  majorToMicroAmount,
+  microAmountToMajor
+} = useBillingCurrency()
 
 defineOptions({
   name: 'ChannelsView'
@@ -104,6 +120,8 @@ const {
 const prices = ref<ProviderPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
 const providerModels = ref<ProviderModel[]>([])
+const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
+const bundledVideoTierCatalog = ref<BundledVideoTierRecord[]>([])
 const pricingLoading = ref(true)
 const servicePolicy = ref<ServicePolicy | null>(null)
 const channelsLoaded = ref(false)
@@ -119,6 +137,25 @@ const channelCurrentPage = ref(1)
 const channelPageSize = ref(20)
 const channelPageSizes = [20, 50, 100]
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
+const anyVideoTierResolution = '*'
+
+type BundledPricingModel = {
+  cost?: {
+    video_tiers?: unknown
+  }
+}
+
+type BundledPricingProvider = {
+  models?: Record<string, BundledPricingModel>
+}
+
+type BundledPricingCatalog = Record<string, BundledPricingProvider>
+
+type BundledVideoTierRecord = {
+  provider: string
+  model: string
+  videoTiers: ReferenceVideoTier[]
+}
 
 const priceByModel = computed(
   () => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price]))
@@ -349,9 +386,9 @@ function channelPriceRows(row: Channel) {
           ? `${unitPrice} / ${t('perImage')}`
           : billingMeter === 'video'
             ? t('billingBasisMultiTierVideo')
-          : price && billingMeter === 'token'
-            ? `${inputPrice} / ${outputPrice}`
-            : t('priceMissing')
+            : price && billingMeter === 'token'
+              ? `${inputPrice} / ${outputPrice}`
+              : t('priceMissing')
     }
   })
 }
@@ -449,14 +486,24 @@ function keyStatusTooltip(
 async function loadPricingData() {
   await withLoading(pricingLoading, async () => {
     try {
-      const [fetchedPrices, fetchedTemplates, fetchedProviderModels] = await Promise.all([
+      const [
+        fetchedPrices,
+        fetchedTemplates,
+        fetchedProviderModels,
+        fetchedModelReferenceCatalog,
+        fetchedBundledVideoTierCatalog
+      ] = await Promise.all([
         getProviderPrices(),
         getPricingTemplates(),
-        getProviderModels()
+        getProviderModels(),
+        getModelReferenceCatalog(),
+        getBundledVideoTierCatalog()
       ])
       prices.value = fetchedPrices
       templates.value = fetchedTemplates
       providerModels.value = fetchedProviderModels
+      modelReferenceCatalog.value = fetchedModelReferenceCatalog
+      bundledVideoTierCatalog.value = fetchedBundledVideoTierCatalog
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -475,14 +522,20 @@ function capabilityValues(capabilities: Record<string, unknown>, path: string[])
 }
 
 function modelOutputModalities(provider: string, model: string) {
-  const record = providerModelByModel.value.get(priceKey(provider, model))
+  const catalogRecord = findReferenceCatalogRecord(provider, model)
+  const catalogOutput = catalogRecord
+    ? capabilityValues(catalogRecord.capabilities, ['modalities', 'output'])
+    : []
+  if (catalogOutput.length > 0) return catalogOutput
+
+  const record = findReferenceProviderModel(provider, model)
   const output = record ? capabilityValues(record.capabilities, ['modalities', 'output']) : []
   if (output.length > 0) return output
 
   const template = findPricingTemplate(templates.value, provider, model)
   if (!template || template.provider === provider) return output
 
-  const referenceRecord = providerModelByModel.value.get(priceKey(template.provider, model))
+  const referenceRecord = findReferenceProviderModel(template.provider, model)
   return referenceRecord
     ? capabilityValues(referenceRecord.capabilities, ['modalities', 'output'])
     : output
@@ -494,7 +547,9 @@ function canUseImageBilling(provider: string, model: string) {
 }
 
 function canUseSeedanceVideoBilling(provider: string, model: string) {
-  return provider === 'doubao' && model.toLowerCase().includes('seedance')
+  return (
+    canonicalReferenceProvider(provider) === 'doubao' && model.toLowerCase().includes('seedance')
+  )
 }
 
 function defaultBillingMeterForModel(provider: string, model: string) {
@@ -522,11 +577,7 @@ function hasManualPriceInput(form: ChannelPriceForm) {
   if (form.canUseSeedanceVideoBilling && form.videoBillingMode) {
     return form.videoPriceTiers.some((tier) => {
       if (form.videoBillingMode === 'official_token') {
-        return (
-          tier.inputWithVideo > 0 ||
-          tier.inputWithoutVideo > 0 ||
-          tier.estimatedTokensPerSecond > 0
-        )
+        return tier.inputWithVideo > 0 || tier.inputWithoutVideo > 0
       }
       return tier.inputWithVideoUnit > 0 || tier.inputWithoutVideoUnit > 0
     })
@@ -561,35 +612,280 @@ function shouldEnablePriceForm(form: ChannelPriceForm) {
 
 type ReferenceVideoTier = {
   resolution?: string
+  label?: string
   tiers?: Record<string, number | null | undefined>
 }
 
-function seedanceReferenceVideoTiers(provider: string, model: string) {
-  const record = providerModelByModel.value.get(priceKey(provider, model))
-  const value = record?.capabilities?.video_tiers
-  return Array.isArray(value) ? (value as ReferenceVideoTier[]) : []
+function canonicalReferenceProvider(provider: string) {
+  const normalizedProvider = provider.trim().toLowerCase()
+  if (
+    normalizedProvider === 'doubao' ||
+    normalizedProvider === 'volcengine' ||
+    normalizedProvider === 'volcengine-ark'
+  ) {
+    return 'doubao'
+  }
+  return normalizedProvider
 }
 
-function videoPriceTiersToForm(tiers: VideoPriceTier[] = []) {
-  return tiers.map((tier) => ({
-    resolutionsText: tier.resolutions.join(','),
-    inputWithVideo: microAmountToMajor(tier.input_with_video_micros ?? 0),
-    inputWithoutVideo: microAmountToMajor(tier.input_without_video_micros ?? 0),
-    estimatedTokensPerSecond: tier.estimated_tokens_per_second ?? 1_000_000,
-    inputWithVideoUnit: microAmountToMajor(tier.input_with_video_unit_micros ?? 0),
-    inputWithoutVideoUnit: microAmountToMajor(tier.input_without_video_unit_micros ?? 0)
-  }))
+function providerMatchesReference(left: string, right: string) {
+  return canonicalReferenceProvider(left) === canonicalReferenceProvider(right)
+}
+
+function isReferenceVideoTier(value: unknown): value is ReferenceVideoTier {
+  if (!value || typeof value !== 'object') return false
+  const tier = value as ReferenceVideoTier
+  return Boolean(tier.tiers && typeof tier.tiers === 'object')
+}
+
+function bundledVideoTierRecordsFromPricingCatalog(catalog: BundledPricingCatalog) {
+  return Object.entries(catalog).flatMap(([provider, providerData]) => {
+    return Object.entries(providerData.models ?? {}).flatMap(([model, modelData]) => {
+      const value = modelData.cost?.video_tiers
+      const videoTiers = Array.isArray(value) ? value.filter(isReferenceVideoTier) : []
+      if (videoTiers.length === 0) return []
+      return [
+        {
+          provider: canonicalReferenceProvider(provider),
+          model,
+          videoTiers
+        }
+      ]
+    })
+  })
+}
+
+async function getBundledVideoTierCatalog() {
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}model-pricing.json`)
+    if (!response.ok) return []
+    const catalog = (await response.json()) as BundledPricingCatalog
+    return bundledVideoTierRecordsFromPricingCatalog(catalog)
+  } catch {
+    return []
+  }
+}
+
+function referenceVideoTierResolutions(tier: ReferenceVideoTier) {
+  const resolution = tier.resolution?.trim()
+  return resolution ? splitCommaList(resolution) : [anyVideoTierResolution]
+}
+
+function referenceVideoTierResolutionLabel(tier: ReferenceVideoTier) {
+  const label = referenceVideoTierDisplayLabel(tier)
+  if (label) return label
+  return tier.resolution?.trim() ? '' : t('videoTierAnyResolution')
+}
+
+function referenceVideoTierDisplayLabel(tier: ReferenceVideoTier) {
+  const label = tier.label?.trim()
+  if (!label) return ''
+  if (billingCurrency.value !== 'CNY' || !isMainlandReferenceVideoTier(tier)) return label
+  const strippedLabel = label
+    .replace(/^(中国内地|中国大陆)\s*(?:[·・|/\\-]\s*)?/u, '')
+    .replace(/^(mainland\s*china|china\s*mainland|chinese\s*mainland)\s*(?:[·・|/\\-]\s*)?/iu, '')
+    .trim()
+  return strippedLabel || tier.resolution?.trim() || label
+}
+
+function videoTierFormResolutionLabel(resolution: string) {
+  return resolution.trim() === anyVideoTierResolution ? t('videoTierAnyResolution') : undefined
+}
+
+function referenceVideoTierHasAudio(tier: ReferenceVideoTier) {
+  return tier.tiers?.with_audio != null || tier.tiers?.without_audio != null
+}
+
+function referenceVideoTierInputWithoutVideo(tier: ReferenceVideoTier) {
+  return tier.tiers?.input_without_video ?? tier.tiers?.without_audio ?? 0
+}
+
+function referenceVideoTierInputWithVideo(tier: ReferenceVideoTier) {
+  return tier.tiers?.input_with_video ?? tier.tiers?.with_audio ?? 0
+}
+
+function referenceVideoTierMatchesFormResolutions(
+  tier: ReferenceVideoTier,
+  formResolutions: Set<string>
+) {
+  return referenceVideoTierResolutions(tier).some((resolution) => {
+    const normalizedResolution = resolution.trim().toLowerCase()
+    return (
+      normalizedResolution === anyVideoTierResolution ||
+      formResolutions.has(anyVideoTierResolution) ||
+      formResolutions.has(normalizedResolution)
+    )
+  })
+}
+
+function isAnyReferenceVideoTier(tier: ReferenceVideoTier) {
+  return referenceVideoTierResolutions(tier).some(
+    (resolution) => resolution.trim().toLowerCase() === anyVideoTierResolution
+  )
+}
+
+function referenceVideoTierSummary(tier: ReferenceVideoTier) {
+  if (referenceVideoTierHasAudio(tier)) {
+    return `${t('videoTierWithAudio')} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}/${t('pricePerMillionTokens')}\n${t('videoTierWithoutAudio')} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}/${t('pricePerMillionTokens')}`
+  }
+
+  const leftLabel = referenceVideoTierHasAudio(tier)
+    ? t('videoTierWithoutAudio')
+    : t('videoInputWithoutVideo')
+  const rightLabel = referenceVideoTierHasAudio(tier)
+    ? t('videoTierWithAudio')
+    : t('videoInputWithVideo')
+  return `${leftLabel} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}\n${rightLabel} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}`
+}
+
+function seedanceReferenceVideoTiers(provider: string, model: string) {
+  const catalogRecord = findReferenceCatalogRecord(provider, model)
+  const catalogValue = catalogRecord?.capabilities?.video_tiers
+  if (Array.isArray(catalogValue) && catalogValue.length > 0) {
+    return filterReferenceVideoTiersForCurrency(catalogValue as ReferenceVideoTier[])
+  }
+
+  const record = findReferenceProviderModel(provider, model)
+  const value = record?.capabilities?.video_tiers
+  if (Array.isArray(value) && value.length > 0) {
+    return filterReferenceVideoTiersForCurrency(value as ReferenceVideoTier[])
+  }
+
+  const bundledRecord = findBundledVideoTierRecord(provider, model)
+  return filterReferenceVideoTiersForCurrency(bundledRecord?.videoTiers ?? [])
+}
+
+function isMainlandReferenceVideoTier(tier: ReferenceVideoTier) {
+  const label = tier.label?.trim() ?? ''
+  return (
+    label.includes('中国内地') ||
+    label.includes('中国大陆') ||
+    /mainland\s*china|china\s*mainland|chinese\s*mainland/i.test(label)
+  )
+}
+
+function filterReferenceVideoTiersForCurrency(tiers: ReferenceVideoTier[]) {
+  if (billingCurrency.value !== 'CNY') return tiers
+  const mainlandTiers = tiers.filter(isMainlandReferenceVideoTier)
+  return mainlandTiers.length > 0 ? mainlandTiers : tiers
+}
+
+function findReferenceCatalogRecord(provider: string, model: string) {
+  const aliases = pricingReferenceModelAliases(model)
+  return modelReferenceCatalog.value.find((record) => {
+    if (!record.enabled || !providerMatchesReference(record.provider, provider)) return false
+    return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
+  })
+}
+
+function findReferenceProviderModel(provider: string, model: string) {
+  const exact = providerModelByModel.value.get(priceKey(provider, model))
+  if (exact) return exact
+
+  const aliases = pricingReferenceModelAliases(model)
+  return providerModels.value.find((record) => {
+    if (!providerMatchesReference(record.provider, provider)) return false
+    return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
+  })
+}
+
+function findBundledVideoTierRecord(provider: string, model: string) {
+  const aliases = pricingReferenceModelAliases(model)
+  return bundledVideoTierCatalog.value.find((record) => {
+    if (!providerMatchesReference(record.provider, provider)) return false
+    return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
+  })
+}
+
+function videoPriceTierPairLabels(referenceTier?: ReferenceVideoTier) {
+  if (!referenceTier || !referenceVideoTierHasAudio(referenceTier)) return {}
+  return {
+    pricePairLeftLabel: t('videoTierWithoutAudio'),
+    pricePairRightLabel: t('videoTierWithAudio')
+  }
+}
+
+function savedVideoTierMatchesReferenceTier(
+  tier: VideoPriceTier,
+  referenceTier: ReferenceVideoTier
+) {
+  const formResolutions = new Set(
+    tier.resolutions.flatMap(splitCommaList).map((item) => item.toLowerCase())
+  )
+  return referenceVideoTierMatchesFormResolutions(referenceTier, formResolutions)
+}
+
+function videoPriceTierFormFromSavedTier(
+  tier: VideoPriceTier | undefined,
+  resolution: string,
+  referenceTier?: ReferenceVideoTier
+) {
+  return {
+    resolutionsText: resolution,
+    resolutionLabel: referenceTier
+      ? referenceVideoTierResolutionLabel(referenceTier)
+      : videoTierFormResolutionLabel(resolution),
+    ...videoPriceTierPairLabels(referenceTier),
+    inputWithVideo:
+      microAmountToMajor(tier?.input_with_video_micros ?? 0) ||
+      (referenceTier ? referenceVideoTierInputWithVideo(referenceTier) : 0),
+    inputWithoutVideo:
+      microAmountToMajor(tier?.input_without_video_micros ?? 0) ||
+      (referenceTier ? referenceVideoTierInputWithoutVideo(referenceTier) : 0),
+    estimatedTokensPerSecond: resolvedVideoTokensPerSecondEstimate(
+      referenceTier && isAnyReferenceVideoTier(referenceTier)
+        ? null
+        : tier?.estimated_tokens_per_second,
+      resolution
+    ),
+    inputWithVideoUnit: microAmountToMajor(tier?.input_with_video_unit_micros ?? 0),
+    inputWithoutVideoUnit: microAmountToMajor(tier?.input_without_video_unit_micros ?? 0)
+  }
+}
+
+function videoPriceTiersToForm(
+  tiers: VideoPriceTier[] = [],
+  referenceTiers: ReferenceVideoTier[] = []
+) {
+  const anyReferenceTier = referenceTiers.find(isAnyReferenceVideoTier)
+  if (anyReferenceTier) {
+    const savedTier = tiers.find((tier) =>
+      savedVideoTierMatchesReferenceTier(tier, anyReferenceTier)
+    )
+    return [
+      videoPriceTierFormFromSavedTier(
+        savedTier ?? tiers[0],
+        anyVideoTierResolution,
+        anyReferenceTier
+      )
+    ]
+  }
+
+  return tiers.flatMap((tier) =>
+    tier.resolutions.flatMap(splitCommaList).map((resolution) => {
+      const formResolutions = new Set(splitCommaList(resolution).map((item) => item.toLowerCase()))
+      const referenceTier = referenceTiers.find((item) =>
+        referenceVideoTierMatchesFormResolutions(item, formResolutions)
+      )
+      return videoPriceTierFormFromSavedTier(tier, resolution, referenceTier)
+    })
+  )
 }
 
 function referenceVideoTiersToForm(tiers: ReferenceVideoTier[]) {
-  return tiers.map((tier) => ({
-    resolutionsText: tier.resolution ?? '',
-    inputWithVideo: tier.tiers?.input_with_video ?? 0,
-    inputWithoutVideo: tier.tiers?.input_without_video ?? 0,
-    estimatedTokensPerSecond: 1_000_000,
-    inputWithVideoUnit: 0,
-    inputWithoutVideoUnit: 0
-  }))
+  return tiers.flatMap((tier) =>
+    referenceVideoTierResolutions(tier).map((resolution) => ({
+      resolutionsText: resolution,
+      resolutionLabel: referenceVideoTierResolutionLabel(tier),
+      pricePairLeftLabel: referenceVideoTierHasAudio(tier) ? t('videoTierWithoutAudio') : undefined,
+      pricePairRightLabel: referenceVideoTierHasAudio(tier) ? t('videoTierWithAudio') : undefined,
+      inputWithVideo: referenceVideoTierInputWithVideo(tier),
+      inputWithoutVideo: referenceVideoTierInputWithoutVideo(tier),
+      estimatedTokensPerSecond: resolvedVideoTokensPerSecondEstimate(null, resolution),
+      inputWithVideoUnit: 0,
+      inputWithoutVideoUnit: 0
+    }))
+  )
 }
 
 function videoPriceTiersPayload(form: ChannelPriceForm): VideoPriceTier[] {
@@ -597,9 +893,7 @@ function videoPriceTiersPayload(form: ChannelPriceForm): VideoPriceTier[] {
     .map((tier) => ({
       resolutions: splitCommaList(tier.resolutionsText),
       input_with_video_micros:
-        form.videoBillingMode === 'official_token'
-          ? majorToMicroAmount(tier.inputWithVideo)
-          : null,
+        form.videoBillingMode === 'official_token' ? majorToMicroAmount(tier.inputWithVideo) : null,
       input_without_video_micros:
         form.videoBillingMode === 'official_token'
           ? majorToMicroAmount(tier.inputWithoutVideo)
@@ -609,9 +903,7 @@ function videoPriceTiersPayload(form: ChannelPriceForm): VideoPriceTier[] {
           ? Math.max(1, Math.round(tier.estimatedTokensPerSecond || 0))
           : null,
       input_with_video_unit_micros:
-        form.videoBillingMode === 'per_second'
-          ? majorToMicroAmount(tier.inputWithVideoUnit)
-          : null,
+        form.videoBillingMode === 'per_second' ? majorToMicroAmount(tier.inputWithVideoUnit) : null,
       input_without_video_unit_micros:
         form.videoBillingMode === 'per_second'
           ? majorToMicroAmount(tier.inputWithoutVideoUnit)
@@ -662,9 +954,9 @@ function openPriceDialog(row: Channel) {
         ? 'image'
         : price?.billing_meter === 'video' && supportsSeedanceVideoBilling
           ? 'video'
-        : price?.billing_meter === 'token' && !supportsSeedanceVideoBilling
-          ? 'token'
-          : null
+          : price?.billing_meter === 'token' && !supportsSeedanceVideoBilling
+            ? 'token'
+            : null
     const billingMeter = savedBillingMeter ?? defaultBillingMeterForModel(row.provider, model)
     const videoBillingMode =
       supportsSeedanceVideoBilling && price?.video_billing_mode
@@ -674,7 +966,7 @@ function openPriceDialog(row: Channel) {
           : null
     const initialVideoPriceTiers =
       supportsSeedanceVideoBilling && price?.video_price_tiers?.length
-        ? videoPriceTiersToForm(price.video_price_tiers)
+        ? videoPriceTiersToForm(price.video_price_tiers, referenceVideoTiers)
         : supportsSeedanceVideoBilling && referenceVideoTiers.length > 0
           ? referenceVideoTiersToForm(referenceVideoTiers)
           : []
@@ -730,9 +1022,10 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
     if (tiers.length > 0) {
       return tiers
         .map((tier) => {
-          const inputWithoutVideo = tier.tiers?.input_without_video
-          const inputWithVideo = tier.tiers?.input_with_video
-          return `${tier.resolution ?? ''} ${t('videoInputWithoutVideo')} ${currencySymbol.value}${inputWithoutVideo ?? 0} / ${t('videoInputWithVideo')} ${currencySymbol.value}${inputWithVideo ?? 0}`
+          const resolutionLabel =
+            referenceVideoTierResolutionLabel(tier) ||
+            referenceVideoTierResolutions(tier).join(', ')
+          return `${resolutionLabel} ${referenceVideoTierSummary(tier)}`
         })
         .join('\n')
     }
@@ -752,11 +1045,23 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
     locale.value
   )
   const cacheWrite =
-    template.cache_write_price_micros === undefined ||
-    template.cache_write_price_micros === null
+    template.cache_write_price_micros === undefined || template.cache_write_price_micros === null
       ? `${currencySymbol.value}0`
       : formatPricePerMillion(template.cache_write_price_micros, locale.value)
   return `Token ${input} / ${output}\nCache ${cacheRead} / ${cacheWrite}`
+}
+
+function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVideoPriceTierForm) {
+  if (!form.canUseSeedanceVideoBilling) return ''
+  const resolutions = new Set(
+    splitCommaList(tier.resolutionsText).map((resolution) => resolution.toLowerCase())
+  )
+  const referenceTier = seedanceReferenceVideoTiers(form.provider, form.model).find((item) => {
+    return referenceVideoTierMatchesFormResolutions(item, resolutions)
+  })
+  if (!referenceTier) return ''
+
+  return referenceVideoTierSummary(referenceTier)
 }
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
@@ -784,8 +1089,7 @@ function fillReferencePrice(form: (typeof priceForms)[string]) {
     template.cache_read_price_micros ?? derivedCacheReadPrice(template.input_price_micros)
   )
   form.cacheWritePerMillion =
-    template.cache_write_price_micros === undefined ||
-    template.cache_write_price_micros === null
+    template.cache_write_price_micros === undefined || template.cache_write_price_micros === null
       ? 0
       : microAmountToMajor(template.cache_write_price_micros)
   form.unitPrice = microAmountToMajor(template.unit_price_micros ?? 0)
@@ -824,7 +1128,21 @@ async function syncCreateReferencePricesIfNeeded() {
 
   try {
     await syncPricingTemplates()
-    templates.value = await getPricingTemplates()
+    const [
+      fetchedTemplates,
+      fetchedProviderModels,
+      fetchedModelReferenceCatalog,
+      fetchedBundledVideoTierCatalog
+    ] = await Promise.all([
+      getPricingTemplates(),
+      getProviderModels(),
+      getModelReferenceCatalog(),
+      getBundledVideoTierCatalog()
+    ])
+    templates.value = fetchedTemplates
+    providerModels.value = fetchedProviderModels
+    modelReferenceCatalog.value = fetchedModelReferenceCatalog
+    bundledVideoTierCatalog.value = fetchedBundledVideoTierCatalog
     return true
   } catch (err) {
     ElMessage.error(readReferenceSyncError(err))
@@ -881,9 +1199,7 @@ async function saveChannelPrices() {
                 ? representativeWithoutVideo
                 : null,
           video_billing_mode:
-            form.canUseSeedanceVideoBilling && form.videoBillingMode
-              ? form.videoBillingMode
-              : null,
+            form.canUseSeedanceVideoBilling && form.videoBillingMode ? form.videoBillingMode : null,
           video_price_tiers: videoTiers,
           enabled: shouldEnablePriceForm(form)
         })
@@ -1206,12 +1522,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column
-          :label="t('actions')"
-          min-width="176"
-          align="center"
-          header-align="center"
-        >
+        <el-table-column :label="t('actions')" min-width="176" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -1346,6 +1657,7 @@ onMounted(loadInitialData)
       :saving="savingPrices"
       :has-reference-price="hasReferencePrice"
       :reference-price-summary="referencePriceSummary"
+      :video-tier-reference-price-summary="videoTierReferencePriceSummary"
       :reference-price-fallback-label="referencePriceFallbackLabel"
       @apply-reference-prices="applyReferencePrices"
       @save="saveChannelPrices"

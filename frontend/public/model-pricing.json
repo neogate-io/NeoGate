@@ -26065,49 +26065,43 @@
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.2
-                    }
+                    },
+                    "label": "中国内地 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "全球 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.2
-                    }
+                    },
+                    "label": "全球 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 1.049188
-                    }
+                    },
+                    "label": "国际 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.348956
-                    }
-                  },
-                  {
-                    "resolution": "720P",
-                    "tiers": {
-                      "price": 0.9
-                    }
-                  },
-                  {
-                    "resolution": "1080P",
-                    "tiers": {
-                      "price": 1.2
-                    }
+                    },
+                    "label": "国际 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -26123,49 +26117,43 @@
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.2
-              }
+              },
+              "label": "中国内地 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "全球 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.2
-              }
+              },
+              "label": "全球 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 1.049188
-              }
+              },
+              "label": "国际 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.348956
-              }
-            },
-            {
-              "resolution": "720P",
-              "tiers": {
-                "price": 0.9
-              }
-            },
-            {
-              "resolution": "1080P",
-              "tiers": {
-                "price": 1.2
-              }
+              },
+              "label": "国际 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -26200,49 +26188,43 @@
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.6
-                    }
+                    },
+                    "label": "中国内地 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "全球 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.6
-                    }
+                    },
+                    "label": "全球 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 1.049188
-                    }
+                    },
+                    "label": "国际 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.798608
-                    }
-                  },
-                  {
-                    "resolution": "720P",
-                    "tiers": {
-                      "price": 0.9
-                    }
-                  },
-                  {
-                    "resolution": "1080P",
-                    "tiers": {
-                      "price": 1.6
-                    }
+                    },
+                    "label": "国际 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -26258,49 +26240,43 @@
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.6
-              }
+              },
+              "label": "中国内地 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "全球 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.6
-              }
+              },
+              "label": "全球 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 1.049188
-              }
+              },
+              "label": "国际 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.798608
-              }
-            },
-            {
-              "resolution": "720P",
-              "tiers": {
-                "price": 0.9
-              }
-            },
-            {
-              "resolution": "1080P",
-              "tiers": {
-                "price": 1.6
-              }
+              },
+              "label": "国际 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -26335,49 +26311,43 @@
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.2
-                    }
+                    },
+                    "label": "中国内地 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "全球 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.2
-                    }
+                    },
+                    "label": "全球 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 1.049188
-                    }
+                    },
+                    "label": "国际 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.348956
-                    }
-                  },
-                  {
-                    "resolution": "720P",
-                    "tiers": {
-                      "price": 0.9
-                    }
-                  },
-                  {
-                    "resolution": "1080P",
-                    "tiers": {
-                      "price": 1.2
-                    }
+                    },
+                    "label": "国际 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -26393,49 +26363,43 @@
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.2
-              }
+              },
+              "label": "中国内地 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "全球 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.2
-              }
+              },
+              "label": "全球 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 1.049188
-              }
+              },
+              "label": "国际 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.348956
-              }
-            },
-            {
-              "resolution": "720P",
-              "tiers": {
-                "price": 0.9
-              }
-            },
-            {
-              "resolution": "1080P",
-              "tiers": {
-                "price": 1.2
-              }
+              },
+              "label": "国际 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -26470,49 +26434,43 @@
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.6
-                    }
+                    },
+                    "label": "中国内地 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "全球 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.6
-                    }
+                    },
+                    "label": "全球 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 1.049188
-                    }
+                    },
+                    "label": "国际 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.798608
-                    }
-                  },
-                  {
-                    "resolution": "720P",
-                    "tiers": {
-                      "price": 0.9
-                    }
-                  },
-                  {
-                    "resolution": "1080P",
-                    "tiers": {
-                      "price": 1.6
-                    }
+                    },
+                    "label": "国际 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -26528,49 +26486,43 @@
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.6
-              }
+              },
+              "label": "中国内地 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "全球 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.6
-              }
+              },
+              "label": "全球 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 1.049188
-              }
+              },
+              "label": "国际 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.798608
-              }
-            },
-            {
-              "resolution": "720P",
-              "tiers": {
-                "price": 0.9
-              }
-            },
-            {
-              "resolution": "1080P",
-              "tiers": {
-                "price": 1.6
-              }
+              },
+              "label": "国际 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -26605,49 +26557,43 @@
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.2
-                    }
+                    },
+                    "label": "中国内地 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "全球 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.2
-                    }
+                    },
+                    "label": "全球 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 1.049188
-                    }
+                    },
+                    "label": "国际 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.348956
-                    }
-                  },
-                  {
-                    "resolution": "720P",
-                    "tiers": {
-                      "price": 0.9
-                    }
-                  },
-                  {
-                    "resolution": "1080P",
-                    "tiers": {
-                      "price": 1.2
-                    }
+                    },
+                    "label": "国际 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -26663,49 +26609,43 @@
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.2
-              }
+              },
+              "label": "中国内地 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "全球 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.2
-              }
+              },
+              "label": "全球 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 1.049188
-              }
+              },
+              "label": "国际 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.348956
-              }
-            },
-            {
-              "resolution": "720P",
-              "tiers": {
-                "price": 0.9
-              }
-            },
-            {
-              "resolution": "1080P",
-              "tiers": {
-                "price": 1.2
-              }
+              },
+              "label": "国际 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -26740,49 +26680,43 @@
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.6
-                    }
+                    },
+                    "label": "中国内地 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "全球 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.6
-                    }
+                    },
+                    "label": "全球 · 1080P"
                   },
                   {
                     "resolution": "720P",
                     "tiers": {
                       "price": 1.049188
-                    }
+                    },
+                    "label": "国际 · 720P"
                   },
                   {
                     "resolution": "1080P",
                     "tiers": {
                       "price": 1.798608
-                    }
-                  },
-                  {
-                    "resolution": "720P",
-                    "tiers": {
-                      "price": 0.9
-                    }
-                  },
-                  {
-                    "resolution": "1080P",
-                    "tiers": {
-                      "price": 1.6
-                    }
+                    },
+                    "label": "国际 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -26798,49 +26732,43 @@
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.6
-              }
+              },
+              "label": "中国内地 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "全球 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.6
-              }
+              },
+              "label": "全球 · 1080P"
             },
             {
               "resolution": "720P",
               "tiers": {
                 "price": 1.049188
-              }
+              },
+              "label": "国际 · 720P"
             },
             {
               "resolution": "1080P",
               "tiers": {
                 "price": 1.798608
-              }
-            },
-            {
-              "resolution": "720P",
-              "tiers": {
-                "price": 0.9
-              }
-            },
-            {
-              "resolution": "1080P",
-              "tiers": {
-                "price": 1.6
-              }
+              },
+              "label": "国际 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -28476,33 +28404,43 @@
                 "video_tiers": [
                   {
                     "resolution": "480P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.1
-                    }
+                    },
+                    "label": "中国内地 · 无声视频 · 480P"
                   },
                   {
                     "resolution": "720P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.2
-                    }
+                    },
+                    "label": "中国内地 · 无声视频 · 720P"
                   },
                   {
                     "resolution": "1080P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.48
-                    }
+                    },
+                    "label": "中国内地 · 无声视频 · 1080P"
                   },
                   {
                     "resolution": "480P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.110089
-                    }
+                    },
+                    "label": "国际 · 无声视频 · 480P"
                   },
                   {
                     "resolution": "720P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.264213
-                    }
+                    },
+                    "label": "国际 · 无声视频 · 720P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -28516,33 +28454,43 @@
           "video_tiers": [
             {
               "resolution": "480P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.1
-              }
+              },
+              "label": "中国内地 · 无声视频 · 480P"
             },
             {
               "resolution": "720P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.2
-              }
+              },
+              "label": "中国内地 · 无声视频 · 720P"
             },
             {
               "resolution": "1080P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.48
-              }
+              },
+              "label": "中国内地 · 无声视频 · 1080P"
             },
             {
               "resolution": "480P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.110089
-              }
+              },
+              "label": "国际 · 无声视频 · 480P"
             },
             {
               "resolution": "720P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.264213
-              }
+              },
+              "label": "国际 · 无声视频 · 720P"
             }
           ],
           "basis": "multi_tier_video"
@@ -28575,27 +28523,35 @@
                 "video_tiers": [
                   {
                     "resolution": "480P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.14
-                    }
+                    },
+                    "label": "中国内地 · 无声视频 · 480P"
                   },
                   {
                     "resolution": "1080P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.7
-                    }
+                    },
+                    "label": "中国内地 · 无声视频 · 1080P"
                   },
                   {
                     "resolution": "480P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.146785
-                    }
+                    },
+                    "label": "国际 · 无声视频 · 480P"
                   },
                   {
                     "resolution": "1080P",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.733924
-                    }
+                    },
+                    "label": "国际 · 无声视频 · 1080P"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -28609,27 +28565,35 @@
           "video_tiers": [
             {
               "resolution": "480P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.14
-              }
+              },
+              "label": "中国内地 · 无声视频 · 480P"
             },
             {
               "resolution": "1080P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.7
-              }
+              },
+              "label": "中国内地 · 无声视频 · 1080P"
             },
             {
               "resolution": "480P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.146785
-              }
+              },
+              "label": "国际 · 无声视频 · 480P"
             },
             {
               "resolution": "1080P",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.733924
-              }
+              },
+              "label": "国际 · 无声视频 · 1080P"
             }
           ],
           "basis": "multi_tier_video"
@@ -29953,27 +29917,35 @@
                 "video_tiers": [
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.4
-                    }
+                    },
+                    "label": "中国内地 · 标准模式wan-std"
                   },
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.6
-                    }
+                    },
+                    "label": "中国内地 · 专业模式wan-pro"
                   },
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.880709
-                    }
+                    },
+                    "label": "国际 · 标准模式wan-std"
                   },
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 1.321063
-                    }
+                    },
+                    "label": "国际 · 专业模式wan-pro"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -29987,27 +29959,35 @@
           "video_tiers": [
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.4
-              }
+              },
+              "label": "中国内地 · 标准模式wan-std"
             },
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.6
-              }
+              },
+              "label": "中国内地 · 专业模式wan-pro"
             },
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.880709
-              }
+              },
+              "label": "国际 · 标准模式wan-std"
             },
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 1.321063
-              }
+              },
+              "label": "国际 · 专业模式wan-pro"
             }
           ],
           "basis": "multi_tier_video"
@@ -30040,27 +30020,35 @@
                 "video_tiers": [
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.6
-                    }
+                    },
+                    "label": "中国内地 · 标准模式wan-std"
                   },
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 0.9
-                    }
+                    },
+                    "label": "中国内地 · 专业模式wan-pro"
                   },
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 1.321063
-                    }
+                    },
+                    "label": "国际 · 标准模式wan-std"
                   },
                   {
                     "resolution": "",
+                    "unit": "per_second",
                     "tiers": {
                       "price": 1.908202
-                    }
+                    },
+                    "label": "国际 · 专业模式wan-pro"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -30074,27 +30062,35 @@
           "video_tiers": [
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.6
-              }
+              },
+              "label": "中国内地 · 标准模式wan-std"
             },
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 0.9
-              }
+              },
+              "label": "中国内地 · 专业模式wan-pro"
             },
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 1.321063
-              }
+              },
+              "label": "国际 · 标准模式wan-std"
             },
             {
               "resolution": "",
+              "unit": "per_second",
               "tiers": {
                 "price": 1.908202
-              }
+              },
+              "label": "国际 · 专业模式wan-pro"
             }
           ],
           "basis": "multi_tier_video"
@@ -34364,22 +34360,28 @@
                 "output": 1.35,
                 "video_tiers": [
                   {
-                    "resolution": "1.35",
+                    "resolution": "768P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 1.35
-                    }
+                    },
+                    "label": "图生视频，768P 6s"
                   },
                   {
-                    "resolution": "2.25",
+                    "resolution": "768P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 2.25
-                    }
+                    },
+                    "label": "图生视频，768P 10s"
                   },
                   {
-                    "resolution": "2.31",
+                    "resolution": "1080P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 2.31
-                    }
+                    },
+                    "label": "图生视频，1080P 6s"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -34392,22 +34394,28 @@
           "output": 1.35,
           "video_tiers": [
             {
-              "resolution": "1.35",
+              "resolution": "768P",
+              "unit": "per_video",
               "tiers": {
                 "price": 1.35
-              }
+              },
+              "label": "图生视频，768P 6s"
             },
             {
-              "resolution": "2.25",
+              "resolution": "768P",
+              "unit": "per_video",
               "tiers": {
                 "price": 2.25
-              }
+              },
+              "label": "图生视频，768P 10s"
             },
             {
-              "resolution": "2.31",
+              "resolution": "1080P",
+              "unit": "per_video",
               "tiers": {
                 "price": 2.31
-              }
+              },
+              "label": "图生视频，1080P 6s"
             }
           ],
           "basis": "multi_tier_video"
@@ -34438,22 +34446,28 @@
                 "output": 2,
                 "video_tiers": [
                   {
-                    "resolution": "2.00",
+                    "resolution": "768P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 2
-                    }
+                    },
+                    "label": "文生视频，图生视频，768P 6s"
                   },
                   {
-                    "resolution": "4.00",
+                    "resolution": "768P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 4
-                    }
+                    },
+                    "label": "文生视频，图生视频，768P 10s"
                   },
                   {
-                    "resolution": "3.50",
+                    "resolution": "1080P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 3.5
-                    }
+                    },
+                    "label": "文生视频，图生视频，1080P 6s"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -34466,22 +34480,28 @@
           "output": 2,
           "video_tiers": [
             {
-              "resolution": "2.00",
+              "resolution": "768P",
+              "unit": "per_video",
               "tiers": {
                 "price": 2
-              }
+              },
+              "label": "文生视频，图生视频，768P 6s"
             },
             {
-              "resolution": "4.00",
+              "resolution": "768P",
+              "unit": "per_video",
               "tiers": {
                 "price": 4
-              }
+              },
+              "label": "文生视频，图生视频，768P 10s"
             },
             {
-              "resolution": "3.50",
+              "resolution": "1080P",
+              "unit": "per_video",
               "tiers": {
                 "price": 3.5
-              }
+              },
+              "label": "文生视频，图生视频，1080P 6s"
             }
           ],
           "basis": "multi_tier_video"
@@ -34512,34 +34532,44 @@
                 "output": 0.6,
                 "video_tiers": [
                   {
-                    "resolution": "2.00",
+                    "resolution": "768P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 2
-                    }
+                    },
+                    "label": "文生视频，图生视频，768P 6s"
                   },
                   {
-                    "resolution": "4.00",
+                    "resolution": "768P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 4
-                    }
+                    },
+                    "label": "文生视频，图生视频，768P 10s"
                   },
                   {
-                    "resolution": "3.50",
+                    "resolution": "1080P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 3.5
-                    }
+                    },
+                    "label": "文生视频，图生视频，1080P 6s"
                   },
                   {
-                    "resolution": "0.60",
+                    "resolution": "512P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 0.6
-                    }
+                    },
+                    "label": "图生视频，512P 6s"
                   },
                   {
-                    "resolution": "1.00",
+                    "resolution": "512P",
+                    "unit": "per_video",
                     "tiers": {
                       "price": 1
-                    }
+                    },
+                    "label": "图生视频，512P 10s"
                   }
                 ],
                 "basis": "multi_tier_video"
@@ -34552,34 +34582,44 @@
           "output": 0.6,
           "video_tiers": [
             {
-              "resolution": "2.00",
+              "resolution": "768P",
+              "unit": "per_video",
               "tiers": {
                 "price": 2
-              }
+              },
+              "label": "文生视频，图生视频，768P 6s"
             },
             {
-              "resolution": "4.00",
+              "resolution": "768P",
+              "unit": "per_video",
               "tiers": {
                 "price": 4
-              }
+              },
+              "label": "文生视频，图生视频，768P 10s"
             },
             {
-              "resolution": "3.50",
+              "resolution": "1080P",
+              "unit": "per_video",
               "tiers": {
                 "price": 3.5
-              }
+              },
+              "label": "文生视频，图生视频，1080P 6s"
             },
             {
-              "resolution": "0.60",
+              "resolution": "512P",
+              "unit": "per_video",
               "tiers": {
                 "price": 0.6
-              }
+              },
+              "label": "图生视频，512P 6s"
             },
             {
-              "resolution": "1.00",
+              "resolution": "512P",
+              "unit": "per_video",
               "tiers": {
                 "price": 1
-              }
+              },
+              "label": "图生视频，512P 10s"
             }
           ],
           "basis": "multi_tier_video"
@@ -37227,8 +37267,8 @@
       "fetched_at": "2026-07-08T08:22:14.265388+00:00"
     }
   },
-  "volcengine-ark": {
-    "id": "volcengine-ark",
+  "doubao": {
+    "id": "doubao",
     "env": [
       "ARK_API_KEY"
     ],

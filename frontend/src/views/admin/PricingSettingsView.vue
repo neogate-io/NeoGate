@@ -148,12 +148,7 @@ onMounted(load)
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column
-          :label="t('actions')"
-          min-width="64"
-          align="center"
-          header-align="center"
-        >
+        <el-table-column :label="t('actions')" min-width="64" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -176,6 +171,7 @@ onMounted(load)
     <el-dialog
       v-model="dialogOpen"
       class="settings-dialog"
+      :close-on-click-modal="false"
       :title="t('editPricingPolicy')"
       width="400px"
     >

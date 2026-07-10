@@ -236,7 +236,10 @@ fn matching_tier<'a>(tiers: &'a [VideoPriceTier], resolution: &str) -> Option<&'
         tier.resolutions
             .iter()
             .flat_map(|value| value.split(','))
-            .any(|candidate| normalize_resolution(Some(candidate)) == resolution)
+            .any(|candidate| {
+                let candidate = candidate.trim();
+                candidate == "*" || normalize_resolution(Some(candidate)) == resolution
+            })
     })
 }
 
@@ -397,6 +400,26 @@ mod tests {
 
         assert_eq!(prepared.metadata.price_micros, 9_000_000);
         assert_eq!(prepared.estimated_micros, 54_000_000);
+    }
+
+    #[test]
+    fn wildcard_resolution_tier_matches_any_resolution() {
+        let mut price = price(VideoBillingMode::OfficialToken);
+        price.video_price_tiers = vec![VideoPriceTier {
+            resolutions: vec!["*".to_string()],
+            input_with_video_micros: Some(16_000_000),
+            input_without_video_micros: Some(8_000_000),
+            estimated_tokens_per_second: Some(100_000),
+            input_with_video_unit_micros: None,
+            input_without_video_unit_micros: None,
+        }];
+        let input = video_billing_input(Some("1080p"), Some(5), false);
+        let prepared =
+            prepare_seedance_video_billing("doubao", "doubao-seedance-1.5-pro", &price, &input)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(prepared.metadata.price_micros, 8_000_000);
     }
 
     #[test]

@@ -100,6 +100,7 @@ function endpointBaseUrlLabel(protocol: EndpointProtocol) {
   <el-dialog
     v-model="open"
     class="channel-dialog"
+    :close-on-click-modal="false"
     :title="mode === 'create' ? t('createChannel') : t('editChannel')"
     width="680px"
   >
@@ -637,11 +638,6 @@ function endpointBaseUrlLabel(protocol: EndpointProtocol) {
   font-size: 18px;
   font-weight: 760;
   line-height: 1.2;
-}
-
-:global(.channel-dialog .el-dialog__headerbtn) {
-  right: 12px;
-  top: 10px;
 }
 
 :global(.channel-dialog .el-dialog__body) {

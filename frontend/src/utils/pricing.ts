@@ -10,6 +10,26 @@ export function derivedCacheReadPrice(inputPrice: number) {
   return Math.round(inputPrice / 10)
 }
 
+export function estimatedVideoTokensPerSecond(resolutionsText?: string | null) {
+  const normalized = (resolutionsText ?? '').trim().toLowerCase()
+  return /(^|[^a-z0-9])(?:1080p|2160p|4k)(?=$|[^a-z0-9])/.test(normalized) ? 200_000 : 100_000
+}
+
+export function resolvedVideoTokensPerSecondEstimate(
+  estimatedTokensPerSecond: number | null | undefined,
+  resolutionsText?: string | null
+) {
+  if (
+    estimatedTokensPerSecond &&
+    Number.isFinite(estimatedTokensPerSecond) &&
+    estimatedTokensPerSecond > 0 &&
+    estimatedTokensPerSecond !== 1_000_000
+  ) {
+    return estimatedTokensPerSecond
+  }
+  return estimatedVideoTokensPerSecond(resolutionsText)
+}
+
 export function isProviderPriceConfigured(price?: ProviderPrice) {
   if (!price) return false
   if (price.billing_meter === 'image') {
@@ -25,6 +45,32 @@ export function isProviderPriceReady(price?: ProviderPrice) {
   return Boolean(price?.enabled && isProviderPriceConfigured(price))
 }
 
+export function pricingReferenceModelAliases(model: string) {
+  const aliases = new Set<string>()
+  const queue = [model.trim().toLowerCase()]
+
+  for (const alias of queue) {
+    if (!alias || aliases.has(alias)) continue
+    aliases.add(alias)
+
+    const dotVersionAlias = alias.replace(/-(\d+)-(\d+)(?=-|$)/g, '-$1.$2')
+    if (dotVersionAlias !== alias) queue.push(dotVersionAlias)
+
+    const withoutDateSuffix = alias.replace(/-\d{6}$/, '')
+    if (withoutDateSuffix !== alias) queue.push(withoutDateSuffix)
+
+    const withoutResolutionSuffix = alias.replace(/-(?:480p|720p|1080p|4k)$/, '')
+    if (withoutResolutionSuffix !== alias) queue.push(withoutResolutionSuffix)
+  }
+
+  return aliases
+}
+
+function hasReferenceModelAlias(model: string, templateModel: string) {
+  const aliases = pricingReferenceModelAliases(model)
+  return [...pricingReferenceModelAliases(templateModel)].some((alias) => aliases.has(alias))
+}
+
 export function findPricingTemplate(templates: PricingTemplate[], provider: string, model: string) {
   const normalizedProvider = provider.trim()
   const normalizedModel = model.trim().toLowerCase()
@@ -32,12 +78,21 @@ export function findPricingTemplate(templates: PricingTemplate[], provider: stri
     (template) =>
       template.enabled &&
       template.source !== CONFIRMED_PRICE_SOURCE &&
-      template.model.trim().toLowerCase() === normalizedModel
+      hasReferenceModelAlias(normalizedModel, template.model)
   )
-  const exact = enabledTemplates.find((template) => template.provider.trim() === normalizedProvider)
+  const sameModelTemplates = enabledTemplates.filter(
+    (template) => template.model.trim().toLowerCase() === normalizedModel
+  )
+  const exact = sameModelTemplates.find(
+    (template) => template.provider.trim() === normalizedProvider
+  )
 
   if (exact) {
     return exact
   }
-  return enabledTemplates.find((template) => template.provider.trim() !== normalizedProvider)
+  return (
+    enabledTemplates.find((template) => template.provider.trim() === normalizedProvider) ??
+    sameModelTemplates.find((template) => template.provider.trim() !== normalizedProvider) ??
+    enabledTemplates.find((template) => template.provider.trim() !== normalizedProvider)
+  )
 }

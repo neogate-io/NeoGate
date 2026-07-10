@@ -113,8 +113,7 @@ function setLiveListRef(element: unknown) {
     class="channel-dialog diagnostic-dialog"
     :title="t('channelDiagnosticReport')"
     width="760px"
-    :close-on-click-modal="!diagnostic.inProgress.value"
-    :close-on-press-escape="!diagnostic.inProgress.value"
+    :close-on-click-modal="false"
   >
     <div v-if="diagnostic.inProgress.value && diagnostic.channel.value" class="diagnostic-running">
       <div class="diagnostic-running-icon">

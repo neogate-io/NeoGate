@@ -40,12 +40,7 @@ import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../
 import { createConfirmAction } from '../../utils/confirm'
 import { copyTextWithMessage } from '../../utils/clipboard'
 import { readError } from '../../utils/errors'
-import {
-  formatCompactDateTime,
-  formatDateTime,
-  downloadCsv,
-  maskApiKey
-} from '../../utils/format'
+import { formatCompactDateTime, formatDateTime, downloadCsv, maskApiKey } from '../../utils/format'
 
 const { locale, t } = useLocale()
 const { formatMoney, majorToMicroAmount } = useBillingCurrency()
@@ -702,12 +697,7 @@ onMounted(() => {
             </button>
           </template>
         </el-table-column>
-        <el-table-column
-          :label="t('actions')"
-          min-width="286"
-          align="center"
-          header-align="center"
-        >
+        <el-table-column :label="t('actions')" min-width="286" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -802,6 +792,7 @@ onMounted(() => {
     <el-dialog
       v-model="userDialogVisible"
       class="user-admin-dialog user-edit-dialog user-create-dialog"
+      :close-on-click-modal="false"
       :title="userDialogTitle"
       width="420px"
     >
@@ -889,6 +880,7 @@ onMounted(() => {
     <el-dialog
       v-model="userKeysDialogVisible"
       class="user-admin-dialog user-keys-dialog"
+      :close-on-click-modal="false"
       :title="t('userPassword')"
       width="860px"
     >

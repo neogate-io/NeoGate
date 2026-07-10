@@ -30,6 +30,7 @@ DEFAULT_API_URL = (
 )
 DEFAULT_OUTPUT = Path("frontend/public/model-pricing.json")
 USER_AGENT = "Mozilla/5.0 (compatible; NeoGate pricing scraper; +https://github.com/neogate-io/NeoGate)"
+PROVIDER_ID = "doubao"
 
 
 class ScrapeError(RuntimeError):
@@ -414,8 +415,8 @@ def to_models_dev_payload(
         )
 
     return {
-        "volcengine-ark": {
-            "id": "volcengine-ark",
+        PROVIDER_ID: {
+            "id": PROVIDER_ID,
             "env": ["ARK_API_KEY"],
             "npm": "@ai-sdk/openai-compatible",
             "api": "https://ark.cn-beijing.volces.com/api/v3",
@@ -592,6 +593,28 @@ def scrape(api_url: str, source_url: str) -> dict[str, Any]:
     return to_models_dev_payload(records, tables, source_url, api_url, result)
 
 
+def provider_metadata(provider: Any) -> dict[str, Any]:
+    if not isinstance(provider, dict):
+        return {}
+    metadata = provider.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    return metadata
+
+
+def same_scraper_source(
+    provider: Any,
+    source_document_ids: set[str],
+    source_api_urls: set[str],
+) -> bool:
+    metadata = provider_metadata(provider)
+    if not metadata:
+        return False
+    document_id = str(metadata.get("document_id") or "")
+    source_api_url = str(metadata.get("source_api_url") or "")
+    return (document_id in source_document_ids) or (source_api_url in source_api_urls)
+
+
 def update_provider_file(output: Path, provider_payload: dict[str, Any]) -> tuple[int, int]:
     merged: dict[str, Any] = {}
     if output.exists():
@@ -602,6 +625,21 @@ def update_provider_file(output: Path, provider_payload: dict[str, Any]) -> tupl
         if not isinstance(existing, dict):
             raise ScrapeError(f"existing {output} must contain a provider map object")
         merged.update(existing)
+    source_document_ids: set[str] = set()
+    source_api_urls: set[str] = set()
+    for provider in provider_payload.values():
+        metadata = provider_metadata(provider)
+        if not metadata:
+            continue
+        source_document_ids.add(str(metadata.get("document_id") or ""))
+        source_api_urls.add(str(metadata.get("source_api_url") or ""))
+    source_document_ids.discard("")
+    source_api_urls.discard("")
+    merged = {
+        provider_id: provider
+        for provider_id, provider in merged.items()
+        if not same_scraper_source(provider, source_document_ids, source_api_urls)
+    }
     merged.update(provider_payload)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(dict(sorted(merged.items())), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -628,11 +666,11 @@ def main() -> int:
         print(text, end="")
     else:
         output = Path(args.output)
-        provider = payload["volcengine-ark"]
+        provider = payload[PROVIDER_ID]
         table_count = len(provider["metadata"]["tables"])
         provider_count, model_count = update_provider_file(output, payload)
         print(
-            f"updated volcengine-ark with {len(provider['models'])} models from {table_count} tables "
+            f"updated {PROVIDER_ID} with {len(provider['models'])} models from {table_count} tables "
             f"in {output} ({provider_count} providers, {model_count} models total)"
         )
     return 0

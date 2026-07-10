@@ -1114,11 +1114,6 @@ fn validate_video_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         }
         return Ok(());
     }
-    if req.provider != "doubao" {
-        return Err(AppError::BadRequest(
-            "video billing mode is only supported for doubao provider".to_string(),
-        ));
-    }
     if req.billing_meter != BillingMeter::Video {
         return Err(AppError::BadRequest(
             "video billing mode requires video billing meter".to_string(),

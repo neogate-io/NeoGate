@@ -45,8 +45,8 @@ pub struct PreparedVideoBilling {
     pub estimated_micros: i64,
 }
 
-pub fn seedance_video_billing_enabled(provider: &str, price: &Price) -> bool {
-    provider == "doubao" && price.video_billing_mode.is_some()
+pub fn seedance_video_billing_enabled(_provider: &str, price: &Price) -> bool {
+    price.billing_meter == BillingMeter::Video && price.video_billing_mode.is_some()
 }
 
 pub fn video_billing_input(
@@ -384,6 +384,22 @@ mod tests {
         assert_eq!(prepared.metadata.price_micros, 28_000_000);
         assert_eq!(prepared.metadata.estimated_tokens, Some(500_000));
         assert_eq!(prepared.estimated_micros, 14_000_000);
+    }
+
+    #[test]
+    fn video_billing_is_not_limited_to_doubao_provider() {
+        let input = video_billing_input(Some("720p"), Some(5), false);
+        let prepared = prepare_seedance_video_billing(
+            "qwen",
+            "happyhorse-1.1-t2v",
+            &price(VideoBillingMode::OfficialToken),
+            &input,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(prepared.metadata.price_micros, 46_000_000);
+        assert_eq!(prepared.estimated_micros, 23_000_000);
     }
 
     #[test]

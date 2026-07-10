@@ -15,6 +15,7 @@ export type ChannelVideoPriceTierForm = {
   estimatedTokensPerSecond: number
   inputWithVideoUnit: number
   inputWithoutVideoUnit: number
+  singlePrice?: boolean
 }
 
 export type ChannelPriceForm = {
@@ -32,6 +33,7 @@ export type ChannelPriceForm = {
   hasPrice: boolean
   hasPriceRecord: boolean
   billingMeterLocked: boolean
+  videoBillingModeLocked: boolean
   canUseImageBilling: boolean
   canUseSeedanceVideoBilling: boolean
 }
@@ -58,20 +60,18 @@ const emit = defineEmits<{
 const { t } = useLocale()
 const { billingCurrency } = useBillingCurrency()
 
+const priceFormList = computed(() => Object.values(props.forms))
+
 const textPriceForms = computed(() =>
-  Object.values(props.forms).filter(
-    (form) => !form.canUseSeedanceVideoBilling && !form.canUseImageBilling
-  )
+  priceFormList.value.filter((form) => !form.canUseSeedanceVideoBilling && !form.canUseImageBilling)
 )
 
 const imagePriceForms = computed(() =>
-  Object.values(props.forms).filter(
-    (form) => !form.canUseSeedanceVideoBilling && form.canUseImageBilling
-  )
+  priceFormList.value.filter((form) => !form.canUseSeedanceVideoBilling && form.canUseImageBilling)
 )
 
 const videoPriceForms = computed(() =>
-  Object.values(props.forms).filter((form) => form.canUseSeedanceVideoBilling)
+  priceFormList.value.filter((form) => form.canUseSeedanceVideoBilling)
 )
 
 const standardPriceSections = computed(() =>
@@ -151,6 +151,11 @@ function videoBillingModeOptions() {
   ]
 }
 
+function videoBillingModeLabel(value: VideoBillingMode | null) {
+  if (value === 'per_second') return t('videoBillingPerSecond')
+  return t('pricePerMillionTokens')
+}
+
 function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
   if (tier.resolutionLabel) return tier.resolutionLabel
   return (
@@ -160,6 +165,40 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
       .filter(Boolean)
       .join(', ') || '-'
   )
+}
+
+function videoTierPrimaryPrice(row: ChannelPriceForm, tier: ChannelVideoPriceTierForm) {
+  return row.videoBillingMode === 'official_token'
+    ? tier.inputWithoutVideo
+    : tier.inputWithoutVideoUnit
+}
+
+function videoTierSecondaryPrice(row: ChannelPriceForm, tier: ChannelVideoPriceTierForm) {
+  return row.videoBillingMode === 'official_token' ? tier.inputWithVideo : tier.inputWithVideoUnit
+}
+
+function updateVideoTierPrimaryPrice(
+  row: ChannelPriceForm,
+  tier: ChannelVideoPriceTierForm,
+  value: number | undefined
+) {
+  if (row.videoBillingMode === 'official_token') {
+    tier.inputWithoutVideo = value ?? 0
+    return
+  }
+  tier.inputWithoutVideoUnit = value ?? 0
+}
+
+function updateVideoTierSecondaryPrice(
+  row: ChannelPriceForm,
+  tier: ChannelVideoPriceTierForm,
+  value: number | undefined
+) {
+  if (row.videoBillingMode === 'official_token') {
+    tier.inputWithVideo = value ?? 0
+    return
+  }
+  tier.inputWithVideoUnit = value ?? 0
 }
 </script>
 
@@ -321,7 +360,11 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
                 <span>{{ row.model }}</span>
               </div>
               <div class="video-meter-cell">
+                <span v-if="row.videoBillingModeLocked" class="price-meter-static">
+                  {{ videoBillingModeLabel(row.videoBillingMode) }}
+                </span>
                 <el-select
+                  v-else
                   v-model="row.videoBillingMode"
                   class="price-meter-select video-mode-select"
                   popper-class="price-meter-select-dropdown"
@@ -357,55 +400,35 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
                 >
                   <span class="video-resolution-cell">{{ videoTierResolutionsLabel(tier) }}</span>
                   <div class="video-price-cell">
-                    <div class="video-price-pair-labels">
+                    <div v-if="!tier.singlePrice" class="video-price-pair-labels">
                       <span>{{ tier.pricePairLeftLabel ?? t('videoInputWithoutVideo') }}</span>
                       <span>/</span>
                       <span>{{ tier.pricePairRightLabel ?? t('videoInputWithVideo') }}</span>
                     </div>
-                    <div
-                      v-if="row.videoBillingMode === 'official_token'"
-                      class="video-price-pair-input"
-                    >
+                    <div class="video-price-pair-input" :class="{ 'is-single': tier.singlePrice }">
                       <el-input-number
-                        v-model="tier.inputWithoutVideo"
+                        :model-value="videoTierPrimaryPrice(row, tier)"
                         class="video-tier-pair-number"
                         :controls="false"
                         :formatter="formatCurrencyInput"
                         :min="0"
                         :parser="parseCurrencyInput"
                         :step="0.01"
+                        @update:model-value="updateVideoTierPrimaryPrice(row, tier, $event)"
                       />
-                      <span class="price-pair-separator">/</span>
-                      <el-input-number
-                        v-model="tier.inputWithVideo"
-                        class="video-tier-pair-number"
-                        :controls="false"
-                        :formatter="formatCurrencyInput"
-                        :min="0"
-                        :parser="parseCurrencyInput"
-                        :step="0.01"
-                      />
-                    </div>
-                    <div v-else class="video-price-pair-input">
-                      <el-input-number
-                        v-model="tier.inputWithoutVideoUnit"
-                        class="video-tier-pair-number"
-                        :controls="false"
-                        :formatter="formatCurrencyInput"
-                        :min="0"
-                        :parser="parseCurrencyInput"
-                        :step="0.01"
-                      />
-                      <span class="price-pair-separator">/</span>
-                      <el-input-number
-                        v-model="tier.inputWithVideoUnit"
-                        class="video-tier-pair-number"
-                        :controls="false"
-                        :formatter="formatCurrencyInput"
-                        :min="0"
-                        :parser="parseCurrencyInput"
-                        :step="0.01"
-                      />
+                      <template v-if="!tier.singlePrice">
+                        <span class="price-pair-separator">/</span>
+                        <el-input-number
+                          :model-value="videoTierSecondaryPrice(row, tier)"
+                          class="video-tier-pair-number"
+                          :controls="false"
+                          :formatter="formatCurrencyInput"
+                          :min="0"
+                          :parser="parseCurrencyInput"
+                          :step="0.01"
+                          @update:model-value="updateVideoTierSecondaryPrice(row, tier, $event)"
+                        />
+                      </template>
                     </div>
                   </div>
                   <div class="reference-price-cell">
@@ -557,6 +580,15 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
   text-align: center;
 }
 
+.video-price-head > span:nth-child(4) {
+  text-align: center;
+}
+
+.price-editor-head > span:nth-child(2),
+.video-price-head > span:nth-child(2) {
+  text-align: center;
+}
+
 .price-editor-row,
 .video-price-model-row {
   background: #ffffff;
@@ -603,6 +635,13 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
 .price-pair-field {
   display: flex;
   justify-content: flex-start;
+  min-width: 0;
+}
+
+.price-meter-cell {
+  align-items: center;
+  display: flex;
+  justify-content: center;
   min-width: 0;
 }
 
@@ -767,6 +806,7 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
 .video-meter-cell {
   align-items: center;
   display: flex;
+  justify-content: center;
   min-width: 0;
 }
 
@@ -808,7 +848,7 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
   align-items: start;
   display: grid;
   gap: 2px;
-  justify-items: start;
+  justify-items: center;
   min-width: 0;
 }
 
@@ -820,7 +860,7 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
   font-weight: 400;
   gap: 4px;
   grid-template-columns: auto auto auto;
-  justify-content: start;
+  justify-content: center;
   line-height: 1.1;
   max-width: 100%;
   min-width: 118px;
@@ -847,6 +887,15 @@ function videoTierResolutionsLabel(tier: ChannelVideoPriceTierForm) {
   min-height: var(--price-control-height);
   padding: 0 5px;
   width: 118px;
+}
+
+.video-price-pair-input.is-single {
+  width: 58px;
+}
+
+.video-price-pair-input.is-single .video-tier-pair-number {
+  flex: 1 1 auto;
+  width: 100%;
 }
 
 .video-tier-pair-number {

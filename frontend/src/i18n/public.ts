@@ -359,7 +359,9 @@ export const publicMessages = {
     allModels: '全部模型',
     selectedModels: '选择模型',
     selectedModelCount: '已选模型',
-    manualModelPlaceholder: '输入模型名，多个用逗号分隔',
+    manualModelHint:
+      '接口可能无法返回全部可用模型；如列表中没有，请手动输入。模型名称必须与上游提供的模型名称完全一致。',
+    manualModelPlaceholder: '输入模型名，多个用空格或逗号分隔',
     addManualModel: '手动添加',
     modelSearchPlaceholder: '搜索模型',
     noMatchingModels: '没有匹配的模型',
@@ -790,7 +792,9 @@ export const publicMessages = {
     allModels: 'All models',
     selectedModels: 'Selected models',
     selectedModelCount: 'Selected',
-    manualModelPlaceholder: 'Enter model names, separated by commas',
+    manualModelHint:
+      'The API may not return every available model. If a model is missing from the list, add it manually and make sure the name exactly matches the upstream model name.',
+    manualModelPlaceholder: 'Enter model names, separated by spaces or commas',
     addManualModel: 'Add manually',
     modelSearchPlaceholder: 'Search models',
     noMatchingModels: 'No matching models',

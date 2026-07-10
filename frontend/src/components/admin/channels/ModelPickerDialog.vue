@@ -47,6 +47,11 @@ function addManualModels() {
   selectedModels.value = Array.from(new Set([...selectedModels.value, ...manualModels]))
   manualModelInput.value = ''
 }
+
+function saveModels() {
+  addManualModels()
+  open.value = false
+}
 </script>
 
 <template>
@@ -90,20 +95,20 @@ function addManualModels() {
           </div>
         </div>
         <div class="manual-model-add">
+          <p class="manual-model-hint">{{ t('manualModelHint') }}</p>
           <el-input
             v-model="manualModelInput"
             class="manual-model-input"
             :placeholder="t('manualModelPlaceholder')"
-            @keyup.enter="addManualModels"
+            @keyup.enter="saveModels"
           />
-          <el-button @click="addManualModels">{{ t('addManualModel') }}</el-button>
         </div>
       </div>
     </div>
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button type="primary" @click="open = false">
+        <el-button type="primary" @click="saveModels">
           {{ t('save') }}
         </el-button>
       </div>
@@ -143,24 +148,24 @@ function addManualModels() {
 }
 
 .manual-model-add {
-  align-items: center;
-  display: flex;
+  align-items: stretch;
+  display: grid;
   gap: 8px;
-  justify-content: stretch;
+  margin-top: 8px;
   min-width: 0;
   width: 100%;
 }
 
-.manual-model-input {
-  flex: 1;
-  min-width: 0;
+.manual-model-hint {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  grid-column: 1 / -1;
 }
 
-.manual-model-add :deep(.el-button) {
-  border-radius: 7px;
-  flex: 0 0 auto;
-  font-weight: 680;
-  min-height: 32px;
+.manual-model-input {
+  min-width: 0;
 }
 
 .model-select-panel {

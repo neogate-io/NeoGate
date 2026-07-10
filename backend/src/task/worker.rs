@@ -1,6 +1,6 @@
 use std::{future::Future, sync::Arc};
 
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method};
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::{stream, StreamExt};
@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     billing::{parse_usage_from_bytes, TokenUsage},
-    error::AppResult,
+    error::{reqwest_status, AppResult},
     relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
     AppState,
 };
@@ -145,8 +145,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             .await?
         }
     };
-    let status = StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(response.status());
     if !status.is_success() {
         return Ok(());
     }
@@ -258,8 +257,7 @@ async fn poll_anthropic_batch_results_usage(
         task.task_type,
     )
     .await?;
-    let status = StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(response.status());
     if !status.is_success() {
         return Ok(None);
     }

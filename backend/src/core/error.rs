@@ -5,6 +5,10 @@ use axum::{
 };
 use serde_json::json;
 
+pub(crate) fn reqwest_status(status: reqwest::StatusCode) -> StatusCode {
+    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpstreamErrorKind {
     Timeout,

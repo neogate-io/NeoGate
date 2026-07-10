@@ -16,7 +16,7 @@ use crate::{
     auth::AdminAuth,
     error::{AppError, AppResult},
     id::DbId,
-    input::{bounded_limit, trimmed_non_empty},
+    input::{bounded_limit, page_number, trimmed_non_empty},
     AppState,
 };
 
@@ -310,7 +310,7 @@ impl UsageStatsPageParams {
 
     fn from_params(params: &UsageStatsParams) -> Self {
         Self {
-            page: params.page.unwrap_or(1).max(1),
+            page: page_number(params.page),
             limit: bounded_limit(params.limit, 20, 100),
         }
     }

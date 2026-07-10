@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{BillableUsage, BillingAccounts, BillingMeter, SettleRequest},
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     provider::newapi,
     relay::{
         describe_upstream_http_failure, finish_relay, forward_openai_with_content_type,
@@ -27,9 +27,9 @@ use crate::{
 };
 
 use super::{
-    log_relay_transport_failover,
+    content_type_header, json_string_field, log_relay_transport_failover,
     multipart::{multipart_boundary, multipart_text_fields, rewrite_multipart_model_field},
-    select_upstream_excluding,
+    positive_i64_text, required_json_string_field, select_upstream_excluding,
 };
 
 #[derive(Debug, Clone)]
@@ -157,8 +157,7 @@ pub(super) async fn relay_openai_image(
 
         match response {
             Ok(upstream_response) => {
-                let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let status = reqwest_status(upstream_response.status());
                 if status.is_success() {
                     ctx.mark_final_with_permit(&mut request_permit);
                     if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
@@ -255,8 +254,7 @@ async fn finish_image_relay(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -291,8 +289,7 @@ async fn finish_streamed_image_relay(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -440,8 +437,7 @@ async fn finish_newapi_image_stream(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -487,14 +483,7 @@ fn image_request_meta(
     headers: &HeaderMap,
     body: &[u8],
 ) -> AppResult<ImageRequestMeta> {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
-    let content_type_text = content_type
-        .to_str()
-        .map_err(|_| AppError::BadRequest("invalid content-type header".to_string()))?;
-    let content_type_text = content_type_text.to_string();
+    let (content_type, content_type_text) = content_type_header(headers)?;
     let lower_content_type = content_type_text.to_ascii_lowercase();
 
     if lower_content_type.starts_with("application/json") {
@@ -523,12 +512,7 @@ fn image_request_meta(
 fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<ImageRequestMeta> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
-    let model = value
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|model| !model.is_empty())
-        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))?
-        .to_string();
+    let model = required_json_string_field(&value, "model")?;
     let stream = value
         .get("stream")
         .and_then(Value::as_bool)
@@ -540,9 +524,9 @@ fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
         image_count,
         request_params: RelayRequestParams::image(
             image_count,
-            string_field(&value, "size"),
-            string_field(&value, "quality"),
-            string_field(&value, "style"),
+            json_string_field(&value, "size"),
+            json_string_field(&value, "quality"),
+            json_string_field(&value, "style"),
         ),
         content_type,
     })
@@ -564,7 +548,7 @@ fn multipart_image_request_meta(
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
             "stream" => stream = value == "true",
-            "n" => image_count = parse_positive_image_count(&value).unwrap_or(1),
+            "n" => image_count = positive_i64_text(&value).unwrap_or(1),
             "size" if !value.is_empty() => size = Some(value),
             "quality" if !value.is_empty() => quality = Some(value),
             "style" if !value.is_empty() => style = Some(value),
@@ -581,22 +565,11 @@ fn multipart_image_request_meta(
     })
 }
 
-fn string_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-}
-
 fn image_count_from_value(value: &Value) -> Option<i64> {
     value
         .get("n")
         .and_then(Value::as_i64)
         .filter(|count| *count > 0)
-}
-
-fn parse_positive_image_count(value: &str) -> Option<i64> {
-    value.trim().parse::<i64>().ok().filter(|count| *count > 0)
 }
 
 fn image_count_from_response_body(body: &[u8]) -> Option<i64> {

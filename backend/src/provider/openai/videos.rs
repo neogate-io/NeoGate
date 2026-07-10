@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{Path, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method},
     response::Response,
 };
 use bytes::Bytes;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::video::{self, VideoBillingInput, VideoBillingMetadata},
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     provider::adapters::{adapter_for_provider, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_task_json_response, forward_openai_bound,
@@ -32,12 +32,12 @@ use crate::{
 };
 
 use super::{
-    log_relay_transport_failover,
+    content_type_header, json_string_field, log_relay_transport_failover,
     multipart::{
         multipart_boundary, multipart_text_fields, rewrite_multipart_model_field,
         safe_multipart_log_label,
     },
-    select_upstream_excluding,
+    positive_i64_field, positive_i64_text, required_json_string_field, select_upstream_excluding,
 };
 
 const VIDEO_CREATE_PATH: &str = "/v1/videos";
@@ -212,8 +212,7 @@ async fn relay_openai_video_create(
 
         match response {
             Ok(upstream_response) => {
-                let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let status = reqwest_status(upstream_response.status());
                 if status.is_success() {
                     ctx.mark_final_with_permit(&mut request_permit);
                     return finish_video_create_success(
@@ -285,8 +284,7 @@ async fn finish_video_create_success(
     upstream_response: reqwest::Response,
     video_billing_metadata: Option<VideoBillingMetadata>,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get(header::CONTENT_TYPE)
@@ -368,14 +366,7 @@ async fn finish_video_create_success(
 }
 
 fn video_request_meta(headers: &HeaderMap, body: &[u8]) -> AppResult<VideoRequestMeta> {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
-    let content_type_text = content_type
-        .to_str()
-        .map_err(|_| AppError::BadRequest("invalid content-type header".to_string()))?;
-    let content_type_text = content_type_text.to_string();
+    let (content_type, content_type_text) = content_type_header(headers)?;
     let lower = content_type_text.to_ascii_lowercase();
     if lower.starts_with("application/json") {
         return json_video_request_meta(body, content_type);
@@ -391,16 +382,11 @@ fn video_request_meta(headers: &HeaderMap, body: &[u8]) -> AppResult<VideoReques
 fn json_video_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<VideoRequestMeta> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
-    let model = value
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|model| !model.is_empty())
-        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))?
-        .to_string();
+    let model = required_json_string_field(&value, "model")?;
     Ok(VideoRequestMeta {
         model,
         request_params: RelayRequestParams::video(
-            string_field(&value, "size"),
+            json_string_field(&value, "size"),
             positive_i64_field(&value, "seconds")
                 .or_else(|| positive_i64_field(&value, "duration")),
         ),
@@ -423,9 +409,7 @@ fn multipart_video_request_meta(
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
             "size" if !value.is_empty() => size = Some(safe_multipart_log_label(&value)),
-            "seconds" | "duration" => {
-                seconds = value.trim().parse::<i64>().ok().filter(|value| *value > 0)
-            }
+            "seconds" | "duration" => seconds = positive_i64_text(&value),
             _ => {}
         }
     }
@@ -437,26 +421,6 @@ fn multipart_video_request_meta(
         video_billing_input,
         content_type,
         is_json: false,
-    })
-}
-
-fn string_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-}
-
-fn positive_i64_field(value: &Value, key: &str) -> Option<i64> {
-    value.get(key).and_then(|value| {
-        value
-            .as_i64()
-            .or_else(|| {
-                value
-                    .as_str()
-                    .and_then(|text| text.trim().parse::<i64>().ok())
-            })
-            .filter(|value| *value > 0)
     })
 }
 

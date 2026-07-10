@@ -37,7 +37,7 @@ use crate::{
         BillingCharge, DebitHold, Price, TokenUsage,
     },
     cache::InvalidationEvent,
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     policy, AppState,
 };
 
@@ -143,8 +143,7 @@ pub(crate) async fn finish_task_json_response(
     task: UpstreamTask,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")
@@ -188,8 +187,7 @@ pub(crate) async fn finish_task_json_response(
 pub(crate) async fn raw_upstream_response(
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")
@@ -262,8 +260,7 @@ pub(crate) async fn finish_relay(
 ) -> AppResult<Response> {
     match response {
         Ok(upstream_response) => {
-            let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status = reqwest_status(upstream_response.status());
             if !status.is_success() {
                 return handle_upstream_http_error(ctx, status, upstream_response).await;
             }

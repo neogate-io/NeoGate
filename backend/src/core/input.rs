@@ -2,6 +2,10 @@ pub fn bounded_limit(limit: Option<i64>, default: i64, max: i64) -> i64 {
     limit.unwrap_or(default).clamp(1, max)
 }
 
+pub fn page_number(page: Option<i64>) -> i64 {
+    page.unwrap_or(1).max(1)
+}
+
 pub fn trimmed_non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -20,6 +24,14 @@ mod tests {
         assert_eq!(bounded_limit(Some(0), 50, 200), 1);
         assert_eq!(bounded_limit(Some(500), 50, 200), 200);
         assert_eq!(bounded_limit(Some(75), 50, 200), 75);
+    }
+
+    #[test]
+    fn normalizes_page_numbers() {
+        assert_eq!(page_number(None), 1);
+        assert_eq!(page_number(Some(0)), 1);
+        assert_eq!(page_number(Some(-2)), 1);
+        assert_eq!(page_number(Some(3)), 3);
     }
 
     #[test]

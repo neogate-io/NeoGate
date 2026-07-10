@@ -303,46 +303,31 @@ async fn diagnose_endpoint(
     progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
 ) -> EndpointDiagnosticReport {
     if !endpoint.enabled {
-        return EndpointDiagnosticReport {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            status: DiagnosticStatus::Skipped,
-            summary: "端点已停用，未执行诊断".to_string(),
-            discovered_models: Vec::new(),
-            configured_models: endpoint.models.clone(),
-            missing_configured_models: Vec::new(),
-            keys: Vec::new(),
-        };
+        return empty_endpoint_report(
+            endpoint,
+            DiagnosticStatus::Skipped,
+            "端点已停用，未执行诊断",
+            Vec::new(),
+        );
     }
 
     if !channel.enabled {
-        return EndpointDiagnosticReport {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            status: DiagnosticStatus::Skipped,
-            summary: "通道已停用，未执行诊断".to_string(),
-            discovered_models: Vec::new(),
-            configured_models: endpoint.models.clone(),
-            missing_configured_models: Vec::new(),
-            keys: Vec::new(),
-        };
+        return empty_endpoint_report(
+            endpoint,
+            DiagnosticStatus::Skipped,
+            "通道已停用，未执行诊断",
+            Vec::new(),
+        );
     }
 
     let enabled_keys: Vec<_> = keys.iter().filter(|key| key.enabled).collect();
     if enabled_keys.is_empty() {
-        return EndpointDiagnosticReport {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            status: DiagnosticStatus::Failed,
-            summary: "没有启用的上游 Key 或凭证".to_string(),
-            discovered_models: Vec::new(),
-            configured_models: endpoint.models.clone(),
-            missing_configured_models: endpoint.models.clone(),
-            keys: Vec::new(),
-        };
+        return empty_endpoint_report(
+            endpoint,
+            DiagnosticStatus::Failed,
+            "没有启用的上游 Key 或凭证",
+            endpoint.models.clone(),
+        );
     }
 
     let mut discovered_models = Vec::new();
@@ -368,16 +353,50 @@ async fn diagnose_endpoint(
         status = DiagnosticStatus::Warning;
     }
 
+    endpoint_report(
+        endpoint,
+        status,
+        endpoint_summary(status, &missing_configured_models),
+        discovered_models,
+        missing_configured_models,
+        key_reports,
+    )
+}
+
+fn empty_endpoint_report(
+    endpoint: &EndpointTarget,
+    status: DiagnosticStatus,
+    summary: &str,
+    missing_configured_models: Vec<String>,
+) -> EndpointDiagnosticReport {
+    endpoint_report(
+        endpoint,
+        status,
+        summary.to_string(),
+        Vec::new(),
+        missing_configured_models,
+        Vec::new(),
+    )
+}
+
+fn endpoint_report(
+    endpoint: &EndpointTarget,
+    status: DiagnosticStatus,
+    summary: String,
+    discovered_models: Vec<String>,
+    missing_configured_models: Vec<String>,
+    keys: Vec<KeyDiagnosticReport>,
+) -> EndpointDiagnosticReport {
     EndpointDiagnosticReport {
         endpoint_id: endpoint.id,
         protocol: endpoint.protocol.clone(),
         base_url: endpoint.base_url.clone(),
         status,
-        summary: endpoint_summary(status, &missing_configured_models),
+        summary,
         discovered_models,
         configured_models: endpoint.models.clone(),
         missing_configured_models,
-        keys: key_reports,
+        keys,
     }
 }
 
@@ -396,13 +415,10 @@ async fn diagnose_key(
             status: DiagnosticStatus::Warning,
             summary: "OpenAI OAuth 通道需要账号上下文，已跳过主动调用诊断".to_string(),
             discovered_models: Vec::new(),
-            steps: vec![DiagnosticStep {
-                name: "probe".to_string(),
-                status: DiagnosticStatus::Skipped,
-                message: "OpenAI OAuth 主动诊断暂未启用；请以实际调用结果为准".to_string(),
-                duration_ms: 0,
-                status_code: None,
-            }],
+            steps: vec![skipped_step(
+                "probe",
+                "OpenAI OAuth 主动诊断暂未启用；请以实际调用结果为准",
+            )],
         };
     }
 
@@ -434,13 +450,7 @@ async fn diagnose_key(
         send_model_result_event(progress, endpoint, key, model, &step);
         steps.push(step);
     } else {
-        steps.push(DiagnosticStep {
-            name: "probe".to_string(),
-            status: DiagnosticStatus::Skipped,
-            message: "没有可用于轻量调用测试的文本模型".to_string(),
-            duration_ms: 0,
-            status_code: None,
-        });
+        steps.push(skipped_step("probe", "没有可用于轻量调用测试的文本模型"));
     }
 
     let status = aggregate_status(steps.iter().map(|item| item.status));
@@ -453,6 +463,26 @@ async fn diagnose_key(
         discovered_models,
         steps,
     }
+}
+
+fn diagnostic_step(
+    name: impl Into<String>,
+    status: DiagnosticStatus,
+    message: impl Into<String>,
+    duration_ms: i64,
+    status_code: Option<u16>,
+) -> DiagnosticStep {
+    DiagnosticStep {
+        name: name.into(),
+        status,
+        message: message.into(),
+        duration_ms,
+        status_code,
+    }
+}
+
+fn skipped_step(name: &str, message: &str) -> DiagnosticStep {
+    diagnostic_step(name, DiagnosticStatus::Skipped, message, 0, None)
 }
 
 fn send_model_started_event(
@@ -514,13 +544,13 @@ async fn run_models_step(
             let status = response.status();
             if !status.is_success() {
                 return ModelsStepResult {
-                    step: DiagnosticStep {
-                        name: "models".to_string(),
-                        status: DiagnosticStatus::Failed,
-                        message: upstream_status_message(status),
-                        duration_ms: started.elapsed().as_millis() as i64,
-                        status_code: Some(status.as_u16()),
-                    },
+                    step: diagnostic_step(
+                        "models",
+                        DiagnosticStatus::Failed,
+                        upstream_status_message(status),
+                        started.elapsed().as_millis() as i64,
+                        Some(status.as_u16()),
+                    ),
                     models: Vec::new(),
                 };
             }
@@ -533,40 +563,40 @@ async fn run_models_step(
                         DiagnosticStatus::Ok
                     };
                     ModelsStepResult {
-                        step: DiagnosticStep {
-                            name: "models".to_string(),
+                        step: diagnostic_step(
+                            "models",
                             status,
-                            message: if models.is_empty() {
+                            if models.is_empty() {
                                 "模型列表接口可访问，但没有返回模型".to_string()
                             } else {
                                 format!("模型列表可访问，发现 {} 个模型", models.len())
                             },
-                            duration_ms: started.elapsed().as_millis() as i64,
-                            status_code: Some(StatusCode::OK.as_u16()),
-                        },
+                            started.elapsed().as_millis() as i64,
+                            Some(StatusCode::OK.as_u16()),
+                        ),
                         models,
                     }
                 }
                 Err(_) => ModelsStepResult {
-                    step: DiagnosticStep {
-                        name: "models".to_string(),
-                        status: DiagnosticStatus::Failed,
-                        message: "模型列表响应不是有效 JSON".to_string(),
-                        duration_ms: started.elapsed().as_millis() as i64,
-                        status_code: Some(status.as_u16()),
-                    },
+                    step: diagnostic_step(
+                        "models",
+                        DiagnosticStatus::Failed,
+                        "模型列表响应不是有效 JSON",
+                        started.elapsed().as_millis() as i64,
+                        Some(status.as_u16()),
+                    ),
                     models: Vec::new(),
                 },
             }
         }
         Err(err) => ModelsStepResult {
-            step: DiagnosticStep {
-                name: "models".to_string(),
-                status: DiagnosticStatus::Failed,
-                message: transport_error_message(&err),
-                duration_ms: started.elapsed().as_millis() as i64,
-                status_code: None,
-            },
+            step: diagnostic_step(
+                "models",
+                DiagnosticStatus::Failed,
+                transport_error_message(&err),
+                started.elapsed().as_millis() as i64,
+                None,
+            ),
             models: Vec::new(),
         },
     }
@@ -627,21 +657,21 @@ async fn run_probe_step(
                     "diagnostic probe request failed"
                 );
             }
-            DiagnosticStep {
-                name: format!("probe:{model}"),
-                status: if status.is_success() {
+            diagnostic_step(
+                format!("probe:{model}"),
+                if status.is_success() {
                     DiagnosticStatus::Ok
                 } else {
                     DiagnosticStatus::Failed
                 },
-                message: if status.is_success() {
+                if status.is_success() {
                     format!("模型 {model} 轻量调用成功")
                 } else {
                     upstream_status_message(status)
                 },
                 duration_ms,
-                status_code: Some(status.as_u16()),
-            }
+                Some(status.as_u16()),
+            )
         }
         Err(err) => {
             let duration_ms = started.elapsed().as_millis() as i64;
@@ -655,13 +685,13 @@ async fn run_probe_step(
                 error = %message,
                 "diagnostic probe request errored"
             );
-            DiagnosticStep {
-                name: format!("probe:{model}"),
-                status: DiagnosticStatus::Failed,
+            diagnostic_step(
+                format!("probe:{model}"),
+                DiagnosticStatus::Failed,
                 message,
                 duration_ms,
-                status_code: None,
-            }
+                None,
+            )
         }
     }
 }

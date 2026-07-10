@@ -738,8 +738,11 @@ async fn select_upstream_excluding(
                 protocols,
                 model,
                 channel_id,
-                attempted,
-                &excluded_endpoint_ids,
+                SelectionConstraints {
+                    attempted,
+                    excluded_endpoint_ids: &excluded_endpoint_ids,
+                    ..SelectionConstraints::default()
+                },
             )
             .await;
         if selected.is_ok() || excluded_endpoint_ids.is_empty() {
@@ -753,8 +756,10 @@ async fn select_upstream_excluding(
                 protocols,
                 model,
                 channel_id,
-                attempted,
-                &[],
+                SelectionConstraints {
+                    attempted,
+                    ..SelectionConstraints::default()
+                },
             )
             .await;
     }

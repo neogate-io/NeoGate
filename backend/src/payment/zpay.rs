@@ -63,7 +63,16 @@ impl PaymentGateway for ZpayGateway {
                     .unwrap_or_else(|| self.config.default_pay_type.clone()),
             ),
         ];
-        params.push(("sign".to_string(), sign_pairs(&params, self.secret_key()?)));
+        params.push((
+            "sign".to_string(),
+            sign_pairs(
+                params
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .collect(),
+                self.secret_key()?,
+            ),
+        ));
         params.push(("sign_type".to_string(), "MD5".to_string()));
 
         let query = serde_urlencoded::to_string(&params).map_err(|err| {
@@ -184,19 +193,18 @@ fn verify_sign(params: &HashMap<String, String>, key: &str) -> AppResult<()> {
 }
 
 fn sign_map(params: &HashMap<String, String>, key: &str) -> String {
-    let pairs: Vec<_> = params
+    let pairs = params
         .iter()
-        .filter(|(key, value)| {
-            key.as_str() != "sign" && key.as_str() != "sign_type" && !value.is_empty()
+        .filter(|(name, value)| {
+            name.as_str() != "sign" && name.as_str() != "sign_type" && !value.is_empty()
         })
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
-    sign_pairs(&pairs, key)
+    sign_pairs(pairs, key)
 }
 
-fn sign_pairs(pairs: &[(String, String)], key: &str) -> String {
-    let mut pairs = pairs.to_vec();
-    pairs.sort_by(|left, right| left.0.cmp(&right.0));
+fn sign_pairs(mut pairs: Vec<(&str, &str)>, key: &str) -> String {
+    pairs.sort_unstable_by_key(|(name, _)| *name);
     let payload = pairs
         .iter()
         .filter(|(_, value)| !value.is_empty())

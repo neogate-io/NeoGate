@@ -67,8 +67,7 @@ pub(super) async fn create_background_response(
                 &[UpstreamProtocol::Openai],
                 &target_model,
                 channel_id,
-                &[],
-                &[],
+                SelectionConstraints::default(),
             )
             .await?
             .1

@@ -24,7 +24,7 @@ mod responses;
 
 use choose::{
     channel_is_available, channel_keys, choose_channel_for_request, choose_key, key_is_available,
-    matching_channel_count, unavailable_channel_message, was_attempted,
+    matching_channel_count, unavailable_channel_message, was_attempted, ChannelAvailability,
 };
 #[cfg(test)]
 use choose::{channel_matches_model, choose_channel, choose_channel_by_slot};
@@ -438,8 +438,7 @@ impl Selector {
         protocols: &[UpstreamProtocol],
         model: &str,
         channel_id: DbId,
-        attempted: &[AttemptedUpstream],
-        excluded_endpoint_ids: &[DbId],
+        constraints: SelectionConstraints<'_>,
     ) -> AppResult<(UpstreamProtocol, SelectedUpstream)> {
         let snapshot = self.routing_snapshot(pool).await?;
         let now = Utc::now();
@@ -447,25 +446,31 @@ impl Selector {
 
         for &protocol in protocols {
             let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+            let availability = ChannelAvailability {
+                protocol,
+                model,
+                now,
+                model_blocks: &model_blocks,
+                attempted: constraints.attempted,
+                excluded_endpoint_ids: Some(constraints.excluded_endpoint_ids),
+            };
             let channels = snapshot
                 .channels
                 .iter()
                 .filter(|channel| channel.id == channel_id && channel.protocol == protocol);
             for channel in channels {
-                if !channel_is_available(
-                    &snapshot,
-                    channel,
-                    protocol,
-                    model,
-                    now,
-                    &model_blocks,
-                    attempted,
-                    Some(excluded_endpoint_ids),
-                ) {
+                if !channel_is_available(&snapshot, channel, &availability) {
                     continue;
                 }
                 let keys = channel_keys(&snapshot, channel);
-                if let Some(key) = choose_key(channel, keys, model, now, &model_blocks, attempted) {
+                if let Some(key) = choose_key(
+                    channel,
+                    keys,
+                    model,
+                    now,
+                    &model_blocks,
+                    constraints.attempted,
+                ) {
                     return Ok((
                         protocol,
                         self.selected_upstream_from_candidate(secrets, channel, key)?,
@@ -501,12 +506,14 @@ impl Selector {
         if !channel_is_available(
             scope.snapshot,
             channel,
-            scope.protocol,
-            scope.model,
-            scope.now,
-            &scope.model_blocks,
-            scope.attempted,
-            Some(scope.excluded_endpoint_ids),
+            &ChannelAvailability {
+                protocol: scope.protocol,
+                model: scope.model,
+                now: scope.now,
+                model_blocks: &scope.model_blocks,
+                attempted: scope.attempted,
+                excluded_endpoint_ids: Some(scope.excluded_endpoint_ids),
+            },
         ) {
             return Ok(None);
         }

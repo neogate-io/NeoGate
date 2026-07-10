@@ -898,10 +898,49 @@ fn schedule_runtime_restart(restart_tx: tokio::sync::watch::Sender<bool>) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
     use super::*;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvRestore {
+        service_mode: Option<String>,
+        neogate_env_file: Option<String>,
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl EnvRestore {
+        fn capture() -> Self {
+            let guard = ENV_LOCK.lock().expect("policy test env lock poisoned");
+            Self {
+                service_mode: std::env::var("SERVICE_MODE").ok(),
+                neogate_env_file: std::env::var("NEOGATE_ENV_FILE").ok(),
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            restore_env_var("SERVICE_MODE", self.service_mode.as_deref());
+            restore_env_var("NEOGATE_ENV_FILE", self.neogate_env_file.as_deref());
+        }
+    }
+
+    fn restore_env_var(key: &str, value: Option<&str>) {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
 
     #[test]
     fn default_policy_is_unfinished_internal_without_credit_requirement() {
+        let _env = EnvRestore::capture();
+        std::env::remove_var("SERVICE_MODE");
+        std::env::remove_var("NEOGATE_ENV_FILE");
         let record = record_from_stored(default_stored_policy(), None);
 
         assert!(!record.setup_completed);
@@ -912,6 +951,7 @@ mod tests {
 
     #[test]
     fn paid_mode_always_requires_credit_and_enables_recharge() {
+        let _env = EnvRestore::capture();
         std::env::set_var("SERVICE_MODE", "paid");
         let record = record_from_stored(
             StoredServicePolicy {
@@ -922,7 +962,6 @@ mod tests {
             },
             None,
         );
-        std::env::remove_var("SERVICE_MODE");
 
         assert!(record.setup_completed);
         assert_eq!(record.service_mode, ServiceMode::Paid);
@@ -933,6 +972,7 @@ mod tests {
 
     #[test]
     fn stored_service_mode_does_not_drive_runtime_policy() {
+        let _env = EnvRestore::capture();
         std::env::remove_var("SERVICE_MODE");
         std::env::remove_var("NEOGATE_ENV_FILE");
         let record = record_from_stored(

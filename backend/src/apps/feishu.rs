@@ -25,8 +25,8 @@ use crate::{
 };
 
 use super::{
-    constant_time_eq, runtime::run_app_message, runtime_for_endpoint, secret_plaintext, AppRuntime,
-    IncomingAppMessage, APP_BODY_LIMIT_BYTES,
+    constant_time_eq, header_value, runtime_for_endpoint, secret_plaintext,
+    spawn_app_message_reply, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
 };
 
 pub(super) const APP_SECRET_KEY: &str = "app_secret";
@@ -85,22 +85,14 @@ pub(super) async fn callback(
         return Ok("success".into_response());
     };
     let target_user = message.external_user_id.clone();
-    let state_clone = Arc::clone(&state);
-    tokio::spawn(async move {
-        match run_app_message(Arc::clone(&state_clone), runtime.clone(), message).await {
-            Ok(outcome) if !outcome.duplicate => {
-                if let Err(err) =
-                    send_text(&state_clone, &runtime, &target_user, &outcome.message).await
-                {
-                    tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to send feishu app message");
-                }
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to handle feishu app message")
-            }
-        }
-    });
+    spawn_app_message_reply(
+        Arc::clone(&state),
+        runtime,
+        message,
+        move |state, runtime, message| async move {
+            send_text(&state, &runtime, &target_user, &message).await
+        },
+    );
     Ok("success".into_response())
 }
 
@@ -184,10 +176,6 @@ fn verify_signature(encrypt_key: &str, headers: &HeaderMap, bytes: &[u8]) -> App
     constant_time_eq(signature.as_bytes(), expected.as_bytes())
         .then_some(())
         .ok_or(AppError::Unauthorized)
-}
-
-fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 fn callback_signature(timestamp: &str, nonce: &str, encrypt_key: &str, body: &[u8]) -> String {

@@ -21,8 +21,8 @@ use crate::{
 };
 
 use super::{
-    constant_time_eq, runtime::run_app_message, runtime_for_endpoint, secret_plaintext, AppRuntime,
-    IncomingAppMessage, APP_BODY_LIMIT_BYTES,
+    constant_time_eq, header_value, runtime_for_endpoint, secret_plaintext,
+    spawn_app_message_reply, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
 };
 
 pub(super) const APP_SECRET_KEY: &str = "app_secret";
@@ -80,23 +80,15 @@ pub(super) async fn callback(
         return Ok("success".into_response());
     };
 
-    let state_clone = Arc::clone(&state);
-    tokio::spawn(async move {
-        match run_app_message(Arc::clone(&state_clone), runtime.clone(), incoming.message).await {
-            Ok(outcome) if !outcome.duplicate => {
-                if let Err(err) =
-                    send_session_text(&state_clone, &incoming.session_webhook, &outcome.message)
-                        .await
-                {
-                    tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to send dingtalk app message");
-                }
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to handle dingtalk app message")
-            }
-        }
-    });
+    let session_webhook = incoming.session_webhook;
+    spawn_app_message_reply(
+        Arc::clone(&state),
+        runtime,
+        incoming.message,
+        move |state, _, message| async move {
+            send_session_text(&state, &session_webhook, &message).await
+        },
+    );
     Ok("success".into_response())
 }
 
@@ -141,10 +133,6 @@ fn verify_signature(
     constant_time_eq(sign.as_bytes(), expected.as_bytes())
         .then_some(())
         .ok_or(AppError::Unauthorized)
-}
-
-fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 fn callback_signature(timestamp: &str, secret: &str) -> String {

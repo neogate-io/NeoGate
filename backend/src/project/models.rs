@@ -15,7 +15,7 @@ use crate::{
     id::DbId,
     relay::{
         read_upstream_error_body,
-        selector::{SelectedUpstream, UpstreamProtocol},
+        selector::{SelectedUpstream, SelectionConstraints, UpstreamProtocol},
         upstream_url,
     },
     AppState,
@@ -1500,8 +1500,7 @@ async fn resolve_admin_text_model(
                 &[protocol],
                 model,
                 channel_id,
-                &[],
-                &[],
+                SelectionConstraints::default(),
             )
             .await
         {

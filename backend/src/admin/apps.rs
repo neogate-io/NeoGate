@@ -11,8 +11,8 @@ use sqlx::{AssertSqlSafe, Row};
 
 use crate::{
     apps::{
-        ensure_supported_app_type, ensure_user_key_exists, get_app_record, list_app_records,
-        normalize_status, required_trimmed, run_log_from_row, runtime_for_app, upsert_endpoint_tx,
+        ensure_user_key_exists, get_app_record, list_app_records, normalize_status,
+        required_trimmed, run_log_from_row, runtime_for_app, upsert_endpoint_tx, validate_app_type,
         AppRecord, AppRunLogRecord, ListAppRunLogsQuery, ListAppsQuery, UpdateAppRequest,
         UpsertAppRequest, DEFAULT_CONTEXT_TURNS, DEFAULT_MAX_OUTPUT_TOKENS,
     },
@@ -271,8 +271,7 @@ async fn create_app(
     _admin: AdminAuth,
     Json(req): Json<UpsertAppRequest>,
 ) -> AppResult<Json<AppRecord>> {
-    crate::apps::validate_app_type(&req.app_type)?;
-    ensure_supported_app_type(&req.app_type)?;
+    validate_app_type(&req.app_type)?;
     let name = required_trimmed(req.name, "app name is required")?;
     let model = required_trimmed(req.model, "model is required")?;
     let status = normalize_status(req.status.as_deref().unwrap_or("enabled"))?;

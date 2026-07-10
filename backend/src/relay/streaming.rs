@@ -1145,7 +1145,12 @@ impl StreamErrorSummary {
                 raw,
             };
         };
-        let error = value.get("error").unwrap_or(&value);
+        let response_error = value
+            .get("response")
+            .and_then(|response| response.get("error"));
+        let error = response_error
+            .or_else(|| value.get("error"))
+            .unwrap_or(&value);
         let error_type = string_field(error, "type")
             .or_else(|| string_field(&value, "type"))
             .map(|value| truncate_for_log(&value, 128));
@@ -1453,6 +1458,24 @@ data: {"error":{"code":"InvalidParameter","message":"model does not support resp
         assert_eq!(
             error.to_error_summary(),
             "upstream stream ended with SSE error event code=unsupported_parameter type=error: tools is not supported"
+        );
+    }
+
+    #[test]
+    fn stream_error_summary_reads_openai_response_failed_nested_error() {
+        let error = StreamErrorSummary::from_sse_data(
+            r#"{"type":"response.failed","response":{"id":"resp_123","status":"failed","error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for user, please retry later"}}}"#,
+        );
+
+        assert_eq!(error.error_code.as_deref(), Some("rate_limit_exceeded"));
+        assert_eq!(
+            error.error_message.as_deref(),
+            Some("Concurrency limit exceeded for user, please retry later")
+        );
+        assert_eq!(error.error_type.as_deref(), Some("response.failed"));
+        assert_eq!(
+            error.to_error_summary(),
+            "upstream stream ended with SSE error event code=rate_limit_exceeded type=response.failed: Concurrency limit exceeded for user, please retry later"
         );
     }
 

@@ -5,7 +5,7 @@ mod webhook;
 mod wecom;
 mod widget;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use axum::{
     routing::{get, post},
@@ -192,6 +192,52 @@ struct AppRunOutcome {
     message: String,
     trace_id: String,
     duplicate: bool,
+}
+
+fn app_message_response(outcome: AppRunOutcome) -> AppMessageResponse {
+    AppMessageResponse {
+        ok: true,
+        conversation_id: outcome.conversation_id,
+        message: outcome.message,
+        trace_id: outcome.trace_id,
+        duplicate: outcome.duplicate,
+    }
+}
+
+fn spawn_app_message_reply<SendReply, ReplyFuture>(
+    state: Arc<AppState>,
+    runtime: AppRuntime,
+    message: IncomingAppMessage,
+    send_reply: SendReply,
+) where
+    SendReply: FnOnce(Arc<AppState>, AppRuntime, String) -> ReplyFuture + Send + 'static,
+    ReplyFuture: Future<Output = AppResult<()>> + Send + 'static,
+{
+    let endpoint_id = runtime.endpoint_id;
+    let app_type = runtime.app_type.clone();
+    tokio::spawn(async move {
+        match runtime::run_app_message(Arc::clone(&state), runtime.clone(), message).await {
+            Ok(outcome) if !outcome.duplicate => {
+                if let Err(err) = send_reply(state, runtime, outcome.message).await {
+                    tracing::warn!(
+                        endpoint_id,
+                        app_type = %app_type,
+                        error = %err,
+                        "failed to send app message"
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    endpoint_id,
+                    app_type = %app_type,
+                    error = %err,
+                    "failed to handle app message"
+                );
+            }
+        }
+    });
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -611,15 +657,6 @@ pub(crate) fn validate_app_type(value: &str) -> AppResult<()> {
     .ok_or_else(|| AppError::BadRequest("invalid app type".to_string()))
 }
 
-pub(crate) fn ensure_supported_app_type(value: &str) -> AppResult<()> {
-    matches!(
-        value,
-        "wecom" | "webhook" | "widget" | "feishu" | "dingtalk"
-    )
-    .then_some(())
-    .ok_or_else(|| AppError::BadRequest("this app type is coming soon".to_string()))
-}
-
 pub(crate) fn normalize_status(value: &str) -> AppResult<String> {
     matches!(value, "enabled" | "disabled")
         .then(|| value.to_string())
@@ -648,6 +685,10 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .zip(right)
         .fold(0u8, |acc, (a, b)| acc | (a ^ b))
         == 0
+}
+
+fn header_value<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 fn extract_xml_value(bytes: &[u8], tag: &str) -> Option<String> {

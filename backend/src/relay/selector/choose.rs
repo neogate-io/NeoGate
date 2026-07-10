@@ -9,6 +9,15 @@ use super::{
     RoutingCache, UpstreamProtocol,
 };
 
+pub(super) struct ChannelAvailability<'a> {
+    pub(super) protocol: UpstreamProtocol,
+    pub(super) model: &'a str,
+    pub(super) now: DateTime<Utc>,
+    pub(super) model_blocks: &'a ModelBlockLookup<'a>,
+    pub(super) attempted: &'a [AttemptedUpstream],
+    pub(super) excluded_endpoint_ids: Option<&'a [DbId]>,
+}
+
 pub(super) fn ready_at(cooldown_until: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     cooldown_until.is_none_or(|value| value <= now)
 }
@@ -65,6 +74,14 @@ pub(super) fn choose_channel_for_request<'a>(
     attempted: &[AttemptedUpstream],
     excluded_endpoint_ids: Option<&[DbId]>,
 ) -> Option<&'a ChannelCandidate> {
+    let availability = ChannelAvailability {
+        protocol,
+        model,
+        now,
+        model_blocks,
+        attempted,
+        excluded_endpoint_ids,
+    };
     let indexed = cache
         .route_index
         .get(&protocol)
@@ -79,16 +96,7 @@ pub(super) fn choose_channel_for_request<'a>(
     let mut selected = None;
 
     for channel in indexed {
-        if !channel_is_available(
-            cache,
-            channel,
-            protocol,
-            model,
-            now,
-            model_blocks,
-            attempted,
-            excluded_endpoint_ids,
-        ) {
+        if !channel_is_available(cache, channel, &availability) {
             continue;
         }
         let weight = channel.weight.max(1);
@@ -119,20 +127,22 @@ pub(super) fn choose_channel_for_request<'a>(
 pub(super) fn channel_is_available(
     cache: &RoutingCache,
     channel: &ChannelCandidate,
-    protocol: UpstreamProtocol,
-    model: &str,
-    now: DateTime<Utc>,
-    model_blocks: &ModelBlockLookup<'_>,
-    attempted: &[AttemptedUpstream],
-    excluded_endpoint_ids: Option<&[DbId]>,
+    availability: &ChannelAvailability<'_>,
 ) -> bool {
-    channel.protocol == protocol
-        && channel_matches_model(channel, model)
-        && !excluded_endpoint_ids.is_some_and(|excluded| excluded.contains(&channel.endpoint_id))
-        && ready_at(channel.cooldown_until, now)
+    channel.protocol == availability.protocol
+        && channel_matches_model(channel, availability.model)
+        && !availability
+            .excluded_endpoint_ids
+            .is_some_and(|excluded| excluded.contains(&channel.endpoint_id))
+        && ready_at(channel.cooldown_until, availability.now)
         && channel_keys(cache, channel).iter().any(|key| {
-            key_is_available(channel, key, model, now, model_blocks)
-                && !was_attempted(channel, key, attempted)
+            key_is_available(
+                channel,
+                key,
+                availability.model,
+                availability.now,
+                availability.model_blocks,
+            ) && !was_attempted(channel, key, availability.attempted)
         })
 }
 

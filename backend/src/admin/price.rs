@@ -508,18 +508,7 @@ async fn sync_channel_model_enabled_for_price(
 async fn sync_models_dev_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
-    let upstream = state
-        .http
-        .get(MODELS_DEV_PRICING_URL)
-        .send()
-        .await
-        .map_err(models_dev_pricing_unavailable)?
-        .error_for_status()
-        .map_err(models_dev_pricing_unavailable)?
-        .json::<HashMap<String, ModelsDevProvider>>()
-        .await
-        .map_err(models_dev_pricing_unavailable)?;
-
+    let upstream = fetch_models_dev_pricing_json(state).await?;
     let provider_codes = enabled_provider_codes(state).await?;
     let mut fetched = 0usize;
     let mut skipped = 0usize;
@@ -578,33 +567,36 @@ async fn fetch_local_cny_pricing_json(
         ));
     };
     let url = format!("{base_url}{LOCAL_CNY_PRICING_JSON_PATH}");
-    state
-        .http
-        .get(&url)
-        .send()
-        .await
-        .map_err(local_cny_pricing_unavailable)?
-        .error_for_status()
-        .map_err(local_cny_pricing_unavailable)?
-        .json::<HashMap<String, ModelsDevProvider>>()
-        .await
-        .map_err(local_cny_pricing_unavailable)
+    fetch_pricing_json(state, &url, local_cny_pricing_unavailable).await
 }
 
 async fn fetch_models_dev_pricing_json(
     state: &AppState,
 ) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    fetch_pricing_json(
+        state,
+        MODELS_DEV_PRICING_URL,
+        models_dev_pricing_unavailable,
+    )
+    .await
+}
+
+async fn fetch_pricing_json(
+    state: &AppState,
+    url: &str,
+    map_error: fn(reqwest::Error) -> AppError,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
     state
         .http
-        .get(MODELS_DEV_PRICING_URL)
+        .get(url)
         .send()
         .await
-        .map_err(models_dev_pricing_unavailable)?
+        .map_err(map_error)?
         .error_for_status()
-        .map_err(models_dev_pricing_unavailable)?
+        .map_err(map_error)?
         .json::<HashMap<String, ModelsDevProvider>>()
         .await
-        .map_err(models_dev_pricing_unavailable)
+        .map_err(map_error)
 }
 
 async fn apply_local_cny_pricing_templates(

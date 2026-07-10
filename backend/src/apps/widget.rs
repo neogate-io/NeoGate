@@ -17,8 +17,8 @@ use crate::{
 };
 
 use super::{
-    runtime::run_app_message, runtime_for_endpoint, AppMessageResponse, AppRuntime,
-    IncomingAppMessage,
+    app_message_response, runtime::run_app_message, runtime_for_endpoint, AppMessageResponse,
+    AppRuntime, IncomingAppMessage,
 };
 
 #[derive(Debug, Deserialize)]
@@ -52,13 +52,7 @@ pub(super) async fn message(
         trace_id,
     };
     let outcome = run_app_message(Arc::clone(&state), runtime, message).await?;
-    Ok(Json(AppMessageResponse {
-        ok: true,
-        conversation_id: outcome.conversation_id,
-        message: outcome.message,
-        trace_id: outcome.trace_id,
-        duplicate: outcome.duplicate,
-    }))
+    Ok(Json(app_message_response(outcome)))
 }
 
 pub(super) async fn script(

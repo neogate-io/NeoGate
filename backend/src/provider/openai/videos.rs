@@ -280,7 +280,7 @@ async fn relay_openai_video_create(
 }
 
 async fn finish_video_create_success(
-    ctx: RelayContext,
+    mut ctx: RelayContext,
     upstream_response: reqwest::Response,
     video_billing_metadata: Option<VideoBillingMetadata>,
 ) -> AppResult<Response> {
@@ -291,8 +291,12 @@ async fn finish_video_create_success(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = match upstream_response.bytes().await {
-        Ok(body) => body,
+        Ok(body) => {
+            ctx.release_request_permit();
+            body
+        }
         Err(err) => {
+            ctx.release_request_permit();
             release_empty_hold(&ctx.state, ctx.hold, "openai video create body read error").await;
             return Err(err.into());
         }

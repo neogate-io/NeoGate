@@ -243,7 +243,7 @@ pub(super) async fn relay_openai_image(
 }
 
 async fn finish_image_relay(
-    ctx: RelayContext,
+    mut ctx: RelayContext,
     response: AppResult<reqwest::Response>,
     requested_image_count: i64,
 ) -> AppResult<Response> {
@@ -264,6 +264,7 @@ async fn finish_image_relay(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
+    ctx.release_request_permit();
     let image_count = image_count_from_response_body(&body).ok_or_else(|| {
         AppError::BadRequest("image response missing non-empty data array".to_string())
     })?;
@@ -353,9 +354,10 @@ struct ImageStreamRelay {
 
 impl ImageStreamRelay {
     async fn finish_success(mut self) {
-        let Some(ctx) = self.ctx.take() else {
+        let Some(mut ctx) = self.ctx.take() else {
             return;
         };
+        ctx.release_request_permit();
         let billing = settle_image_hold(&ctx, self.image_count, "streamed image relay").await;
         let usage = crate::relay::usage_from_context(
             &ctx,
@@ -369,9 +371,10 @@ impl ImageStreamRelay {
     }
 
     async fn finish_error(mut self, error: String) {
-        let Some(ctx) = self.ctx.take() else {
+        let Some(mut ctx) = self.ctx.take() else {
             return;
         };
+        ctx.release_request_permit();
         release_empty_hold(&ctx.state, ctx.hold.clone(), "streamed image relay error").await;
         let failure = crate::relay::key_failure_from_context(&ctx, error.clone()).await;
         let usage = crate::relay::usage_from_context(
@@ -388,7 +391,8 @@ impl ImageStreamRelay {
 
 impl Drop for ImageStreamRelay {
     fn drop(&mut self) {
-        if self.ctx.is_some() {
+        if let Some(ctx) = self.ctx.as_mut() {
+            ctx.release_request_permit();
             tracing::warn!("image stream ended before completion; skipping image billing settle");
         }
     }

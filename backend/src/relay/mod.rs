@@ -320,11 +320,12 @@ fn rewrite_response_model(body: Bytes, external_model: &str) -> AppResult<Bytes>
     Ok(body)
 }
 
-async fn finish_relay_error(ctx: RelayContext, err: AppError) -> AppResult<Response> {
+async fn finish_relay_error(mut ctx: RelayContext, err: AppError) -> AppResult<Response> {
     let err = relay_upstream_error(&ctx, err);
     let summary = err.to_string();
     log_relay_upstream_failure(&ctx, &err);
     let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
+    ctx.release_request_permit();
     let failure = key_failure_from_context(&ctx, summary).await;
     release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
     enqueue_relay_usage(&ctx.state, usage, failure).await;
@@ -342,7 +343,7 @@ pub(crate) async fn handle_upstream_http_error(
 }
 
 pub(crate) async fn respond_upstream_http_failure(
-    ctx: RelayContext,
+    mut ctx: RelayContext,
     status: StatusCode,
     failure: UpstreamHttpFailure,
 ) -> AppResult<Response> {
@@ -359,6 +360,7 @@ pub(crate) async fn respond_upstream_http_failure(
     });
     let client_response = payload.to_string();
     log_upstream_http_failure(&ctx, status, &failure, Some(&client_response));
+    ctx.release_request_permit();
     record_upstream_http_failure(&ctx, status, &failure, "upstream error").await;
 
     let mut builder = Response::builder()

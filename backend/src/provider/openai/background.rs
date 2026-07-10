@@ -146,7 +146,7 @@ pub(super) async fn create_background_response(
         "/v1/responses",
     )
     .await;
-    let ctx = RelayContext {
+    let mut ctx = RelayContext {
         state: Arc::clone(&state),
         auth: auth.clone(),
         upstream: upstream.clone(),
@@ -186,8 +186,12 @@ pub(super) async fn create_background_response(
         .cloned()
         .unwrap_or_else(|| axum::http::HeaderValue::from_static("application/json"));
     let body = match upstream_response.bytes().await {
-        Ok(body) => body,
+        Ok(body) => {
+            ctx.release_request_permit();
+            body
+        }
         Err(err) => {
+            ctx.release_request_permit();
             release_empty_hold(&state, hold, "openai background response body read error").await;
             return Err(err.into());
         }

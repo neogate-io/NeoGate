@@ -57,6 +57,10 @@ impl RelayContext {
         self.relay_final = true;
         self.request_permit = request_permit.take();
     }
+
+    pub(crate) fn release_request_permit(&mut self) {
+        self.request_permit.take();
+    }
 }
 
 pub(crate) fn body(
@@ -78,8 +82,9 @@ pub(crate) fn body(
     )
 }
 
-pub(crate) fn body_from_bytes(ctx: RelayContext, status: StatusCode, bytes: Bytes) -> Body {
+pub(crate) fn body_from_bytes(mut ctx: RelayContext, status: StatusCode, bytes: Bytes) -> Body {
     let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
+    ctx.release_request_permit();
     body_from_stream(
         ctx,
         status,
@@ -294,7 +299,7 @@ impl StreamingRelay {
     }
 
     async fn finish_stream_success(mut self) {
-        let ctx = self.ctx.take().expect("stream context finalized once");
+        let mut ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let stream_complete = self.usage.response_complete();
         let stream_failed = self.usage.response_failed();
@@ -303,6 +308,7 @@ impl StreamingRelay {
             .as_ref()
             .map(StreamErrorSummary::to_error_summary)
             .unwrap_or_else(|| "upstream stream ended with SSE error event".to_string());
+        ctx.release_request_permit();
         tracing::debug!(
             relay_trace_id = %ctx.relay_trace_id,
             relay_attempt = ctx.relay_attempt,
@@ -501,9 +507,10 @@ impl StreamingRelay {
     }
 
     async fn finish_stream_error(mut self, summary: String) {
-        let Some(ctx) = self.ctx.take() else {
+        let Some(mut ctx) = self.ctx.take() else {
             return;
         };
+        ctx.release_request_permit();
         tracing::warn!(
             provider = %ctx.upstream.provider,
             channel_id = ctx.upstream.channel_id,
@@ -694,9 +701,10 @@ fn is_body_decode_error(summary: &str) -> bool {
 
 impl Drop for StreamingRelay {
     fn drop(&mut self) {
-        let Some(ctx) = self.ctx.take() else {
+        let Some(mut ctx) = self.ctx.take() else {
             return;
         };
+        ctx.release_request_permit();
         let status = self.status;
         let stream_complete = self.usage.response_complete();
         let token_usage = self.usage.finish();

@@ -35,7 +35,7 @@ pub use types::{
 };
 
 pub const MICROS_PER_MAJOR_UNIT: i64 = 1_000_000;
-pub const BILLABLE_PROVIDER_PRICE_CONDITION: &str = r#"
+pub const BILLABLE_PRICE_CONDITION: &str = r#"
 (
     (billing_meter = 'token'
         AND input_price_micros >= 0
@@ -51,18 +51,18 @@ pub const BILLABLE_PROVIDER_PRICE_CONDITION: &str = r#"
         END)
 )
 "#;
-pub const BILLABLE_PROVIDER_PRICE_CONDITION_PP: &str = r#"
+pub const BILLABLE_PRICE_CONDITION_CP: &str = r#"
 (
-    (pp.billing_meter = 'token'
-        AND pp.input_price_micros >= 0
-        AND pp.output_price_micros >= 0)
-    OR (pp.billing_meter = 'image'
-        AND pp.unit_price_micros > 0)
-    OR (pp.billing_meter = 'video'
-        AND pp.video_billing_mode IS NOT NULL
+    (cp.billing_meter = 'token'
+        AND cp.input_price_micros >= 0
+        AND cp.output_price_micros >= 0)
+    OR (cp.billing_meter = 'image'
+        AND cp.unit_price_micros > 0)
+    OR (cp.billing_meter = 'video'
+        AND cp.video_billing_mode IS NOT NULL
         AND CASE
-            WHEN jsonb_typeof(pp.video_price_tiers) = 'array'
-            THEN jsonb_array_length(pp.video_price_tiers) > 0
+            WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
+            THEN jsonb_array_length(cp.video_price_tiers) > 0
             ELSE FALSE
         END)
 )
@@ -129,7 +129,7 @@ impl fmt::Debug for AllocationRecoverySample {
     }
 }
 
-type PriceCacheKey = (String, String, String);
+type PriceCacheKey = (DbId, String, String);
 
 #[derive(Clone)]
 struct PriceCache {
@@ -184,17 +184,17 @@ impl Billing {
     pub async fn price_for(
         &self,
         pool: &PgPool,
-        provider: &str,
+        channel_id: DbId,
         model: &str,
         user_group: &str,
     ) -> AppResult<Price> {
         self.price_cache
-            .price_for(pool, provider, model, user_group)
+            .price_for(pool, channel_id, model, user_group)
             .await
     }
 
-    pub fn invalidate_price(&self, provider: &str, model: &str) {
-        self.price_cache.invalidate(provider, model);
+    pub fn invalidate_price(&self, channel_id: DbId, model: &str) {
+        self.price_cache.invalidate(channel_id, model);
     }
 
     pub fn invalidate_all_prices(&self) {
@@ -621,10 +621,10 @@ impl PriceCache {
         }
     }
 
-    fn invalidate(&self, provider: &str, model: &str) {
+    fn invalidate(&self, channel_id: DbId, model: &str) {
         self.entries
-            .retain(|(cached_provider, cached_model, _), _| {
-                cached_provider != provider || cached_model != model
+            .retain(|(cached_channel_id, cached_model, _), _| {
+                *cached_channel_id != channel_id || cached_model != model
             });
     }
 
@@ -635,15 +635,11 @@ impl PriceCache {
     async fn price_for(
         &self,
         pool: &PgPool,
-        provider: &str,
+        channel_id: DbId,
         model: &str,
         user_group: &str,
     ) -> AppResult<Price> {
-        let key = (
-            provider.to_string(),
-            model.to_string(),
-            user_group.to_string(),
-        );
+        let key = (channel_id, model.to_string(), user_group.to_string());
         if let Some(cached) = self.entries.get(&key) {
             if cached.expires_at > Instant::now() {
                 return Ok(cached.price.clone());
@@ -662,8 +658,8 @@ impl PriceCache {
                        unit_price_micros,
                        video_billing_mode,
                        video_price_tiers
-                FROM provider_price
-                WHERE provider = $1 AND model = $2 AND enabled = TRUE
+                FROM channel_price
+                WHERE channel_id = $1 AND model = $2 AND enabled = TRUE
             ),
             policy AS (
                 SELECT multiplier_micros
@@ -705,13 +701,15 @@ impl PriceCache {
             LEFT JOIN policy ON TRUE
             "#,
         )
-        .bind(provider)
+        .bind(channel_id)
         .bind(model)
         .bind(user_group)
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| {
-            AppError::BadRequest(format!("price is not configured for {provider}/{model}"))
+            AppError::BadRequest(format!(
+                "price is not configured for channel {channel_id}/{model}"
+            ))
         })?;
 
         let multiplier_micros: i64 = row.try_get("multiplier_micros")?;

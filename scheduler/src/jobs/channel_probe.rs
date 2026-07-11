@@ -722,15 +722,22 @@ async fn can_cooldown_endpoint(context: &AppContext, endpoint_id: DbId) -> Resul
             FROM target
             JOIN channel c ON c.id = target.channel_id
             JOIN channel_model cm ON cm.channel_id = target.channel_id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
                                   AND (
-                                      (pp.billing_meter = 'token'
-                                          AND pp.input_price_micros >= 0
-                                          AND pp.output_price_micros >= 0)
-                                      OR (pp.billing_meter = 'image'
-                                          AND pp.unit_price_micros > 0)
+                                      (cp.billing_meter = 'token'
+                                          AND cp.input_price_micros >= 0
+                                          AND cp.output_price_micros >= 0)
+                                      OR (cp.billing_meter = 'image'
+                                          AND cp.unit_price_micros > 0)
+                                      OR (cp.billing_meter = 'video'
+                                          AND cp.video_billing_mode IS NOT NULL
+                                          AND CASE
+                                              WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
+                                              THEN jsonb_array_length(cp.video_price_tiers) > 0
+                                              ELSE FALSE
+                                          END)
                                   )
             WHERE cm.enabled = TRUE
               AND cm.status = 'available'
@@ -774,16 +781,23 @@ async fn can_cooldown_endpoint(context: &AppContext, endpoint_id: DbId) -> Resul
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
                             AND (
-                                (pp.billing_meter = 'token'
-                                    AND pp.input_price_micros >= 0
-                                    AND pp.output_price_micros >= 0)
-                                OR (pp.billing_meter = 'image'
-                                    AND pp.unit_price_micros > 0)
+                                (cp.billing_meter = 'token'
+                                    AND cp.input_price_micros >= 0
+                                    AND cp.output_price_micros >= 0)
+                                OR (cp.billing_meter = 'image'
+                                          AND cp.unit_price_micros > 0)
+                                      OR (cp.billing_meter = 'video'
+                                          AND cp.video_billing_mode IS NOT NULL
+                                          AND CASE
+                                              WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
+                                              THEN jsonb_array_length(cp.video_price_tiers) > 0
+                                              ELSE FALSE
+                                          END)
                             )
                       )
                       AND (
@@ -853,15 +867,22 @@ async fn can_cooldown_key(context: &AppContext, key_id: DbId) -> Result<bool> {
             JOIN provider p ON p.code = c.provider
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
                                   AND (
-                                      (pp.billing_meter = 'token'
-                                          AND pp.input_price_micros >= 0
-                                          AND pp.output_price_micros >= 0)
-                                      OR (pp.billing_meter = 'image'
-                                          AND pp.unit_price_micros > 0)
+                                      (cp.billing_meter = 'token'
+                                          AND cp.input_price_micros >= 0
+                                          AND cp.output_price_micros >= 0)
+                                      OR (cp.billing_meter = 'image'
+                                          AND cp.unit_price_micros > 0)
+                                      OR (cp.billing_meter = 'video'
+                                          AND cp.video_billing_mode IS NOT NULL
+                                          AND CASE
+                                              WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
+                                              THEN jsonb_array_length(cp.video_price_tiers) > 0
+                                              ELSE FALSE
+                                          END)
                                   )
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
@@ -909,16 +930,23 @@ async fn can_cooldown_key(context: &AppContext, key_id: DbId) -> Result<bool> {
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
                             AND (
-                                (pp.billing_meter = 'token'
-                                    AND pp.input_price_micros >= 0
-                                    AND pp.output_price_micros >= 0)
-                                OR (pp.billing_meter = 'image'
-                                    AND pp.unit_price_micros > 0)
+                                (cp.billing_meter = 'token'
+                                    AND cp.input_price_micros >= 0
+                                    AND cp.output_price_micros >= 0)
+                                OR (cp.billing_meter = 'image'
+                                          AND cp.unit_price_micros > 0)
+                                      OR (cp.billing_meter = 'video'
+                                          AND cp.video_billing_mode IS NOT NULL
+                                          AND CASE
+                                              WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
+                                              THEN jsonb_array_length(cp.video_price_tiers) > 0
+                                              ELSE FALSE
+                                          END)
                             )
                       )
                       AND (

@@ -17,7 +17,7 @@ use crate::{
         UpsertAppRequest, DEFAULT_CONTEXT_TURNS, DEFAULT_MAX_OUTPUT_TOKENS,
     },
     auth::{generate_user_key, key_prefix, AdminAuth},
-    billing::{account, CreditAccountType, BILLABLE_PROVIDER_PRICE_CONDITION_PP},
+    billing::{account, CreditAccountType, BILLABLE_PRICE_CONDITION_CP},
     cache::InvalidationEvent,
     error::{AppError, AppResult},
     id::DbId,
@@ -145,11 +145,11 @@ async fn project_app_model_options(
              FROM unnest(ce.models) AS endpoint_model(model)
              WHERE btrim(endpoint_model.model) = pm.target_model
          )
-        LEFT JOIN provider_price pp
-          ON pp.provider = c.provider
-         AND pp.model = cm.model
-         AND pp.enabled = TRUE
-         AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+        LEFT JOIN channel_price cp
+          ON cp.channel_id = c.id
+         AND cp.model = cm.model
+         AND cp.enabled = TRUE
+         AND {BILLABLE_PRICE_CONDITION_CP}
         WHERE pm.project_id = $1
           AND pm.enabled = TRUE
           AND (
@@ -157,7 +157,7 @@ async fn project_app_model_options(
               OR (
                   p.code IS NOT NULL
                   AND ce.id IS NOT NULL
-                  AND pp.provider IS NOT NULL
+                  AND cp.id IS NOT NULL
                   AND (
                       (
                           c.use_credentials = FALSE
@@ -208,11 +208,11 @@ async fn global_app_model_options(state: &AppState) -> AppResult<Vec<AppModelOpt
         JOIN channel c ON c.id = cm.channel_id
         JOIN provider p ON p.code = c.provider
         JOIN channel_endpoint ce ON ce.channel_id = c.id
-        JOIN provider_price pp
-         ON pp.provider = c.provider
-         AND pp.model = cm.model
-         AND pp.enabled = TRUE
-         AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+        JOIN channel_price cp
+         ON cp.channel_id = c.id
+         AND cp.model = cm.model
+         AND cp.enabled = TRUE
+         AND {BILLABLE_PRICE_CONDITION_CP}
         WHERE p.enabled = TRUE
           AND c.enabled = TRUE
           AND ce.enabled = TRUE

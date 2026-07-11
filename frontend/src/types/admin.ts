@@ -432,8 +432,9 @@ export type UsageRecord = {
   created_at: string
 }
 
-export type ProviderPrice = {
+export type ChannelPrice = {
   id: number
+  channel_id: number
   provider: string
   model: string
   input_price_micros: number

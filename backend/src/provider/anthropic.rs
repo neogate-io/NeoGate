@@ -129,7 +129,7 @@ pub(crate) async fn anthropic_messages(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )
@@ -327,7 +327,7 @@ pub(crate) async fn create_anthropic_message_batch(
         .billing
         .price_for(
             &state.db.pool,
-            &upstream.provider,
+            upstream.channel_id,
             &resolved.target_model,
             &auth.user_group,
         )

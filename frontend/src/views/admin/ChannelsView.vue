@@ -17,9 +17,9 @@ import {
   getModelReferenceCatalog,
   getProviderModels,
   getPricingTemplates,
-  getProviderPrices,
+  getChannelPrices,
   syncPricingTemplates,
-  upsertProviderPrice
+  upsertChannelPrice
 } from '../../api/prices'
 import { updateChannelModel, updateChannel } from '../../api/channels'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
@@ -47,16 +47,17 @@ import type {
   ModelReferenceCatalogRecord,
   PricingTemplate,
   ProviderModel,
-  ProviderPrice,
+  ChannelPrice,
   VideoBillingMode,
   VideoPriceTier
 } from '../../types/admin'
 import { ApiError, readError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import {
+  channelPriceKey,
   derivedCacheReadPrice,
   findPricingTemplate,
-  isProviderPriceConfigured,
+  isChannelPriceConfigured,
   priceKey,
   pricingReferenceModelAliases,
   resolvedVideoTokensPerSecondEstimate
@@ -117,7 +118,7 @@ const {
   confirmDeleteChannel
 } = useChannels(t)
 
-const prices = ref<ProviderPrice[]>([])
+const prices = ref<ChannelPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
 const providerModels = ref<ProviderModel[]>([])
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
@@ -158,7 +159,7 @@ type BundledVideoTierRecord = {
 }
 
 const priceByModel = computed(
-  () => new Map(prices.value.map((price) => [priceKey(price.provider, price.model), price]))
+  () => new Map(prices.value.map((price) => [channelPriceKey(price.channel_id, price.model), price]))
 )
 const isInternalServiceMode = computed(() => servicePolicy.value?.service_mode === 'internal')
 const providerModelByModel = computed(
@@ -246,8 +247,11 @@ function channelModelRecords(row: Channel) {
         runtime_status: 'normal',
         success_count: 0,
         failure_count: 0,
-        billing_enabled: Boolean(priceByModel.value.get(priceKey(row.provider, model))?.enabled),
-        price_configured: Boolean(priceByModel.value.get(priceKey(row.provider, model))),
+        billing_enabled: Boolean(
+          priceByModel.value.get(channelPriceKey(row.id, model))?.enabled &&
+            isChannelPriceConfigured(priceByModel.value.get(channelPriceKey(row.id, model)))
+        ),
+        price_configured: Boolean(priceByModel.value.get(channelPriceKey(row.id, model))),
         created_at: '',
         updated_at: ''
       }) as ChannelModel
@@ -302,8 +306,8 @@ function channelPriceStatus(row: Channel) {
 function channelPriceRows(row: Channel) {
   return channelModelRecords(row).map((channelModel) => {
     const model = channelModel.model
-    const price = priceByModel.value.get(priceKey(row.provider, model))
-    const hasConfiguredPrice = channelModel.price_configured || isProviderPriceConfigured(price)
+    const price = priceByModel.value.get(channelPriceKey(row.id, model))
+    const hasConfiguredPrice = channelModel.price_configured || isChannelPriceConfigured(price)
     if (pricingLoading.value && prices.value.length === 0) {
       return {
         model,
@@ -493,7 +497,7 @@ async function loadPricingData() {
         fetchedModelReferenceCatalog,
         fetchedBundledVideoTierCatalog
       ] = await Promise.all([
-        getProviderPrices(),
+        getChannelPrices(),
         getPricingTemplates(),
         getProviderModels(),
         getModelReferenceCatalog(),
@@ -590,7 +594,7 @@ function hasManualPriceInput(form: ChannelPriceForm) {
   )
 }
 
-function hasEnabledBillablePrice(price?: ProviderPrice, billingMeter?: BillingMeter | null) {
+function hasEnabledBillablePrice(price?: ChannelPrice, billingMeter?: BillingMeter | null) {
   if (!price?.enabled) return false
   if (billingMeter && price.billing_meter !== billingMeter) return false
   if (price.video_billing_mode) {
@@ -1024,7 +1028,7 @@ function openPriceDialog(row: Channel) {
   }
 
   for (const model of channelModelList(row)) {
-    const key = priceKey(row.provider, model)
+    const key = channelPriceKey(row.id, model)
     const price = priceByModel.value.get(key)
     const template = findPricingTemplate(templates.value, row.provider, model)
     const supportsImageBilling = canUseImageBilling(row.provider, model)
@@ -1060,6 +1064,7 @@ function openPriceDialog(row: Channel) {
       ? template.cache_write_price_micros
       : (price?.cache_write_price_micros ?? inputPrice)
     priceForms[key] = {
+      channelId: row.id,
       provider: row.provider,
       model,
       billingMeter,
@@ -1258,8 +1263,8 @@ async function saveChannelPrices() {
           form.videoBillingMode,
           true
         )
-        await upsertProviderPrice({
-          provider: form.provider,
+        await upsertChannelPrice({
+          channel_id: form.channelId,
           model: form.model,
           input_price_micros:
             form.canUseSeedanceVideoBilling && form.videoBillingMode

@@ -93,7 +93,7 @@ pub(super) async fn create_background_response(
         .billing
         .price_for(
             &state.db.pool,
-            &upstream.provider,
+            upstream.channel_id,
             &target_model,
             &auth.user_group,
         )

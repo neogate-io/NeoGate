@@ -9,7 +9,7 @@ use sqlx::{PgPool, Row};
 
 use crate::{
     admin::setting::resolve_default_text_model,
-    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
+    billing::BILLABLE_PRICE_CONDITION_CP,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult},
     id::DbId,
@@ -1249,19 +1249,19 @@ async fn validate_target(
     target_model: &str,
 ) -> AppResult<()> {
     if let Some(channel_id) = target_channel_id {
-        let row = sqlx::query("SELECT provider FROM channel WHERE id = $1")
+        let row = sqlx::query("SELECT id FROM channel WHERE id = $1")
             .bind(channel_id)
             .fetch_optional(pool)
             .await?
             .ok_or_else(|| AppError::BadRequest("target channel does not exist".to_string()))?;
-        let provider: String = row.try_get("provider")?;
+        let channel_id: DbId = row.try_get("id")?;
         let has_price = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
-                SELECT 1 FROM provider_price
-                WHERE provider = $1 AND model = $2 AND enabled = TRUE
+                SELECT 1 FROM channel_price
+                WHERE channel_id = $1 AND model = $2 AND enabled = TRUE
             )",
         )
-        .bind(provider)
+        .bind(channel_id)
         .bind(target_model)
         .fetch_one(pool)
         .await?;
@@ -1275,7 +1275,7 @@ async fn validate_target(
 
     let has_any_price = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
-            SELECT 1 FROM provider_price
+            SELECT 1 FROM channel_price
             WHERE model = $1 AND enabled = TRUE
         )",
     )
@@ -1375,7 +1375,7 @@ async fn list_auto_configure_available_models(
         r#"
         SELECT DISTINCT ON (cm.model, c.id)
                cm.model, c.provider, c.id AS channel_id, c.name AS channel_name, ce.protocol,
-               pp.input_price_micros, pp.output_price_micros
+               cp.input_price_micros, cp.output_price_micros
         FROM channel_model cm
         JOIN channel c ON c.id = cm.channel_id
         JOIN provider p ON p.code = c.provider
@@ -1394,11 +1394,11 @@ async fn list_auto_configure_available_models(
                     WHERE btrim(endpoint_model.model) <> ''
                 )
             )
-        JOIN provider_price pp ON pp.provider = c.provider
-                              AND pp.model = cm.model
-                              AND pp.enabled = TRUE
-                              AND pp.billing_meter = 'token'
-                              AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+        JOIN channel_price cp ON cp.channel_id = c.id
+                              AND cp.model = cm.model
+                              AND cp.enabled = TRUE
+                              AND cp.billing_meter = 'token'
+                              AND {BILLABLE_PRICE_CONDITION_CP}
         WHERE p.enabled = TRUE
           AND c.enabled = TRUE
           AND cm.enabled = TRUE

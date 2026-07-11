@@ -19,8 +19,9 @@ const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
 const PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX: &str = "local_cny_fx";
 
 #[derive(Debug, Serialize)]
-pub struct ProviderPriceRecord {
+pub struct ChannelPriceRecord {
     pub id: DbId,
+    pub channel_id: DbId,
     pub provider: String,
     pub model: String,
     pub input_price_micros: i64,
@@ -113,8 +114,8 @@ pub struct PricingTemplateSyncResult {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpsertProviderPriceRequest {
-    pub provider: String,
+pub struct UpsertChannelPriceRequest {
+    pub channel_id: DbId,
     pub model: String,
     pub input_price_micros: i64,
     pub output_price_micros: i64,
@@ -253,19 +254,21 @@ pub async fn list_provider_models(state: &AppState) -> AppResult<Vec<ProviderMod
     rows.iter().map(provider_model_from_row).collect()
 }
 
-pub async fn list_provider_prices(state: &AppState) -> AppResult<Vec<ProviderPriceRecord>> {
+pub async fn list_channel_prices(state: &AppState) -> AppResult<Vec<ChannelPriceRecord>> {
     let rows = sqlx::query(
-        "SELECT id, provider, model, input_price_micros,
-                output_price_micros, cache_read_price_micros,
-                cache_write_price_micros, billing_meter,
-                unit_price_micros, video_billing_mode, video_price_tiers,
-                enabled, created_at, updated_at
-         FROM provider_price
-         ORDER BY provider ASC, model ASC",
+        "SELECT cp.id, cp.channel_id, c.provider, cp.model,
+                cp.input_price_micros, cp.output_price_micros,
+                cp.cache_read_price_micros, cp.cache_write_price_micros,
+                cp.billing_meter, cp.unit_price_micros,
+                cp.video_billing_mode, cp.video_price_tiers,
+                cp.enabled, cp.created_at, cp.updated_at
+         FROM channel_price cp
+         JOIN channel c ON c.id = cp.channel_id
+         ORDER BY c.provider ASC, cp.channel_id ASC, cp.model ASC",
     )
     .fetch_all(&state.db.pool)
     .await?;
-    rows.iter().map(provider_price_from_row).collect()
+    rows.iter().map(channel_price_from_row).collect()
 }
 
 pub async fn list_pricing_templates(state: &AppState) -> AppResult<Vec<PricingTemplateRecord>> {
@@ -417,38 +420,48 @@ pub async fn sync_pricing_templates(
     }
 }
 
-pub async fn upsert_provider_price(
+pub async fn upsert_channel_price(
     state: &AppState,
-    req: UpsertProviderPriceRequest,
-) -> AppResult<ProviderPriceRecord> {
+    req: UpsertChannelPriceRequest,
+) -> AppResult<ChannelPriceRecord> {
     validate_price(&req)?;
-    ensure_model_is_known(state, &req.provider, &req.model).await?;
+    ensure_channel_model_is_known(state, req.channel_id, &req.model).await?;
     let row = sqlx::query(
-        "INSERT INTO provider_price
-         (provider, model, input_price_micros,
-          output_price_micros, cache_read_price_micros,
-          cache_write_price_micros, billing_meter,
-          unit_price_micros, video_billing_mode, video_price_tiers, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (provider, model)
-         DO UPDATE SET
-             input_price_micros = EXCLUDED.input_price_micros,
-             output_price_micros = EXCLUDED.output_price_micros,
-             cache_read_price_micros = EXCLUDED.cache_read_price_micros,
-             cache_write_price_micros = EXCLUDED.cache_write_price_micros,
-             billing_meter = EXCLUDED.billing_meter,
-             unit_price_micros = EXCLUDED.unit_price_micros,
-             video_billing_mode = EXCLUDED.video_billing_mode,
-             video_price_tiers = EXCLUDED.video_price_tiers,
-             enabled = EXCLUDED.enabled,
-             updated_at = now()
-         RETURNING id, provider, model, input_price_micros,
-                   output_price_micros, cache_read_price_micros,
-                   cache_write_price_micros, billing_meter,
-                   unit_price_micros, video_billing_mode, video_price_tiers,
-                   enabled, created_at, updated_at",
+        "WITH upserted AS (
+            INSERT INTO channel_price
+             (channel_id, model, input_price_micros,
+              output_price_micros, cache_read_price_micros,
+              cache_write_price_micros, billing_meter,
+              unit_price_micros, video_billing_mode, video_price_tiers, enabled)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (channel_id, model)
+             DO UPDATE SET
+                 input_price_micros = EXCLUDED.input_price_micros,
+                 output_price_micros = EXCLUDED.output_price_micros,
+                 cache_read_price_micros = EXCLUDED.cache_read_price_micros,
+                 cache_write_price_micros = EXCLUDED.cache_write_price_micros,
+                 billing_meter = EXCLUDED.billing_meter,
+                 unit_price_micros = EXCLUDED.unit_price_micros,
+                 video_billing_mode = EXCLUDED.video_billing_mode,
+                 video_price_tiers = EXCLUDED.video_price_tiers,
+                 enabled = EXCLUDED.enabled,
+                 updated_at = now()
+             RETURNING id, channel_id, model, input_price_micros,
+                       output_price_micros, cache_read_price_micros,
+                       cache_write_price_micros, billing_meter,
+                       unit_price_micros, video_billing_mode, video_price_tiers,
+                       enabled, created_at, updated_at
+         )
+         SELECT upserted.id, upserted.channel_id, c.provider, upserted.model,
+                upserted.input_price_micros, upserted.output_price_micros,
+                upserted.cache_read_price_micros, upserted.cache_write_price_micros,
+                upserted.billing_meter, upserted.unit_price_micros,
+                upserted.video_billing_mode, upserted.video_price_tiers,
+                upserted.enabled, upserted.created_at, upserted.updated_at
+         FROM upserted
+         JOIN channel c ON c.id = upserted.channel_id",
     )
-    .bind(req.provider)
+    .bind(req.channel_id)
     .bind(req.model)
     .bind(req.input_price_micros)
     .bind(req.output_price_micros)
@@ -461,14 +474,14 @@ pub async fn upsert_provider_price(
     .bind(req.enabled)
     .fetch_one(&state.db.pool)
     .await?;
-    let price = provider_price_from_row(&row)?;
+    let price = channel_price_from_row(&row)?;
     sync_channel_model_enabled_for_price(state, &price).await?;
     Ok(price)
 }
 
 async fn sync_channel_model_enabled_for_price(
     state: &AppState,
-    price: &ProviderPriceRecord,
+    price: &ChannelPriceRecord,
 ) -> AppResult<()> {
     if price.enabled {
         sqlx::query(
@@ -476,14 +489,13 @@ async fn sync_channel_model_enabled_for_price(
              SET enabled = TRUE,
                  updated_at = now()
              FROM channel_endpoint ce
-             JOIN channel c ON c.id = ce.channel_id
              WHERE cm.channel_id = ce.channel_id
-               AND c.provider = $1
+               AND cm.channel_id = $1
                AND cm.model = $2
                AND cm.model = ANY(ce.models)
                AND cm.status = 'available'",
         )
-        .bind(&price.provider)
+        .bind(price.channel_id)
         .bind(&price.model)
         .execute(&state.db.pool)
         .await?;
@@ -492,12 +504,10 @@ async fn sync_channel_model_enabled_for_price(
             "UPDATE channel_model cm
              SET enabled = FALSE,
                  updated_at = now()
-             FROM channel c
-             WHERE c.id = cm.channel_id
-               AND c.provider = $1
+             WHERE cm.channel_id = $1
                AND cm.model = $2",
         )
-        .bind(&price.provider)
+        .bind(price.channel_id)
         .bind(&price.model)
         .execute(&state.db.pool)
         .await?;
@@ -1061,10 +1071,10 @@ pub async fn upsert_pricing_policy(
     pricing_policy_from_row(&row)
 }
 
-fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
-    if req.provider.trim().is_empty() || req.model.trim().is_empty() {
+fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
+    if req.channel_id <= 0 || req.model.trim().is_empty() {
         return Err(AppError::BadRequest(
-            "provider and model are required".to_string(),
+            "channel and model are required".to_string(),
         ));
     }
     let prices = PricingMicros {
@@ -1100,7 +1110,7 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_video_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
+fn validate_video_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
     if req.billing_meter == BillingMeter::Video && req.video_billing_mode.is_none() {
         return Err(AppError::BadRequest(
             "video billing mode is required for video billing".to_string(),
@@ -1200,24 +1210,28 @@ fn validate_pricing_policy(req: &UpsertPricingPolicyRequest) -> AppResult<()> {
     Ok(())
 }
 
-async fn ensure_model_is_known(state: &AppState, provider: &str, model: &str) -> AppResult<()> {
+async fn ensure_channel_model_is_known(
+    state: &AppState,
+    channel_id: DbId,
+    model: &str,
+) -> AppResult<()> {
     let row = sqlx::query(
         r#"
         SELECT 1
-        FROM provider_model
-        WHERE provider = $1
+        FROM channel_model
+        WHERE channel_id = $1
           AND model = $2
         LIMIT 1
         "#,
     )
-    .bind(provider)
+    .bind(channel_id)
     .bind(model)
     .fetch_optional(&state.db.pool)
     .await?;
 
     if row.is_none() {
         return Err(AppError::BadRequest(
-            "model is not known for this provider".to_string(),
+            "model is not configured for this channel".to_string(),
         ));
     }
 
@@ -1240,9 +1254,10 @@ fn provider_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderMod
     })
 }
 
-fn provider_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderPriceRecord> {
-    Ok(ProviderPriceRecord {
+fn channel_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelPriceRecord> {
+    Ok(ChannelPriceRecord {
         id: row.try_get("id")?,
+        channel_id: row.try_get("channel_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         input_price_micros: row.try_get("input_price_micros")?,

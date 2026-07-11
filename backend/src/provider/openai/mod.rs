@@ -449,7 +449,7 @@ async fn relay_openai(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )

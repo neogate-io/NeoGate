@@ -43,7 +43,7 @@ pub enum InvalidationEvent {
         cooldown_until: DateTime<Utc>,
     },
     Price {
-        provider: String,
+        channel_id: DbId,
         model: String,
     },
 }
@@ -149,8 +149,8 @@ pub async fn apply_invalidation(state: &AppState, event: InvalidationEvent) {
                 .mark_key_failure_local(id, cooldown_until)
                 .await;
         }
-        InvalidationEvent::Price { provider, model } => {
-            state.billing.invalidate_price(&provider, &model);
+        InvalidationEvent::Price { channel_id, model } => {
+            state.billing.invalidate_price(channel_id, &model);
         }
     }
 }

@@ -87,7 +87,7 @@ pub(super) async fn relay_openai_image(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )

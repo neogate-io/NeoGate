@@ -1,9 +1,13 @@
-import type { PricingTemplate, ProviderPrice } from '../types/admin'
+import type { PricingTemplate, ChannelPrice } from '../types/admin'
 
 const CONFIRMED_PRICE_SOURCE = 'confirmed_price'
 
 export function priceKey(provider: string, model: string) {
   return `${provider.trim()}\u0000${model.trim().toLowerCase()}`
+}
+
+export function channelPriceKey(channelId: number, model: string) {
+  return `${channelId}\u0000${model.trim().toLowerCase()}`
 }
 
 export function derivedCacheReadPrice(inputPrice: number) {
@@ -30,7 +34,7 @@ export function resolvedVideoTokensPerSecondEstimate(
   return estimatedVideoTokensPerSecond(resolutionsText)
 }
 
-export function isProviderPriceConfigured(price?: ProviderPrice) {
+export function isChannelPriceConfigured(price?: ChannelPrice) {
   if (!price) return false
   if (price.billing_meter === 'image') {
     return price.unit_price_micros !== undefined && price.unit_price_micros !== null
@@ -41,8 +45,8 @@ export function isProviderPriceConfigured(price?: ProviderPrice) {
   return price.input_price_micros >= 0 && price.output_price_micros >= 0
 }
 
-export function isProviderPriceReady(price?: ProviderPrice) {
-  return Boolean(price?.enabled && isProviderPriceConfigured(price))
+export function isChannelPriceReady(price?: ChannelPrice) {
+  return Boolean(price?.enabled && isChannelPriceConfigured(price))
 }
 
 export function pricingReferenceModelAliases(model: string) {

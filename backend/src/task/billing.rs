@@ -153,7 +153,7 @@ async fn finalize_loaded(
                 .billing
                 .price_for(
                     &state.db.pool,
-                    &task.provider,
+                    task.channel_id,
                     upstream_model,
                     &billing_context.user_group,
                 )

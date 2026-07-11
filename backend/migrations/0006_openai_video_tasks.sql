@@ -12,42 +12,81 @@ ALTER TABLE task_upstream
     );
 
 ALTER TABLE provider_price
-    ADD COLUMN IF NOT EXISTS video_billing_mode TEXT,
-    ADD COLUMN IF NOT EXISTS video_price_tiers JSONB NOT NULL DEFAULT '[]'::JSONB;
-
-ALTER TABLE provider_price
-    DROP CONSTRAINT IF EXISTS provider_price_video_billing_mode_check;
-ALTER TABLE provider_price
-    ADD CONSTRAINT provider_price_video_billing_mode_check
-    CHECK (
-        video_billing_mode IS NULL
-        OR video_billing_mode IN ('official_token', 'per_second')
-    ) NOT VALID;
-ALTER TABLE provider_price VALIDATE CONSTRAINT provider_price_video_billing_mode_check;
-
-ALTER TABLE provider_price
-    DROP CONSTRAINT IF EXISTS provider_price_video_billing_shape_check;
-ALTER TABLE provider_price
-    ADD CONSTRAINT provider_price_video_billing_shape_check
-    CHECK (
-        CASE
-            WHEN billing_meter = 'video' THEN
-                video_billing_mode IS NOT NULL
-                AND jsonb_typeof(video_price_tiers) = 'array'
-                AND jsonb_array_length(video_price_tiers) > 0
-            ELSE
-                video_billing_mode IS NULL
-                AND video_price_tiers = '[]'::JSONB
-        END
-    ) NOT VALID;
-ALTER TABLE provider_price VALIDATE CONSTRAINT provider_price_video_billing_shape_check;
-
-ALTER TABLE provider_price
     DROP CONSTRAINT IF EXISTS provider_price_billing_meter_check;
 ALTER TABLE provider_price
     ADD CONSTRAINT provider_price_billing_meter_check
     CHECK (billing_meter IN ('token', 'image', 'video')) NOT VALID;
 ALTER TABLE provider_price VALIDATE CONSTRAINT provider_price_billing_meter_check;
+
+ALTER TABLE provider_price
+    ADD COLUMN IF NOT EXISTS video_billing_mode TEXT,
+    ADD COLUMN IF NOT EXISTS video_price_tiers JSONB NOT NULL DEFAULT '[]'::JSONB;
+
+CREATE TABLE channel_price (
+    id BIGSERIAL PRIMARY KEY,
+    channel_id BIGINT NOT NULL REFERENCES channel(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    input_price_micros BIGINT NOT NULL CHECK (input_price_micros >= 0),
+    output_price_micros BIGINT NOT NULL CHECK (output_price_micros >= 0),
+    cache_read_price_micros BIGINT CHECK (cache_read_price_micros >= 0),
+    cache_write_price_micros BIGINT CHECK (cache_write_price_micros >= 0),
+    billing_meter TEXT NOT NULL DEFAULT 'token',
+    unit_price_micros BIGINT CHECK (unit_price_micros >= 0),
+    video_billing_mode TEXT,
+    video_price_tiers JSONB NOT NULL DEFAULT '[]'::JSONB,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (channel_id, model),
+    CONSTRAINT channel_price_channel_model_fk
+        FOREIGN KEY (channel_id, model) REFERENCES channel_model(channel_id, model) ON DELETE CASCADE,
+    CONSTRAINT channel_price_billing_meter_check
+        CHECK (billing_meter IN ('token', 'image', 'video')),
+    CONSTRAINT channel_price_video_billing_mode_check
+        CHECK (
+            video_billing_mode IS NULL
+            OR video_billing_mode IN ('official_token', 'per_second')
+        ),
+    CONSTRAINT channel_price_video_billing_shape_check
+        CHECK (
+            CASE
+                WHEN billing_meter = 'video' THEN
+                    video_billing_mode IS NOT NULL
+                    AND jsonb_typeof(video_price_tiers) = 'array'
+                    AND jsonb_array_length(video_price_tiers) > 0
+                ELSE
+                    video_billing_mode IS NULL
+                    AND video_price_tiers = '[]'::JSONB
+            END
+        )
+);
+
+INSERT INTO channel_price (
+    channel_id, model, input_price_micros, output_price_micros,
+    cache_read_price_micros, cache_write_price_micros,
+    billing_meter, unit_price_micros, video_billing_mode, video_price_tiers,
+    enabled, created_at, updated_at
+)
+SELECT
+    cm.channel_id,
+    pp.model,
+    pp.input_price_micros,
+    pp.output_price_micros,
+    pp.cache_read_price_micros,
+    pp.cache_write_price_micros,
+    pp.billing_meter,
+    pp.unit_price_micros,
+    pp.video_billing_mode,
+    pp.video_price_tiers,
+    pp.enabled,
+    pp.created_at,
+    pp.updated_at
+FROM provider_price pp
+JOIN channel c ON c.provider = pp.provider
+JOIN channel_model cm ON cm.channel_id = c.id AND cm.model = pp.model
+ON CONFLICT (channel_id, model) DO NOTHING;
+
+DROP TABLE provider_price;
 
 ALTER TABLE provider_model
     DROP CONSTRAINT IF EXISTS provider_model_billing_meter_check;

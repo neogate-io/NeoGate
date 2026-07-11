@@ -19,6 +19,7 @@ export type ChannelVideoPriceTierForm = {
 }
 
 export type ChannelPriceForm = {
+  channelId: number
   provider: string
   model: string
   billingMeter: BillingMeter | null

@@ -9,7 +9,7 @@ use sqlx::{AssertSqlSafe, PgPool, Row};
 
 use crate::{
     admin::{channel::KeySelectionMode, credentials::openai_runtime_credential},
-    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
+    billing::BILLABLE_PRICE_CONDITION_CP,
     error::{AppError, AppResult},
     id::DbId,
     secrets::SecretStore,
@@ -93,11 +93,11 @@ async fn fetch_channel_candidates(pool: &PgPool) -> AppResult<Vec<ChannelCandida
           )
           AND EXISTS (
               SELECT 1
-              FROM provider_price pp
-              WHERE pp.provider = c.provider
-                AND pp.model = cm.model
-                AND pp.enabled = TRUE
-                AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+              FROM channel_price cp
+              WHERE cp.channel_id = c.id
+                AND cp.model = cm.model
+                AND cp.enabled = TRUE
+                AND {BILLABLE_PRICE_CONDITION_CP}
           )
          WHERE p.enabled = TRUE
            AND c.enabled = TRUE

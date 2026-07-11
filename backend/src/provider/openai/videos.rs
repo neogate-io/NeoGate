@@ -130,7 +130,7 @@ async fn relay_openai_video_create(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )

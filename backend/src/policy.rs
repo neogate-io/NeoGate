@@ -16,9 +16,9 @@ use crate::{
         },
         fetch_upstream_models,
         price::{
-            list_pricing_templates, sync_pricing_templates, upsert_provider_price,
+            list_pricing_templates, sync_pricing_templates, upsert_channel_price,
             PricingTemplateRecord, PricingTemplateSyncResult, SyncPricingTemplatesRequest,
-            UpsertProviderPriceRequest,
+            UpsertChannelPriceRequest,
         },
         provider::{
             ensure_builtin_manual_provider_by_code, list_providers, provider_default_endpoints,
@@ -125,7 +125,7 @@ pub struct CompleteSetupRequest {
     pub registration_enabled: Option<bool>,
     pub channel: Option<SetupChannelRequest>,
     #[serde(default)]
-    pub prices: Vec<SetupProviderPriceRequest>,
+    pub prices: Vec<SetupChannelPriceRequest>,
     pub smtp: Option<UpsertSmtpSettingRequest>,
     pub payment: Option<UpsertPaymentSettingRequest>,
 }
@@ -139,8 +139,9 @@ pub struct SetupChannelRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SetupProviderPriceRequest {
-    pub provider: String,
+pub struct SetupChannelPriceRequest {
+    #[serde(rename = "provider")]
+    pub _provider: String,
     pub model: String,
     pub input_price_micros: i64,
     pub output_price_micros: i64,
@@ -334,10 +335,14 @@ pub async fn complete_setup_for_state(
         None
     };
     for price in req.prices {
-        upsert_provider_price(
+        let channel_id = channel
+            .as_ref()
+            .map(|channel| channel.id)
+            .ok_or_else(|| AppError::BadRequest("upstream channel is required".to_string()))?;
+        upsert_channel_price(
             &state,
-            UpsertProviderPriceRequest {
-                provider: price.provider,
+            UpsertChannelPriceRequest {
+                channel_id,
                 model: price.model,
                 input_price_micros: price.input_price_micros,
                 output_price_micros: price.output_price_micros,

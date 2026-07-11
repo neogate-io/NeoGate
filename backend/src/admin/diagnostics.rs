@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
+    billing::BILLABLE_PRICE_CONDITION_CP,
     cache::InvalidationEvent,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
@@ -1251,10 +1251,10 @@ async fn can_cooldown_endpoint(state: &AppState, endpoint_id: DbId) -> AppResult
             FROM target
             JOIN channel c ON c.id = target.channel_id
             JOIN channel_model cm ON cm.channel_id = target.channel_id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
-                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
+                                  AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE cm.enabled = TRUE
               AND cm.status = 'available'
               AND (
@@ -1297,11 +1297,11 @@ async fn can_cooldown_endpoint(state: &AppState, endpoint_id: DbId) -> AppResult
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
-                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
+                            AND {BILLABLE_PRICE_CONDITION_CP}
                       )
                       AND (
                           cm.runtime_status = 'normal'
@@ -1370,10 +1370,10 @@ async fn can_cooldown_key(state: &AppState, key_id: DbId) -> AppResult<bool> {
             JOIN provider p ON p.code = c.provider
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
-                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
+                                  AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
               AND ce.enabled = TRUE
@@ -1420,11 +1420,11 @@ async fn can_cooldown_key(state: &AppState, key_id: DbId) -> AppResult<bool> {
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
-                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
+                            AND {BILLABLE_PRICE_CONDITION_CP}
                       )
                       AND (
                           cm.runtime_status = 'normal'
@@ -1494,10 +1494,10 @@ async fn can_disable_channel_model_for_endpoint(
             JOIN channel c ON c.id = target.channel_id
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
-                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
+                                  AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE ce.enabled = TRUE
               AND ce.healthy = TRUE
               AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
@@ -1544,11 +1544,11 @@ async fn can_disable_channel_model_for_endpoint(
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
-                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
+                            AND {BILLABLE_PRICE_CONDITION_CP}
                       )
                       AND (
                           cm.runtime_status = 'normal'

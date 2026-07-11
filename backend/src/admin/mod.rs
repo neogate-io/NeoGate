@@ -54,8 +54,8 @@ use self::{
         CredentialModelRecord, CredentialRecord, CredentialUploadResult,
     },
     diagnostics::{
-        diagnose_channel, diagnose_channel_with_progress, ChannelDiagnosticEvent,
-        ChannelDiagnosticReport,
+        diagnose_channel_with_scope, ChannelDiagnosticEvent, ChannelDiagnosticReport,
+        DiagnoseChannelRequest,
     },
     price::{
         list_channel_prices, list_model_reference_catalog, list_pricing_policies,
@@ -878,8 +878,10 @@ async fn diagnose_channel_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
     Path(id): Path<DbId>,
+    req: Option<Json<DiagnoseChannelRequest>>,
 ) -> AppResult<Json<ChannelDiagnosticReport>> {
-    let report = diagnose_channel(&state, id).await?;
+    let scope = req.map(|Json(req)| req.scope).unwrap_or_default();
+    let report = diagnose_channel_with_scope(&state, id, scope, None).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(report))
 }
@@ -888,10 +890,12 @@ async fn diagnose_channel_stream_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
     Path(id): Path<DbId>,
+    req: Option<Json<DiagnoseChannelRequest>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ChannelDiagnosticEvent>();
+    let scope = req.map(|Json(req)| req.scope).unwrap_or_default();
     tokio::spawn(async move {
-        match diagnose_channel_with_progress(&state, id, Some(tx.clone())).await {
+        match diagnose_channel_with_scope(&state, id, scope, Some(tx.clone())).await {
             Ok(_) => {
                 invalidate_cache(&state, InvalidationEvent::Routing).await;
             }

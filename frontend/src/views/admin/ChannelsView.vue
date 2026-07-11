@@ -22,7 +22,7 @@ import {
   syncPricingTemplates,
   upsertChannelPrice
 } from '../../api/prices'
-import { updateChannelModel, updateChannel } from '../../api/channels'
+import { updateChannelModel, updateChannel, type ChannelDiagnosticScope } from '../../api/channels'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelDiagnosticDialog from '../../components/admin/channels/ChannelDiagnosticDialog.vue'
@@ -40,6 +40,7 @@ import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
+import type { MessageKey } from '../../i18n'
 import type {
   BillingMeter,
   Channel,
@@ -135,6 +136,9 @@ const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
 const appliedChannelSearch = ref('')
 const channelStatusFilter = ref<'all' | 'normal' | 'attention' | 'disabled'>('all')
+const diagnosticScopeDialogOpen = ref(false)
+const diagnosticScopeChannel = ref<Channel | null>(null)
+const selectedDiagnosticScope = ref<ChannelDiagnosticScope>('all')
 const channelCurrentPage = ref(1)
 const channelPageSize = ref(20)
 const channelPageSizes = [20, 50, 100]
@@ -174,6 +178,43 @@ const {
   isChannelDiagnosing,
   run: runChannelDiagnostic
 } = diagnostic
+
+const baseDiagnosticScopeOptions: Array<{ value: ChannelDiagnosticScope; labelKey: MessageKey }> =
+  [
+    { value: 'all', labelKey: 'diagnosticScopeAll' },
+    { value: 'models', labelKey: 'diagnosticScopeModels' },
+    { value: 'text', labelKey: 'diagnosticScopeText' },
+    { value: 'image', labelKey: 'diagnosticScopeImage' },
+    { value: 'video', labelKey: 'diagnosticScopeVideo' }
+  ]
+
+const diagnosticScopeOptions = computed(() => {
+  const row = diagnosticScopeChannel.value
+  if (!row) return baseDiagnosticScopeOptions
+  const capabilities = channelDiagnosticCapabilities(row)
+  return baseDiagnosticScopeOptions.filter((option) => {
+    if (option.value === 'text') return capabilities.text
+    if (option.value === 'image') return capabilities.image
+    if (option.value === 'video') return capabilities.video
+    return true
+  })
+})
+
+function openDiagnosticScopeDialog(row: Channel) {
+  if (diagnosticInProgress.value) return
+  diagnosticScopeChannel.value = row
+  selectedDiagnosticScope.value = diagnosticScopeOptions.value[0]?.value ?? 'models'
+  diagnosticScopeDialogOpen.value = true
+}
+
+function startChannelDiagnosticWithScope() {
+  const row = diagnosticScopeChannel.value
+  if (!row) return
+  const scope = selectedDiagnosticScope.value
+  diagnosticScopeDialogOpen.value = false
+  diagnosticScopeChannel.value = null
+  void runChannelDiagnostic(row, scope)
+}
 
 const filteredChannels = computed(() => {
   const keyword = appliedChannelSearch.value.trim().toLowerCase()
@@ -257,6 +298,27 @@ function channelModelRecords(row: Channel) {
         created_at: '',
         updated_at: ''
       }) as ChannelModel
+  )
+}
+
+function channelDiagnosticCapabilities(row: Channel) {
+  const models = channelModelRecords(row)
+  return models.reduce(
+    (capabilities, item) => {
+      const meter =
+        item.billing_meter ??
+        priceByModel.value.get(channelPriceKey(row.id, item.model))?.billing_meter ??
+        defaultBillingMeterForModel(row.provider, item.model)
+      if (meter === 'image') {
+        capabilities.image = true
+      } else if (meter === 'video') {
+        capabilities.video = true
+      } else {
+        capabilities.text = true
+      }
+      return capabilities
+    },
+    { text: false, image: false, video: false }
   )
 }
 
@@ -1675,7 +1737,7 @@ onMounted(loadInitialData)
                 :disabled="diagnosticInProgress"
                 :icon="Lightning"
                 :loading="isChannelDiagnosing(row.id)"
-                @click="runChannelDiagnostic(row)"
+                @click="openDiagnosticScopeDialog(row)"
               >
                 {{ t('actionDiagnose') }}
               </el-button>
@@ -1815,11 +1877,76 @@ onMounted(loadInitialData)
       @save="saveChannelPrices"
     />
 
+    <el-dialog
+      v-model="diagnosticScopeDialogOpen"
+      class="channel-dialog diagnostic-scope-dialog"
+      :title="t('diagnosticScopeTitle')"
+      width="420px"
+      :close-on-click-modal="false"
+    >
+      <div class="diagnostic-scope-content">
+        <div v-if="diagnosticScopeChannel" class="diagnostic-scope-channel">
+          <strong>{{ diagnosticScopeChannel.name }}</strong>
+          <span>{{ diagnosticScopeChannel.provider }}</span>
+        </div>
+        <el-radio-group v-model="selectedDiagnosticScope" class="diagnostic-scope-options">
+          <el-radio
+            v-for="option in diagnosticScopeOptions"
+            :key="option.value"
+            :value="option.value"
+          >
+            {{ t(option.labelKey) }}
+          </el-radio>
+        </el-radio-group>
+      </div>
+      <template #footer>
+        <el-button @click="diagnosticScopeDialogOpen = false">{{ t('cancel') }}</el-button>
+        <el-button
+          type="primary"
+          :disabled="diagnosticInProgress || diagnosticScopeOptions.length === 0"
+          @click="startChannelDiagnosticWithScope"
+        >
+          {{ t('actionDiagnose') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <ChannelDiagnosticDialog :diagnostic="diagnostic" @retry="runChannelDiagnostic" />
   </section>
 </template>
 
 <style scoped>
+.diagnostic-scope-content {
+  display: grid;
+  gap: 16px;
+}
+
+.diagnostic-scope-channel {
+  background: #f7f8fa;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.diagnostic-scope-channel strong {
+  color: #1d2129;
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.diagnostic-scope-channel span {
+  color: #86909c;
+  font-size: 12px;
+}
+
+.diagnostic-scope-options {
+  align-items: flex-start;
+  display: grid;
+  gap: 10px;
+}
+
 .channel-search-input {
   flex: 0 0 min(260px, 100%);
   width: min(260px, 100%);

@@ -62,6 +62,7 @@ function diagnosticStepLabel(name: string) {
   if (name === 'models') return t('diagnosticStepModels')
   if (name === 'probe') return t('diagnosticStepProbe')
   if (name.startsWith('probe:')) return `${t('diagnosticStepProbe')} · ${name.slice(6)}`
+  if (name.startsWith('image_probe:')) return `${t('diagnosticStepImageProbe')} · ${name.slice(12)}`
   if (name.startsWith('video_probe:')) return `${t('diagnosticStepVideoProbe')} · ${name.slice(12)}`
   return name
 }

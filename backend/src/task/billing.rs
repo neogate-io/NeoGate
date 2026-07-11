@@ -1,8 +1,8 @@
 use crate::{
     auth::UserAuth,
     billing::{
-        video, BillableUsage, BillingAccounts, CreditAccountId, DebitHold, SettleRequest,
-        TokenUsage,
+        video, BillableUsage, BillingAccounts, BillingMeter, CreditAccountId, DebitHold,
+        SettleRequest, TokenUsage, VideoBillingMode,
     },
     error::AppResult,
     id::DbId,
@@ -125,6 +125,11 @@ async fn finalize_loaded(
             "seedance official token video task finished without usage.total_tokens; releasing hold"
         );
     }
+    let provider_video_seconds = (task.task_type == UpstreamTaskType::OpenAiVideo
+        && video_success
+        && video_billing_metadata.is_none())
+    .then(|| video::provider_video_duration_seconds(&task.upstream_metadata))
+    .flatten();
     let usage = if task.task_type == UpstreamTaskType::OpenAiVideo && !video_success {
         None
     } else {
@@ -134,7 +139,10 @@ async fn finalize_loaded(
         && video_billing_metadata.is_none()
         && video_success
         && usage.is_none();
-    let should_settle = video_settlement.is_some() || usage.is_some() || settle_without_usage;
+    let should_settle = video_settlement.is_some()
+        || usage.is_some()
+        || provider_video_seconds.is_some()
+        || settle_without_usage;
     let target = if should_settle { "settled" } else { "released" };
     let Some(hold) = upstream::mark_billing_status(&state.db.pool, task.id, "held", target).await?
     else {
@@ -171,7 +179,17 @@ async fn finalize_loaded(
                     return Err(err);
                 }
             };
-            (usage.map(BillableUsage::token), price)
+            let billable_usage = if task.task_type == UpstreamTaskType::OpenAiVideo
+                && price.billing_meter == BillingMeter::Video
+                && price.video_billing_mode == Some(VideoBillingMode::PerSecond)
+            {
+                provider_video_seconds
+                    .map(BillableUsage::video_seconds)
+                    .or_else(|| usage.map(BillableUsage::token))
+            } else {
+                usage.map(BillableUsage::token)
+            };
+            (billable_usage, price)
         };
         let token_usage = billable_usage.and_then(|usage| usage.token_usage);
         let billing = match state

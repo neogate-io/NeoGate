@@ -359,6 +359,7 @@ export type DiagnosticStep = {
 export type KeyDiagnosticReport = {
   key_id?: number | null
   key_name: string
+  masked_key?: string | null
   key_prefix?: string | null
   status: DiagnosticStatus
   summary: string

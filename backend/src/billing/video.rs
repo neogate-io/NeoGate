@@ -218,6 +218,17 @@ pub fn total_tokens_from_metadata(value: &Value) -> Option<i64> {
         .and_then(value_as_positive_i64)
 }
 
+pub fn provider_video_duration_seconds(value: &Value) -> Option<i64> {
+    value
+        .get("usage")
+        .and_then(|usage| {
+            usage
+                .get("output_video_duration")
+                .or_else(|| usage.get("duration"))
+        })
+        .and_then(value_as_positive_i64)
+}
+
 fn video_settlement_price(billing_meter: BillingMeter, price_micros: i64) -> Price {
     Price {
         input_price_micros: price_micros,
@@ -457,5 +468,17 @@ mod tests {
         assert_eq!(usage.meter, BillingMeter::Video);
         assert_eq!(usage.token_usage.unwrap().input_tokens, 321_000);
         assert_eq!(price.billing_meter, BillingMeter::Video);
+    }
+
+    #[test]
+    fn reads_provider_video_duration_seconds() {
+        let value = serde_json::json!({
+            "usage": {
+                "duration": 5,
+                "output_video_duration": 4
+            }
+        });
+
+        assert_eq!(provider_video_duration_seconds(&value), Some(4));
     }
 }

@@ -62,6 +62,7 @@ function diagnosticStepLabel(name: string) {
   if (name === 'models') return t('diagnosticStepModels')
   if (name === 'probe') return t('diagnosticStepProbe')
   if (name.startsWith('probe:')) return `${t('diagnosticStepProbe')} · ${name.slice(6)}`
+  if (name.startsWith('video_probe:')) return `${t('diagnosticStepVideoProbe')} · ${name.slice(12)}`
   return name
 }
 
@@ -257,7 +258,8 @@ function setLiveListRef(element: unknown) {
             <div class="diagnostic-key-head">
               <div>
                 <strong>{{ key.key_name }}</strong>
-                <span v-if="key.key_prefix">{{ key.key_prefix }}</span>
+                <span v-if="key.masked_key">{{ key.masked_key }}</span>
+                <span v-else-if="key.key_prefix">{{ key.key_prefix }}</span>
                 <span v-else>{{ endpoint.protocol.toUpperCase() }}</span>
               </div>
               <el-tag :type="diagnosticStatusType(key.status)" size="small" effect="light">

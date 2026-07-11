@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 
 TESTS_DIR = Path(__file__).resolve().parents[1]
@@ -204,6 +205,14 @@ def save_video(name, headers, body):
     return path
 
 
+def save_video_url(name, url):
+    request = Request(url, headers={"User-Agent": "NeoGate video smoke test"})
+    with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        headers = {key.lower(): value for key, value in response.headers.items()}
+        body = response.read()
+    return save_video(name, headers, body)
+
+
 def unique_output_path(prefix, extension):
     suffix = time.strftime("%H%M%S")
     path = OUTPUT_DIR / f"{prefix}_{suffix}{extension}"
@@ -229,10 +238,54 @@ def video_extension(content_type):
 
 
 def video_status(value):
-    status = value.get("status")
+    status = nested_value(value, ("status",))
+    if not isinstance(status, str):
+        status = nested_value(value, ("task_status",))
+    if not isinstance(status, str):
+        status = nested_value(value, ("output", "status"))
+    if not isinstance(status, str):
+        status = nested_value(value, ("output", "task_status"))
     if isinstance(status, str) and status:
         return status.lower()
     return ""
+
+
+def video_id(value):
+    for path in (
+        ("id",),
+        ("task_id",),
+        ("output", "id"),
+        ("output", "task_id"),
+    ):
+        current = nested_value(value, path)
+        if isinstance(current, str) and current:
+            return current
+    return ""
+
+
+def nested_value(value, path):
+    current = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def video_urls(value):
+    urls = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            lower_key = key.lower()
+            if isinstance(item, str) and lower_key in {"video_url", "url"}:
+                if item.startswith("http://") or item.startswith("https://"):
+                    urls.append(item)
+            else:
+                urls.extend(video_urls(item))
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(video_urls(item))
+    return urls
 
 
 def poll_video_until_terminal(api, video_id, initial_value):
@@ -255,16 +308,21 @@ def _test_videos_create_poll_and_download():
     value = parse_json_body(body)
     save_json("videos_create", value)
 
-    video_id = value.get("id")
-    if not isinstance(video_id, str) or not video_id:
+    video_id_value = video_id(value)
+    if not video_id_value:
         raise AssertionError(f"video id is missing: {value}")
 
-    final_value = poll_video_until_terminal(api, video_id, value)
+    final_value = poll_video_until_terminal(api, video_id_value, value)
     save_json("videos_final", final_value)
     if video_status(final_value) not in SUCCESS_STATUSES:
         raise AssertionError(final_value)
 
-    status, headers, content = api.get_bytes(f"/videos/{video_id}/content")
+    urls = video_urls(final_value)
+    if urls:
+        save_video_url("videos_content", urls[0])
+        return
+
+    status, headers, content = api.get_bytes(f"/videos/{video_id_value}/content")
     assert_success(status, content)
     save_video("videos_content", headers, content)
 

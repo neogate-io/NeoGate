@@ -312,11 +312,7 @@ async fn finish_video_create_success(
     if let Some(metadata) = &video_billing_metadata {
         video::attach_video_billing_metadata(&mut task_metadata, metadata);
     }
-    let video_id = match value
-        .get("id")
-        .or_else(|| value.get("task_id"))
-        .and_then(Value::as_str)
-    {
+    let video_id = match video_response_id(&value) {
         Some(id) if !id.is_empty() => id,
         _ => {
             release_empty_hold(&ctx.state, ctx.hold, "openai video create missing id").await;
@@ -325,11 +321,8 @@ async fn finish_video_create_success(
             ));
         }
     };
-    let status_text = value
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("queued");
-    let terminal = video_terminal(status_text);
+    let status_text = video_status_text(&value, "queued");
+    let terminal = video_terminal(&status_text);
     if let Err(err) = upstream_task::insert_task(
         &ctx.state.db.pool,
         NewUpstreamTask {
@@ -340,7 +333,7 @@ async fn finish_video_create_success(
             upstream: &ctx.upstream,
             model: Some(&ctx.external_model),
             upstream_model: Some(&ctx.upstream_model),
-            status: status_text,
+            status: &status_text,
             terminal,
             hold: &ctx.hold,
             upstream_metadata: task_metadata,
@@ -430,9 +423,37 @@ fn multipart_video_request_meta(
 
 pub(crate) fn video_terminal(status: &str) -> bool {
     matches!(
-        status,
+        status.to_ascii_lowercase().as_str(),
         "completed" | "succeeded" | "success" | "failed" | "cancelled" | "canceled" | "expired"
     )
+}
+
+pub(crate) fn video_status_text(value: &Value, fallback: &str) -> String {
+    value
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("task_status").and_then(Value::as_str))
+        .or_else(|| nested_string(value, &["output", "status"]))
+        .or_else(|| nested_string(value, &["output", "task_status"]))
+        .unwrap_or(fallback)
+        .to_ascii_lowercase()
+}
+
+fn video_response_id(value: &Value) -> Option<&str> {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("task_id").and_then(Value::as_str))
+        .or_else(|| nested_string(value, &["output", "id"]))
+        .or_else(|| nested_string(value, &["output", "task_id"]))
+}
+
+fn nested_string<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str()
 }
 
 #[cfg(test)]
@@ -450,6 +471,20 @@ mod tests {
         assert_eq!(meta.model, "sora-2");
         assert_eq!(meta.request_params.video_size.as_deref(), Some("1280x720"));
         assert_eq!(meta.request_params.video_seconds, Some(4));
+    }
+
+    #[test]
+    fn parses_nested_video_task_response_fields() {
+        let value = serde_json::json!({
+            "output": {
+                "task_id": "task_123",
+                "task_status": "SUCCEEDED"
+            }
+        });
+
+        assert_eq!(video_response_id(&value), Some("task_123"));
+        assert_eq!(video_status_text(&value, "queued"), "succeeded");
+        assert!(video_terminal(&video_status_text(&value, "queued")));
     }
 
     #[test]

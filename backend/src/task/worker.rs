@@ -295,11 +295,7 @@ fn task_status_from_value(value: &Value, task: &UpstreamTask) -> (String, bool) 
             (status, terminal)
         }
         UpstreamTaskType::OpenAiVideo => {
-            let status = value
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or(&task.status)
-                .to_string();
+            let status = crate::provider::openai::video_status_text(value, &task.status);
             let terminal = crate::provider::openai::video_terminal(&status);
             (status, terminal)
         }

@@ -390,6 +390,22 @@ pub async fn update_channel_model(
                  WHEN status = 'disabled' THEN 'available'
                  ELSE status
              END,
+             runtime_status = CASE
+                 WHEN $3 = TRUE THEN 'normal'
+                 ELSE runtime_status
+             END,
+             cooldown_until = CASE
+                 WHEN $3 = TRUE THEN NULL
+                 ELSE cooldown_until
+             END,
+             last_error = CASE
+                 WHEN $3 = TRUE THEN NULL
+                 ELSE last_error
+             END,
+             last_status_code = CASE
+                 WHEN $3 = TRUE THEN NULL
+                 ELSE last_status_code
+             END,
              updated_at = now()
          WHERE channel_id = $1
            AND model = $2
@@ -1205,7 +1221,7 @@ fn channel_key_from_row(row: &sqlx::postgres::PgRow, secret: &str) -> AppResult<
     })
 }
 
-fn mask_channel_key(secret: &str) -> String {
+pub(crate) fn mask_channel_key(secret: &str) -> String {
     const HEAD_LEN: usize = 8;
     const TAIL_LEN: usize = 6;
     const MASK_THRESHOLD: usize = 18;

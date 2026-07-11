@@ -253,10 +253,8 @@ async fn openai_oauth_catalog_models(state: &AppState) -> AppResult<Vec<String>>
     let rows = sqlx::query(
         "SELECT pm.model
          FROM provider_model pm
-         JOIN provider p ON p.code = pm.provider
          WHERE pm.provider = 'openai'
            AND pm.enabled = TRUE
-           AND NOT pm.model = ANY(p.default_models)
          ORDER BY pm.model ASC",
     )
     .fetch_all(&state.db.pool)

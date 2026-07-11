@@ -4,7 +4,6 @@ export type ChannelProviderOption = {
   value: ChannelProvider
   label: string
   defaultName: string
-  defaultModels: string
   defaultEndpoints: Record<EndpointProtocol, {
     baseUrl: string
   }>
@@ -14,7 +13,6 @@ export const customProviderOption: ChannelProviderOption = {
   value: 'custom',
   label: '自定义',
   defaultName: '',
-  defaultModels: '',
   defaultEndpoints: emptyDefaultEndpoints()
 }
 
@@ -22,7 +20,6 @@ export const newapiProviderOption: ChannelProviderOption = {
   value: 'newapi',
   label: 'NewAPI',
   defaultName: '',
-  defaultModels: '',
   defaultEndpoints: emptyDefaultEndpoints()
 }
 
@@ -30,7 +27,6 @@ export const sub2apiProviderOption: ChannelProviderOption = {
   value: 'sub2api',
   label: 'Sub2API',
   defaultName: '',
-  defaultModels: '',
   defaultEndpoints: emptyDefaultEndpoints()
 }
 
@@ -58,7 +54,6 @@ export function providerToOption(provider: ProviderRecord): ChannelProviderOptio
     value: provider.code,
     label: provider.display_name,
     defaultName: provider.display_name,
-    defaultModels: provider.default_models.join(','),
     defaultEndpoints
   }
 }

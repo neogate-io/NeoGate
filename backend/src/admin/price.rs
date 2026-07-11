@@ -737,7 +737,7 @@ fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<Pri
 
 /// 按 `cost.basis` 口径分流构造参考价微单位。
 /// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
-/// `pricing_basis` 只影响参考价展示文案;实际计费链路仍以 `billing_meter` 为准。
+/// `pricing_basis` 影响参考价展示文案;实际计费链路仍以 `billing_meter` 为准。
 fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
     let basis = parse_pricing_basis(cost.basis.as_deref());
     use PricingBasis::*;
@@ -805,7 +805,7 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         MultiTierVideo => {
-            // input/output 已由抓取脚本取代表档(最低档)写入,按 token 微单位处理。
+            // input/output 已由抓取脚本取代表档(最低档)写入,作为视频参考价代表档。
             let input = per_million_to_micros(cost.input)?;
             let output =
                 per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
@@ -814,7 +814,7 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
                 output_price_micros: output,
                 cache_read_price_micros: None,
                 cache_write_price_micros: None,
-                billing_meter: BillingMeter::Token,
+                billing_meter: BillingMeter::Video,
                 unit_price_micros: None,
                 pricing_basis: MultiTierVideo,
             })
@@ -849,6 +849,12 @@ fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
 
 fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
     if model
+        .modalities
+        .as_ref()
+        .is_some_and(|modalities| modality_contains(&modalities.output, "video"))
+    {
+        BillingMeter::Video
+    } else if model
         .modalities
         .as_ref()
         .is_some_and(|modalities| modality_contains(&modalities.output, "image"))
@@ -1456,8 +1462,21 @@ mod tests {
         let prices = pricing_micros_from_models_dev_model(&model).unwrap();
 
         assert_eq!(prices.pricing_basis, PricingBasis::MultiTierVideo);
+        assert_eq!(prices.billing_meter, BillingMeter::Video);
         assert_eq!(prices.input_price_micros, 16_000_000);
         assert_eq!(prices.output_price_micros, 16_000_000);
+    }
+
+    #[test]
+    fn video_output_models_use_video_billing_meter() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"modalities":{"input":["text"],"output":["video"]}}"#)
+                .unwrap();
+
+        assert_eq!(
+            billing_meter_from_models_dev_model(&model),
+            BillingMeter::Video
+        );
     }
 
     #[test]

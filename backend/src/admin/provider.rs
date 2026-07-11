@@ -53,7 +53,6 @@ pub struct ProviderRecord {
     pub code: String,
     pub display_name: String,
     pub name: String,
-    pub default_models: Vec<String>,
     pub default_endpoints: Vec<ProviderDefaultEndpointRecord>,
     pub enabled: bool,
     pub sort_order: i32,
@@ -71,7 +70,7 @@ pub async fn list_providers(state: &AppState) -> AppResult<Vec<ProviderRecord>> 
     ensure_builtin_manual_providers(state).await?;
 
     let rows = sqlx::query(
-        "SELECT id, code, display_name, name, default_models,
+        "SELECT id, code, display_name, name,
                 default_openai_base_url, default_openai_oauth_base_url, default_anthropic_base_url,
                 enabled, sort_order, created_at, updated_at
          FROM provider
@@ -128,24 +127,6 @@ pub async fn provider_default_endpoints(
         .transpose()
 }
 
-pub async fn provider_default_models(
-    state: &AppState,
-    code: &str,
-) -> AppResult<Option<Vec<String>>> {
-    let row = sqlx::query(
-        "SELECT default_models
-         FROM provider
-         WHERE code = $1 AND enabled = TRUE",
-    )
-    .bind(code)
-    .fetch_optional(&state.db.pool)
-    .await?;
-
-    row.map(|row| row.try_get("default_models"))
-        .transpose()
-        .map_err(Into::into)
-}
-
 pub async fn ensure_builtin_manual_provider_by_code(state: &AppState, code: &str) -> AppResult<()> {
     let Some(provider) = BUILTIN_MANUAL_PROVIDERS
         .iter()
@@ -170,13 +151,12 @@ async fn ensure_builtin_manual_provider_record(
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO provider
-         (code, display_name, name, default_models, default_openai_base_url,
+         (code, display_name, name, default_openai_base_url,
           default_openai_oauth_base_url, default_anthropic_base_url, enabled, sort_order)
-         VALUES ($1, $2, $3, ARRAY[]::TEXT[], '', '', '', TRUE, $4)
+         VALUES ($1, $2, $3, '', '', '', TRUE, $4)
          ON CONFLICT (code) DO UPDATE
          SET display_name = EXCLUDED.display_name,
              name = EXCLUDED.name,
-             default_models = EXCLUDED.default_models,
              default_openai_base_url = EXCLUDED.default_openai_base_url,
              default_openai_oauth_base_url = EXCLUDED.default_openai_oauth_base_url,
              default_anthropic_base_url = EXCLUDED.default_anthropic_base_url,
@@ -243,7 +223,6 @@ fn provider_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderRecord> {
         code: row.try_get("code")?,
         display_name: row.try_get("display_name")?,
         name: row.try_get("name")?,
-        default_models: row.try_get("default_models")?,
         default_endpoints: provider_default_endpoints_from_row(row)?,
         enabled: row.try_get("enabled")?,
         sort_order: row.try_get("sort_order")?,

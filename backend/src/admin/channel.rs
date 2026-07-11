@@ -16,8 +16,7 @@ use crate::{
 use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
     ensure_builtin_manual_provider_by_code, provider_default_endpoint_base_url,
-    provider_default_endpoints, provider_default_models, record_provider_models,
-    OPENAI_OAUTH_PROTOCOL,
+    provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -605,18 +604,13 @@ async fn normalize_create_endpoints(
         && !(provider_code == "openai" && req.use_credentials)
     {
         if let Some(defaults) = provider_default_endpoints(state, provider_code).await? {
-            let default_models = provider_default_models(state, provider_code)
-                .await?
-                .ok_or_else(|| {
-                    AppError::BadRequest(format!("invalid provider: {provider_code}"))
-                })?;
             let inputs: Vec<ChannelEndpointInput> = defaults
                 .into_iter()
                 .filter(|endpoint| !endpoint.base_url.trim().is_empty())
                 .map(|endpoint| ChannelEndpointInput {
                     protocol: endpoint.protocol,
                     base_url: Some(endpoint.base_url),
-                    models: default_models.clone(),
+                    models: Vec::new(),
                     enabled: true,
                 })
                 .collect();

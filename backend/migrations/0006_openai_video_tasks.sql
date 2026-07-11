@@ -11,6 +11,9 @@ ALTER TABLE task_upstream
         )
     );
 
+ALTER TABLE provider
+    DROP COLUMN IF EXISTS default_models;
+
 ALTER TABLE provider_price
     DROP CONSTRAINT IF EXISTS provider_price_billing_meter_check;
 ALTER TABLE provider_price
@@ -101,6 +104,18 @@ ALTER TABLE pricing_template
     ADD CONSTRAINT pricing_template_billing_meter_check
     CHECK (billing_meter IN ('token', 'image', 'video')) NOT VALID;
 ALTER TABLE pricing_template VALIDATE CONSTRAINT pricing_template_billing_meter_check;
+
+UPDATE provider_model
+SET billing_meter = 'video',
+    updated_at = now()
+WHERE billing_meter <> 'video'
+  AND jsonb_path_exists(capabilities, '$.modalities.output[*] ? (@ like_regex "^video$" flag "i")');
+
+UPDATE pricing_template
+SET billing_meter = 'video',
+    updated_at = now()
+WHERE billing_meter <> 'video'
+  AND pricing_basis = 'multi_tier_video';
 
 ALTER TABLE usage
     DROP CONSTRAINT IF EXISTS usage_billing_meter_check;

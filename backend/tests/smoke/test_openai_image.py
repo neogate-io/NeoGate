@@ -14,8 +14,8 @@ from urllib.request import Request, urlopen
 TESTS_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = TESTS_DIR.parent
 ENV_FILE = BACKEND_DIR / ".env"
-MODEL = "gpt-image-2"
-RESPONSE_MODEL = "gpt-5.5"
+DEFAULT_IMAGE_MODEL = "gpt-image-2"
+DEFAULT_RESPONSE_MODEL = "gpt-5.5"
 DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1"
 DEFAULT_IMAGE_SIZE = "1536x1024"
 REQUEST_TIMEOUT_SECONDS = 600
@@ -66,6 +66,8 @@ def normalized_base_url():
 
 BASE_URL = normalized_base_url()
 API_KEY = env_value("NEOGATE_API_KEY")
+MODEL = env_value("NEOGATE_IMAGE_MODEL") or DEFAULT_IMAGE_MODEL
+RESPONSE_MODEL = env_value("NEOGATE_RESPONSE_MODEL") or DEFAULT_RESPONSE_MODEL
 IMAGE_SIZE = env_value("NEOGATE_IMAGE_SIZE") or DEFAULT_IMAGE_SIZE
 
 

@@ -570,7 +570,6 @@ pub(crate) fn anthropic_usage_input_tokens(usage: Option<&Value>) -> i64 {
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
         )
-        .saturating_add(anthropic_cache_creation_tokens(usage))
 }
 
 pub(crate) fn anthropic_usage_output_tokens(usage: Option<&Value>) -> i64 {
@@ -868,13 +867,11 @@ impl AnthropicSseToOpenAiChat {
             Some(json!({
                 "prompt_tokens": self
                     .input_tokens
-                    .saturating_add(self.cached_input_tokens)
-                    .saturating_add(self.cache_creation_input_tokens),
+                    .saturating_add(self.cached_input_tokens),
                 "completion_tokens": self.output_tokens,
                 "total_tokens": self
                     .input_tokens
                     .saturating_add(self.cached_input_tokens)
-                    .saturating_add(self.cache_creation_input_tokens)
                     .saturating_add(self.output_tokens),
                 "prompt_tokens_details": {
                     "cached_tokens": self.cached_input_tokens,

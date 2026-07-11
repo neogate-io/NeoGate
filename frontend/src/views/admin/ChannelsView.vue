@@ -1726,7 +1726,14 @@ onMounted(loadInitialData)
           </template>
         </el-table-column>
         <el-table-column prop="id" label="ID" width="48" align="right" header-align="right" />
-        <el-table-column prop="name" :label="t('name')" min-width="150" header-align="center">
+        <el-table-column
+          prop="name"
+          :label="t('channelName')"
+          width="220"
+          header-align="center"
+          class-name="channel-name-column"
+          label-class-name="channel-name-header"
+        >
           <template #default="{ row }">
             <button
               type="button"
@@ -1784,7 +1791,9 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelKeyCountShort')"
-          min-width="92"
+          width="112"
+          align="center"
+          header-align="center"
           class-name="channel-key-count-column"
           label-class-name="channel-key-count-header"
         >
@@ -1794,9 +1803,11 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('probeTrend')"
-          min-width="120"
+          width="176"
           align="center"
           header-align="center"
+          class-name="channel-probe-trend-column"
+          label-class-name="channel-probe-trend-header"
         >
           <template #default="{ row }">
             <ChannelProbeTrendCell :channel="row" :latency-scale="probeTrendLatencyScale" />
@@ -1804,9 +1815,11 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelStatus')"
-          min-width="96"
+          width="112"
           align="center"
           header-align="center"
+          class-name="channel-runtime-status-column"
+          label-class-name="channel-runtime-status-header"
         >
           <template #default="{ row }">
             <span class="channel-runtime-status-tag" :class="`is-${channelRuntimeStatus(row)}`">
@@ -1824,9 +1837,11 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column
           :label="t('channelRuntimeSwitch')"
-          min-width="116"
+          width="124"
           align="center"
           header-align="center"
+          class-name="channel-runtime-switch-column"
+          label-class-name="channel-runtime-switch-header"
         >
           <template #default="{ row }">
             <button
@@ -1850,7 +1865,14 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" min-width="168" align="center" header-align="center">
+        <el-table-column
+          :label="t('actions')"
+          width="196"
+          align="center"
+          header-align="center"
+          class-name="channel-actions-column"
+          label-class-name="channel-actions-header"
+        >
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -2265,6 +2287,38 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
+.channel-table
+  :deep(
+    .channel-name-column .cell,
+    .channel-key-count-column .cell,
+    .channel-probe-trend-column .cell,
+    .channel-runtime-status-column .cell,
+    .channel-runtime-switch-column .cell,
+    .channel-actions-column .cell
+  ) {
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.channel-table
+  :deep(
+    .channel-name-header .cell,
+    .channel-key-count-header .cell,
+    .channel-probe-trend-header .cell,
+    .channel-runtime-status-header .cell,
+    .channel-runtime-switch-header .cell,
+    .channel-actions-header .cell
+  ) {
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
 .channel-table :deep(.el-table__body .cell) {
   align-items: center;
   display: flex;
@@ -2302,6 +2356,11 @@ onMounted(loadInitialData)
 
 .channel-table :deep(.el-table__body .el-table__cell:nth-child(3) .cell) {
   display: block;
+}
+
+.channel-table :deep(.channel-actions-column .table-row-actions) {
+  justify-content: center;
+  width: 172px;
 }
 
 .channel-price-summary {
@@ -2447,7 +2506,7 @@ onMounted(loadInitialData)
   font-weight: 700;
   justify-content: center;
   min-height: 28px;
-  min-width: 0;
+  width: 74px;
   padding: 0 10px;
   white-space: nowrap;
 }
@@ -2460,6 +2519,7 @@ onMounted(loadInitialData)
   line-height: 1;
   padding: 5px 12px;
   white-space: nowrap;
+  width: 76px;
 }
 
 .channel-runtime-status-tag.is-normal {
@@ -2475,6 +2535,10 @@ onMounted(loadInitialData)
 .channel-runtime-status-tag.is-disabled {
   background: #f1f5f9;
   color: #64748b;
+}
+
+.channel-runtime-switch {
+  width: 92px;
 }
 
 .channel-runtime-switch.is-enabled,

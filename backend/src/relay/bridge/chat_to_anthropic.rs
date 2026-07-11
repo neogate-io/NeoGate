@@ -873,8 +873,11 @@ fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
 }
 
 fn push_anthropic_sse(out: &mut Vec<u8>, event: &str, data: Value) {
-    out.extend_from_slice(format!("event: {event}\n").as_bytes());
-    out.extend_from_slice(format!("data: {data}\n\n").as_bytes());
+    out.extend_from_slice(b"event: ");
+    out.extend_from_slice(event.as_bytes());
+    out.extend_from_slice(b"\ndata: ");
+    serde_json::to_writer(&mut *out, &data).expect("serializing JSON value to Vec cannot fail");
+    out.extend_from_slice(b"\n\n");
 }
 
 #[cfg(test)]
@@ -1177,9 +1180,9 @@ mod tests {
         assert_eq!(value["choices"][0]["message"]["role"], "assistant");
         assert_eq!(value["choices"][0]["message"]["content"], "OK");
         assert_eq!(value["choices"][0]["finish_reason"], "stop");
-        assert_eq!(value["usage"]["prompt_tokens"], 16);
+        assert_eq!(value["usage"]["prompt_tokens"], 14);
         assert_eq!(value["usage"]["completion_tokens"], 1);
-        assert_eq!(value["usage"]["total_tokens"], 17);
+        assert_eq!(value["usage"]["total_tokens"], 15);
         assert_eq!(value["usage"]["prompt_tokens_details"]["cached_tokens"], 6);
         assert_eq!(
             value["usage"]["prompt_tokens_details"]["cached_creation_tokens"],
@@ -1332,7 +1335,7 @@ mod tests {
         assert!(text.contains(r#""content":"O""#));
         assert!(text.contains(r#""content":"K""#));
         assert!(text.contains(r#""finish_reason":"stop""#));
-        assert!(text.contains(r#""prompt_tokens":16"#));
+        assert!(text.contains(r#""prompt_tokens":14"#));
         assert!(text.contains(r#""completion_tokens":1"#));
         assert!(text.contains(r#""cached_tokens":6"#));
         assert!(text.contains(r#""cached_creation_tokens":2"#));

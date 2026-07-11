@@ -283,6 +283,30 @@ mod tests {
     }
 
     #[test]
+    fn cost_does_not_double_count_bridge_cached_creation_tokens() {
+        let price = Price {
+            input_price_micros: 1_000_000,
+            output_price_micros: 2_000_000,
+            cache_read_price_micros: Some(100_000),
+            cache_write_price_micros: Some(1_250_000),
+            billing_meter: BillingMeter::Token,
+            unit_price_micros: None,
+            video_billing_mode: None,
+            video_price_tiers: Vec::new(),
+        };
+        let usage = parse_usage_from_bytes(
+            br#"{"usage":{"prompt_tokens":14,"completion_tokens":1,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":6,"cached_creation_tokens":2}}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 14);
+        assert_eq!(usage.cached_input_tokens, Some(6));
+        assert_eq!(usage.cache_creation_input_tokens, Some(2));
+        assert_eq!(cost_for_usage(usage, &price), 14);
+    }
+
+    #[test]
     fn parses_openai_usage_details() {
         let usage = parse_usage_from_bytes(
             br#"{"usage":{"prompt_tokens":98502,"completion_tokens":93,"total_tokens":98595,"prompt_tokens_details":{"cached_tokens":96640,"audio_tokens":7},"completion_tokens_details":{"reasoning_tokens":11,"audio_tokens":13}}}"#,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import { useBillingCurrency } from '../../../composables/useBillingCurrency'
 import type { BillingMeter, VideoBillingMode } from '../../../types/admin'
@@ -60,6 +60,7 @@ const emit = defineEmits<{
 
 const { t } = useLocale()
 const { billingCurrency } = useBillingCurrency()
+const activePriceTab = ref('text')
 
 const priceFormList = computed(() => Object.values(props.forms))
 
@@ -80,6 +81,20 @@ const standardPriceSections = computed(() =>
     { key: 'text', title: t('textModelPrices'), forms: textPriceForms.value },
     { key: 'image', title: t('imageModelPrices'), forms: imagePriceForms.value }
   ].filter((section) => section.forms.length > 0)
+)
+
+const priceTabKeys = computed(() => [
+  ...standardPriceSections.value.map((section) => section.key),
+  ...(videoPriceForms.value.length > 0 ? ['video'] : [])
+])
+
+watch(
+  [open, priceTabKeys],
+  () => {
+    if (priceTabKeys.value.includes(activePriceTab.value)) return
+    activePriceTab.value = priceTabKeys.value[0] ?? 'text'
+  },
+  { immediate: true }
 )
 
 function formatCurrencyInput(value: number | string) {
@@ -208,250 +223,257 @@ function updateVideoTierSecondaryPrice(
     v-model="open"
     class="channel-dialog price-dialog"
     :close-on-click-modal="false"
-    :title="t('configurePrice')"
+    :title="t('modelPriceDialogTitle')"
     width="min(940px, calc(100vw - 32px))"
   >
     <div class="price-editor-sections">
-      <section v-for="section in standardPriceSections" :key="section.key" class="price-section">
-        <div class="price-section-header">
-          <h3>
-            {{ section.title }}
-            <span>{{ section.forms.length }}</span>
-          </h3>
-        </div>
+      <el-tabs v-if="priceTabKeys.length" v-model="activePriceTab" class="price-model-tabs">
+        <el-tab-pane
+          v-for="section in standardPriceSections"
+          :key="section.key"
+          :name="section.key"
+        >
+          <template #label>
+            <span class="price-tab-label">
+              {{ section.title }}
+              <span>{{ section.forms.length }}</span>
+            </span>
+          </template>
+          <div class="price-editor">
+            <div class="price-editor-head">
+              <span>{{ t('model') }}</span>
+              <span>{{ t('billingMeter') }}</span>
+              <span>{{ t('inputOutputPriceShort') }}</span>
+              <span>{{ t('cacheReadWritePriceShort') }}</span>
+              <span>{{ t('officialReferencePrice') }}</span>
+            </div>
 
-        <div class="price-editor">
-          <div class="price-editor-head">
-            <span>{{ t('model') }}</span>
-            <span>{{ t('billingMeter') }}</span>
-            <span>{{ t('inputOutputPriceShort') }}</span>
-            <span>{{ t('cacheReadWritePriceShort') }}</span>
-            <span>{{ t('officialReferencePrice') }}</span>
-          </div>
-
-          <div class="price-editor-body">
-            <div
-              v-for="row in section.forms"
-              :key="`${row.provider}:${row.model}`"
-              class="price-editor-row"
-            >
-              <div class="price-model-cell" :title="row.model">
-                <span>{{ row.model }}</span>
-              </div>
-              <div class="price-meter-cell">
-                <span v-if="row.billingMeterLocked" class="price-meter-static">
-                  {{ billingMeterLabel(row) }}
-                </span>
-                <el-select
-                  v-else
-                  v-model="row.billingMeter"
-                  class="price-meter-select"
-                  popper-class="price-meter-select-dropdown"
-                  :placeholder="t('billingMeterRequired')"
-                >
-                  <el-option :label="t('billingMeterToken')" value="token" />
-                  <el-option
-                    v-if="row.canUseImageBilling"
-                    :label="t('billingMeterImageGeneration')"
-                    value="image"
-                  />
-                </el-select>
-              </div>
-              <div class="price-pair-field">
-                <div v-if="row.billingMeter === 'token'" class="price-pair-input">
-                  <el-input-number
-                    v-model="row.inputPerMillion"
-                    class="price-number-input"
-                    :controls="false"
-                    :formatter="formatCurrencyInput"
-                    :min="0"
-                    :parser="parseCurrencyInput"
-                    :step="0.01"
-                  />
-                  <span class="price-pair-separator">/</span>
-                  <el-input-number
-                    v-model="row.outputPerMillion"
-                    class="price-number-input"
-                    :controls="false"
-                    :formatter="formatCurrencyInput"
-                    :min="0"
-                    :parser="parseCurrencyInput"
-                    :step="0.01"
-                  />
+            <div class="price-editor-body">
+              <div
+                v-for="row in section.forms"
+                :key="`${row.provider}:${row.model}`"
+                class="price-editor-row"
+              >
+                <div class="price-model-cell" :title="row.model">
+                  <span>{{ row.model }}</span>
                 </div>
-                <div v-else-if="row.billingMeter === 'image'" class="price-single-input">
-                  <el-input-number
-                    v-model="row.unitPrice"
-                    class="price-number-input"
-                    :controls="false"
-                    :formatter="formatCurrencyInput"
-                    :min="0"
-                    :parser="parseCurrencyInput"
-                    :step="0.01"
-                  />
-                  <span class="price-unit-label">{{ t('perImage') }}</span>
+                <div class="price-meter-cell">
+                  <span v-if="row.billingMeterLocked" class="price-meter-static">
+                    {{ billingMeterLabel(row) }}
+                  </span>
+                  <el-select
+                    v-else
+                    v-model="row.billingMeter"
+                    class="price-meter-select"
+                    popper-class="price-meter-select-dropdown"
+                    :placeholder="t('billingMeterRequired')"
+                  >
+                    <el-option :label="t('billingMeterToken')" value="token" />
+                    <el-option
+                      v-if="row.canUseImageBilling"
+                      :label="t('billingMeterImageGeneration')"
+                      value="image"
+                    />
+                  </el-select>
                 </div>
-                <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>
-              </div>
-              <div class="price-pair-field">
-                <div v-if="row.billingMeter === 'token'" class="price-pair-input">
-                  <el-input-number
-                    v-model="row.cacheReadPerMillion"
-                    class="price-number-input"
-                    :controls="false"
-                    :formatter="formatCurrencyInput"
-                    :min="0"
-                    :parser="parseCurrencyInput"
-                    :step="0.01"
-                  />
-                  <span class="price-pair-separator">/</span>
-                  <el-input-number
-                    v-model="row.cacheWritePerMillion"
-                    class="price-number-input"
-                    :controls="false"
-                    :formatter="formatCurrencyInput"
-                    :min="0"
-                    :parser="parseCurrencyInput"
-                    :step="0.01"
-                  />
+                <div class="price-pair-field">
+                  <div v-if="row.billingMeter === 'token'" class="price-pair-input">
+                    <el-input-number
+                      v-model="row.inputPerMillion"
+                      class="price-number-input"
+                      :controls="false"
+                      :formatter="formatCurrencyInput"
+                      :min="0"
+                      :parser="parseCurrencyInput"
+                      :step="0.01"
+                    />
+                    <span class="price-pair-separator">/</span>
+                    <el-input-number
+                      v-model="row.outputPerMillion"
+                      class="price-number-input"
+                      :controls="false"
+                      :formatter="formatCurrencyInput"
+                      :min="0"
+                      :parser="parseCurrencyInput"
+                      :step="0.01"
+                    />
+                  </div>
+                  <div v-else-if="row.billingMeter === 'image'" class="price-single-input">
+                    <el-input-number
+                      v-model="row.unitPrice"
+                      class="price-number-input"
+                      :controls="false"
+                      :formatter="formatCurrencyInput"
+                      :min="0"
+                      :parser="parseCurrencyInput"
+                      :step="0.01"
+                    />
+                    <span class="price-unit-label">{{ t('perImage') }}</span>
+                  </div>
+                  <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>
                 </div>
-                <span v-else class="price-muted-cell">-</span>
-              </div>
-              <div class="reference-price-cell">
-                <template v-if="hasReferencePrice(row)">
-                  <span class="reference-price-summary">{{ referencePriceSummary(row) }}</span>
-                </template>
-                <el-tag
-                  v-else
-                  class="reference-price-fallback-tag"
-                  :type="row.hasPrice ? 'info' : 'warning'"
-                >
-                  {{ referencePriceFallbackLabel(row) }}
-                </el-tag>
+                <div class="price-pair-field">
+                  <div v-if="row.billingMeter === 'token'" class="price-pair-input">
+                    <el-input-number
+                      v-model="row.cacheReadPerMillion"
+                      class="price-number-input"
+                      :controls="false"
+                      :formatter="formatCurrencyInput"
+                      :min="0"
+                      :parser="parseCurrencyInput"
+                      :step="0.01"
+                    />
+                    <span class="price-pair-separator">/</span>
+                    <el-input-number
+                      v-model="row.cacheWritePerMillion"
+                      class="price-number-input"
+                      :controls="false"
+                      :formatter="formatCurrencyInput"
+                      :min="0"
+                      :parser="parseCurrencyInput"
+                      :step="0.01"
+                    />
+                  </div>
+                  <span v-else class="price-muted-cell">-</span>
+                </div>
+                <div class="reference-price-cell">
+                  <template v-if="hasReferencePrice(row)">
+                    <span class="reference-price-summary">{{ referencePriceSummary(row) }}</span>
+                  </template>
+                  <el-tag
+                    v-else
+                    class="reference-price-fallback-tag"
+                    :type="row.hasPrice ? 'info' : 'warning'"
+                  >
+                    {{ referencePriceFallbackLabel(row) }}
+                  </el-tag>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </el-tab-pane>
 
-      <section v-if="videoPriceForms.length" class="price-section">
-        <div class="price-section-header">
-          <h3>
-            {{ t('videoModelPrices') }}
-            <span>{{ videoPriceForms.length }}</span>
-          </h3>
-        </div>
+        <el-tab-pane v-if="videoPriceForms.length" name="video">
+          <template #label>
+            <span class="price-tab-label">
+              {{ t('videoModelPrices') }}
+              <span>{{ videoPriceForms.length }}</span>
+            </span>
+          </template>
+          <div class="video-price-editor">
+            <div class="video-price-head">
+              <span>{{ t('model') }}</span>
+              <span>{{ t('billingMeter') }}</span>
+              <span class="video-spec-head">{{ t('videoTierResolutions') }}</span>
+              <span>{{ t('videoTierPrice') }}</span>
+              <span>{{ t('officialReferencePrice') }}</span>
+            </div>
 
-        <div class="video-price-editor">
-          <div class="video-price-head">
-            <span>{{ t('model') }}</span>
-            <span>{{ t('billingMeter') }}</span>
-            <span class="video-spec-head">{{ t('videoTierResolutions') }}</span>
-            <span>{{ t('videoTierPrice') }}</span>
-            <span>{{ t('officialReferencePrice') }}</span>
-          </div>
-
-          <div class="video-price-body">
-            <div
-              v-for="row in videoPriceForms"
-              :key="`${row.provider}:${row.model}`"
-              class="video-price-model-row"
-            >
-              <div class="price-model-cell" :title="row.model">
-                <span>{{ row.model }}</span>
-              </div>
-              <div class="video-meter-cell">
-                <span v-if="row.videoBillingModeLocked" class="price-meter-static">
-                  {{ videoBillingModeLabel(row.videoBillingMode) }}
-                </span>
-                <el-select
-                  v-else
-                  v-model="row.videoBillingMode"
-                  class="price-meter-select video-mode-select"
-                  popper-class="price-meter-select-dropdown"
-                  :placeholder="t('videoBillingMode')"
-                  @change="applyVideoBillingMode(row)"
-                >
-                  <el-option
-                    v-for="option in videoBillingModeOptions()"
-                    :key="option.value"
-                    :label="option.label"
-                    :value="option.value"
-                  />
-                </el-select>
-              </div>
-              <div class="video-tier-stack">
-                <div v-if="row.videoPriceTiers.length === 0" class="video-tier-row">
-                  <span class="price-muted-cell">-</span>
-                  <span class="price-muted-cell">{{ t('noKnownVideoTiers') }}</span>
-                  <div class="reference-price-cell">
-                    <el-tag
-                      class="reference-price-fallback-tag"
-                      :type="row.hasPrice ? 'info' : 'warning'"
-                    >
-                      {{ referencePriceFallbackLabel(row) }}
-                    </el-tag>
-                  </div>
+            <div class="video-price-body">
+              <div
+                v-for="row in videoPriceForms"
+                :key="`${row.provider}:${row.model}`"
+                class="video-price-model-row"
+              >
+                <div class="price-model-cell" :title="row.model">
+                  <span>{{ row.model }}</span>
                 </div>
-
-                <div
-                  v-for="(tier, tierIndex) in row.videoPriceTiers"
-                  :key="`${row.provider}:${row.model}:${tierIndex}`"
-                  class="video-tier-row"
-                >
-                  <span class="video-resolution-cell">{{ videoTierResolutionsLabel(tier) }}</span>
-                  <div class="video-price-cell">
-                    <div v-if="!tier.singlePrice" class="video-price-pair-labels">
-                      <span>{{ tier.pricePairLeftLabel ?? t('videoInputWithoutVideo') }}</span>
-                      <span>/</span>
-                      <span>{{ tier.pricePairRightLabel ?? t('videoInputWithVideo') }}</span>
+                <div class="video-meter-cell">
+                  <span v-if="row.videoBillingModeLocked" class="price-meter-static">
+                    {{ videoBillingModeLabel(row.videoBillingMode) }}
+                  </span>
+                  <el-select
+                    v-else
+                    v-model="row.videoBillingMode"
+                    class="price-meter-select video-mode-select"
+                    popper-class="price-meter-select-dropdown"
+                    :placeholder="t('videoBillingMode')"
+                    @change="applyVideoBillingMode(row)"
+                  >
+                    <el-option
+                      v-for="option in videoBillingModeOptions()"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value"
+                    />
+                  </el-select>
+                </div>
+                <div class="video-tier-stack">
+                  <div v-if="row.videoPriceTiers.length === 0" class="video-tier-row">
+                    <span class="price-muted-cell">-</span>
+                    <span class="price-muted-cell">{{ t('noKnownVideoTiers') }}</span>
+                    <div class="reference-price-cell">
+                      <el-tag
+                        class="reference-price-fallback-tag"
+                        :type="row.hasPrice ? 'info' : 'warning'"
+                      >
+                        {{ referencePriceFallbackLabel(row) }}
+                      </el-tag>
                     </div>
-                    <div class="video-price-pair-input" :class="{ 'is-single': tier.singlePrice }">
-                      <el-input-number
-                        :model-value="videoTierPrimaryPrice(row, tier)"
-                        class="video-tier-pair-number"
-                        :controls="false"
-                        :formatter="formatCurrencyInput"
-                        :min="0"
-                        :parser="parseCurrencyInput"
-                        :step="0.01"
-                        @update:model-value="updateVideoTierPrimaryPrice(row, tier, $event)"
-                      />
-                      <template v-if="!tier.singlePrice">
-                        <span class="price-pair-separator">/</span>
+                  </div>
+
+                  <div
+                    v-for="(tier, tierIndex) in row.videoPriceTiers"
+                    :key="`${row.provider}:${row.model}:${tierIndex}`"
+                    class="video-tier-row"
+                  >
+                    <span class="video-resolution-cell">{{ videoTierResolutionsLabel(tier) }}</span>
+                    <div class="video-price-cell">
+                      <div v-if="!tier.singlePrice" class="video-price-pair-labels">
+                        <span>{{ tier.pricePairLeftLabel ?? t('videoInputWithoutVideo') }}</span>
+                        <span>/</span>
+                        <span>{{ tier.pricePairRightLabel ?? t('videoInputWithVideo') }}</span>
+                      </div>
+                      <div
+                        class="video-price-pair-input"
+                        :class="{ 'is-single': tier.singlePrice }"
+                      >
                         <el-input-number
-                          :model-value="videoTierSecondaryPrice(row, tier)"
+                          :model-value="videoTierPrimaryPrice(row, tier)"
                           class="video-tier-pair-number"
                           :controls="false"
                           :formatter="formatCurrencyInput"
                           :min="0"
                           :parser="parseCurrencyInput"
                           :step="0.01"
-                          @update:model-value="updateVideoTierSecondaryPrice(row, tier, $event)"
+                          @update:model-value="updateVideoTierPrimaryPrice(row, tier, $event)"
                         />
-                      </template>
+                        <template v-if="!tier.singlePrice">
+                          <span class="price-pair-separator">/</span>
+                          <el-input-number
+                            :model-value="videoTierSecondaryPrice(row, tier)"
+                            class="video-tier-pair-number"
+                            :controls="false"
+                            :formatter="formatCurrencyInput"
+                            :min="0"
+                            :parser="parseCurrencyInput"
+                            :step="0.01"
+                            @update:model-value="updateVideoTierSecondaryPrice(row, tier, $event)"
+                          />
+                        </template>
+                      </div>
                     </div>
-                  </div>
-                  <div class="reference-price-cell">
-                    <template v-if="videoTierReferencePriceSummary(row, tier)">
-                      <span class="reference-price-summary">
-                        {{ videoTierReferencePriceSummary(row, tier) }}
-                      </span>
-                    </template>
-                    <el-tag
-                      v-else
-                      class="reference-price-fallback-tag"
-                      :type="row.hasPrice ? 'info' : 'warning'"
-                    >
-                      {{ referencePriceFallbackLabel(row) }}
-                    </el-tag>
+                    <div class="reference-price-cell">
+                      <template v-if="videoTierReferencePriceSummary(row, tier)">
+                        <span class="reference-price-summary">
+                          {{ videoTierReferencePriceSummary(row, tier) }}
+                        </span>
+                      </template>
+                      <el-tag
+                        v-else
+                        class="reference-price-fallback-tag"
+                        :type="row.hasPrice ? 'info' : 'warning'"
+                      >
+                        {{ referencePriceFallbackLabel(row) }}
+                      </el-tag>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </el-tab-pane>
+      </el-tabs>
     </div>
 
     <template #footer>
@@ -482,6 +504,36 @@ function updateVideoTierSecondaryPrice(
   display: grid;
   gap: 16px;
   overflow: visible;
+}
+
+.price-model-tabs :deep(.el-tabs__header) {
+  margin: 0 0 12px;
+}
+
+.price-model-tabs :deep(.el-tabs__nav-wrap::after) {
+  background-color: #e2e8f0;
+  height: 1px;
+}
+
+.price-tab-label {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+}
+
+.price-tab-label span {
+  align-items: center;
+  background: #f3f7fb;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  color: var(--price-secondary-text);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 500;
+  justify-content: center;
+  line-height: 1;
+  min-width: 26px;
+  padding: 3px 8px;
 }
 
 .price-section {

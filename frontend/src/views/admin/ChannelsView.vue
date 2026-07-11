@@ -9,6 +9,7 @@ import {
   Lightning,
   Plus,
   Search,
+  Tickets,
   VideoPause,
   WarningFilled
 } from '@element-plus/icons-vue'
@@ -159,7 +160,8 @@ type BundledVideoTierRecord = {
 }
 
 const priceByModel = computed(
-  () => new Map(prices.value.map((price) => [channelPriceKey(price.channel_id, price.model), price]))
+  () =>
+    new Map(prices.value.map((price) => [channelPriceKey(price.channel_id, price.model), price]))
 )
 const isInternalServiceMode = computed(() => servicePolicy.value?.service_mode === 'internal')
 const providerModelByModel = computed(
@@ -249,7 +251,7 @@ function channelModelRecords(row: Channel) {
         failure_count: 0,
         billing_enabled: Boolean(
           priceByModel.value.get(channelPriceKey(row.id, model))?.enabled &&
-            isChannelPriceConfigured(priceByModel.value.get(channelPriceKey(row.id, model)))
+          isChannelPriceConfigured(priceByModel.value.get(channelPriceKey(row.id, model)))
         ),
         price_configured: Boolean(priceByModel.value.get(channelPriceKey(row.id, model))),
         created_at: '',
@@ -319,11 +321,14 @@ function channelPriceRows(row: Channel) {
         runtimeToggleDisabled: true,
         runtimeEnabled: Boolean(channelModel.enabled),
         upstreamMissing: channelModel.status === 'missing',
+        category: 'text' as const,
         inputPrice: '-',
         outputPrice: '-',
         cacheReadPrice: '-',
         cacheWritePrice: '-',
         cachePrice: '-',
+        videoBillingMode: '-',
+        videoTiers: [],
         price: '-'
       }
     }
@@ -363,6 +368,7 @@ function channelPriceRows(row: Channel) {
       : t('priceMissing')
     const modelStatus = channelModel.status
     const upstreamMissing = modelStatus === 'missing'
+    const categoryMeter = billingMeter ?? defaultBillingMeterForModel(row.provider, model)
     return {
       model,
       disabled: !modelEnabled,
@@ -373,6 +379,12 @@ function channelPriceRows(row: Channel) {
       runtimeToggleDisabled: !billingEnabled || upstreamMissing || isRuntimeToggling(row.id, model),
       runtimeEnabled: modelEnabled,
       upstreamMissing,
+      category:
+        categoryMeter === 'image'
+          ? ('image' as const)
+          : categoryMeter === 'video'
+            ? ('video' as const)
+            : ('text' as const),
       modelStatus,
       modelStatusLabel: modelStatusLabel(modelStatus),
       inputPrice,
@@ -385,6 +397,9 @@ function channelPriceRows(row: Channel) {
           : price && billingMeter === 'token'
             ? `${cacheReadPrice} / ${cacheWritePrice}`
             : t('priceMissing'),
+      videoBillingMode:
+        billingMeter === 'video' ? videoBillingModeLabel(price?.video_billing_mode ?? null) : '-',
+      videoTiers: billingMeter === 'video' ? videoTierRows(price) : [],
       price:
         billingMeter === 'image'
           ? `${unitPrice} / ${t('perImage')}`
@@ -403,6 +418,44 @@ function channelPricePreviewRows(row: Channel) {
 
 function channelPriceOverflowCount(row: Channel) {
   return Math.max(channelModelList(row).length - channelPricePreviewRows(row).length, 0)
+}
+
+function videoTierRows(price?: ChannelPrice) {
+  const mode = price?.video_billing_mode ?? 'official_token'
+  const suffix = mode === 'per_second' ? t('perSecond') : t('pricePerMillionTokens')
+  return (price?.video_price_tiers ?? []).map((tier) => {
+    const specs = videoTierSpecsLabel([tier])
+    const primary =
+      mode === 'per_second' ? tier.input_without_video_unit_micros : tier.input_without_video_micros
+    const secondary =
+      mode === 'per_second' ? tier.input_with_video_unit_micros : tier.input_with_video_micros
+    const values = [primary, secondary]
+      .filter((value): value is number => value !== undefined && value !== null)
+      .filter((value, index, list) => list.indexOf(value) === index)
+    return {
+      specs,
+      price:
+        values.length > 0
+          ? `${values.map((value) => formatPricePerMillion(value, 'en-US')).join(' / ')} / ${suffix}`
+          : t('priceMissing')
+    }
+  })
+}
+
+function videoBillingModeLabel(value: VideoBillingMode | null) {
+  if (value === 'per_second') return t('videoBillingPerSecond')
+  return t('pricePerMillionTokens')
+}
+
+function videoTierPriceLabel(price?: ChannelPrice) {
+  const rows = videoTierRows(price)
+  if (rows.length === 0) return t('priceMissing')
+
+  const labels = rows
+    .map((tier) => tier.price)
+    .filter((label) => label && label !== t('priceMissing'))
+    .filter((label, index, list) => list.indexOf(label) === index)
+  return labels.length > 0 ? labels.join('\n') : t('priceMissing')
 }
 
 function videoTierSpecsLabel(tiers: VideoPriceTier[] = []) {
@@ -1494,7 +1547,6 @@ onMounted(loadInitialData)
             <ChannelExpandPanel
               :channel="row"
               :rows="channelPriceRows(row)"
-              @configure-price="openPriceDialog"
               @toggle-model-runtime="toggleChannelModelRuntime"
             />
           </template>
@@ -1625,7 +1677,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" min-width="176" align="center" header-align="center">
+        <el-table-column :label="t('actions')" min-width="232" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -1637,6 +1689,14 @@ onMounted(loadInitialData)
                 @click="runChannelDiagnostic(row)"
               >
                 {{ t('actionDiagnose') }}
+              </el-button>
+              <el-button
+                class="admin-action-button compact-row-action"
+                :aria-label="t('configurePrice')"
+                :icon="Tickets"
+                @click="openPriceDialog(row)"
+              >
+                {{ t('actionModels') }}
               </el-button>
               <el-button
                 class="admin-action-button compact-row-action"
@@ -1935,7 +1995,7 @@ onMounted(loadInitialData)
 }
 
 .channel-table :deep(.el-table__expanded-cell) {
-  background: #f6f9fc;
+  background: #ffffff;
   height: auto !important;
   max-width: 100%;
   overflow: hidden;

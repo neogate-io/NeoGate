@@ -658,7 +658,7 @@ fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
         error_debug = ?err,
         "failed to sync pricing templates from models.dev"
     );
-    AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
+    pricing_reference_source_unavailable()
 }
 fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
     tracing::warn!(
@@ -666,7 +666,14 @@ fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
         error_debug = ?err,
         "failed to sync local CNY pricing templates from public base url"
     );
-    AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
+    pricing_reference_source_unavailable()
+}
+
+fn pricing_reference_source_unavailable() -> AppError {
+    AppError::UpstreamUnavailableWithCode {
+        code: "pricing_reference_source_unavailable",
+        message: "pricing reference source is temporarily unavailable",
+    }
 }
 
 async fn enabled_provider_codes(state: &AppState) -> AppResult<HashSet<String>> {
@@ -1079,9 +1086,10 @@ pub async fn upsert_pricing_policy(
 
 fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
     if req.channel_id <= 0 || req.model.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "channel and model are required".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "price_model_required",
+            message: "channel and model are required",
+        });
     }
     let prices = PricingMicros {
         input_price_micros: req.input_price_micros,
@@ -1098,17 +1106,19 @@ fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
         },
     };
     if !prices_are_non_negative(prices) {
-        return Err(AppError::BadRequest(
-            "price must be non-negative".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "price_must_be_non_negative",
+            message: "price must be non-negative",
+        });
     }
     if prices.billing_meter == BillingMeter::Image {
         match prices.unit_price_micros {
             Some(price) if price > 0 => {}
             _ => {
-                return Err(AppError::BadRequest(
-                    "unit price is required for image billing".to_string(),
-                ));
+                return Err(AppError::BadRequestWithCode {
+                    code: "image_unit_price_required",
+                    message: "unit price is required for image billing",
+                });
             }
         }
     }
@@ -1118,33 +1128,38 @@ fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
 
 fn validate_video_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
     if req.billing_meter == BillingMeter::Video && req.video_billing_mode.is_none() {
-        return Err(AppError::BadRequest(
-            "video billing mode is required for video billing".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "video_billing_mode_required",
+            message: "video billing mode is required for video billing",
+        });
     }
     if req.video_billing_mode.is_none() {
         if !req.video_price_tiers.is_empty() {
-            return Err(AppError::BadRequest(
-                "video billing mode is required for video price tiers".to_string(),
-            ));
+            return Err(AppError::BadRequestWithCode {
+                code: "video_billing_mode_required",
+                message: "video billing mode is required for video price tiers",
+            });
         }
         return Ok(());
     }
     if req.billing_meter != BillingMeter::Video {
-        return Err(AppError::BadRequest(
-            "video billing mode requires video billing meter".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "video_billing_meter_required",
+            message: "video billing mode requires video billing meter",
+        });
     }
     if req.video_price_tiers.is_empty() {
-        return Err(AppError::BadRequest(
-            "video price tiers are required".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "video_price_tiers_required",
+            message: "video price tiers are required",
+        });
     }
     for tier in &req.video_price_tiers {
         if tier.resolutions.iter().all(|value| value.trim().is_empty()) {
-            return Err(AppError::BadRequest(
-                "video price tier resolutions are required".to_string(),
-            ));
+            return Err(AppError::BadRequestWithCode {
+                code: "video_price_tier_resolution_required",
+                message: "video price tier resolutions are required",
+            });
         }
         match req.video_billing_mode {
             Some(VideoBillingMode::OfficialToken) => {
@@ -1174,10 +1189,13 @@ fn validate_video_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
     Ok(())
 }
 
-fn require_positive(value: Option<i64>, field: &str) -> AppResult<()> {
+fn require_positive(value: Option<i64>, _field: &str) -> AppResult<()> {
     match value {
         Some(value) if value > 0 => Ok(()),
-        _ => Err(AppError::BadRequest(format!("{field} must be positive"))),
+        _ => Err(AppError::BadRequestWithCode {
+            code: "video_price_tier_price_required",
+            message: "video price tier price must be positive",
+        }),
     }
 }
 

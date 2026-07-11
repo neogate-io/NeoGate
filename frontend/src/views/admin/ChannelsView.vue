@@ -9,7 +9,6 @@ import {
   Lightning,
   Plus,
   Search,
-  Tickets,
   VideoPause,
   WarningFilled
 } from '@element-plus/icons-vue'
@@ -26,7 +25,9 @@ import { updateChannelModel, updateChannel, type ChannelDiagnosticScope } from '
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
 import ChannelDiagnosticDialog from '../../components/admin/channels/ChannelDiagnosticDialog.vue'
-import ChannelExpandPanel from '../../components/admin/channels/ChannelExpandPanel.vue'
+import ChannelExpandPanel, {
+  type ChannelExpandPriceGroup
+} from '../../components/admin/channels/ChannelExpandPanel.vue'
 import ChannelProbeTrendCell from '../../components/admin/channels/ChannelProbeTrendCell.vue'
 import ChannelPriceDialog, {
   type ChannelPriceForm,
@@ -179,14 +180,13 @@ const {
   run: runChannelDiagnostic
 } = diagnostic
 
-const baseDiagnosticScopeOptions: Array<{ value: ChannelDiagnosticScope; labelKey: MessageKey }> =
-  [
-    { value: 'all', labelKey: 'diagnosticScopeAll' },
-    { value: 'models', labelKey: 'diagnosticScopeModels' },
-    { value: 'text', labelKey: 'diagnosticScopeText' },
-    { value: 'image', labelKey: 'diagnosticScopeImage' },
-    { value: 'video', labelKey: 'diagnosticScopeVideo' }
-  ]
+const baseDiagnosticScopeOptions: Array<{ value: ChannelDiagnosticScope; labelKey: MessageKey }> = [
+  { value: 'all', labelKey: 'diagnosticScopeAll' },
+  { value: 'models', labelKey: 'diagnosticScopeModels' },
+  { value: 'text', labelKey: 'diagnosticScopeText' },
+  { value: 'image', labelKey: 'diagnosticScopeImage' },
+  { value: 'video', labelKey: 'diagnosticScopeVideo' }
+]
 
 const diagnosticScopeOptions = computed(() => {
   const row = diagnosticScopeChannel.value
@@ -307,11 +307,11 @@ function channelDiagnosticCapabilities(row: Channel) {
     (capabilities, item) => {
       const meter =
         item.billing_meter ??
-        priceByModel.value.get(channelPriceKey(row.id, item.model))?.billing_meter ??
-        defaultBillingMeterForModel(row.provider, item.model)
-      if (meter === 'image') {
+        priceByModel.value.get(channelPriceKey(row.id, item.model))?.billing_meter
+      const displayMeter = displayBillingMeterForModel(row.provider, item.model, meter)
+      if (displayMeter === 'image') {
         capabilities.image = true
-      } else if (meter === 'video') {
+      } else if (displayMeter === 'video') {
         capabilities.video = true
       } else {
         capabilities.text = true
@@ -384,11 +384,13 @@ function channelPriceRows(row: Channel) {
         runtimeEnabled: Boolean(channelModel.enabled),
         upstreamMissing: channelModel.status === 'missing',
         category: 'text' as const,
+        billingMeterLabel: '-',
         inputPrice: '-',
         outputPrice: '-',
         cacheReadPrice: '-',
         cacheWritePrice: '-',
         cachePrice: '-',
+        imagePriceGroups: [],
         videoBillingMode: '-',
         videoTiers: [],
         price: '-'
@@ -430,7 +432,16 @@ function channelPriceRows(row: Channel) {
       : t('priceMissing')
     const modelStatus = channelModel.status
     const upstreamMissing = modelStatus === 'missing'
-    const categoryMeter = billingMeter ?? defaultBillingMeterForModel(row.provider, model)
+    const categoryMeter = defaultBillingMeterForModel(row.provider, model)
+    const displayBillingMeter = billingMeter ?? categoryMeter
+    const billingMeterLabel = billingMeterDisplayLabel(row.provider, model, displayBillingMeter)
+    const imageGroups = imagePriceGroups(categoryMeter, displayBillingMeter, Boolean(price), {
+      input: inputPrice,
+      output: outputPrice,
+      cacheRead: cacheReadPrice,
+      cacheWrite: cacheWritePrice,
+      unit: unitPrice
+    })
     return {
       model,
       disabled: !modelEnabled,
@@ -447,27 +458,31 @@ function channelPriceRows(row: Channel) {
           : categoryMeter === 'video'
             ? ('video' as const)
             : ('text' as const),
+      billingMeterLabel,
       modelStatus,
       modelStatusLabel: modelStatusLabel(modelStatus),
       inputPrice,
       outputPrice,
       cacheReadPrice,
       cacheWritePrice,
+      imagePriceGroups: imageGroups,
       cachePrice:
-        billingMeter === 'image' || billingMeter === 'video'
+        displayBillingMeter === 'image' || displayBillingMeter === 'video'
           ? '-'
-          : price && billingMeter === 'token'
+          : price && displayBillingMeter === 'token'
             ? `${cacheReadPrice} / ${cacheWritePrice}`
             : t('priceMissing'),
       videoBillingMode:
-        billingMeter === 'video' ? videoBillingModeLabel(price?.video_billing_mode ?? null) : '-',
-      videoTiers: billingMeter === 'video' ? videoTierRows(price) : [],
+        displayBillingMeter === 'video'
+          ? videoBillingModeLabel(price?.video_billing_mode ?? null)
+          : '-',
+      videoTiers: displayBillingMeter === 'video' ? videoTierRows(price) : [],
       price:
-        billingMeter === 'image'
+        displayBillingMeter === 'image'
           ? `${unitPrice} / ${t('perImage')}`
-          : billingMeter === 'video'
+          : displayBillingMeter === 'video'
             ? videoTierSpecsLabel(price?.video_price_tiers)
-            : price && billingMeter === 'token'
+            : price && displayBillingMeter === 'token'
               ? `${inputPrice} / ${outputPrice}`
               : t('priceMissing')
     }
@@ -482,6 +497,54 @@ function channelPriceOverflowCount(row: Channel) {
   return Math.max(channelModelList(row).length - channelPricePreviewRows(row).length, 0)
 }
 
+function inlinePriceGroup(label: string, price: string): ChannelExpandPriceGroup {
+  return { label, price, inline: true }
+}
+
+function compactPriceGroup(items: ChannelExpandPriceGroup[]) {
+  return items.length > 0
+    ? [
+        inlinePriceGroup(
+          items.map((item) => item.label).join(' / '),
+          items.map((item) => item.price).join(' / ')
+        )
+      ]
+    : []
+}
+
+function imagePriceGroups(
+  categoryMeter: BillingMeter,
+  displayBillingMeter: BillingMeter,
+  configured: boolean,
+  prices: {
+    input: string
+    output: string
+    cacheRead: string
+    cacheWrite: string
+    unit: string
+  }
+) {
+  if (categoryMeter !== 'image') return []
+  if (displayBillingMeter === 'token') {
+    return [
+      inlinePriceGroup(
+        t('inputOutputPairShort'),
+        configured ? `${prices.input} / ${prices.output}` : t('priceMissing')
+      ),
+      inlinePriceGroup(
+        t('cacheReadWritePairShort'),
+        configured ? `${prices.cacheRead} / ${prices.cacheWrite}` : t('priceMissing')
+      )
+    ]
+  }
+  return [
+    inlinePriceGroup(
+      t('perImage'),
+      displayBillingMeter === 'image' ? prices.unit : t('priceMissing')
+    )
+  ]
+}
+
 function videoTierRows(price?: ChannelPrice) {
   const mode = price?.video_billing_mode ?? 'official_token'
   const suffix = mode === 'per_second' ? t('perSecond') : t('pricePerMillionTokens')
@@ -494,12 +557,35 @@ function videoTierRows(price?: ChannelPrice) {
     const values = [primary, secondary]
       .filter((value): value is number => value !== undefined && value !== null)
       .filter((value, index, list) => list.indexOf(value) === index)
+    const officialTokenPrices = [
+      primary !== undefined && primary !== null
+        ? inlinePriceGroup(t('videoInputWithoutVideo'), formatPricePerMillion(primary, 'en-US'))
+        : null,
+      secondary !== undefined && secondary !== null
+        ? inlinePriceGroup(t('videoInputWithVideo'), formatPricePerMillion(secondary, 'en-US'))
+        : null
+    ].filter((group): group is ChannelExpandPriceGroup => Boolean(group))
+    const officialTokenPriceGroups =
+      mode === 'official_token' ? compactPriceGroup(officialTokenPrices) : []
+    const perSecondPriceGroups =
+      mode === 'per_second' && values.length > 0
+        ? [
+            inlinePriceGroup(
+              t('perSecond'),
+              values.map((value) => formatPricePerMillion(value, 'en-US')).join(' / ')
+            )
+          ]
+        : []
     return {
       specs,
+      priceGroups:
+        officialTokenPriceGroups.length > 0 ? officialTokenPriceGroups : perSecondPriceGroups,
       price:
-        values.length > 0
-          ? `${values.map((value) => formatPricePerMillion(value, 'en-US')).join(' / ')} / ${suffix}`
-          : t('priceMissing')
+        officialTokenPriceGroups.length > 0 || perSecondPriceGroups.length > 0
+          ? ''
+          : values.length > 0
+            ? `${values.map((value) => formatPricePerMillion(value, 'en-US')).join(' / ')} / ${suffix}`
+            : t('priceMissing')
     }
   })
 }
@@ -676,6 +762,26 @@ function defaultBillingMeterForModel(provider: string, model: string) {
   return canUseImageBilling(provider, model) ? 'image' : 'token'
 }
 
+function displayBillingMeterForModel(
+  provider: string,
+  model: string,
+  billingMeter?: BillingMeter | null
+) {
+  const defaultMeter = defaultBillingMeterForModel(provider, model)
+  if (defaultMeter !== 'token') return defaultMeter
+  return billingMeter ?? defaultMeter
+}
+
+function billingMeterDisplayLabel(provider: string, model: string, billingMeter: BillingMeter) {
+  if (canUseImageBilling(provider, model) && billingMeter === 'token')
+    return t('pricePerMillionTokens')
+  if (canUseImageBilling(provider, model) && billingMeter === 'image')
+    return t('billingMeterPerCall')
+  if (billingMeter === 'image') return t('billingMeterImageGeneration')
+  if (billingMeter === 'video') return t('billingMeterVideo')
+  return t('billingMeterToken')
+}
+
 function isBillingMeterLocked(provider: string, model: string) {
   return canUseSeedanceVideoBilling(provider, model) || !canUseImageBilling(provider, model)
 }
@@ -690,6 +796,12 @@ function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm
 function findApplicablePricingTemplate(form: ChannelPriceForm) {
   const template = findPricingTemplate(templates.value, form.provider, form.model)
   return template && templateAppliesToForm(template, form) ? template : undefined
+}
+
+function lockedBillingMeterForReferencePrice(provider: string, model: string): BillingMeter | null {
+  if (!canUseImageBilling(provider, model)) return null
+  const template = findPricingTemplate(templates.value, provider, model)
+  return template?.billing_meter === 'image' ? 'image' : null
 }
 
 function hasManualPriceInput(form: ChannelPriceForm) {
@@ -1152,6 +1264,7 @@ function openPriceDialog(row: Channel) {
     const referenceVideoTiers = supportsSeedanceVideoBilling
       ? seedanceReferenceVideoTiers(row.provider, model)
       : []
+    const lockedBillingMeter = lockedBillingMeterForReferencePrice(row.provider, model)
     const lockedVideoBillingMode = lockedVideoBillingModeForReferenceTiers(referenceVideoTiers)
     const savedBillingMeter =
       price?.billing_meter === 'image' && supportsImageBilling
@@ -1161,7 +1274,8 @@ function openPriceDialog(row: Channel) {
           : price?.billing_meter === 'token' && !supportsSeedanceVideoBilling
             ? 'token'
             : null
-    const billingMeter = savedBillingMeter ?? defaultBillingMeterForModel(row.provider, model)
+    const billingMeter =
+      lockedBillingMeter ?? savedBillingMeter ?? defaultBillingMeterForModel(row.provider, model)
     const videoBillingMode =
       lockedVideoBillingMode ??
       (supportsSeedanceVideoBilling && price?.video_billing_mode
@@ -1203,7 +1317,7 @@ function openPriceDialog(row: Channel) {
       enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
       hasPrice: hasEnabledBillablePrice(price, billingMeter),
       hasPriceRecord: Boolean(price),
-      billingMeterLocked: isBillingMeterLocked(row.provider, model),
+      billingMeterLocked: Boolean(lockedBillingMeter) || isBillingMeterLocked(row.provider, model),
       videoBillingModeLocked: Boolean(lockedVideoBillingMode),
       canUseImageBilling: supportsImageBilling,
       canUseSeedanceVideoBilling: supportsSeedanceVideoBilling
@@ -1313,11 +1427,16 @@ function requireBillingMeter(form: (typeof priceForms)[string]) {
   return form.billingMeter
 }
 
+function requireImageUnitPrice(form: (typeof priceForms)[string]) {
+  if (form.unitPrice <= 0) {
+    throw new Error(t('imageUnitPriceRequired'))
+  }
+}
+
 function readReferenceSyncError(err: unknown) {
   if (
     err instanceof ApiError &&
-    err.status === 502 &&
-    err.message.includes('pricing reference source')
+    err.code === 'pricing_reference_source_unavailable'
   ) {
     return t('referencePricesSourceUnavailable')
   }
@@ -1370,6 +1489,9 @@ async function saveChannelPrices() {
           form.canUseSeedanceVideoBilling && form.videoBillingMode === 'per_second'
             ? 'video'
             : requireBillingMeter(form)
+        if (billingMeter === 'image') {
+          requireImageUnitPrice(form)
+        }
         const representativeWithoutVideo = representativeVideoPriceMicros(
           videoTiers,
           form.videoBillingMode
@@ -1598,6 +1720,7 @@ onMounted(loadInitialData)
             <ChannelExpandPanel
               :channel="row"
               :rows="channelPriceRows(row)"
+              @edit-price="openPriceDialog"
               @toggle-model-runtime="toggleChannelModelRuntime"
             />
           </template>
@@ -1619,7 +1742,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('modelPrices')" min-width="200">
+        <el-table-column :label="t('modelInfo')" min-width="200">
           <template #default="{ row }">
             <div class="channel-price-summary">
               <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
@@ -1645,7 +1768,6 @@ onMounted(loadInitialData)
                   @click="toggleChannelRowExpansion(row)"
                 >
                   <span class="channel-price-model">{{ item.model }}</span>
-                  <span class="channel-price-value">{{ item.price }}</span>
                 </button>
                 <button
                   v-if="channelPriceOverflowCount(row) > 0"
@@ -1728,7 +1850,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('actions')" min-width="232" align="center" header-align="center">
+        <el-table-column :label="t('actions')" min-width="168" align="center" header-align="center">
           <template #default="{ row }">
             <div class="table-row-actions">
               <el-button
@@ -1740,14 +1862,6 @@ onMounted(loadInitialData)
                 @click="openDiagnosticScopeDialog(row)"
               >
                 {{ t('actionDiagnose') }}
-              </el-button>
-              <el-button
-                class="admin-action-button compact-row-action"
-                :aria-label="t('configurePrice')"
-                :icon="Tickets"
-                @click="openPriceDialog(row)"
-              >
-                {{ t('actionModels') }}
               </el-button>
               <el-button
                 class="admin-action-button compact-row-action"
@@ -2088,7 +2202,6 @@ onMounted(loadInitialData)
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-name-text),
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-provider-text),
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-price-model),
-.channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-price-value),
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-key-count),
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled .channel-runtime-switch-text) {
   color: #94a3b8;
@@ -2280,7 +2393,7 @@ onMounted(loadInitialData)
 .channel-price-model {
   background: var(--admin-primary-soft);
   border: 1px solid var(--admin-primary-border);
-  border-radius: 999px 0 0 999px;
+  border-radius: 999px;
   color: var(--admin-primary);
   font-size: 12px;
   font-weight: 680;
@@ -2292,31 +2405,10 @@ onMounted(loadInitialData)
   white-space: nowrap;
 }
 
-.channel-price-value {
-  background: #ffffff;
-  border: 1px solid #dfe8f2;
-  border-left: 0;
-  border-radius: 0 999px 999px 0;
-  color: #1d2939;
-  font-size: 12px;
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  font-weight: 680;
-  padding: 2px 9px;
-  text-align: left;
-  white-space: nowrap;
-}
-
 .channel-price-item.is-missing .channel-price-model {
   background: #fff7ed;
   border-color: #fed7aa;
   color: #c2410c;
-}
-
-.channel-price-item.is-missing .channel-price-value {
-  background: #f97316;
-  border-color: #f97316;
-  color: #ffffff;
 }
 
 .channel-price-item.is-disabled {

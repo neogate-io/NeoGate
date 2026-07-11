@@ -727,9 +727,10 @@ async fn update_admin_password_handler(
     Json(req): Json<UpdateAdminPasswordRequest>,
 ) -> AppResult<Json<Value>> {
     if req.current_password.is_empty() {
-        return Err(AppError::BadRequest(
-            "current password is required".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "current_password_required",
+            message: "current password is required",
+        });
     }
     auth::validate_user_password_input(&req.new_password)?;
 
@@ -753,9 +754,10 @@ async fn update_admin_password_handler(
         &state.config.admin_token_secret,
         &password_hash,
     ) {
-        return Err(AppError::BadRequest(
-            "current password is incorrect".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "current_password_incorrect",
+            message: "current password is incorrect",
+        });
     }
 
     let password_hash =

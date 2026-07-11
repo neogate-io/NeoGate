@@ -1,16 +1,30 @@
 <script setup lang="ts">
-import { CircleCheck, CircleCloseFilled, Warning } from '@element-plus/icons-vue'
+import { CircleCheck, CircleCloseFilled, Tickets, Warning } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { Channel } from '../../../types/admin'
 
+export type ChannelExpandPriceGroup = {
+  label: string
+  price: string
+  inline?: boolean
+}
+
+export type ChannelExpandVideoTierRow = {
+  specs: string
+  price: string
+  priceGroups?: ChannelExpandPriceGroup[]
+}
+
 export type ChannelExpandPriceRow = {
   model: string
   category: 'text' | 'image' | 'video'
+  billingMeterLabel: string
   price: string
   cachePrice: string
+  imagePriceGroups?: ChannelExpandPriceGroup[]
   videoBillingMode?: string
-  videoTiers?: Array<{ specs: string; price: string }>
+  videoTiers?: ChannelExpandVideoTierRow[]
   missing?: boolean
   disabled?: boolean
   billingEnabled?: boolean
@@ -28,6 +42,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   toggleModelRuntime: [channelId: number, model: string, enabled: boolean]
+  editPrice: [channel: Channel]
 }>()
 
 const { t } = useLocale()
@@ -71,6 +86,17 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
 
 <template>
   <div class="channel-expand-panel" :class="{ 'is-channel-disabled': !channel.enabled }">
+    <div class="channel-expand-actions">
+      <el-button
+        class="admin-action-button channel-expand-price-action"
+        type="primary"
+        :aria-label="t('editModelPrices')"
+        :icon="Tickets"
+        @click="emit('editPrice', channel)"
+      >
+        {{ t('editModelPrices') }}
+      </el-button>
+    </div>
     <el-tabs v-if="modelSections.length" v-model="activeTab" class="channel-model-tabs">
       <el-tab-pane v-for="section in modelSections" :key="section.key" :name="section.key">
         <template #label>
@@ -84,7 +110,7 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
             <span>{{ t('modelName') }}</span>
             <span>{{ t('billingMeter') }}</span>
             <span>{{ t('videoTierResolutions') }}</span>
-            <span>{{ t('videoTierPrice') }}</span>
+            <span>{{ t('modelPrice') }}</span>
             <span>{{ t('priceStatus') }}</span>
             <span>{{ t('runtimeStatus') }}</span>
             <span>{{ t('modelRuntimeSwitch') }}</span>
@@ -108,7 +134,18 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
                 class="channel-video-tier-row"
               >
                 <span class="channel-detail-price">{{ tier.specs }}</span>
-                <span class="channel-detail-price">{{ tier.price }}</span>
+                <div v-if="tier.priceGroups?.length" class="channel-video-price-cell">
+                  <div
+                    v-for="group in tier.priceGroups"
+                    :key="group.label"
+                    class="channel-image-price-group"
+                    :class="{ 'is-inline': group.inline }"
+                  >
+                    <span class="channel-image-price-value">{{ group.price }}</span>
+                    <span class="channel-image-price-label">{{ group.label }}</span>
+                  </div>
+                </div>
+                <span v-else class="channel-detail-price">{{ tier.price }}</span>
               </div>
             </div>
             <span
@@ -162,11 +199,19 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
           </div>
         </div>
 
-        <div v-else class="channel-expand-price-table">
+        <div
+          v-else
+          class="channel-expand-price-table"
+          :class="{ 'is-image-table': section.key === 'image' }"
+        >
           <div class="channel-expand-price-row is-head">
             <span>{{ t('modelName') }}</span>
-            <span class="channel-head-label">{{ t('inputOutputPriceShort') }}</span>
-            <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
+            <span v-if="section.key === 'image'">{{ t('billingMeter') }}</span>
+            <span v-if="section.key === 'image'">{{ t('modelPrice') }}</span>
+            <template v-else>
+              <span class="channel-head-label">{{ t('inputOutputPriceShort') }}</span>
+              <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
+            </template>
             <span>{{ t('priceStatus') }}</span>
             <span>{{ t('runtimeStatus') }}</span>
             <span>{{ t('modelRuntimeSwitch') }}</span>
@@ -182,8 +227,24 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
             }"
           >
             <span class="channel-price-model">{{ item.model }}</span>
-            <span class="channel-detail-price">{{ item.price }}</span>
-            <span class="channel-detail-price">{{ item.cachePrice }}</span>
+            <span v-if="section.key === 'image'" class="channel-detail-meter">
+              {{ item.billingMeterLabel }}
+            </span>
+            <div v-if="section.key === 'image'" class="channel-image-price-cell">
+              <div
+                v-for="group in item.imagePriceGroups"
+                :key="group.label"
+                class="channel-image-price-group"
+                :class="{ 'is-inline': group.inline }"
+              >
+                <span class="channel-image-price-value">{{ group.price }}</span>
+                <span class="channel-image-price-label">{{ group.label }}</span>
+              </div>
+            </div>
+            <template v-else>
+              <span class="channel-detail-price">{{ item.price }}</span>
+              <span class="channel-detail-price">{{ item.cachePrice }}</span>
+            </template>
             <span
               class="channel-detail-status"
               :class="{ 'is-missing': item.missing, 'is-disabled': !item.billingEnabled }"
@@ -246,15 +307,31 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
   gap: 12px;
   margin: 0;
   padding: 14px 16px 16px 60px;
+  position: relative;
+}
+
+.channel-expand-actions {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  position: absolute;
+  right: 16px;
+  top: 14px;
+  z-index: 1;
+}
+
+.channel-expand-price-action {
+  min-height: 30px;
 }
 
 .channel-model-tabs :deep(.el-tabs__header) {
   margin: 0 0 10px;
+  padding-right: 120px;
 }
 
 .channel-model-tabs :deep(.el-tabs__nav-wrap::after) {
-  background-color: #e2e8f0;
-  height: 1px;
+  display: none;
 }
 
 .channel-model-tab-label {
@@ -301,11 +378,11 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
     minmax(190px, 1fr)
     128px
     128px
-    168px
+    240px
     92px
     76px
     132px;
-  min-width: 940px;
+  min-width: 1012px;
 }
 
 .channel-expand-video-head {
@@ -374,7 +451,7 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
 .channel-video-tier-row {
   align-items: center;
   display: grid;
-  grid-template-columns: 128px 168px;
+  grid-template-columns: 128px 240px;
   min-height: 54px;
 }
 
@@ -385,6 +462,15 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
 
 .channel-video-tier-row + .channel-video-tier-row {
   border-top: 1px solid #edf2f7;
+}
+
+.channel-video-price-cell {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 10px;
 }
 
 .channel-expand-price-row {
@@ -402,6 +488,16 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
     132px;
   min-height: 46px;
   padding: 0 12px;
+}
+
+.channel-expand-price-table.is-image-table .channel-expand-price-row {
+  grid-template-columns:
+    minmax(120px, 1.4fr)
+    104px
+    minmax(240px, 1fr)
+    92px
+    56px
+    132px;
 }
 
 .channel-expand-price-row + .channel-expand-price-row {
@@ -439,6 +535,62 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
 .channel-expand-price-row.is-head span:nth-child(5),
 .channel-expand-price-row.is-head span:nth-child(6) {
   text-align: center;
+}
+
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(2),
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(3),
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(4),
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(5),
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(6) {
+  text-align: center;
+}
+
+.channel-expand-price-table.is-image-table .channel-expand-price-row > .channel-detail-meter {
+  justify-content: center;
+  text-align: center;
+}
+
+.channel-image-price-cell {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.channel-image-price-group {
+  align-items: center;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  min-width: 0;
+}
+
+.channel-image-price-group.is-inline {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.channel-image-price-value {
+  color: #1d2129;
+  font-feature-settings: 'tnum';
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.channel-image-price-label {
+  color: #718096;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.channel-image-price-group.is-inline .channel-image-price-label {
+  font-size: 12px;
 }
 
 .channel-expand-price-row.is-head span:nth-child(4),
@@ -509,6 +661,12 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
   .channel-price-model,
 .channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-detail-price,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-meter,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-image-price-value,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-image-price-label,
 .channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-detail-status,
 .channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
@@ -664,6 +822,16 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
 @media (max-width: 760px) {
   .channel-expand-panel {
     padding: 12px;
+  }
+
+  .channel-expand-actions {
+    justify-content: flex-start;
+    position: static;
+  }
+
+  .channel-model-tabs :deep(.el-tabs__header) {
+    margin: 0 0 10px;
+    padding-right: 0;
   }
 
   .channel-expand-head {

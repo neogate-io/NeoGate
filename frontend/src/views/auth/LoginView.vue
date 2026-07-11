@@ -82,20 +82,20 @@ async function sendVerificationCode() {
 }
 
 function isVerificationRequiredError(err: unknown) {
-  return err instanceof ApiError && err.message.includes('verification code required')
+  return err instanceof ApiError && err.code === 'verification_code_required'
 }
 
 function readLoginError(err: unknown) {
   if (isVerificationRequiredError(err)) {
     return t('loginVerificationRequired')
   }
-  if (err instanceof ApiError && err.message.includes('invalid verification code')) {
+  if (err instanceof ApiError && err.code === 'invalid_verification_code') {
     return t('loginVerificationInvalid')
   }
-  if (err instanceof ApiError && err.message.includes('registration is closed')) {
+  if (err instanceof ApiError && err.code === 'registration_closed') {
     return t('registrationClosed')
   }
-  if (err instanceof ApiError && err.message.includes('account pending approval')) {
+  if (err instanceof ApiError && err.code === 'account_pending_approval') {
     return t('accountPendingApproval')
   }
   if (isSmtpConfigError(err)) {
@@ -104,7 +104,7 @@ function readLoginError(err: unknown) {
   if (isLoginVerificationRateLimitedError(err)) {
     return t('loginVerificationRateLimited')
   }
-  if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
+  if (err instanceof ApiError && err.code === 'password_min_length') {
     return t('passwordMinLength')
   }
   if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
@@ -124,11 +124,7 @@ function readLoginVerificationCodeError(err: unknown) {
 }
 
 function isLoginVerificationRateLimitedError(err: unknown) {
-  return (
-    err instanceof ApiError &&
-    (err.message.includes('too many login verification code requests') ||
-      err.message.includes('too many login verification attempts'))
-  )
+  return err instanceof ApiError && err.code === 'login_verification_rate_limited'
 }
 
 function readRedirectPath(role: LoginRole) {

@@ -294,8 +294,7 @@ function referenceSyncConfirmContent() {
 function readReferenceSyncError(err: unknown) {
   if (
     err instanceof ApiError &&
-    err.status === 502 &&
-    err.message.includes('pricing reference source')
+    err.code === 'pricing_reference_source_unavailable'
   ) {
     return referencePricesSourceUnavailableText.value
   }

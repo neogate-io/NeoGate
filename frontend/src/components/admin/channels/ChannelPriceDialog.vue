@@ -106,10 +106,18 @@ function parseCurrencyInput(value: string) {
   return value.replace(/^[¥$]/, '')
 }
 
-function billingMeterLabel(row: ChannelPriceForm) {
-  if (row.billingMeter === 'image') return t('billingMeterImageGeneration')
-  if (row.billingMeter === 'video') return t('billingMeterVideo')
+function billingMeterOptionLabel(row: ChannelPriceForm, billingMeter: BillingMeter) {
+  if (row.canUseImageBilling && billingMeter === 'token') return t('pricePerMillionTokens')
+  if (row.canUseImageBilling && billingMeter === 'image') return t('billingMeterPerCall')
+  if (billingMeter === 'image') return t('billingMeterImageGeneration')
+  if (billingMeter === 'video') return t('billingMeterVideo')
   return t('billingMeterToken')
+}
+
+function billingMeterLabel(row: ChannelPriceForm) {
+  return row.billingMeter
+    ? billingMeterOptionLabel(row, row.billingMeter)
+    : t('billingMeterRequired')
 }
 
 function inferredPerSecondPrice(
@@ -239,12 +247,17 @@ function updateVideoTierSecondaryPrice(
               <span>{{ section.forms.length }}</span>
             </span>
           </template>
-          <div class="price-editor">
+          <div class="price-editor" :class="{ 'is-image-editor': section.key === 'image' }">
             <div class="price-editor-head">
               <span>{{ t('model') }}</span>
               <span>{{ t('billingMeter') }}</span>
-              <span>{{ t('inputOutputPriceShort') }}</span>
-              <span>{{ t('cacheReadWritePriceShort') }}</span>
+              <template v-if="section.key === 'image'">
+                <span>{{ t('prices') }}</span>
+              </template>
+              <template v-else>
+                <span>{{ t('inputOutputPriceShort') }}</span>
+                <span>{{ t('cacheReadWritePriceShort') }}</span>
+              </template>
               <span>{{ t('officialReferencePrice') }}</span>
             </div>
 
@@ -268,74 +281,144 @@ function updateVideoTierSecondaryPrice(
                     popper-class="price-meter-select-dropdown"
                     :placeholder="t('billingMeterRequired')"
                   >
-                    <el-option :label="t('billingMeterToken')" value="token" />
+                    <el-option :label="billingMeterOptionLabel(row, 'token')" value="token" />
                     <el-option
                       v-if="row.canUseImageBilling"
-                      :label="t('billingMeterImageGeneration')"
+                      :label="billingMeterOptionLabel(row, 'image')"
                       value="image"
                     />
                   </el-select>
                 </div>
-                <div class="price-pair-field">
-                  <div v-if="row.billingMeter === 'token'" class="price-pair-input">
-                    <el-input-number
-                      v-model="row.inputPerMillion"
-                      class="price-number-input"
-                      :controls="false"
-                      :formatter="formatCurrencyInput"
-                      :min="0"
-                      :parser="parseCurrencyInput"
-                      :step="0.01"
-                    />
-                    <span class="price-pair-separator">/</span>
-                    <el-input-number
-                      v-model="row.outputPerMillion"
-                      class="price-number-input"
-                      :controls="false"
-                      :formatter="formatCurrencyInput"
-                      :min="0"
-                      :parser="parseCurrencyInput"
-                      :step="0.01"
-                    />
-                  </div>
-                  <div v-else-if="row.billingMeter === 'image'" class="price-single-input">
-                    <el-input-number
-                      v-model="row.unitPrice"
-                      class="price-number-input"
-                      :controls="false"
-                      :formatter="formatCurrencyInput"
-                      :min="0"
-                      :parser="parseCurrencyInput"
-                      :step="0.01"
-                    />
-                    <span class="price-unit-label">{{ t('perImage') }}</span>
+                <div v-if="section.key === 'image'" class="image-price-cell">
+                  <template v-if="row.billingMeter === 'token'">
+                    <div class="image-price-group">
+                      <span class="image-price-group-label">{{ t('inputOutputPairShort') }}</span>
+                      <div class="price-pair-input">
+                        <el-input-number
+                          v-model="row.inputPerMillion"
+                          class="price-number-input"
+                          :controls="false"
+                          :formatter="formatCurrencyInput"
+                          :min="0"
+                          :parser="parseCurrencyInput"
+                          :step="0.01"
+                        />
+                        <span class="price-pair-separator">/</span>
+                        <el-input-number
+                          v-model="row.outputPerMillion"
+                          class="price-number-input"
+                          :controls="false"
+                          :formatter="formatCurrencyInput"
+                          :min="0"
+                          :parser="parseCurrencyInput"
+                          :step="0.01"
+                        />
+                      </div>
+                    </div>
+                    <div class="image-price-group">
+                      <span class="image-price-group-label">{{
+                        t('cacheReadWritePairShort')
+                      }}</span>
+                      <div class="price-pair-input">
+                        <el-input-number
+                          v-model="row.cacheReadPerMillion"
+                          class="price-number-input"
+                          :controls="false"
+                          :formatter="formatCurrencyInput"
+                          :min="0"
+                          :parser="parseCurrencyInput"
+                          :step="0.01"
+                        />
+                        <span class="price-pair-separator">/</span>
+                        <el-input-number
+                          v-model="row.cacheWritePerMillion"
+                          class="price-number-input"
+                          :controls="false"
+                          :formatter="formatCurrencyInput"
+                          :min="0"
+                          :parser="parseCurrencyInput"
+                          :step="0.01"
+                        />
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else-if="row.billingMeter === 'image'" class="image-price-group">
+                    <div class="video-price-pair-input is-single">
+                      <el-input-number
+                        v-model="row.unitPrice"
+                        class="video-tier-pair-number"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.01"
+                      />
+                    </div>
                   </div>
                   <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>
                 </div>
-                <div class="price-pair-field">
-                  <div v-if="row.billingMeter === 'token'" class="price-pair-input">
-                    <el-input-number
-                      v-model="row.cacheReadPerMillion"
-                      class="price-number-input"
-                      :controls="false"
-                      :formatter="formatCurrencyInput"
-                      :min="0"
-                      :parser="parseCurrencyInput"
-                      :step="0.01"
-                    />
-                    <span class="price-pair-separator">/</span>
-                    <el-input-number
-                      v-model="row.cacheWritePerMillion"
-                      class="price-number-input"
-                      :controls="false"
-                      :formatter="formatCurrencyInput"
-                      :min="0"
-                      :parser="parseCurrencyInput"
-                      :step="0.01"
-                    />
+                <template v-else>
+                  <div class="price-pair-field">
+                    <div v-if="row.billingMeter === 'token'" class="price-pair-input">
+                      <el-input-number
+                        v-model="row.inputPerMillion"
+                        class="price-number-input"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.01"
+                      />
+                      <span class="price-pair-separator">/</span>
+                      <el-input-number
+                        v-model="row.outputPerMillion"
+                        class="price-number-input"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.01"
+                      />
+                    </div>
+                    <div v-else-if="row.billingMeter === 'image'" class="price-single-input">
+                      <el-input-number
+                        v-model="row.unitPrice"
+                        class="price-number-input"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.01"
+                      />
+                      <span class="price-unit-label">{{ t('perImage') }}</span>
+                    </div>
+                    <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>
                   </div>
-                  <span v-else class="price-muted-cell">-</span>
-                </div>
+                  <div class="price-pair-field">
+                    <div v-if="row.billingMeter === 'token'" class="price-pair-input">
+                      <el-input-number
+                        v-model="row.cacheReadPerMillion"
+                        class="price-number-input"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.01"
+                      />
+                      <span class="price-pair-separator">/</span>
+                      <el-input-number
+                        v-model="row.cacheWritePerMillion"
+                        class="price-number-input"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.01"
+                      />
+                    </div>
+                    <span v-else class="price-muted-cell">-</span>
+                  </div>
+                </template>
                 <div class="reference-price-cell">
                   <template v-if="hasReferencePrice(row)">
                     <span class="reference-price-summary">{{ referencePriceSummary(row) }}</span>
@@ -597,6 +680,15 @@ function updateVideoTierSecondaryPrice(
     minmax(132px, 0.9fr);
 }
 
+.price-editor.is-image-editor .price-editor-head,
+.price-editor.is-image-editor .price-editor-row {
+  grid-template-columns:
+    var(--price-model-column)
+    112px
+    minmax(260px, 1fr)
+    minmax(132px, 0.7fr);
+}
+
 .video-price-head {
   align-items: center;
   display: grid;
@@ -639,6 +731,10 @@ function updateVideoTierSecondaryPrice(
 
 .price-editor-head > span:nth-child(2),
 .video-price-head > span:nth-child(2) {
+  text-align: center;
+}
+
+.price-editor.is-image-editor .price-editor-head > span:nth-child(3) {
   text-align: center;
 }
 
@@ -691,6 +787,30 @@ function updateVideoTierSecondaryPrice(
   min-width: 0;
 }
 
+.image-price-cell {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.image-price-group {
+  align-items: center;
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  min-width: 0;
+}
+
+.image-price-group-label {
+  color: var(--price-tertiary-text);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .price-meter-cell {
   align-items: center;
   display: flex;
@@ -699,19 +819,10 @@ function updateVideoTierSecondaryPrice(
 }
 
 .price-meter-select {
-  width: 96px;
+  width: 102px;
 }
 
 .price-meter-select :deep(.el-select__wrapper) {
-  height: var(--price-control-height);
-  min-height: var(--price-control-height);
-}
-
-.video-mode-select {
-  width: 108px;
-}
-
-.video-mode-select :deep(.el-select__wrapper) {
   font-size: 12px;
   height: var(--price-control-height);
   min-height: var(--price-control-height);
@@ -719,6 +830,12 @@ function updateVideoTierSecondaryPrice(
   padding-right: 6px;
 }
 
+.video-mode-select {
+  width: 108px;
+}
+
+.price-meter-select :deep(.el-select__placeholder),
+.price-meter-select :deep(.el-select__selected-item),
 .video-mode-select :deep(.el-select__placeholder),
 .video-mode-select :deep(.el-select__selected-item) {
   font-size: 12px;
@@ -1083,6 +1200,21 @@ function updateVideoTierSecondaryPrice(
     grid-template-columns: 1fr;
   }
 
+  .image-price-cell {
+    align-items: stretch;
+    display: grid;
+    gap: 8px;
+    justify-content: stretch;
+  }
+
+  .image-price-group {
+    justify-items: stretch;
+  }
+
+  .image-price-group-label {
+    text-align: left;
+  }
+
   .video-tier-row {
     gap: 8px;
     grid-template-columns: 1fr;
@@ -1100,6 +1232,8 @@ function updateVideoTierSecondaryPrice(
 
   .video-mode-select,
   .video-price-pair-labels,
+  .price-pair-input,
+  .price-single-input,
   .video-price-pair-input {
     width: 100%;
   }

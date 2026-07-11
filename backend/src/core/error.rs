@@ -148,8 +148,18 @@ pub enum AppError {
     },
     #[error("rate limited: {0}")]
     RateLimited(String),
+    #[error("rate limited: {message}")]
+    RateLimitedWithCode {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("upstream unavailable: {0}")]
     UpstreamUnavailable(String),
+    #[error("upstream unavailable: {message}")]
+    UpstreamUnavailableWithCode {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error(transparent)]
     UpstreamRequest(UpstreamRequestError),
     #[error(transparent)]
@@ -201,8 +211,12 @@ impl AppError {
             AppError::BadRequest(_) | AppError::BadRequestWithCode { .. } => {
                 StatusCode::BAD_REQUEST
             }
-            AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
-            AppError::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
+            AppError::RateLimited(_) | AppError::RateLimitedWithCode { .. } => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
+            AppError::UpstreamUnavailable(_) | AppError::UpstreamUnavailableWithCode { .. } => {
+                StatusCode::BAD_GATEWAY
+            }
             AppError::UpstreamRequest(err) => err.status(),
             AppError::Sqlx(_)
             | AppError::Io(_)
@@ -226,7 +240,9 @@ impl AppError {
             AppError::BadRequest(_) => "bad_request",
             AppError::BadRequestWithCode { code, .. } => code,
             AppError::RateLimited(_) => "rate_limited",
+            AppError::RateLimitedWithCode { code, .. } => code,
             AppError::UpstreamUnavailable(_) => "upstream_unavailable",
+            AppError::UpstreamUnavailableWithCode { code, .. } => code,
             AppError::UpstreamRequest(err) => err.kind.type_code(),
             AppError::Sqlx(_)
             | AppError::Io(_)
@@ -241,6 +257,9 @@ impl AppError {
         if let AppError::UpstreamUnavailable(message) = self {
             return message.clone();
         }
+        if let AppError::UpstreamUnavailableWithCode { message, .. } = self {
+            return (*message).to_string();
+        }
 
         if status.is_server_error() {
             return "internal server error".to_string();
@@ -254,6 +273,7 @@ impl AppError {
             | AppError::Forbidden(message) => message.clone(),
             AppError::ConflictWithCode { message, .. } => (*message).to_string(),
             AppError::BadRequestWithCode { message, .. } => (*message).to_string(),
+            AppError::RateLimitedWithCode { message, .. } => (*message).to_string(),
             _ => self.to_string(),
         }
     }
@@ -285,6 +305,7 @@ impl AppError {
                 | AppError::BadRequestWithCode { .. }
                 | AppError::PayloadTooLarge(_)
                 | AppError::RateLimited(_)
+                | AppError::RateLimitedWithCode { .. }
                 | AppError::Forbidden(_)
         )
     }
@@ -304,7 +325,7 @@ fn error_response(status: StatusCode, code: &'static str, message: String) -> Re
     response
         .headers_mut()
         .insert("x-neogate-error-code", HeaderValue::from_static(code));
-    if code == "rate_limited" {
+    if status == StatusCode::TOO_MANY_REQUESTS {
         response
             .headers_mut()
             .insert("x-neogate-retryable", HeaderValue::from_static("true"));

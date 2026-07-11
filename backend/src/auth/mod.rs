@@ -115,7 +115,10 @@ async fn request_login_verification_code(
     if login_email_needs_verification(&state, &email).await? {
         let (_, registration_enabled) = registration_policy(&state).await?;
         if !registration_enabled {
-            return Err(AppError::BadRequest("registration is closed".to_string()));
+            return Err(AppError::BadRequestWithCode {
+                code: "registration_closed",
+                message: "registration is closed",
+            });
         }
         let code = generate_login_verification_code();
         let code_hash =
@@ -224,9 +227,10 @@ async fn update_user_password(
     Json(req): Json<UpdateUserPasswordRequest>,
 ) -> AppResult<Json<OkResponse>> {
     if req.current_password.is_empty() {
-        return Err(AppError::BadRequest(
-            "current password is required".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "current_password_required",
+            message: "current password is required",
+        });
     }
     validate_user_password_input(&req.new_password)?;
 
@@ -253,18 +257,20 @@ async fn update_user_password(
         &state.config.admin_token_secret,
         &current_hash,
     ) {
-        return Err(AppError::BadRequest(
-            "current password is incorrect".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "current_password_incorrect",
+            message: "current password is incorrect",
+        });
     }
     if verify_user_password(
         &req.new_password,
         &state.config.admin_token_secret,
         &current_hash,
     ) {
-        return Err(AppError::BadRequest(
-            "new password cannot be the same as the current password".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "password_same_as_current",
+            message: "new password cannot be the same as the current password",
+        });
     }
 
     let next_hash = hash_user_password(&req.new_password, &state.config.admin_token_secret);
@@ -328,7 +334,10 @@ async fn login_or_create_user(
         let mut requires_password_change: bool = row.try_get("requires_password_change")?;
         if status != "enabled" {
             if status == "pending" {
-                return Err(AppError::BadRequest("account pending approval".to_string()));
+                return Err(AppError::BadRequestWithCode {
+                    code: "account_pending_approval",
+                    message: "account pending approval",
+                });
             }
             return Err(AppError::Unauthorized);
         }
@@ -360,16 +369,20 @@ async fn login_or_create_user(
     } else {
         let (service_mode, registration_enabled) = registration_policy(state).await?;
         if !registration_enabled {
-            return Err(AppError::BadRequest("registration is closed".to_string()));
+            return Err(AppError::BadRequestWithCode {
+                code: "registration_closed",
+                message: "registration is closed",
+            });
         }
 
         let Some(verification_code) = verification_code
             .map(str::trim)
             .filter(|code| !code.is_empty())
         else {
-            return Err(AppError::BadRequest(
-                "verification code required".to_string(),
-            ));
+            return Err(AppError::BadRequestWithCode {
+                code: "verification_code_required",
+                message: "verification code required",
+            });
         };
         state
             .auth_rate_limiter
@@ -395,7 +408,10 @@ async fn login_or_create_user(
         let user_id: DbId = row.try_get("id")?;
         if service_mode == ServiceMode::Internal {
             tx.commit().await?;
-            return Err(AppError::BadRequest("account pending approval".to_string()));
+            return Err(AppError::BadRequestWithCode {
+                code: "account_pending_approval",
+                message: "account pending approval",
+            });
         }
         project::ensure_default_project_for_user(&mut tx, user_id).await?;
         UserLogin {
@@ -424,9 +440,10 @@ async fn consume_login_verification_code(
     state: &AppState,
 ) -> AppResult<()> {
     if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(AppError::BadRequest(
-            "invalid verification code".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "invalid_verification_code",
+            message: "invalid verification code",
+        });
     }
 
     let code_hash = hash_email_verification_code(email, code, &state.config.admin_token_secret);
@@ -449,9 +466,10 @@ async fn consume_login_verification_code(
     .await?;
 
     let Some(row) = row else {
-        return Err(AppError::BadRequest(
-            "invalid verification code".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "invalid_verification_code",
+            message: "invalid verification code",
+        });
     };
     let code_id: DbId = row.try_get("id")?;
 
@@ -519,12 +537,16 @@ fn generate_login_verification_code() -> String {
 
 pub(crate) fn validate_user_password_input(password: &str) -> AppResult<()> {
     if password.is_empty() {
-        return Err(AppError::BadRequest("password is required".to_string()));
+        return Err(AppError::BadRequestWithCode {
+            code: "password_required",
+            message: "password is required",
+        });
     }
     if password.chars().count() < MIN_USER_PASSWORD_LEN {
-        return Err(AppError::BadRequest(
-            "password must be at least 8 characters".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "password_min_length",
+            message: "password must be at least 8 characters",
+        });
     }
     Ok(())
 }

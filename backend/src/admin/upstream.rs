@@ -74,7 +74,7 @@ pub(super) async fn upstream_models(
     if req.use_credentials && provider_code == "openai" && protocol == OPENAI_OAUTH_PROTOCOL {
         let models = openai_oauth_catalog_models(&state).await?;
         if models.is_empty() {
-            return Err(AppError::BadRequest("no models returned".to_string()));
+            return Err(no_models_returned());
         }
         record_provider_models(&state, provider_code, &models, "upstream", false).await?;
         if let Some(channel_id) = req.channel_id {
@@ -109,7 +109,7 @@ pub(super) async fn upstream_models(
 
     let models = fetch_upstream_models(&state, &protocol, base_url, secret).await?;
     if models.is_empty() {
-        return Err(AppError::BadRequest("no models returned".to_string()));
+        return Err(no_models_returned());
     }
     record_provider_models(&state, provider_code, &models, "upstream", false).await?;
     if let Some(channel_id) = req.channel_id {
@@ -331,10 +331,17 @@ pub(crate) async fn fetch_upstream_models(
         .map_err(|_| AppError::BadRequest("上游模型列表响应格式无效".to_string()))?;
     let models = extract_model_ids(&value);
     if models.is_empty() {
-        return Err(AppError::BadRequest("no models returned".to_string()));
+        return Err(no_models_returned());
     }
 
     Ok(models)
+}
+
+fn no_models_returned() -> AppError {
+    AppError::BadRequestWithCode {
+        code: "no_models_returned",
+        message: "no models returned",
+    }
 }
 
 fn upstream_models_request_error(base_url: &str, err: reqwest::Error) -> AppError {

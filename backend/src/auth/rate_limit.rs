@@ -66,6 +66,7 @@ impl AuthRateLimiter {
         self.check(
             format!("login-code-email:{email}"),
             AUTH_RATE_LIMIT_WINDOW,
+            "login_verification_rate_limited",
             "too many login verification code requests",
             LOGIN_CODE_EMAIL_LIMIT,
         )
@@ -73,6 +74,7 @@ impl AuthRateLimiter {
         self.check(
             format!("login-code-ip:{client_key}"),
             AUTH_RATE_LIMIT_WINDOW,
+            "login_verification_rate_limited",
             "too many login verification code requests",
             LOGIN_CODE_IP_LIMIT,
         )
@@ -83,6 +85,7 @@ impl AuthRateLimiter {
         self.check(
             format!("login-code-attempt:{email}"),
             AUTH_RATE_LIMIT_WINDOW,
+            "login_verification_rate_limited",
             "too many login verification attempts",
             LOGIN_CODE_ATTEMPT_LIMIT,
         )
@@ -97,6 +100,7 @@ impl AuthRateLimiter {
         self.check(
             format!("password-reset-email:{email}"),
             AUTH_RATE_LIMIT_WINDOW,
+            "password_reset_rate_limited",
             "too many password reset requests",
             PASSWORD_RESET_EMAIL_LIMIT,
         )
@@ -104,6 +108,7 @@ impl AuthRateLimiter {
         self.check(
             format!("password-reset-ip:{client_key}"),
             AUTH_RATE_LIMIT_WINDOW,
+            "password_reset_rate_limited",
             "too many password reset requests",
             PASSWORD_RESET_IP_LIMIT,
         )
@@ -118,6 +123,7 @@ impl AuthRateLimiter {
         self.check(
             format!("password-reset-attempt-token:{}", hash_key(token)),
             AUTH_RATE_LIMIT_WINDOW,
+            "password_reset_rate_limited",
             "too many password reset attempts",
             PASSWORD_RESET_ATTEMPT_LIMIT,
         )
@@ -125,6 +131,7 @@ impl AuthRateLimiter {
         self.check(
             format!("password-reset-attempt-ip:{client_key}"),
             AUTH_RATE_LIMIT_WINDOW,
+            "password_reset_rate_limited",
             "too many password reset attempts",
             PASSWORD_RESET_IP_LIMIT,
         )
@@ -135,12 +142,15 @@ impl AuthRateLimiter {
         &self,
         key: String,
         window: Duration,
+        code: &'static str,
         message: &'static str,
         limit: u32,
     ) -> AppResult<()> {
         match &self.backend {
-            AuthRateLimitBackend::Local(local) => local.check(key, limit, window, message),
-            AuthRateLimitBackend::Redis(redis) => redis.check(key, limit, window, message).await,
+            AuthRateLimitBackend::Local(local) => local.check(key, limit, window, code, message),
+            AuthRateLimitBackend::Redis(redis) => {
+                redis.check(key, limit, window, code, message).await
+            }
         }
     }
 }
@@ -157,6 +167,7 @@ impl LocalAuthRateLimiter {
         key: String,
         limit: u32,
         window: Duration,
+        code: &'static str,
         message: &'static str,
     ) -> AppResult<()> {
         let now = Instant::now();
@@ -173,7 +184,7 @@ impl LocalAuthRateLimiter {
             bucket.reset_at = now + window;
         }
         if bucket.count >= limit {
-            return Err(AppError::RateLimited(message.to_string()));
+            return Err(AppError::RateLimitedWithCode { code, message });
         }
         bucket.count += 1;
         Ok(())
@@ -186,6 +197,7 @@ impl RedisAuthRateLimiter {
         key: String,
         limit: u32,
         window: Duration,
+        code: &'static str,
         message: &'static str,
     ) -> AppResult<()> {
         let mut conn = self.manager.clone();
@@ -206,7 +218,7 @@ impl RedisAuthRateLimiter {
         .await?;
 
         if count > limit as i64 {
-            return Err(AppError::RateLimited(message.to_string()));
+            return Err(AppError::RateLimitedWithCode { code, message });
         }
         Ok(())
     }
@@ -241,6 +253,12 @@ mod tests {
             .check_login_verification_request("user@example.com", client_key)
             .await
             .unwrap_err();
-        assert!(matches!(err, AppError::RateLimited(_)));
+        assert!(matches!(
+            err,
+            AppError::RateLimitedWithCode {
+                code: "login_verification_rate_limited",
+                ..
+            }
+        ));
     }
 }

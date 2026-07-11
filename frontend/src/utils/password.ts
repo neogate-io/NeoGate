@@ -50,17 +50,13 @@ export function readPasswordChangeError(
   t: Translate,
   options: PasswordChangeErrorOptions = {}
 ) {
-  if (err instanceof ApiError && err.message.includes('current password is incorrect')) {
+  if (err instanceof ApiError && err.code === 'current_password_incorrect') {
     return t(options.currentIncorrectKey ?? 'currentPasswordIncorrect')
   }
-  if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
+  if (err instanceof ApiError && err.code === 'password_min_length') {
     return t('passwordMinLength')
   }
-  if (
-    options.sameAsCurrentKey &&
-    err instanceof ApiError &&
-    err.message.includes('new password cannot be the same')
-  ) {
+  if (options.sameAsCurrentKey && err instanceof ApiError && err.code === 'password_same_as_current') {
     return t(options.sameAsCurrentKey)
   }
   return options.fallback === 'readError'

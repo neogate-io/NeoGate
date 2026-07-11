@@ -10,14 +10,15 @@ const brand = reactive({
   loaded: false,
   loading: false,
   siteName: DEFAULT_SITE_NAME,
-  logoUrl: '/logos/logo.svg',
+  logoUrl: '',
   billingCurrency: DEFAULT_BILLING_CURRENCY as BillingCurrency
 })
 
 let pendingLoad: Promise<void> | null = null
 
 function normalizeBillingCurrency(value?: string | null): BillingCurrency {
-  return value === 'CNY' ? 'CNY' : 'USD'
+  if (value === 'USD') return 'USD'
+  return DEFAULT_BILLING_CURRENCY
 }
 
 function applyBrand(setting: SiteSetting) {

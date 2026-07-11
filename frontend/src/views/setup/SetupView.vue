@@ -726,7 +726,7 @@ async function submitSetup() {
       setSiteBrand({
         site_name: completedStatus.site_name || bootstrapForm.siteName,
         public_base_url: completedStatus.public_base_url || bootstrapForm.publicBaseUrl,
-        logo_url: '/logos/logo.svg',
+        logo_url: null,
         billing_currency: completedStatus.billing_currency,
         env_write_supported: completedStatus.env_write_supported
       })

@@ -389,7 +389,7 @@ function channelPriceRows(row: Channel) {
         billingMeter === 'image'
           ? `${unitPrice} / ${t('perImage')}`
           : billingMeter === 'video'
-            ? t('billingBasisMultiTierVideo')
+            ? videoTierSpecsLabel(price?.video_price_tiers)
             : price && billingMeter === 'token'
               ? `${inputPrice} / ${outputPrice}`
               : t('priceMissing')
@@ -403,6 +403,18 @@ function channelPricePreviewRows(row: Channel) {
 
 function channelPriceOverflowCount(row: Channel) {
   return Math.max(channelModelList(row).length - channelPricePreviewRows(row).length, 0)
+}
+
+function videoTierSpecsLabel(tiers: VideoPriceTier[] = []) {
+  const specs = tiers
+    .flatMap((tier) => tier.resolutions)
+    .map((resolution) => resolution.trim())
+    .filter(Boolean)
+    .map((resolution) =>
+      resolution === anyVideoTierResolution ? t('videoTierAllSpecifications') : resolution
+    )
+  const uniqueSpecs = Array.from(new Set(specs))
+  return uniqueSpecs.length > 0 ? uniqueSpecs.join(' / ') : t('billingBasisMultiTierVideo')
 }
 
 function runtimeKey(channelId: number, model: string) {

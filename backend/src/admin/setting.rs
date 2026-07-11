@@ -15,8 +15,6 @@ use crate::{
 
 const SITE_BRAND_SETTING_KEY: &str = "site_brand";
 pub const ADMIN_MODEL_SETTING_KEY: &str = "admin_model";
-const DEFAULT_LOGO_URL: &str = "/logos/logo.svg";
-
 #[derive(Debug, Serialize)]
 pub struct SiteSettingRecord {
     pub site_name: String,
@@ -120,10 +118,7 @@ pub async fn get_site_setting(state: &AppState) -> AppResult<SiteSettingRecord> 
         .and_then(|setting| setting.site_name.clone())
         .or(probe.site_name)
         .unwrap_or_else(|| "NeoGate".to_string());
-    let logo_url = brand.map_or_else(
-        || Some(DEFAULT_LOGO_URL.to_string()),
-        |setting| setting.logo_url,
-    );
+    let logo_url = brand.and_then(|setting| setting.logo_url);
     Ok(SiteSettingRecord {
         site_name,
         public_base_url: probe.public_base_url,

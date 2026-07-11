@@ -162,6 +162,11 @@ def slug(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z._-]+", "-", value.strip().lower()).strip("-")
 
 
+def model_id_from_name(value: str) -> str:
+    primary = next((line.strip() for line in value.splitlines() if line.strip()), value)
+    return slug(primary)
+
+
 def modalities_for_record(record: dict[str, Any]) -> dict[str, list[str]]:
     section = record.get("section") or ""
     model = record.get("model") or ""
@@ -365,6 +370,11 @@ def cost_from_record(record: dict[str, Any]) -> dict[str, Any]:
     # 多档视频价:用代表档(最低档)覆盖 input/output,并保留完整档位结构
     if basis == "multi_tier_video":
         representative, video_tiers = parse_multi_tier_video(prices)
+        model_id = model_id_from_name(str(record.get("model") or ""))
+        if model_id in {"doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"}:
+            for tier in video_tiers:
+                if not tier.get("resolution"):
+                    tier["resolution"] = "480p,720p"
         if representative is not None:
             cost["input"] = representative
             cost["output"] = representative
@@ -397,7 +407,7 @@ def to_models_dev_payload(
         name = record.get("model")
         if not name:
             continue
-        model_id = slug(str(name))
+        model_id = model_id_from_name(str(name))
         entry = models.setdefault(model_id, new_model_entry(model_id, str(name), record))
         merge_modalities(entry, record)
         cost = cost_from_record(record)

@@ -99,6 +99,9 @@ watch(
 
 function formatCurrencyInput(value: number | string) {
   if (value === '' || value === undefined || value === null) return ''
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `${billingCurrency.value === 'CNY' ? '¥' : '$'}${value.toFixed(2)}`
+  }
   return `${billingCurrency.value === 'CNY' ? '¥' : '$'}${value}`
 }
 
@@ -123,15 +126,18 @@ function billingMeterLabel(row: ChannelPriceForm) {
 function inferredPerSecondPrice(
   pricePerMillionTokens: number,
   estimatedTokensPerSecond: number,
-  resolutionsText: string
+  resolutionsText: string,
+  hasVideoInput = false
 ) {
   if (!Number.isFinite(pricePerMillionTokens) || pricePerMillionTokens <= 0) return 0
   const tokensPerSecond = resolvedVideoTokensPerSecondEstimate(
     estimatedTokensPerSecond,
     resolutionsText
   )
-  const pricePerSecond = (pricePerMillionTokens * tokensPerSecond) / 1_000_000
-  return Math.round(pricePerSecond * 1_000_000) / 1_000_000
+  const inputOutputDurationMultiplier = hasVideoInput ? 2 : 1
+  const pricePerSecond =
+    (pricePerMillionTokens * tokensPerSecond * inputOutputDurationMultiplier) / 1_000_000
+  return Math.round(pricePerSecond * 100) / 100
 }
 
 function shouldInferPerSecondPrice(currentPrice: number, pricePerMillionTokens: number) {
@@ -148,14 +154,16 @@ function inferPerSecondVideoPrices(row: ChannelPriceForm) {
       tier.inputWithoutVideoUnit = inferredPerSecondPrice(
         tier.inputWithoutVideo,
         tier.estimatedTokensPerSecond,
-        tier.resolutionsText
+        tier.resolutionsText,
+        false
       )
     }
     if (shouldInferPerSecondPrice(tier.inputWithVideoUnit, tier.inputWithVideo)) {
       tier.inputWithVideoUnit = inferredPerSecondPrice(
         tier.inputWithVideo,
         tier.estimatedTokensPerSecond,
-        tier.resolutionsText
+        tier.resolutionsText,
+        true
       )
     }
   }
@@ -697,7 +705,7 @@ function updateVideoTierSecondaryPrice(
     118px
     136px
     156px
-    140px;
+    170px;
 }
 
 .price-editor-head,
@@ -946,6 +954,7 @@ function updateVideoTierSecondaryPrice(
   color: var(--price-tertiary-text);
   font-size: 10.5px;
   font-weight: 500;
+  line-height: 1.45;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: pre-line;
@@ -991,7 +1000,7 @@ function updateVideoTierSecondaryPrice(
   grid-template-columns:
     136px
     156px
-    140px;
+    170px;
   min-height: 60px;
 }
 

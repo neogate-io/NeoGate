@@ -41554,8 +41554,8 @@
           "basis": "multi_tier_video"
         }
       },
-      "doubao-seedance-2.0-fast-1080p": {
-        "id": "doubao-seedance-2.0-fast-1080p",
+      "doubao-seedance-2.0-fast": {
+        "id": "doubao-seedance-2.0-fast",
         "name": "doubao-seedance-2.0-fast\n按输入是否包含视频区分定价\n不支持输出 1080p 视频",
         "description": "",
         "modalities": {
@@ -41583,7 +41583,7 @@
                 "output": 22,
                 "video_tiers": [
                   {
-                    "resolution": "",
+                    "resolution": "480p,720p",
                     "tiers": {
                       "input_without_video": 37,
                       "input_with_video": 22
@@ -41605,7 +41605,7 @@
           "output": 22,
           "video_tiers": [
             {
-              "resolution": "",
+              "resolution": "480p,720p",
               "tiers": {
                 "input_without_video": 37,
                 "input_with_video": 22
@@ -41615,8 +41615,8 @@
           "basis": "multi_tier_video"
         }
       },
-      "doubao-seedance-2.0-mini-1080p": {
-        "id": "doubao-seedance-2.0-mini-1080p",
+      "doubao-seedance-2.0-mini": {
+        "id": "doubao-seedance-2.0-mini",
         "name": "doubao-seedance-2.0-mini\n按输入是否包含视频区分定价\n不支持输出 1080p 视频",
         "description": "",
         "modalities": {
@@ -41644,7 +41644,7 @@
                 "output": 14,
                 "video_tiers": [
                   {
-                    "resolution": "",
+                    "resolution": "480p,720p",
                     "tiers": {
                       "input_without_video": 23,
                       "input_with_video": 14
@@ -41666,7 +41666,7 @@
           "output": 14,
           "video_tiers": [
             {
-              "resolution": "",
+              "resolution": "480p,720p",
               "tiers": {
                 "input_without_video": 23,
                 "input_with_video": 14

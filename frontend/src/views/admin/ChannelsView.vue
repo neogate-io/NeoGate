@@ -870,6 +870,15 @@ function providerMatchesReference(left: string, right: string) {
   return canonicalReferenceProvider(left) === canonicalReferenceProvider(right)
 }
 
+function providerMatchesBundledVideoReference(recordProvider: string, provider: string, model: string) {
+  if (providerMatchesReference(recordProvider, provider)) return true
+  const aliases = pricingReferenceModelAliases(model)
+  return (
+    canonicalReferenceProvider(recordProvider) === 'doubao' &&
+    [...aliases].some((alias) => alias.includes('seedance'))
+  )
+}
+
 function isReferenceVideoTier(value: unknown): value is ReferenceVideoTier {
   if (!value || typeof value !== 'object') return false
   const tier = value as ReferenceVideoTier
@@ -994,12 +1003,13 @@ function isAnyReferenceVideoTier(tier: ReferenceVideoTier) {
 }
 
 function referenceVideoTierSummary(tier: ReferenceVideoTier) {
+  const pricePerMillionTokensUnit = t('pricePerMillionTokens').replace(' ', '\u00a0')
   if (referenceVideoTierUsesSinglePrice(tier)) {
     return `${t('videoTierPrice')} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}/${t('perSecond')}`
   }
 
   if (referenceVideoTierHasAudio(tier)) {
-    return `${t('videoTierWithAudio')} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}/${t('pricePerMillionTokens')}\n${t('videoTierWithoutAudio')} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}/${t('pricePerMillionTokens')}`
+    return `${t('videoTierWithAudio')} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}/${pricePerMillionTokensUnit}\n${t('videoTierWithoutAudio')} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}/${pricePerMillionTokensUnit}`
   }
 
   const leftLabel = referenceVideoTierHasAudio(tier)
@@ -1008,20 +1018,24 @@ function referenceVideoTierSummary(tier: ReferenceVideoTier) {
   const rightLabel = referenceVideoTierHasAudio(tier)
     ? t('videoTierWithAudio')
     : t('videoInputWithVideo')
-  return `${leftLabel} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}\n${rightLabel} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}`
+  return `${leftLabel} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}/${pricePerMillionTokensUnit}\n${rightLabel} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}/${pricePerMillionTokensUnit}`
 }
 
 function seedanceReferenceVideoTiers(provider: string, model: string) {
   const catalogRecord = findReferenceCatalogRecord(provider, model)
   const catalogValue = catalogRecord?.capabilities?.video_tiers
   if (Array.isArray(catalogValue) && catalogValue.length > 0) {
-    return filterReferenceVideoTiersForCurrency(catalogValue as ReferenceVideoTier[])
+    return filterReferenceVideoTiersForCurrency(
+      normalizedSeedanceReferenceVideoTiers(model, catalogValue as ReferenceVideoTier[])
+    )
   }
 
   const record = findReferenceProviderModel(provider, model)
   const value = record?.capabilities?.video_tiers
   if (Array.isArray(value) && value.length > 0) {
-    return filterReferenceVideoTiersForCurrency(value as ReferenceVideoTier[])
+    return filterReferenceVideoTiersForCurrency(
+      normalizedSeedanceReferenceVideoTiers(model, value as ReferenceVideoTier[])
+    )
   }
 
   const template = findPricingTemplate(templates.value, provider, model)
@@ -1030,7 +1044,9 @@ function seedanceReferenceVideoTiers(provider: string, model: string) {
   }
 
   const bundledRecord = findBundledVideoTierRecord(provider, model)
-  return filterReferenceVideoTiersForCurrency(bundledRecord?.videoTiers ?? [])
+  return filterReferenceVideoTiersForCurrency(
+    normalizedSeedanceReferenceVideoTiers(model, bundledRecord?.videoTiers ?? [])
+  )
 }
 
 function isMainlandReferenceVideoTier(tier: ReferenceVideoTier) {
@@ -1065,6 +1081,17 @@ function filterReferenceVideoTiersForCurrency(tiers: ReferenceVideoTier[]) {
   return dedupeReferenceVideoTiersByResolution(mainlandTiers.length > 0 ? mainlandTiers : tiers)
 }
 
+function normalizedSeedanceReferenceVideoTiers(model: string, tiers: ReferenceVideoTier[]) {
+  const aliases = pricingReferenceModelAliases(model)
+  const isSeedanceFastOrMini = [...aliases].some((alias) =>
+    /(?:^|-)seedance-2\.0-(?:fast|mini)$/.test(alias)
+  )
+  if (!isSeedanceFastOrMini) return tiers
+  return tiers.map((tier) =>
+    tier.resolution?.trim() ? tier : { ...tier, resolution: '480p,720p' }
+  )
+}
+
 function findReferenceCatalogRecord(provider: string, model: string) {
   const aliases = pricingReferenceModelAliases(model)
   return modelReferenceCatalog.value.find((record) => {
@@ -1087,7 +1114,7 @@ function findReferenceProviderModel(provider: string, model: string) {
 function findBundledVideoTierRecord(provider: string, model: string) {
   const aliases = pricingReferenceModelAliases(model)
   return bundledVideoTierCatalog.value.find((record) => {
-    if (!providerMatchesReference(record.provider, provider)) return false
+    if (!providerMatchesBundledVideoReference(record.provider, provider, model)) return false
     return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
   })
 }
@@ -1751,7 +1778,12 @@ onMounted(loadInitialData)
         </el-table-column>
         <el-table-column :label="t('modelInfo')" min-width="200">
           <template #default="{ row }">
-            <div class="channel-price-summary">
+            <button
+              type="button"
+              class="channel-expand-toggle channel-price-summary"
+              :aria-label="`${row.name} ${t('modelPriceDetails')}`"
+              @click="toggleChannelRowExpansion(row)"
+            >
               <div v-if="channelPriceStatus(row).missing > 0" class="channel-price-summary-head">
                 <el-tag
                   class="price-status-tag"
@@ -1765,28 +1797,22 @@ onMounted(loadInitialData)
                 </el-tag>
               </div>
               <div class="channel-price-list">
-                <button
+                <span
                   v-for="item in channelPricePreviewRows(row)"
                   :key="item.model"
                   class="channel-price-item"
                   :class="{ 'is-missing': item.missing, 'is-disabled': item.disabled }"
-                  type="button"
-                  :aria-label="`${item.model} ${t('modelPriceDetails')}`"
-                  @click="toggleChannelRowExpansion(row)"
                 >
                   <span class="channel-price-model">{{ item.model }}</span>
-                </button>
-                <button
+                </span>
+                <span
                   v-if="channelPriceOverflowCount(row) > 0"
                   class="channel-price-more"
-                  type="button"
-                  :aria-label="`${row.name} ${t('modelPriceDetails')}`"
-                  @click="toggleChannelRowExpansion(row)"
                 >
                   +{{ channelPriceOverflowCount(row) }}
-                </button>
+                </span>
               </div>
-            </div>
+            </button>
           </template>
         </el-table-column>
         <el-table-column
@@ -2366,6 +2392,7 @@ onMounted(loadInitialData)
 .channel-price-summary {
   display: grid;
   gap: 8px;
+  justify-items: start;
   min-width: 0;
   width: 100%;
 }
@@ -2428,7 +2455,6 @@ onMounted(loadInitialData)
   appearance: none;
   background: transparent;
   border: 0;
-  cursor: pointer;
   display: inline-flex;
   font: inherit;
   gap: 0;
@@ -2437,12 +2463,6 @@ onMounted(loadInitialData)
   overflow: hidden;
   padding: 0;
   width: fit-content;
-}
-
-.channel-price-item:focus-visible,
-.channel-price-more:focus-visible {
-  outline: 2px solid var(--brand-blue);
-  outline-offset: 2px;
 }
 
 .channel-price-item:hover .channel-price-model {
@@ -2481,7 +2501,6 @@ onMounted(loadInitialData)
   border: 1px solid #dbe4ef;
   border-radius: 999px;
   color: #64748b;
-  cursor: pointer;
   display: inline-flex;
   font-size: 12px;
   font-weight: 720;

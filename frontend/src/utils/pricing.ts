@@ -16,7 +16,19 @@ export function derivedCacheReadPrice(inputPrice: number) {
 
 export function estimatedVideoTokensPerSecond(resolutionsText?: string | null) {
   const normalized = (resolutionsText ?? '').trim().toLowerCase()
-  return /(^|[^a-z0-9])(?:1080p|2160p|4k)(?=$|[^a-z0-9])/.test(normalized) ? 200_000 : 100_000
+  const dimensionsByResolution: Record<string, [number, number]> = {
+    '480p': [896, 480],
+    '720p': [1280, 720],
+    '1080p': [1920, 1080],
+    '2160p': [3840, 2160],
+    '4k': [3840, 2160]
+  }
+  const matches = normalized.match(/(?:480p|720p|1080p|2160p|4k)/g) ?? ['720p']
+  const tokensPerSecond = matches.map((resolution) => {
+    const [width, height] = dimensionsByResolution[resolution] ?? dimensionsByResolution['720p']
+    return (width * height * 24) / 1024
+  })
+  return Math.round(Math.max(...tokensPerSecond))
 }
 
 export function resolvedVideoTokensPerSecondEstimate(
@@ -65,6 +77,16 @@ export function pricingReferenceModelAliases(model: string) {
 
     const withoutResolutionSuffix = alias.replace(/-(?:480p|720p|1080p|4k)$/, '')
     if (withoutResolutionSuffix !== alias) queue.push(withoutResolutionSuffix)
+
+    const withoutRouterPrefix = alias.replace(/^\d+:/, '')
+    if (withoutRouterPrefix !== alias) queue.push(withoutRouterPrefix)
+
+    const doubaoSeedanceAlias = alias.replace(/^seedance-/, 'doubao-seedance-')
+    if (doubaoSeedanceAlias !== alias) queue.push(doubaoSeedanceAlias)
+
+    if (/^(?:doubao-)?seedance-2\.0-(?:fast|mini)$/.test(alias)) {
+      queue.push(`${alias}-1080p`)
+    }
   }
 
   return aliases

@@ -447,17 +447,6 @@ function videoBillingModeLabel(value: VideoBillingMode | null) {
   return t('pricePerMillionTokens')
 }
 
-function videoTierPriceLabel(price?: ChannelPrice) {
-  const rows = videoTierRows(price)
-  if (rows.length === 0) return t('priceMissing')
-
-  const labels = rows
-    .map((tier) => tier.price)
-    .filter((label) => label && label !== t('priceMissing'))
-    .filter((label, index, list) => list.indexOf(label) === index)
-  return labels.length > 0 ? labels.join('\n') : t('priceMissing')
-}
-
 function videoTierSpecsLabel(tiers: VideoPriceTier[] = []) {
   const specs = tiers
     .flatMap((tier) => tier.resolutions)

@@ -48,6 +48,38 @@ python -m unittest tests.smoke.test_openai_image.test_images_variation
 python -m unittest tests.smoke.test_openai_image.test_responses_image_generation_background
 ```
 
+## OpenAI Video Smoke Test
+
+The OpenAI-compatible video smoke test lives in `smoke/test_openai_video.py`.
+It creates a video task, polls `GET /v1/videos/{id}` until the task is
+terminal, then downloads `GET /v1/videos/{id}/content` when the task succeeds.
+
+Required:
+
+```bash
+NEOGATE_API_KEY=your_neogate_api_key
+```
+
+Optional:
+
+```bash
+NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
+NEOGATE_VIDEO_MODEL=sora-2
+NEOGATE_VIDEO_SIZE=1280x720
+NEOGATE_VIDEO_SECONDS=4
+NEOGATE_VIDEO_PROMPT='A calm five second shot of a glass teapot on a walnut table.'
+NEOGATE_VIDEO_EXTRA_JSON='{"resolution":"720p","ratio":"16:9"}'
+```
+
+Generated JSON snapshots and video content are saved under
+`tests/output/openai_video/`.
+
+Run the video smoke test from `backend/`:
+
+```bash
+python -m unittest tests.smoke.test_openai_video
+```
+
 ## Relay Benchmark
 
 The relay benchmark tools provide a local OpenAI-compatible mock upstream for

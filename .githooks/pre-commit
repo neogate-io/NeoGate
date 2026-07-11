@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# NeoGate pre-commit hook: keep Rust formatting aligned with CI.
-# Mirrors the "Check formatting" step in .github/workflows/ci.yml so that
-# formatting failures never reach the CI runner.
+# NeoGate pre-commit hook: keep fast local checks aligned with CI.
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 set -euo pipefail
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "pre-commit: cargo not found on PATH, skipping rustfmt check." >&2
-  exit 0
-fi
-
 # Only run when Rust sources are staged.
 if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^backend/.*\.rs$|^scheduler/.*\.rs$'; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH; cannot run rustfmt check." >&2
+    exit 1
+  fi
+
   echo "pre-commit: running 'cargo fmt --all -- --check' ..." >&2
   if ! cargo fmt --all -- --check; then
     echo "" >&2
@@ -21,4 +19,19 @@ if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^backend/.*\.rs$
     echo "  then:  git add -u && git commit" >&2
     exit 1
   fi
+fi
+
+# Only run when frontend files are staged. This catches the CI "pnpm lint"
+# failure before the commit is created.
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^frontend/'; then
+  if ! command -v pnpm >/dev/null 2>&1; then
+    echo "pre-commit: pnpm not found on PATH; cannot run frontend lint." >&2
+    exit 1
+  fi
+
+  echo "pre-commit: running frontend 'pnpm lint' ..." >&2
+  (
+    cd frontend
+    pnpm lint
+  )
 fi

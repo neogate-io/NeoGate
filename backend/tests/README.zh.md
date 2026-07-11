@@ -47,6 +47,37 @@ python -m unittest tests.smoke.test_openai_image.test_images_variation
 python -m unittest tests.smoke.test_openai_image.test_responses_image_generation_background
 ```
 
+## OpenAI 视频冒烟测试
+
+OpenAI 兼容视频冒烟测试位于 `smoke/test_openai_video.py`。测试会创建视频
+任务，轮询 `GET /v1/videos/{id}` 直到任务进入终态；成功后再下载
+`GET /v1/videos/{id}/content`。
+
+必填：
+
+```bash
+NEOGATE_API_KEY=your_neogate_api_key
+```
+
+可选：
+
+```bash
+NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
+NEOGATE_VIDEO_MODEL=sora-2
+NEOGATE_VIDEO_SIZE=1280x720
+NEOGATE_VIDEO_SECONDS=4
+NEOGATE_VIDEO_PROMPT='A calm five second shot of a glass teapot on a walnut table.'
+NEOGATE_VIDEO_EXTRA_JSON='{"resolution":"720p","ratio":"16:9"}'
+```
+
+生成的 JSON 快照和视频文件会保存到 `tests/output/openai_video/`。
+
+在 `backend/` 目录下运行视频冒烟测试：
+
+```bash
+python -m unittest tests.smoke.test_openai_video
+```
+
 ## Relay 压测
 
 Relay 压测工具提供一个本地 OpenAI 兼容 mock 上游服务，用于测量 NeoGate

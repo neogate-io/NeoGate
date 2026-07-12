@@ -159,7 +159,10 @@ pub(crate) async fn finish_task_json_response(
         "upstream async task bound response"
     );
     if status.is_success() {
-        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
+            if task.task_type == UpstreamTaskType::OpenAiVideo {
+                crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
+            }
             let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
             let usage = parse_usage_from_bytes(&body, false);
             upstream_task::update_task_from_upstream_value(

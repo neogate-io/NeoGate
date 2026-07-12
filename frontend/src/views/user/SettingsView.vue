@@ -117,6 +117,10 @@ async function save() {
 
 <style scoped>
 .user-settings-view {
+  color: #354154;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   max-width: 1120px;
 }
 
@@ -135,6 +139,13 @@ async function save() {
   display: flex;
   gap: 10px;
   min-width: 0;
+}
+
+.user-settings-title h3 {
+  color: #1f2937;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.25;
 }
 
 .user-settings-icon {
@@ -161,6 +172,35 @@ async function save() {
   margin-bottom: 0;
 }
 
+.user-settings-grid :deep(.el-form-item__label) {
+  color: #667085;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.2;
+  margin-bottom: 7px;
+}
+
+.user-settings-grid :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  min-height: 38px;
+}
+
+.user-settings-grid :deep(.el-input__inner) {
+  color: #354154;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.user-settings-grid :deep(.el-input__inner::placeholder) {
+  color: #a2acba;
+}
+
+.user-settings-grid :deep(.el-input__prefix),
+.user-settings-grid :deep(.el-input__suffix) {
+  color: #8b96a8;
+}
+
 .user-settings-actions {
   display: flex;
   padding-top: 16px;
@@ -168,7 +208,8 @@ async function save() {
 
 .user-settings-actions :deep(.el-button) {
   border-radius: 7px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 500;
   min-height: 36px;
   min-width: 96px;
 }

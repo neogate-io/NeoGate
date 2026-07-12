@@ -374,7 +374,11 @@ async function submitRecharge() {
 
 <style scoped>
 .recharge-view {
+  color: #354154;
   display: grid;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   gap: 12px;
   width: min(1120px, 100%);
 }
@@ -403,7 +407,7 @@ async function submitRecharge() {
   background: #ffffff;
   border: 1px solid #dfe7f1;
   border-radius: 8px;
-  color: #111827;
+  color: #354154;
   cursor: pointer;
   display: grid;
   gap: 8px;
@@ -431,30 +435,30 @@ async function submitRecharge() {
   border-radius: 999px;
   color: #fff;
   font-size: 12px;
-  font-weight: 780;
+  font-weight: 500;
   padding: 4px 9px;
   white-space: nowrap;
 }
 
 .plan-name {
-  color: #334155;
+  color: #354154;
   font-size: 14px;
-  font-weight: 800;
+  font-weight: 500;
   min-width: 0;
 }
 
 .plan-card strong {
-  color: #111827;
-  font-size: 26px;
-  font-weight: 840;
+  color: #1f2937;
+  font-size: 25px;
+  font-weight: 600;
   line-height: 1;
   white-space: nowrap;
 }
 
 .plan-hint {
-  color: #8a95a5;
+  color: #7b8798;
   font-size: 12px;
-  font-weight: 560;
+  font-weight: 400;
 }
 
 .plan-card .el-icon {
@@ -477,9 +481,9 @@ async function submitRecharge() {
 }
 
 .recharge-section h3 {
-  color: #697586;
+  color: #667085;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
   margin: 0;
 }
 
@@ -492,7 +496,7 @@ async function submitRecharge() {
   color: #8a95a5;
   content: var(--recharge-currency-symbol);
   font-size: 14px;
-  font-weight: 720;
+  font-weight: 400;
   left: 10px;
   pointer-events: none;
   position: absolute;
@@ -503,6 +507,7 @@ async function submitRecharge() {
 
 .custom-amount-input :deep(.el-input__inner) {
   font-size: 14px;
+  font-weight: 400;
   height: 28px;
   padding-left: 18px;
   text-align: left;
@@ -525,6 +530,8 @@ async function submitRecharge() {
 .payment-methods :deep(.el-segmented__item) {
   border-radius: 6px;
   color: #b4bfcc;
+  font-size: 13px;
+  font-weight: 400;
   min-height: 42px;
   padding: 0 8px;
 }
@@ -581,15 +588,15 @@ async function submitRecharge() {
 
 .recharge-summary-total span,
 .recharge-summary-list dt {
-  color: #697586;
+  color: #667085;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .recharge-summary-total strong {
-  color: #111827;
-  font-size: 34px;
-  font-weight: 820;
+  color: #1f2937;
+  font-size: 32px;
+  font-weight: 600;
   line-height: 1.1;
 }
 
@@ -608,23 +615,24 @@ async function submitRecharge() {
 }
 
 .recharge-summary-list dd {
-  color: #111827;
+  color: #354154;
   font-size: 14px;
-  font-weight: 740;
+  font-weight: 400;
   margin: 0;
 }
 
 .recharge-submit {
   border-radius: 7px;
-  font-size: 15px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 500;
   min-height: 46px;
   width: 100%;
 }
 
 .recharge-history-trigger {
-  color: #697586;
-  font-weight: 720;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 400;
   padding-inline: 6px;
 }
 
@@ -778,13 +786,13 @@ async function submitRecharge() {
   .recharge-order-card span {
     color: #8a95a5;
     font-size: 12px;
-    font-weight: 720;
+    font-weight: 400;
   }
 
   .recharge-order-card strong {
-    color: #111827;
+    color: #354154;
     font-size: 14px;
-    font-weight: 740;
+    font-weight: 400;
   }
 
   .recharge-order-card .el-tag {

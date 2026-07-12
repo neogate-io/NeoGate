@@ -35,8 +35,8 @@ describe('pricingReferenceModelAliases', () => {
 })
 
 describe('estimatedVideoTokensPerSecond', () => {
-  it('defaults missing video resolution to the backend 480p assumption', () => {
-    expect(estimatedVideoTokensPerSecond('*')).toBe(10080)
-    expect(estimatedVideoTokensPerSecond('')).toBe(10080)
+  it('defaults missing video resolution to a conservative 1080p estimate', () => {
+    expect(estimatedVideoTokensPerSecond('*')).toBe(48600)
+    expect(estimatedVideoTokensPerSecond('')).toBe(48600)
   })
 })

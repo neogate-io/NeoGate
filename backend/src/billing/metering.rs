@@ -82,20 +82,21 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
             .get("response")
             .and_then(|response| response.get("usage"))
     })?;
-    let input_tokens = usage
-        .get("prompt_tokens")
-        .or_else(|| usage.get("input_tokens"))
-        .and_then(Value::as_i64)?;
     let output_tokens = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
+        .and_then(Value::as_i64);
+    let total_tokens = usage.get("total_tokens").and_then(Value::as_i64);
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
         .and_then(Value::as_i64)
         .or_else(|| {
-            usage
-                .get("total_tokens")
-                .and_then(Value::as_i64)
-                .map(|total| total.saturating_sub(input_tokens).max(0))
-        })
+            total_tokens
+                .and_then(|total| output_tokens.map(|output| total.saturating_sub(output).max(0)))
+        })?;
+    let output_tokens = output_tokens
+        .or_else(|| total_tokens.map(|total| total.saturating_sub(input_tokens).max(0)))
         .unwrap_or(0);
 
     let input_details = usage
@@ -320,6 +321,19 @@ mod tests {
         assert_eq!(usage.reasoning_output_tokens, Some(11));
         assert_eq!(usage.audio_input_tokens, Some(7));
         assert_eq!(usage.audio_output_tokens, Some(13));
+    }
+
+    #[test]
+    fn parses_video_usage_without_prompt_tokens() {
+        let usage = parse_usage_from_bytes(
+            br#"{"usage":{"completion_tokens":197880,"total_tokens":197880}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 197_880);
+        assert_eq!(usage.total_tokens(), 197_880);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use axum::{
     response::Response,
 };
 use bytes::Bytes;
+use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -319,6 +320,7 @@ async fn finish_video_create_success(
         }
     };
     let mut task_metadata = value.clone();
+    attach_video_task_relay_metadata(&mut task_metadata, &ctx);
     if let Some(metadata) = &video_billing_metadata {
         video::attach_video_billing_metadata(&mut task_metadata, metadata);
     }
@@ -456,6 +458,18 @@ fn video_response_id(value: &Value) -> Option<&str> {
         .or_else(|| value.get("task_id").and_then(Value::as_str))
         .or_else(|| nested_string(value, &["output", "id"]))
         .or_else(|| nested_string(value, &["output", "task_id"]))
+}
+
+fn attach_video_task_relay_metadata(value: &mut Value, ctx: &RelayContext) {
+    if !value.is_object() {
+        return;
+    }
+    if !value.get("neogate").is_some_and(Value::is_object) {
+        value["neogate"] = Value::Object(Default::default());
+    }
+    value["neogate"]["relay_trace_id"] = Value::String(ctx.relay_trace_id.to_string());
+    let elapsed = ChronoDuration::from_std(ctx.started.elapsed()).unwrap_or_default();
+    value["neogate"]["relay_started_at"] = Value::String((Utc::now() - elapsed).to_rfc3339());
 }
 
 fn nested_string<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {

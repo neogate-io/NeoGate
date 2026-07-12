@@ -381,7 +381,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .user-overview-view {
+  color: #354154;
   display: grid;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   gap: 12px;
   width: min(1120px, 100%);
 }
@@ -501,9 +505,9 @@ onBeforeUnmount(() => {
 
 .overview-balance-card span,
 .overview-usage-card span {
-  color: #697586;
-  font-size: 14px;
-  font-weight: 760;
+  color: #6f7b8f;
+  font-size: 13px;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -517,9 +521,9 @@ onBeforeUnmount(() => {
 
 .overview-balance-card strong,
 .overview-usage-card strong {
-  color: #111827;
+  color: #1f2937;
   font-size: 29px;
-  font-weight: 840;
+  font-weight: 600;
   line-height: 1.05;
 }
 
@@ -535,6 +539,7 @@ onBeforeUnmount(() => {
 .overview-balance-card strong {
   align-self: center;
   font-size: 44px;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -544,7 +549,7 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   color: #e4edf5;
   font-size: 12.5px;
-  font-weight: 760;
+  font-weight: 400;
   line-height: 1.2;
   padding: 6px 10px;
 }
@@ -555,7 +560,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   font-size: 12px;
-  font-weight: 680;
+  font-weight: 400;
   gap: 6px;
   line-height: 1.2;
 }
@@ -563,7 +568,7 @@ onBeforeUnmount(() => {
 .overview-usage-trend b {
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 820;
+  font-weight: 500;
   padding: 3px 7px;
 }
 
@@ -623,7 +628,8 @@ onBeforeUnmount(() => {
   border-radius: 7px;
   color: var(--user-primary, #168bd3);
   height: 34px;
-  font-weight: 780;
+  font-size: 13px;
+  font-weight: 500;
   justify-self: start;
   min-width: 92px;
   padding: 0 16px;
@@ -792,19 +798,19 @@ onBeforeUnmount(() => {
 .overview-chart-tooltip span {
   color: #cbd5e1;
   font-size: 11px;
-  font-weight: 680;
+  font-weight: 400;
 }
 
 .overview-chart-tooltip strong {
   color: #ffffff;
   font-size: 14px;
-  font-weight: 820;
+  font-weight: 500;
 }
 
 .overview-chart-axis {
   color: #8a95a5;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   height: 14px;
   position: relative;
 }
@@ -866,13 +872,13 @@ onBeforeUnmount(() => {
 }
 
 .overview-action-copy strong {
-  color: #111827;
-  font-size: 15.5px;
-  font-weight: 780;
+  color: #1f2937;
+  font-size: 14.5px;
+  font-weight: 500;
 }
 
 .overview-action-copy span {
-  color: #697586;
+  color: #6f7b8f;
   font-size: 13px;
   line-height: 1.35;
 }

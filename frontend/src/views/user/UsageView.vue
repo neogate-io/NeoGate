@@ -92,6 +92,10 @@ function statusLabel(statusCode?: number | null) {
   return statusCode && statusCode >= 400 ? String(statusCode) : t('success')
 }
 
+function latencyRateText(row: (typeof usagePage.value.items)[number]) {
+  return formatTokenRate(row.output_tokens_per_second, locale.value, '')
+}
+
 function routingTierLabel(tier?: string | null) {
   if (tier === 'simple') return t('routingTier_simple')
   if (tier === 'standard') return t('routingTier_standard')
@@ -267,19 +271,19 @@ async function exportUsage() {
                 >{{ formatNumber(row.input_tokens, locale) }} /
                 {{ formatNumber(row.output_tokens, locale) }}</span
               >
-              <small
+              <small v-if="row.cache_in_tokens"
                 >{{ t('cacheReadShort') }}↓ {{ formatNumber(row.cache_in_tokens, locale) }}</small
               >
             </span>
             <span class="usage-latency-cell">
               <span class="usage-latency-pills">
                 <b>{{ formatDurationMs(row.latency_ms) }}</b>
-                <b>{{ formatDurationMs(row.first_response_ms) }}</b>
+                <b v-if="row.first_response_ms != null">{{ formatDurationMs(row.first_response_ms) }}</b>
               </span>
-              <small
-                >{{ row.streamed ? t('streamShortLabel') : t('nonStreamShortLabel') }} ·
-                {{ formatTokenRate(row.output_tokens_per_second, locale) }}</small
-              >
+              <small>
+                {{ row.streamed ? t('streamShortLabel') : t('nonStreamShortLabel') }}
+                <template v-if="latencyRateText(row)"> · {{ latencyRateText(row) }}</template>
+              </small>
             </span>
             <span class="usage-cost">{{ formatMoney(row.cost_micros, locale, 6) }}</span>
             <button class="usage-details-label" type="button" @click="toggleUsageDetails">
@@ -532,19 +536,27 @@ async function exportUsage() {
 }
 
 .usage-list {
+  --usage-numeric-font:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --usage-table-font:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --usage-table-columns: 164px minmax(240px, 1fr) 150px 150px 104px 82px;
   display: grid;
+  font-family: var(--usage-table-font);
 }
 
 .usage-table-header {
   align-items: center;
-  background: #f8fafc;
-  border-bottom: 1px solid #e5eaf1;
-  color: #697586;
+  background: #f9fbfd;
+  border-bottom: 1px solid #e8edf4;
+  color: #7f8a9a;
   display: grid;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   gap: 12px;
-  grid-template-columns: 164px minmax(150px, 210px) 168px 156px 104px 82px;
+  grid-template-columns: var(--usage-table-columns);
   min-height: 48px;
   padding: 0 22px;
 }
@@ -617,6 +629,9 @@ async function exportUsage() {
 
 .usage-row {
   border-bottom: 1px solid #edf1f6;
+  color: #39465a;
+  font-size: 13px;
+  font-weight: 400;
   outline: none;
 }
 
@@ -624,7 +639,7 @@ async function exportUsage() {
   align-items: center;
   display: grid;
   gap: 12px;
-  grid-template-columns: 164px minmax(150px, 210px) 168px 156px 104px 82px;
+  grid-template-columns: var(--usage-table-columns);
   list-style: none;
   min-height: 78px;
   outline: none;
@@ -650,16 +665,17 @@ async function exportUsage() {
 .usage-latency-cell,
 .usage-cost,
 .usage-status {
-  color: #111827;
+  color: #39465a;
   font-size: 13px;
   font-weight: 400;
 }
 
 .usage-time {
-  color: #475467;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 12.5px;
+  color: #6f7b8f;
+  font-family: var(--usage-numeric-font);
+  font-size: 12.75px;
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -675,7 +691,7 @@ async function exportUsage() {
 .usage-model-cell small,
 .usage-token-stack small,
 .usage-latency-cell small {
-  color: #9a9a9a;
+  color: #929daf;
   font-size: 12px;
   font-weight: 400;
   overflow: hidden;
@@ -685,26 +701,31 @@ async function exportUsage() {
 
 .usage-model-pill {
   align-items: center;
-  display: inline-flex;
+  display: flex;
   gap: 2px;
   justify-self: start;
   max-width: 100%;
   min-height: 30px;
+  min-width: 0;
 }
 
 .usage-model-pill > span {
-  color: #111827;
-  font-size: 13.5px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: #354154;
+  display: block;
+  font-family: var(--usage-table-font);
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .usage-token-stack > span {
-  color: #111827;
-  font-size: 13.5px;
-  font-weight: 500;
+  color: #39465a;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 400;
   white-space: nowrap;
 }
 
@@ -717,7 +738,7 @@ async function exportUsage() {
 }
 
 .usage-token-stack span + span {
-  color: #697586;
+  color: #929daf;
   font-size: 12px;
   font-weight: 400;
 }
@@ -731,23 +752,25 @@ async function exportUsage() {
 
 .usage-latency-pills b {
   align-items: center;
-  background: #edfcf7;
-  border: 1px solid #b6f0dc;
+  background: #f2fcf9;
+  border: 1px solid #ccefe5;
   border-radius: 7px;
-  color: #0f8f70;
+  color: #16856f;
   display: inline-flex;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--usage-numeric-font);
   font-size: 12px;
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
   min-height: 21px;
   padding: 0 6px;
 }
 
 .usage-cost {
-  color: #111827;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 13px;
+  color: #39465a;
+  font-family: var(--usage-numeric-font);
+  font-size: 12.75px;
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
   text-align: left;
 }
 
@@ -759,7 +782,7 @@ async function exportUsage() {
   color: #047857;
   display: inline-flex;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   justify-self: start;
   line-height: 1;
   min-height: 21px;
@@ -776,10 +799,10 @@ async function exportUsage() {
   appearance: none;
   background: transparent;
   border: 0;
-  color: var(--user-primary, #168bd3);
+  color: #247fb8;
   cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 12.75px;
+  font-weight: 400;
   padding: 0;
   text-align: left;
   white-space: nowrap;

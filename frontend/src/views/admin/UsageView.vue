@@ -152,7 +152,6 @@ function relayChannelLabel(row: UsageRecord) {
   return `#${row.channel_id}`
 }
 
-
 function usageUserDisplay(row: UsageRecord) {
   if (row.user_username) return row.user_username
   if (row.user_email) return row.user_email
@@ -226,7 +225,7 @@ function initialRouteDateRange() {
 
 function stringQueryValue(key: string) {
   const value = route.query[key]
-  return Array.isArray(value) ? value[0] ?? undefined : value ?? undefined
+  return Array.isArray(value) ? (value[0] ?? undefined) : (value ?? undefined)
 }
 
 function numberQueryValue(key: string) {
@@ -242,7 +241,11 @@ function billingMeterQueryValue() {
 }
 
 function routingRulesText(row: UsageRecord) {
-  return row.routing?.matched_rule_ids.map(routingRuleText).join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  return (
+    row.routing?.matched_rule_ids
+      .map(routingRuleText)
+      .join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  )
 }
 
 function routingCandidatesText(row: UsageRecord) {
@@ -253,6 +256,136 @@ function routingCandidatesText(row: UsageRecord) {
   )
 }
 
+function usageIsFailed(row: UsageRecord) {
+  return Boolean(row.error_summary) || (row.status_code != null && row.status_code >= 400)
+}
+
+function usageDetailSummary(row: UsageRecord) {
+  if (usageIsFailed(row)) {
+    return compactUsageError(row)
+  }
+
+  return usageSuccessSummary(row)
+}
+
+function usageSuccessSummary(row: UsageRecord) {
+  if (row.billing_meter === 'image') {
+    return `${t('usageDetailImageGeneration')} · ${formatNumber(row.billable_units, locale.value)} ${t('usageDetailImages')}`
+  }
+
+  if (row.billing_meter === 'video') {
+    const parts = [t('usageDetailVideoGeneration')]
+    const isPerSecondBilling =
+      row.billable_units > 0 && row.billable_units !== (row.total_tokens ?? 0)
+    if (isPerSecondBilling) {
+      parts.push(`${formatNumber(row.billable_units, locale.value)} ${t('usageDetailSeconds')}`)
+    } else if ((row.total_tokens ?? 0) > 0) {
+      parts.push(`${formatNumber(row.total_tokens, locale.value)} ${t('usageDetailTokens')}`)
+    }
+    if (parts.length === 1 && row.billable_units > 0) {
+      parts.push(`${formatNumber(row.billable_units, locale.value)} ${t('usageDetailSeconds')}`)
+    }
+    return parts.join(' · ')
+  }
+
+  if ((row.total_tokens ?? 0) > 0) {
+    return `${t('usageDetailTextCall')} · ${formatNumber(row.total_tokens, locale.value)} ${t('usageDetailTokens')}`
+  }
+
+  if (row.billable_units > 0) {
+    return `${t('usageDetailCompleted')} · ${formatNumber(row.billable_units, locale.value)} ${t('usageDetailBillingUnits')}`
+  }
+
+  return t('usageDetailCompleted')
+}
+
+function compactUsageError(row: UsageRecord) {
+  const error = row.error_summary?.trim()
+  if (!error) return t('usageStatusFailed')
+
+  const lower = error.toLowerCase()
+  if (/upstream model unavailable|invalidendpointormodel|not\s*found/.test(lower)) {
+    return t('usageErrorUpstreamModelUnavailable')
+  }
+  if (/timeout|timed out|deadline/.test(lower)) return t('usageErrorUpstreamTimeout')
+  if (/insufficient|quota|balance|credit/.test(lower)) return t('usageErrorInsufficientCredit')
+  if (/unauthorized|forbidden|authentication|permission|access denied/.test(lower)) {
+    return t('usageErrorAuthFailed')
+  }
+
+  let summary = error
+    .split(/\bRequest id:/i)[0]
+    .split(/;\s*type=/i)[0]
+    .split(/;\s*code=/i)[0]
+    .replace(/^upstream [^:]+:\s*/i, '')
+    .replace(/\bstatus\s+\d{3};?\s*/i, '')
+    .replace(/;\s*$/, '')
+    .trim()
+
+  if (/^status\s+\d{3};?/i.test(summary)) {
+    summary = t('usageStatusFailed')
+  }
+  summary = summary.replace(/\s+/g, ' ')
+
+  return summary || t('usageStatusFailed')
+}
+
+function usageBillingUnitsDisplay(row: UsageRecord) {
+  const value = formatNumber(row.billable_units, locale.value)
+  if (row.billing_meter === 'video') {
+    const isPerSecondBilling =
+      row.billable_units > 0 && row.billable_units !== (row.total_tokens ?? 0)
+    return `${value} ${isPerSecondBilling ? t('usageDetailSeconds') : t('usageDetailTokens')}`
+  }
+  if (row.billing_meter === 'image') return `${value} ${t('usageDetailImages')}`
+  return `${value} ${t('usageDetailBillingUnits')}`
+}
+
+function usageDetailRows(row: UsageRecord) {
+  const rows = [{ label: t('usageDetailsColumn'), value: usageDetailSummary(row) }]
+  if (row.error_summary) rows.push({ label: t('errorSummary'), value: row.error_summary })
+  if (row.status_code != null) rows.push({ label: t('status'), value: `HTTP ${row.status_code}` })
+  rows.push({ label: t('model'), value: usageModelDisplay(row) })
+  if (
+    row.billing_meter === 'token' &&
+    ((row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0)
+  ) {
+    rows.push({
+      label: t('usageDetailTokens'),
+      value: `${formatNumber(row.input_tokens, locale.value)} / ${formatNumber(row.output_tokens, locale.value)}`
+    })
+  }
+  if (row.billing_meter !== 'token' && row.billable_units > 0) {
+    rows.push({ label: t('billingUnits'), value: usageBillingUnitsDisplay(row) })
+  }
+  rows.push({ label: t('relayTipLatency'), value: formatDurationMs(row.latency_ms) })
+  if (row.channel_name || row.channel_id != null) {
+    rows.push({
+      label: t('relayTipPath'),
+      value: `${row.relay_path || relayChannelLabel(row)} ${row.channel_name || ''}`.trim()
+    })
+  }
+  if (!row.relay_final) {
+    rows.push({ label: t('relayTrace'), value: t('relayTooltipRetry') })
+  }
+  if (row.routing) {
+    rows.push({
+      label: t('autoRouting'),
+      value: `${row.routing.requested_model} -> ${row.routing.selected_model}`
+    })
+    rows.push({ label: t('routingTier'), value: routingTierLabel(row.routing.tier) })
+    rows.push({ label: t('routingTask'), value: routingTaskText(row.routing.task_type) })
+    rows.push({ label: t('routingReason'), value: routingReasonText(row) })
+    if (row.routing.matched_rule_ids.length) {
+      rows.push({ label: t('routingRules'), value: routingRulesText(row) })
+    }
+    if (row.routing.candidate_summary.length) {
+      rows.push({ label: t('routingCandidates'), value: routingCandidatesText(row) })
+    }
+  }
+  return rows
+}
+
 async function handleSearch() {
   await resetUsageAndReload()
 }
@@ -261,7 +394,10 @@ async function exportUsage() {
   exporting.value = true
   try {
     const result = await downloadAdminUsageCsv(usageBaseQuery.value)
-    downloadBlob(result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`, result.blob)
+    downloadBlob(
+      result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`,
+      result.blob
+    )
   } finally {
     exporting.value = false
   }
@@ -358,24 +494,27 @@ async function exportUsage() {
         row-key="id"
         stripe
       >
-        <el-table-column :label="t('time')" min-width="180">
+        <el-table-column :label="t('time')" min-width="160">
           <template #default="{ row }">
             <span class="usage-time-cell">{{ formatDateTime(row.created_at, locale) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('usageUser')" min-width="160">
+        <el-table-column :label="t('usageUser')" min-width="110">
           <template #default="{ row }">
-            <span class="usage-user-cell" :class="{ 'is-empty': !row.user_username && !row.user_email && !row.user_id }">
+            <span
+              class="usage-user-cell"
+              :class="{ 'is-empty': !row.user_username && !row.user_email && !row.user_id }"
+            >
               {{ usageUserDisplay(row) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('model')" min-width="170">
+        <el-table-column :label="t('model')" min-width="220">
           <template #default="{ row }">
             <span class="usage-model-name">{{ usageModelDisplay(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('latencyColumnHint')" min-width="170">
+        <el-table-column :label="t('latencyColumnHint')" min-width="140">
           <template #default="{ row }">
             <div class="usage-stack">
               <div class="usage-tags">
@@ -401,7 +540,10 @@ async function exportUsage() {
               </span>
               <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
             </div>
-            <div v-else-if="row.billing_meter === 'video' && (row.total_tokens ?? 0) === 0" class="usage-stack">
+            <div
+              v-else-if="row.billing_meter === 'video' && (row.total_tokens ?? 0) === 0"
+              class="usage-stack"
+            >
               <span class="usage-mono">
                 {{ formatNumber(row.billable_units, locale) }} {{ t('perSecond') }}
               </span>
@@ -434,7 +576,7 @@ async function exportUsage() {
             <span class="usage-cost-cell">{{ formatMoney(row.cost_micros, locale, 6) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('status')" min-width="110" align="center" header-align="center">
+        <el-table-column :label="t('status')" min-width="84" align="center" header-align="center">
           <template #default="{ row }">
             <el-tooltip
               :content="usageStatusTooltip(row.status_code)"
@@ -453,102 +595,51 @@ async function exportUsage() {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('relayTrace')" min-width="130" align="left" header-align="left">
+        <el-table-column :label="t('relayTrace')" min-width="150" align="left" header-align="left">
           <template #default="{ row }">
-            <el-tooltip :disabled="!row.relay_trace_id" placement="top" :show-after="400" popper-class="usage-trace-tip-popper">
+            <div class="usage-trace-cell">
+              <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
+                <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
+                  <span v-if="i > 0" class="usage-trace-sep">→</span>
+                  <span
+                    class="usage-trace-seg"
+                    :class="{ 'is-current': i === row.relay_path_index }"
+                    >{{ seg }}</span
+                  >
+                </template>
+                <span
+                  v-if="!row.relay_trace_id && relayPathSegments(row).length === 0"
+                  class="usage-muted"
+                  >-</span
+                >
+              </span>
+              <span v-if="row.channel_name" class="usage-trace-name">{{ row.channel_name }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('usageDetailsColumn')" min-width="230">
+          <template #default="{ row }">
+            <el-tooltip placement="top" :show-after="600" popper-class="usage-detail-tip-popper">
               <template #content>
-                <div class="usage-trace-tip" :class="{ 'is-zh': locale === 'zh-CN' }">
-                  <div class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('relayTipPath') }}</span>
-                    <span class="usage-trace-tip-value is-mono">{{ row.relay_path || relayChannelLabel(row) }}</span>
-                  </div>
-                  <div class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('relayTipChannel') }}</span>
-                    <span class="usage-trace-tip-value is-mono">{{ relayChannelLabel(row) }}</span>
-                  </div>
-                  <div v-if="row.channel_name" class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('channelName') }}</span>
-                    <span class="usage-trace-tip-value">{{ row.channel_name }}</span>
-                  </div>
-                  <div v-if="row.status_code != null" class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('relayTipStatus') }}</span>
-                    <span class="usage-trace-tip-value is-mono">{{ row.status_code }}</span>
-                  </div>
-                  <div class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('relayTipLatency') }}</span>
-                    <span class="usage-trace-tip-value is-mono">{{ formatDurationMs(row.latency_ms) }}</span>
-                  </div>
-                  <div v-if="row.error_summary" class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('relayTipError') }}</span>
-                    <span class="usage-trace-tip-value is-error">{{ row.error_summary }}</span>
-                  </div>
-                  <template v-if="row.routing">
-                    <div class="usage-trace-tip-row">
-                      <span class="usage-trace-tip-label">{{ t('autoRouting') }}</span>
-                      <span class="usage-trace-tip-value">
-                        {{ row.routing.requested_model }} -> {{ row.routing.selected_model }}
-                      </span>
-                    </div>
-                    <div class="usage-trace-tip-row">
-                      <span class="usage-trace-tip-label">{{ t('routingTier') }}</span>
-                      <span class="usage-trace-tip-value">{{ routingTierLabel(row.routing.tier) }}</span>
-                    </div>
-                    <div class="usage-trace-tip-row">
-                      <span class="usage-trace-tip-label">{{ t('routingTask') }}</span>
-                      <span class="usage-trace-tip-value">{{ routingTaskText(row.routing.task_type) }}</span>
-                    </div>
-                    <div class="usage-trace-tip-row">
-                      <span class="usage-trace-tip-label">{{ t('routingReason') }}</span>
-                      <span class="usage-trace-tip-value">{{ routingReasonText(row) }}</span>
-                    </div>
-                    <div v-if="row.routing.matched_rule_ids.length" class="usage-trace-tip-row">
-                      <span class="usage-trace-tip-label">{{ t('routingRules') }}</span>
-                      <span class="usage-trace-tip-value">{{ routingRulesText(row) }}</span>
-                    </div>
-                    <div v-if="row.routing.candidate_summary.length" class="usage-trace-tip-row">
-                      <span class="usage-trace-tip-label">{{ t('routingCandidates') }}</span>
-                      <span class="usage-trace-tip-value">{{ routingCandidatesText(row) }}</span>
-                    </div>
-                  </template>
-                  <div class="usage-trace-tip-row">
-                    <span class="usage-trace-tip-label">{{ t('status') }}</span>
+                <div class="usage-detail-tip">
+                  <div
+                    v-for="(item, index) in usageDetailRows(row)"
+                    :key="index"
+                    class="usage-detail-tip-row"
+                  >
+                    <span class="usage-detail-tip-label">{{ item.label }}</span>
                     <span
-                      class="usage-trace-tip-value"
-                      :class="`is-${relayTraceTone(row)}`"
-                    >{{ row.relay_final ? t('relayTooltipFinal') : t('relayTooltipRetry') }}</span>
+                      class="usage-detail-tip-value"
+                      :class="{ 'is-error': index === 0 && usageIsFailed(row) }"
+                      >{{ item.value }}</span
+                    >
                   </div>
                 </div>
               </template>
-              <div class="usage-trace-cell">
-                <span class="usage-trace-path" :class="`is-${relayTraceTone(row)}`">
-                  <template v-for="(seg, i) in relayPathSegments(row)" :key="i">
-                    <span v-if="i > 0" class="usage-trace-sep">→</span>
-                    <span
-                      class="usage-trace-seg"
-                      :class="{ 'is-current': i === row.relay_path_index }"
-                    >{{ seg }}</span>
-                  </template>
-                  <span
-                    v-if="!row.relay_trace_id && relayPathSegments(row).length === 0"
-                    class="usage-muted"
-                  >-</span>
-                </span>
-                <span v-if="row.channel_name" class="usage-trace-name">{{ row.channel_name }}</span>
-              </div>
+              <span class="usage-detail-cell" :class="{ 'is-error': usageIsFailed(row) }">{{
+                usageDetailSummary(row)
+              }}</span>
             </el-tooltip>
-          </template>
-        </el-table-column>
-        <el-table-column prop="error_summary" :label="t('error')" min-width="260">
-          <template #default="{ row }">
-            <el-tooltip
-              v-if="row.error_summary"
-              :content="row.error_summary"
-              placement="top"
-              :show-after="600"
-            >
-              <span class="usage-error-cell">{{ row.error_summary }}</span>
-            </el-tooltip>
-            <span v-else class="usage-muted">-</span>
           </template>
         </el-table-column>
         <template #empty>
@@ -685,9 +776,10 @@ async function exportUsage() {
   display: block;
   font-size: 13px;
   font-weight: 680;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: normal;
 }
 
 .usage-tags {
@@ -705,10 +797,10 @@ async function exportUsage() {
   color: var(--admin-success);
   display: inline-flex;
   font-feature-settings: 'tnum';
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 540;
-  height: 20px;
+  height: 22px;
   justify-content: center;
   min-width: 46px;
   padding: 0 7px;
@@ -720,7 +812,7 @@ async function exportUsage() {
   color: #1d2939;
   font-feature-settings: 'tnum';
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   font-weight: 400;
 }
@@ -754,15 +846,62 @@ async function exportUsage() {
   font-weight: 760;
 }
 
-.usage-error-cell {
-  color: #b91c1c;
+.usage-detail-cell {
+  color: #344054;
   display: block;
   font-size: 13px;
-  font-weight: 560;
+  font-weight: 600;
   line-height: 1.5;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
+}
+
+.usage-detail-cell.is-error {
+  color: #b91c1c;
+}
+
+.usage-table .usage-status-switch {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 6px;
+  color: #667085;
+  gap: 4px;
+  min-height: 24px;
+  min-width: auto;
+  padding: 0 4px;
+}
+
+.usage-table .usage-status-switch.is-success {
+  background: transparent;
+  border-color: transparent;
+  color: #24825f;
+}
+
+.usage-table .usage-status-switch.is-danger {
+  background: transparent;
+  border-color: transparent;
+  color: #b42318;
+}
+
+.usage-table .usage-status-switch.is-neutral {
+  background: transparent;
+  border-color: transparent;
+  color: #667085;
+}
+
+.usage-table .usage-status-switch-icon {
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  height: 16px;
+  opacity: 1;
+  width: 16px;
+}
+
+.usage-table .usage-status-switch-text {
+  font-size: 13px;
+  font-weight: 560;
 }
 
 .usage-trace-cell {
@@ -788,7 +927,7 @@ async function exportUsage() {
 .usage-trace-name {
   color: #667085;
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 520;
   line-height: 1.25;
   max-width: 160px;
@@ -807,13 +946,13 @@ async function exportUsage() {
 
 .usage-trace-sep {
   color: #c8ced8;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
 .usage-trace-seg {
   font-feature-settings: 'tnum';
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   font-weight: 460;
 }
@@ -842,42 +981,34 @@ async function exportUsage() {
 </style>
 
 <style>
-.usage-trace-tip-popper {
-  max-width: min(640px, calc(100vw - 48px));
+.usage-detail-tip-popper {
+  max-width: min(520px, calc(100vw - 48px));
   padding: 4px 2px;
 }
 
-.usage-trace-tip {
+.usage-detail-tip {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: min(520px, calc(100vw - 72px));
+  min-width: min(340px, calc(100vw - 72px));
 }
 
-.usage-trace-tip.is-zh {
-  min-width: min(420px, calc(100vw - 72px));
-}
-
-.usage-trace-tip-row {
+.usage-detail-tip-row {
   align-items: flex-start;
   display: grid;
-  gap: 14px;
-  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 12px;
+  grid-template-columns: 86px minmax(0, 1fr);
   line-height: 1.45;
 }
 
-.usage-trace-tip.is-zh .usage-trace-tip-row {
-  grid-template-columns: 78px minmax(0, 1fr);
-}
-
-.usage-trace-tip-label {
+.usage-detail-tip-label {
   color: #98a2b3;
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
 }
 
-.usage-trace-tip-value {
+.usage-detail-tip-value {
   color: #f2f4f7;
   font-size: 12px;
   font-weight: 600;
@@ -886,20 +1017,7 @@ async function exportUsage() {
   word-break: normal;
 }
 
-.usage-trace-tip-value.is-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-weight: 500;
-}
-
-.usage-trace-tip-value.is-error {
+.usage-detail-tip-value.is-error {
   color: #fda4af;
-}
-
-.usage-trace-tip-value.is-success {
-  color: #6ee7a8;
-}
-
-.usage-trace-tip-value.is-warning {
-  color: #fcd34d;
 }
 </style>

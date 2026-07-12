@@ -201,11 +201,7 @@ fn openai_video_to_bailian(body: Bytes) -> AppResult<Bytes> {
 }
 
 fn normalize_bailian_video_resolution(value: &str) -> Option<String> {
-    let normalized = value
-        .trim()
-        .to_ascii_uppercase()
-        .replace('X', "x")
-        .replace('*', "x");
+    let normalized = value.trim().to_ascii_uppercase().replace(['X', '*'], "x");
     if normalized == "720P" || normalized.ends_with("x720") || normalized.contains("720") {
         return Some("720P".to_string());
     }

@@ -147,20 +147,15 @@ pub struct DiagnosticStep {
     pub status_code: Option<u16>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticScope {
+    #[default]
     All,
     Models,
     Text,
     Image,
     Video,
-}
-
-impl Default for DiagnosticScope {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 impl DiagnosticScope {

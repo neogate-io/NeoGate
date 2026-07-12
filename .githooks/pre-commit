@@ -4,8 +4,20 @@
 # Enable once per clone:  git config core.hooksPath .githooks
 set -euo pipefail
 
-# Only run when Rust sources are staged.
-if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^backend/.*\.rs$|^scheduler/.*\.rs$'; then
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+has_staged_match() {
+  grep -qE "$1" <<<"$staged_files"
+}
+
+run_full="${NEOGATE_PRECOMMIT_FULL:-0}"
+rust_sources_pattern='^(backend|scheduler)/.*\.rs$'
+rust_ci_pattern='^(backend|scheduler)/.*\.rs$|^(backend|scheduler)/Cargo\.toml$|^Cargo\.toml$|^Cargo\.lock$|^backend/Cargo\.lock$|^\.github/workflows/ci\.yml$'
+frontend_pattern='^frontend/'
+frontend_typecheck_pattern='^frontend/.*\.(ts|vue)$|^frontend/(package\.json|pnpm-lock\.yaml|tsconfig\.json|vite\.config\.ts|eslint\.config\.js)$'
+
+# Keep Rust formatting fast, but run it only when Rust sources are staged.
+if has_staged_match "$rust_sources_pattern"; then
   if ! command -v cargo >/dev/null 2>&1; then
     echo "pre-commit: cargo not found on PATH; cannot run rustfmt check." >&2
     exit 1
@@ -21,9 +33,22 @@ if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^backend/.*\.rs$
   fi
 fi
 
-# Only run when frontend files are staged. This catches the CI "pnpm lint"
-# failure before the commit is created.
-if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^frontend/'; then
+# Run clippy when Rust code or Rust build metadata changes. This is intentionally
+# broader than the rustfmt trigger so version bumps and lockfile updates do not
+# ship with CI-blocking warnings.
+if has_staged_match "$rust_ci_pattern"; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH; cannot run clippy." >&2
+    exit 1
+  fi
+
+  echo "pre-commit: running 'cargo clippy --workspace --all-targets -- -D warnings' ..." >&2
+  cargo clippy --workspace --all-targets -- -D warnings
+fi
+
+# Only run when frontend files are staged. This catches common frontend CI
+# failures before the commit is created.
+if has_staged_match "$frontend_pattern"; then
   if ! command -v pnpm >/dev/null 2>&1; then
     echo "pre-commit: pnpm not found on PATH; cannot run frontend lint." >&2
     exit 1
@@ -33,5 +58,27 @@ if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^frontend/'; the
   (
     cd frontend
     pnpm lint
+  )
+fi
+
+if has_staged_match "$frontend_typecheck_pattern"; then
+  if ! command -v pnpm >/dev/null 2>&1; then
+    echo "pre-commit: pnpm not found on PATH; cannot run frontend typecheck." >&2
+    exit 1
+  fi
+
+  echo "pre-commit: running frontend 'pnpm typecheck' ..." >&2
+  (
+    cd frontend
+    pnpm typecheck
+  )
+fi
+
+if [[ "$run_full" == "1" ]]; then
+  echo "pre-commit: NEOGATE_PRECOMMIT_FULL=1, running backend tests and frontend build ..." >&2
+  cargo test --workspace
+  (
+    cd frontend
+    pnpm build
   )
 fi

@@ -294,6 +294,13 @@ router.beforeEach(async (to) => {
     }
   }
 
+  if (to.name === 'costAttribution') {
+    const servicePolicy = await getAdminServicePolicy().catch(() => null)
+    if (servicePolicy && servicePolicy.service_mode === 'paid') {
+      return '/admin/statistics'
+    }
+  }
+
   if (to.name === 'userRecharge') {
     const servicePolicy = await getUserServicePolicy().catch(() => null)
     if (servicePolicy && !servicePolicy.recharge_enabled) {

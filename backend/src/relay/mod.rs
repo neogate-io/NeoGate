@@ -150,6 +150,14 @@ pub(crate) async fn finish_task_json_response(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
+    tracing::info!(
+        task_id = task.id,
+        ?task.task_type,
+        upstream_task_id = %task.upstream_task_id,
+        upstream_status = status.as_u16(),
+        upstream_response = %String::from_utf8_lossy(&body),
+        "upstream async task bound response"
+    );
     if status.is_success() {
         if let Ok(value) = serde_json::from_slice::<Value>(&body) {
             let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);

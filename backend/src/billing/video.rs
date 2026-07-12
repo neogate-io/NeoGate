@@ -226,6 +226,8 @@ pub fn provider_video_duration_seconds(value: &Value) -> Option<i64> {
                 .get("output_video_duration")
                 .or_else(|| usage.get("duration"))
         })
+        .or_else(|| value.get("seconds"))
+        .or_else(|| value.get("duration"))
         .and_then(value_as_positive_i64)
 }
 
@@ -479,6 +481,9 @@ mod tests {
             }
         });
 
+        assert_eq!(provider_video_duration_seconds(&value), Some(4));
+
+        let value = serde_json::json!({"seconds": "4"});
         assert_eq!(provider_video_duration_seconds(&value), Some(4));
     }
 }

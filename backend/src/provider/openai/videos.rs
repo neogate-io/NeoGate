@@ -301,6 +301,16 @@ async fn finish_video_create_success(
             return Err(err.into());
         }
     };
+    tracing::info!(
+        provider = %ctx.upstream.provider,
+        channel_id = ctx.upstream.channel_id,
+        channel_name = %ctx.upstream.channel_name,
+        model = %ctx.model,
+        external_model = %ctx.external_model,
+        upstream_status = status.as_u16(),
+        upstream_response = %String::from_utf8_lossy(&body),
+        "upstream openai video create response"
+    );
     let value: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(err) => {

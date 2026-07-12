@@ -146,10 +146,20 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         }
     };
     let status = reqwest_status(response.status());
+    let body = read_response_bytes(state, response, task.id, task.task_type).await?;
+    tracing::info!(
+        task_id = task.id,
+        ?task.task_type,
+        upstream_task_id = %task.upstream_task_id,
+        provider = %upstream.provider,
+        channel_id = upstream.channel_id,
+        upstream_status = status.as_u16(),
+        upstream_response = %String::from_utf8_lossy(&body),
+        "upstream async task poll response"
+    );
     if !status.is_success() {
         return Ok(());
     }
-    let body = read_response_bytes(state, response, task.id, task.task_type).await?;
     let mut value: Value = serde_json::from_slice(&body)?;
     if task.task_type == UpstreamTaskType::OpenAiVideo {
         crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);

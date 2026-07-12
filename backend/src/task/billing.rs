@@ -181,11 +181,14 @@ async fn finalize_loaded(
             };
             let billable_usage = if task.task_type == UpstreamTaskType::OpenAiVideo
                 && price.billing_meter == BillingMeter::Video
-                && price.video_billing_mode == Some(VideoBillingMode::PerSecond)
             {
-                provider_video_seconds
-                    .map(BillableUsage::video_seconds)
-                    .or_else(|| usage.map(BillableUsage::token))
+                match price.video_billing_mode {
+                    Some(VideoBillingMode::PerSecond) => provider_video_seconds
+                        .map(BillableUsage::video_seconds)
+                        .or_else(|| usage.map(BillableUsage::token)),
+                    Some(VideoBillingMode::OfficialToken) => usage.map(BillableUsage::token),
+                    None => usage.map(BillableUsage::token),
+                }
             } else {
                 usage.map(BillableUsage::token)
             };

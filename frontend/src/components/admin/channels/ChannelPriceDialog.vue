@@ -37,7 +37,7 @@ export type ChannelPriceForm = {
   billingMeterLocked: boolean
   videoBillingModeLocked: boolean
   canUseImageBilling: boolean
-  canUseSeedanceVideoBilling: boolean
+  canUseVideoBilling: boolean
 }
 
 const open = defineModel<boolean>('open', { required: true })

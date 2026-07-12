@@ -65,6 +65,23 @@ import {
   pricingReferenceModelAliases,
   resolvedVideoTokensPerSecondEstimate
 } from '../../utils/pricing'
+import {
+  ANY_VIDEO_TIER_RESOLUTION,
+  defaultVideoBillingModeForReferenceTiers,
+  isAnyReferenceVideoTier,
+  lockedVideoBillingModeForReferenceTiers,
+  referenceVideoPriceShape,
+  referenceVideoTierHasAudio,
+  referenceVideoTierInputWithVideo,
+  referenceVideoTierInputWithoutVideo,
+  referenceVideoTierMatchesFormResolutions,
+  referenceVideoTierResolutions,
+  referenceVideoTierUsesInputOutputLabels,
+  referenceVideoTierUsesSinglePrice,
+  referenceVideoTierUsesSingleTokenPrice,
+  savedVideoTierMatchesReferenceTier,
+  type ReferenceVideoTier
+} from '../../utils/videoPricing'
 
 const { locale, t } = useLocale()
 const {
@@ -144,7 +161,7 @@ const channelCurrentPage = ref(1)
 const channelPageSize = ref(20)
 const channelPageSizes = [20, 50, 100]
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
-const anyVideoTierResolution = '*'
+const anyVideoTierResolution = ANY_VIDEO_TIER_RESOLUTION
 
 type BundledPricingModel = {
   cost?: {
@@ -457,7 +474,7 @@ function channelPriceRows(row: Channel) {
             }
           ]
         : displayBillingMeter === 'video'
-          ? videoTierRows(price)
+          ? videoTierRows(row.provider, model, price)
           : []
     return {
       model,
@@ -485,9 +502,7 @@ function channelPriceRows(row: Channel) {
             ? `${cacheReadPrice} / ${cacheWritePrice}`
             : t('priceMissing'),
       videoBillingMode:
-        modelCategory === 'video'
-          ? billingMeterDisplayLabel(row.provider, model, displayBillingMeter)
-          : '-',
+        modelCategory === 'video' ? videoBillingModeDisplayLabel(price, displayBillingMeter) : '-',
       videoTiers,
       price:
         displayBillingMeter === 'image'
@@ -557,15 +572,41 @@ function imagePriceGroups(
   ]
 }
 
-function videoTierRows(price?: ChannelPrice) {
+function matchingReferenceVideoTierForSavedTier(
+  provider: string,
+  model: string,
+  tier: VideoPriceTier
+) {
+  const formResolutions = new Set(
+    tier.resolutions.flatMap(splitCommaList).map((item) => item.toLowerCase())
+  )
+  return priceDialogReferenceVideoTiersForModel(provider, model).find((referenceTier) =>
+    referenceVideoTierMatchesFormResolutions(referenceTier, formResolutions)
+  )
+}
+
+function videoTierRows(provider: string, model: string, price?: ChannelPrice) {
   const mode = price?.video_billing_mode ?? 'official_token'
   const suffix = mode === 'per_second' ? t('perSecond') : t('pricePerMillionTokens')
   return (price?.video_price_tiers ?? []).map((tier) => {
-    const specs = videoTierSpecsLabel([tier])
+    const referenceTier = matchingReferenceVideoTierForSavedTier(provider, model, tier)
+    const singleTokenPriceTier =
+      referenceTier !== undefined && referenceVideoTierUsesSingleTokenPrice(referenceTier)
+    const singlePriceTier =
+      referenceTier !== undefined && referenceVideoPriceShape(referenceTier) === 'single'
+    const specs = singleTokenPriceTier ? '-' : videoTierSpecsLabel([tier])
     const primary =
       mode === 'per_second' ? tier.input_without_video_unit_micros : tier.input_without_video_micros
     const secondary =
       mode === 'per_second' ? tier.input_with_video_unit_micros : tier.input_with_video_micros
+    const singlePrice = primary ?? secondary
+    if (singlePriceTier && singlePrice !== undefined && singlePrice !== null) {
+      return {
+        specs,
+        priceGroups: [inlinePriceGroup(`/ ${suffix}`, formatPricePerMillion(singlePrice, 'en-US'))],
+        price: ''
+      }
+    }
     const values = [primary, secondary]
       .filter((value): value is number => value !== undefined && value !== null)
       .filter((value, index, list) => list.indexOf(value) === index)
@@ -579,15 +620,16 @@ function videoTierRows(price?: ChannelPrice) {
     ].filter((group): group is ChannelExpandPriceGroup => Boolean(group))
     const officialTokenPriceGroups =
       mode === 'official_token' ? compactPriceGroup(officialTokenPrices) : []
+    const perSecondPrices = [
+      primary !== undefined && primary !== null
+        ? inlinePriceGroup(t('videoInputWithoutVideo'), formatPricePerMillion(primary, 'en-US'))
+        : null,
+      secondary !== undefined && secondary !== null
+        ? inlinePriceGroup(t('videoInputWithVideo'), formatPricePerMillion(secondary, 'en-US'))
+        : null
+    ].filter((group): group is ChannelExpandPriceGroup => Boolean(group))
     const perSecondPriceGroups =
-      mode === 'per_second' && values.length > 0
-        ? [
-            inlinePriceGroup(
-              t('perSecond'),
-              values.map((value) => formatPricePerMillion(value, 'en-US')).join(' / ')
-            )
-          ]
-        : []
+      mode === 'per_second' && perSecondPrices.length > 0 ? compactPriceGroup(perSecondPrices) : []
     return {
       specs,
       priceGroups:
@@ -759,14 +801,14 @@ function canUseImageBilling(provider: string, model: string) {
   return output.length === 1 && output[0] === 'image'
 }
 
-function canUseSeedanceVideoBilling(provider: string, model: string) {
+function canUseVideoBilling(provider: string, model: string) {
   const output = modelOutputModalities(provider, model)
-  return output.includes('video') || seedanceReferenceVideoTiers(provider, model).length > 0
+  return output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0
 }
 
 function modelCategoryForModel(provider: string, model: string): 'text' | 'image' | 'video' {
   const output = modelOutputModalities(provider, model)
-  if (output.includes('video') || seedanceReferenceVideoTiers(provider, model).length > 0) {
+  if (output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0) {
     return 'video'
   }
   if (output.length === 1 && output[0] === 'image') return 'image'
@@ -774,9 +816,9 @@ function modelCategoryForModel(provider: string, model: string): 'text' | 'image
 }
 
 function defaultBillingMeterForModel(provider: string, model: string) {
-  if (canUseSeedanceVideoBilling(provider, model)) {
+  if (canUseVideoBilling(provider, model)) {
     const template = findPricingTemplate(templates.value, provider, model)
-    if (seedanceReferenceVideoTiers(provider, model).length === 0 && template?.billing_meter) {
+    if (referenceVideoTiersForModel(provider, model).length === 0 && template?.billing_meter) {
       return template.billing_meter
     }
     return 'video'
@@ -804,12 +846,20 @@ function billingMeterDisplayLabel(provider: string, model: string, billingMeter:
   return t('billingMeterToken')
 }
 
+function videoBillingModeDisplayLabel(price: ChannelPrice | undefined, billingMeter: BillingMeter) {
+  if (price?.video_billing_mode === 'per_second') return t('videoBillingPerSecond')
+  if (price?.video_billing_mode === 'official_token' || billingMeter === 'video') {
+    return t('pricePerMillionTokens')
+  }
+  return billingMeter === 'token' ? t('pricePerMillionTokens') : t('billingMeterVideo')
+}
+
 function isBillingMeterLocked(provider: string, model: string) {
-  return canUseSeedanceVideoBilling(provider, model) || !canUseImageBilling(provider, model)
+  return canUseVideoBilling(provider, model) || !canUseImageBilling(provider, model)
 }
 
 function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm) {
-  if (form.canUseSeedanceVideoBilling && template.billing_meter === 'token') return true
+  if (form.canUseVideoBilling && template.billing_meter === 'token') return true
   return (
     template.billing_meter ===
     (form.billingMeter ?? defaultBillingMeterForModel(form.provider, form.model))
@@ -828,7 +878,7 @@ function lockedBillingMeterForReferencePrice(provider: string, model: string): B
 }
 
 function hasManualPriceInput(form: ChannelPriceForm) {
-  if (form.canUseSeedanceVideoBilling && form.videoBillingMode) {
+  if (form.canUseVideoBilling && form.videoBillingMode) {
     return form.videoPriceTiers.some((tier) => {
       if (form.videoBillingMode === 'official_token') {
         return tier.inputWithVideo > 0 || tier.inputWithoutVideo > 0
@@ -862,13 +912,6 @@ function shouldSavePriceForm(form: ChannelPriceForm) {
 
 function shouldEnablePriceForm(form: ChannelPriceForm) {
   return form.enabled || hasManualPriceInput(form)
-}
-
-type ReferenceVideoTier = {
-  resolution?: string
-  label?: string
-  pricePairKind?: 'input_output'
-  tiers?: Record<string, number | null | undefined>
 }
 
 function canonicalReferenceProvider(provider: string) {
@@ -941,11 +984,6 @@ async function getBundledVideoTierCatalog() {
   }
 }
 
-function referenceVideoTierResolutions(tier: ReferenceVideoTier) {
-  const resolution = tier.resolution?.trim()
-  return resolution ? splitCommaList(resolution) : [anyVideoTierResolution]
-}
-
 function referenceVideoTierResolutionLabel(tier: ReferenceVideoTier) {
   const label = referenceVideoTierDisplayLabel(tier)
   if (label) return label
@@ -965,80 +1003,6 @@ function referenceVideoTierDisplayLabel(tier: ReferenceVideoTier) {
 
 function videoTierFormResolutionLabel(resolution: string) {
   return resolution.trim() === anyVideoTierResolution ? t('videoTierAnyResolution') : undefined
-}
-
-function referenceVideoTierHasAudio(tier: ReferenceVideoTier) {
-  return tier.tiers?.with_audio != null || tier.tiers?.without_audio != null
-}
-
-function referenceVideoTierUsesSinglePrice(tier: ReferenceVideoTier) {
-  return (
-    tier.tiers?.price != null &&
-    tier.tiers?.input_without_video == null &&
-    tier.tiers?.input_with_video == null &&
-    tier.tiers?.without_audio == null &&
-    tier.tiers?.with_audio == null
-  )
-}
-
-function referenceVideoTierUsesInputOutputLabels(tier: ReferenceVideoTier) {
-  return tier.pricePairKind === 'input_output'
-}
-
-function referenceVideoTierUsesSingleTokenPrice(tier: ReferenceVideoTier) {
-  return (
-    referenceVideoTierUsesInputOutputLabels(tier) &&
-    referenceVideoTierInputWithoutVideo(tier) === referenceVideoTierInputWithVideo(tier)
-  )
-}
-
-function lockedVideoBillingModeForReferenceTiers(
-  tiers: ReferenceVideoTier[]
-): VideoBillingMode | null {
-  if (tiers.length === 0) return null
-  return tiers.every(referenceVideoTierUsesSinglePrice) ? 'per_second' : null
-}
-
-function defaultVideoBillingModeForReferenceTiers(tiers: ReferenceVideoTier[]): VideoBillingMode {
-  return lockedVideoBillingModeForReferenceTiers(tiers) ?? 'official_token'
-}
-
-function referenceVideoTierPrice(
-  tier: ReferenceVideoTier,
-  kind: 'input_without_video' | 'input_with_video'
-) {
-  if (kind === 'input_with_video') {
-    return tier.tiers?.input_with_video ?? tier.tiers?.with_audio ?? tier.tiers?.price ?? 0
-  }
-  return tier.tiers?.input_without_video ?? tier.tiers?.without_audio ?? tier.tiers?.price ?? 0
-}
-
-function referenceVideoTierInputWithoutVideo(tier: ReferenceVideoTier) {
-  return referenceVideoTierPrice(tier, 'input_without_video')
-}
-
-function referenceVideoTierInputWithVideo(tier: ReferenceVideoTier) {
-  return referenceVideoTierPrice(tier, 'input_with_video')
-}
-
-function referenceVideoTierMatchesFormResolutions(
-  tier: ReferenceVideoTier,
-  formResolutions: Set<string>
-) {
-  return referenceVideoTierResolutions(tier).some((resolution) => {
-    const normalizedResolution = resolution.trim().toLowerCase()
-    return (
-      normalizedResolution === anyVideoTierResolution ||
-      formResolutions.has(anyVideoTierResolution) ||
-      formResolutions.has(normalizedResolution)
-    )
-  })
-}
-
-function isAnyReferenceVideoTier(tier: ReferenceVideoTier) {
-  return referenceVideoTierResolutions(tier).some(
-    (resolution) => resolution.trim().toLowerCase() === anyVideoTierResolution
-  )
 }
 
 function referenceVideoTierSummary(tier: ReferenceVideoTier) {
@@ -1068,12 +1032,12 @@ function referenceVideoTierSummary(tier: ReferenceVideoTier) {
   return `${leftLabel} ${currencySymbol.value}${referenceVideoTierInputWithoutVideo(tier)}/${pricePerMillionTokensUnit}\n${rightLabel} ${currencySymbol.value}${referenceVideoTierInputWithVideo(tier)}/${pricePerMillionTokensUnit}`
 }
 
-function seedanceReferenceVideoTiers(provider: string, model: string) {
+function referenceVideoTiersForModel(provider: string, model: string) {
   const catalogRecord = findReferenceCatalogRecord(provider, model)
   const catalogValue = catalogRecord?.capabilities?.video_tiers
   if (Array.isArray(catalogValue) && catalogValue.length > 0) {
     return filterReferenceVideoTiersForCurrency(
-      normalizedSeedanceReferenceVideoTiers(model, catalogValue as ReferenceVideoTier[])
+      normalizedReferenceVideoTiers(model, catalogValue as ReferenceVideoTier[])
     )
   }
 
@@ -1081,18 +1045,18 @@ function seedanceReferenceVideoTiers(provider: string, model: string) {
   const value = record?.capabilities?.video_tiers
   if (Array.isArray(value) && value.length > 0) {
     return filterReferenceVideoTiersForCurrency(
-      normalizedSeedanceReferenceVideoTiers(model, value as ReferenceVideoTier[])
+      normalizedReferenceVideoTiers(model, value as ReferenceVideoTier[])
     )
   }
 
   const template = findPricingTemplate(templates.value, provider, model)
   if (template && template.provider !== provider) {
-    return seedanceReferenceVideoTiers(template.provider, model)
+    return referenceVideoTiersForModel(template.provider, model)
   }
 
   const bundledRecord = findBundledVideoTierRecord(provider, model)
   return filterReferenceVideoTiersForCurrency(
-    normalizedSeedanceReferenceVideoTiers(model, bundledRecord?.videoTiers ?? [])
+    normalizedReferenceVideoTiers(model, bundledRecord?.videoTiers ?? [])
   )
 }
 
@@ -1109,8 +1073,8 @@ function videoTokenReferenceTierFromTemplate(template?: PricingTemplate): Refere
   ]
 }
 
-function seedancePriceDialogReferenceVideoTiers(provider: string, model: string) {
-  const tiers = seedanceReferenceVideoTiers(provider, model)
+function priceDialogReferenceVideoTiersForModel(provider: string, model: string) {
+  const tiers = referenceVideoTiersForModel(provider, model)
   if (tiers.length > 0) return tiers
   return videoTokenReferenceTierFromTemplate(findPricingTemplate(templates.value, provider, model))
 }
@@ -1147,7 +1111,7 @@ function filterReferenceVideoTiersForCurrency(tiers: ReferenceVideoTier[]) {
   return dedupeReferenceVideoTiersByResolution(mainlandTiers.length > 0 ? mainlandTiers : tiers)
 }
 
-function normalizedSeedanceReferenceVideoTiers(model: string, tiers: ReferenceVideoTier[]) {
+function normalizedReferenceVideoTiers(model: string, tiers: ReferenceVideoTier[]) {
   const aliases = pricingReferenceModelAliases(model)
   const isSeedanceFastOrMini = [...aliases].some((alias) =>
     /(?:^|-)seedance-2\.0-(?:fast|mini)$/.test(alias)
@@ -1200,24 +1164,13 @@ function videoPriceTierPairLabels(referenceTier?: ReferenceVideoTier) {
   }
 }
 
-function savedVideoTierMatchesReferenceTier(
-  tier: VideoPriceTier,
-  referenceTier: ReferenceVideoTier
-) {
-  const formResolutions = new Set(
-    tier.resolutions.flatMap(splitCommaList).map((item) => item.toLowerCase())
-  )
-  return referenceVideoTierMatchesFormResolutions(referenceTier, formResolutions)
-}
-
 function videoPriceTierFormFromSavedTier(
   tier: VideoPriceTier | undefined,
   resolution: string,
   referenceTier?: ReferenceVideoTier
 ) {
   const usesSinglePrice = referenceTier
-    ? referenceVideoTierUsesSinglePrice(referenceTier) ||
-      referenceVideoTierUsesSingleTokenPrice(referenceTier)
+    ? referenceVideoPriceShape(referenceTier) === 'single'
     : false
   const usesSingleUnitPrice = referenceTier
     ? referenceVideoTierUsesSinglePrice(referenceTier)
@@ -1365,9 +1318,9 @@ function openPriceDialog(row: Channel) {
     const price = priceByModel.value.get(key)
     const template = findPricingTemplate(templates.value, row.provider, model)
     const supportsImageBilling = canUseImageBilling(row.provider, model)
-    const supportsSeedanceVideoBilling = canUseSeedanceVideoBilling(row.provider, model)
-    const referenceVideoTiers = supportsSeedanceVideoBilling
-      ? seedancePriceDialogReferenceVideoTiers(row.provider, model)
+    const supportsVideoBilling = canUseVideoBilling(row.provider, model)
+    const referenceVideoTiers = supportsVideoBilling
+      ? priceDialogReferenceVideoTiersForModel(row.provider, model)
       : []
     const lockedBillingMeter = lockedBillingMeterForReferencePrice(row.provider, model)
     const lockedVideoBillingMode = lockedVideoBillingModeForReferenceTiers(referenceVideoTiers)
@@ -1375,26 +1328,26 @@ function openPriceDialog(row: Channel) {
     const savedBillingMeter =
       price?.billing_meter === 'image' && supportsImageBilling
         ? 'image'
-        : price?.billing_meter === 'video' && supportsSeedanceVideoBilling
+        : price?.billing_meter === 'video' && supportsVideoBilling
           ? 'video'
           : price?.billing_meter === 'token' && defaultBillingMeter === 'token'
             ? 'token'
             : null
     const billingMeter =
-      supportsSeedanceVideoBilling && referenceVideoTiers.length > 0
+      supportsVideoBilling && referenceVideoTiers.length > 0
         ? 'video'
         : (lockedBillingMeter ?? savedBillingMeter ?? defaultBillingMeter)
     const videoBillingMode =
       lockedVideoBillingMode ??
-      (supportsSeedanceVideoBilling && price?.video_billing_mode
+      (supportsVideoBilling && price?.video_billing_mode
         ? price.video_billing_mode
-        : supportsSeedanceVideoBilling && referenceVideoTiers.length > 0
+        : supportsVideoBilling && referenceVideoTiers.length > 0
           ? defaultVideoBillingModeForReferenceTiers(referenceVideoTiers)
           : null)
     const initialVideoPriceTiers =
-      supportsSeedanceVideoBilling && price?.video_price_tiers?.length
+      supportsVideoBilling && price?.video_price_tiers?.length
         ? videoPriceTiersToForm(price.video_price_tiers, referenceVideoTiers)
-        : supportsSeedanceVideoBilling && referenceVideoTiers.length > 0
+        : supportsVideoBilling && referenceVideoTiers.length > 0
           ? referenceVideoTiersToForm(referenceVideoTiers)
           : []
     const inputPrice = price?.input_price_micros ?? template?.input_price_micros ?? 0
@@ -1427,16 +1380,16 @@ function openPriceDialog(row: Channel) {
       billingMeterLocked: Boolean(lockedBillingMeter) || isBillingMeterLocked(row.provider, model),
       videoBillingModeLocked: Boolean(lockedVideoBillingMode),
       canUseImageBilling: supportsImageBilling,
-      canUseSeedanceVideoBilling: supportsSeedanceVideoBilling
+      canUseVideoBilling: supportsVideoBilling
     }
   }
   priceDialogOpen.value = true
 }
 
 function hasReferencePrice(form: (typeof priceForms)[string]) {
-  if (form.canUseSeedanceVideoBilling) {
+  if (form.canUseVideoBilling) {
     return (
-      seedancePriceDialogReferenceVideoTiers(form.provider, form.model).length > 0 ||
+      priceDialogReferenceVideoTiersForModel(form.provider, form.model).length > 0 ||
       Boolean(findApplicablePricingTemplate(form))
     )
   }
@@ -1448,8 +1401,8 @@ function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
 }
 
 function referencePriceSummary(form: (typeof priceForms)[string]) {
-  if (form.canUseSeedanceVideoBilling) {
-    const tiers = seedancePriceDialogReferenceVideoTiers(form.provider, form.model)
+  if (form.canUseVideoBilling) {
+    const tiers = priceDialogReferenceVideoTiersForModel(form.provider, form.model)
     if (tiers.length > 0) {
       return tiers
         .map((tier) => {
@@ -1490,11 +1443,11 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
 }
 
 function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVideoPriceTierForm) {
-  if (!form.canUseSeedanceVideoBilling) return ''
+  if (!form.canUseVideoBilling) return ''
   const resolutions = new Set(
     splitCommaList(tier.resolutionsText).map((resolution) => resolution.toLowerCase())
   )
-  const referenceTier = seedancePriceDialogReferenceVideoTiers(form.provider, form.model).find(
+  const referenceTier = priceDialogReferenceVideoTiersForModel(form.provider, form.model).find(
     (item) => {
       return referenceVideoTierMatchesFormResolutions(item, resolutions)
     }
@@ -1505,8 +1458,8 @@ function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVid
 }
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
-  if (form.canUseSeedanceVideoBilling) {
-    const tiers = seedancePriceDialogReferenceVideoTiers(form.provider, form.model)
+  if (form.canUseVideoBilling) {
+    const tiers = priceDialogReferenceVideoTiersForModel(form.provider, form.model)
     if (tiers.length > 0) {
       form.videoBillingMode = defaultVideoBillingModeForReferenceTiers(tiers)
       form.billingMeter = 'video'
@@ -1597,13 +1550,9 @@ async function saveChannelPrices() {
       for (const form of Object.values(priceForms)) {
         if (!shouldSavePriceForm(form)) continue
         const videoTiers =
-          form.canUseSeedanceVideoBilling && form.videoBillingMode
-            ? videoPriceTiersPayload(form)
-            : []
+          form.canUseVideoBilling && form.videoBillingMode ? videoPriceTiersPayload(form) : []
         const billingMeter =
-          form.canUseSeedanceVideoBilling && form.videoBillingMode
-            ? 'video'
-            : requireBillingMeter(form)
+          form.canUseVideoBilling && form.videoBillingMode ? 'video' : requireBillingMeter(form)
         if (billingMeter === 'image') {
           requireImageUnitPrice(form)
         }
@@ -1620,21 +1569,19 @@ async function saveChannelPrices() {
           channel_id: form.channelId,
           model: form.model,
           input_price_micros:
-            form.canUseSeedanceVideoBilling && form.videoBillingMode
+            form.canUseVideoBilling && form.videoBillingMode
               ? representativeWithoutVideo
               : majorToMicroAmount(form.inputPerMillion),
           output_price_micros:
-            form.canUseSeedanceVideoBilling && form.videoBillingMode
+            form.canUseVideoBilling && form.videoBillingMode
               ? representativeWithVideo
               : majorToMicroAmount(form.outputPerMillion),
           cache_read_price_micros:
-            form.canUseSeedanceVideoBilling && form.videoBillingMode
+            form.canUseVideoBilling && form.videoBillingMode
               ? 0
               : majorToMicroAmount(form.cacheReadPerMillion),
           cache_write_price_micros:
-            form.canUseSeedanceVideoBilling && form.videoBillingMode
-              ? 0
-              : cacheWritePricePayload(form),
+            form.canUseVideoBilling && form.videoBillingMode ? 0 : cacheWritePricePayload(form),
           billing_meter: billingMeter,
           unit_price_micros:
             billingMeter === 'image'
@@ -1643,7 +1590,7 @@ async function saveChannelPrices() {
                 ? representativeWithoutVideo
                 : null,
           video_billing_mode:
-            form.canUseSeedanceVideoBilling && form.videoBillingMode ? form.videoBillingMode : null,
+            form.canUseVideoBilling && form.videoBillingMode ? form.videoBillingMode : null,
           video_price_tiers: videoTiers,
           enabled: shouldEnablePriceForm(form)
         })
@@ -1864,7 +1811,7 @@ onMounted(loadInitialData)
             </button>
           </template>
         </el-table-column>
-        <el-table-column :label="t('modelInfo')" min-width="200">
+        <el-table-column :label="t('modelInfo')" min-width="260">
           <template #default="{ row }">
             <button
               type="button"
@@ -2246,7 +2193,7 @@ onMounted(loadInitialData)
 .channel-name-text {
   color: #1d2129;
   font-size: 14px;
-  font-weight: 680;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2255,7 +2202,7 @@ onMounted(loadInitialData)
 .channel-provider-text {
   color: #86909c;
   font-size: 12px;
-  font-weight: 560;
+  font-weight: 400;
   line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2325,6 +2272,21 @@ onMounted(loadInitialData)
 .channel-table :deep(.el-table__body td) {
   height: 82px;
   padding: 12px 0;
+}
+
+.channel-table :deep(.el-table__header .cell) {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.channel-table :deep(.el-table__body .cell) {
+  align-items: center;
+  color: #344054;
+  display: flex;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .channel-table :deep(.el-table__body tr.channel-row-is-disabled td) {
@@ -2428,11 +2390,6 @@ onMounted(loadInitialData)
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-}
-
-.channel-table :deep(.el-table__body .cell) {
-  align-items: center;
-  display: flex;
 }
 
 .channel-expand-toggle {
@@ -2560,9 +2517,9 @@ onMounted(loadInitialData)
   border-radius: 999px;
   color: var(--admin-primary);
   font-size: 12px;
-  font-weight: 680;
+  font-weight: 400;
   letter-spacing: 0;
-  max-width: 148px;
+  max-width: 240px;
   overflow: hidden;
   padding: 2px 8px;
   text-overflow: ellipsis;
@@ -2588,7 +2545,7 @@ onMounted(loadInitialData)
   color: #64748b;
   display: inline-flex;
   font-size: 12px;
-  font-weight: 720;
+  font-weight: 400;
   min-height: 24px;
   padding: 0 9px;
 }
@@ -2607,7 +2564,7 @@ onMounted(loadInitialData)
   display: inline-flex;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 400;
   justify-content: center;
   min-height: 28px;
   width: 74px;
@@ -2619,7 +2576,7 @@ onMounted(loadInitialData)
   border-radius: 999px;
   display: inline-block;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1;
   padding: 5px 12px;
   white-space: nowrap;

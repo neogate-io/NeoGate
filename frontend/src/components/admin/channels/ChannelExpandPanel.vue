@@ -100,7 +100,6 @@ async function copyModelName(model: string) {
     <div class="channel-expand-actions">
       <el-button
         class="admin-action-button channel-expand-price-action"
-        type="primary"
         :aria-label="t('editModelPrices')"
         :icon="Tickets"
         @click="emit('editPrice', channel)"
@@ -149,14 +148,16 @@ async function copyModelName(model: string) {
                 </el-button>
               </el-tooltip>
             </span>
-            <span class="channel-detail-meter">{{ item.videoBillingMode }}</span>
+            <span class="channel-detail-meter">
+              <span class="channel-detail-meter-badge">{{ item.videoBillingMode }}</span>
+            </span>
             <div class="channel-video-tier-stack">
               <div
                 v-for="(tier, tierIndex) in videoTiersForDisplay(item)"
                 :key="`${item.model}:${tierIndex}`"
                 class="channel-video-tier-row"
               >
-                <span class="channel-detail-price">{{ tier.specs }}</span>
+                <span class="channel-detail-price channel-video-tier-specs">{{ tier.specs }}</span>
                 <div v-if="tier.priceGroups?.length" class="channel-video-price-cell">
                   <div
                     v-for="group in tier.priceGroups"
@@ -263,7 +264,7 @@ async function copyModelName(model: string) {
               </el-tooltip>
             </span>
             <span v-if="section.key === 'image'" class="channel-detail-meter">
-              {{ item.billingMeterLabel }}
+              <span class="channel-detail-meter-badge">{{ item.billingMeterLabel }}</span>
             </span>
             <div v-if="section.key === 'image'" class="channel-image-price-cell">
               <div
@@ -360,9 +361,42 @@ async function copyModelName(model: string) {
   min-height: 30px;
 }
 
+.channel-expand-price-action.el-button {
+  --el-button-active-bg-color: #0f6fb5;
+  --el-button-active-border-color: #0f6fb5;
+  --el-button-active-text-color: #ffffff;
+  --el-button-bg-color: #168bd3;
+  --el-button-border-color: #168bd3;
+  --el-button-hover-bg-color: #0f7cc2;
+  --el-button-hover-border-color: #0f7cc2;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-size: 34px;
+  --el-button-text-color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 34px;
+  padding: 8px 14px;
+}
+
+.channel-expand-price-action.el-button :deep(.el-icon) {
+  font-size: 14px;
+}
+
 .channel-model-tabs :deep(.el-tabs__header) {
   margin: 0 0 10px;
   padding-right: 120px;
+}
+
+.channel-model-tabs :deep(.el-tabs__item) {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.channel-model-tabs :deep(.el-tabs__item.is-active) {
+  color: var(--admin-primary);
+  font-weight: 400;
 }
 
 .channel-model-tabs :deep(.el-tabs__nav-wrap::after) {
@@ -383,7 +417,7 @@ async function copyModelName(model: string) {
   color: var(--admin-primary);
   display: inline-flex;
   font-size: 11px;
-  font-weight: 620;
+  font-weight: 400;
   justify-content: center;
   line-height: 1;
   min-width: 24px;
@@ -422,11 +456,12 @@ async function copyModelName(model: string) {
 
 .channel-expand-video-head {
   align-items: center;
-  background: #f4f7fb;
+  background: #f6f8fb;
   border-bottom: 1px solid #e2e8f0;
-  color: #4e5969;
+  color: #334155;
   font-size: 12px;
-  font-weight: 760;
+  font-weight: 400;
+  letter-spacing: 0;
   min-height: 38px;
 }
 
@@ -470,7 +505,12 @@ async function copyModelName(model: string) {
 .channel-expand-video-model-row {
   align-items: stretch;
   background: #ffffff;
-  min-height: 54px;
+  min-height: 44px;
+}
+
+.channel-expand-video-model-row:hover,
+.channel-expand-price-row:not(.is-head):hover {
+  background: #f8fbff;
 }
 
 .channel-expand-video-model-row + .channel-expand-video-model-row {
@@ -487,12 +527,17 @@ async function copyModelName(model: string) {
   align-items: center;
   display: grid;
   grid-template-columns: 128px 240px;
-  min-height: 54px;
+  min-height: 44px;
 }
 
 .channel-video-tier-row > .channel-detail-price {
   justify-content: center;
   text-align: center;
+}
+
+.channel-detail-price.channel-video-tier-specs {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .channel-video-tier-row + .channel-video-tier-row {
@@ -521,7 +566,7 @@ async function copyModelName(model: string) {
     92px
     56px
     132px;
-  min-height: 46px;
+  min-height: 40px;
   padding: 0 12px;
 }
 
@@ -540,10 +585,11 @@ async function copyModelName(model: string) {
 }
 
 .channel-expand-price-row.is-head {
-  background: #f4f7fb;
-  color: #4e5969;
+  background: #f6f8fb;
+  color: #334155;
   font-size: 12px;
-  font-weight: 760;
+  font-weight: 400;
+  letter-spacing: 0;
   min-height: 38px;
 }
 
@@ -607,25 +653,32 @@ async function copyModelName(model: string) {
 }
 
 .channel-image-price-value {
-  color: #1d2129;
+  color: #111827;
   font-feature-settings: 'tnum';
   font-size: 13px;
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.2;
   white-space: nowrap;
 }
 
 .channel-image-price-label {
-  color: #718096;
-  font-size: 10.5px;
-  font-weight: 500;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 400;
   line-height: 1.1;
   white-space: nowrap;
 }
 
 .channel-image-price-group.is-inline .channel-image-price-label {
-  font-size: 12px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.channel-image-price-group.is-inline .channel-image-price-value {
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .channel-expand-price-row.is-head span:nth-child(4),
@@ -673,6 +726,14 @@ async function copyModelName(model: string) {
 .channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-price-model,
 .channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-detail-price,
 .channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-detail-meter {
+  color: #94a3b8;
+}
+
+.channel-expand-panel.is-channel-disabled .channel-detail-meter-badge,
+.channel-expand-video-model-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-detail-meter-badge {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
   color: #94a3b8;
 }
 
@@ -731,7 +792,7 @@ async function copyModelName(model: string) {
   background: transparent;
   border: 0;
   border-radius: 0;
-  color: #1d2129;
+  color: #172033;
   display: inline-flex;
   gap: 6px;
   font-size: 13px;
@@ -744,7 +805,7 @@ async function copyModelName(model: string) {
 .channel-expand-video-model-row .channel-price-model,
 .channel-detail-meter {
   align-items: center;
-  color: #1d2129;
+  color: #172033;
   display: inline-flex;
   font-size: 13px;
   font-weight: 400;
@@ -756,6 +817,26 @@ async function copyModelName(model: string) {
 
 .channel-expand-video-model-row .channel-price-model {
   gap: 6px;
+}
+
+.channel-detail-meter {
+  color: #4e5969;
+  font-size: 12px;
+  font-weight: 400;
+  justify-content: center;
+}
+
+.channel-detail-meter-badge {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  color: #4e5969;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
 }
 
 .channel-price-model-text {
@@ -770,13 +851,13 @@ async function copyModelName(model: string) {
   color: #64748b;
   display: inline-flex;
   flex: 0 0 24px;
-  height: 24px;
+  height: 22px;
   justify-content: center;
   margin-left: 0;
-  min-height: 24px;
+  min-height: 22px;
   opacity: 0.62;
   padding: 0;
-  width: 24px;
+  width: 22px;
 }
 
 .channel-model-copy-button.el-button:hover,
@@ -787,12 +868,12 @@ async function copyModelName(model: string) {
 }
 
 .channel-model-copy-button.el-button .el-icon {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .channel-detail-price {
   align-items: center;
-  color: #1d2129;
+  color: #111827;
   display: inline-flex;
   font-feature-settings: 'tnum';
   font-size: 13px;
@@ -814,7 +895,7 @@ async function copyModelName(model: string) {
   align-items: center;
   color: #22c55e;
   display: inline-flex;
-  font-size: 18px;
+  font-size: 16px;
   justify-content: center;
 }
 
@@ -830,8 +911,8 @@ async function copyModelName(model: string) {
   color: #475569;
   display: inline-flex;
   font-size: 12px;
-  font-weight: 700;
-  height: 22px;
+  font-weight: 400;
+  height: 20px;
   justify-content: center;
   line-height: 1;
   padding: 2px 5px;
@@ -878,9 +959,9 @@ async function copyModelName(model: string) {
 }
 
 .channel-detail-switch-copy strong {
-  color: #344054;
-  font-size: 12px;
-  font-weight: 700;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 400;
   white-space: nowrap;
 }
 

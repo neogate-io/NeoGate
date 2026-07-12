@@ -473,6 +473,28 @@ mod tests {
     }
 
     #[test]
+    fn official_token_settlement_charges_total_tokens_once() {
+        let metadata = VideoBillingMetadata {
+            mode: VideoBillingMode::OfficialToken,
+            resolution: "720p".to_string(),
+            duration_seconds: 5,
+            has_video_input: false,
+            price_micros: 4_200_000,
+            estimated_tokens_per_second: Some(100_000),
+            estimated_tokens: Some(500_000),
+            estimated_micros: 2_100_000,
+        };
+        let (usage, price) =
+            settlement_usage_and_price(&metadata, &json!({"usage":{"total_tokens":1_000_000}}))
+                .unwrap();
+
+        assert_eq!(
+            super::super::cost_for_billable_usage(usage, &price),
+            4_200_000
+        );
+    }
+
+    #[test]
     fn reads_provider_video_duration_seconds() {
         let value = serde_json::json!({
             "usage": {

@@ -23,7 +23,7 @@ export function estimatedVideoTokensPerSecond(resolutionsText?: string | null) {
     '2160p': [3840, 2160],
     '4k': [3840, 2160]
   }
-  const matches = normalized.match(/(?:480p|720p|1080p|2160p|4k)/g) ?? ['720p']
+  const matches = normalized.match(/(?:480p|720p|1080p|2160p|4k)/g) ?? ['480p']
   const tokensPerSecond = matches.map((resolution) => {
     const [width, height] = dimensionsByResolution[resolution] ?? dimensionsByResolution['720p']
     return (width * height * 24) / 1024
@@ -74,6 +74,12 @@ export function pricingReferenceModelAliases(model: string) {
 
     const withoutDateSuffix = alias.replace(/-\d{6}$/, '')
     if (withoutDateSuffix !== alias) queue.push(withoutDateSuffix)
+
+    const withoutDateSuffixDotVersionAlias = withoutDateSuffix.replace(
+      /-(\d+)-(\d+)(?=-|$)/g,
+      '-$1.$2'
+    )
+    if (withoutDateSuffixDotVersionAlias !== alias) queue.push(withoutDateSuffixDotVersionAlias)
 
     const withoutResolutionSuffix = alias.replace(/-(?:480p|720p|1080p|4k)$/, '')
     if (withoutResolutionSuffix !== alias) queue.push(withoutResolutionSuffix)

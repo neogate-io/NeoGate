@@ -1155,67 +1155,19 @@ fn upstream_protocol_from_str(protocol: &str) -> AppResult<UpstreamProtocol> {
 }
 
 fn probe_model(endpoint: &EndpointTarget) -> Option<String> {
-    endpoint
-        .models
-        .iter()
-        .find(|model| is_text_probe_model(model))
-        .cloned()
+    endpoint.models.first().cloned()
 }
 
 fn diagnostic_probe_models(configured_models: &[String]) -> Vec<String> {
-    configured_models
-        .iter()
-        .filter(|&model| is_text_probe_model(model))
-        .cloned()
-        .collect()
+    configured_models.to_vec()
 }
 
 fn diagnostic_video_probe_models(configured_video_models: &[String]) -> Vec<String> {
-    configured_video_models
-        .iter()
-        .filter(|&model| is_text_to_video_probe_model(model))
-        .cloned()
-        .collect()
+    configured_video_models.to_vec()
 }
 
 fn diagnostic_image_probe_models(configured_image_models: &[String]) -> Vec<String> {
-    configured_image_models
-        .iter()
-        .filter(|&model| is_image_probe_model(model))
-        .cloned()
-        .collect()
-}
-
-fn is_text_probe_model(model: &str) -> bool {
-    let lowered = model.to_ascii_lowercase();
-    ![
-        "embedding",
-        "moderation",
-        "image",
-        "video",
-        "t2v",
-        "i2v",
-        "r2v",
-        "dall-e",
-        "whisper",
-        "tts",
-        "audio",
-        "rerank",
-        "clip",
-        "vision",
-    ]
-    .iter()
-    .any(|marker| lowered.contains(marker))
-}
-
-fn is_text_to_video_probe_model(model: &str) -> bool {
-    let lowered = model.to_ascii_lowercase();
-    lowered.contains("t2v") || lowered.contains("text-to-video")
-}
-
-fn is_image_probe_model(model: &str) -> bool {
-    let lowered = model.to_ascii_lowercase();
-    lowered.contains("image") || lowered.starts_with("image-") || lowered.contains("-image-")
+    configured_image_models.to_vec()
 }
 
 async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDiagnosticTarget> {
@@ -1239,7 +1191,7 @@ async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDi
 }
 
 async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<EndpointTarget>> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT ce.id, c.provider, ce.protocol, ce.base_url,
                 COALESCE(cm.models, ARRAY[]::TEXT[]) AS models,
                 COALESCE(cm.image_models, ARRAY[]::TEXT[]) AS image_models,
@@ -1248,32 +1200,31 @@ async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<End
          FROM channel_endpoint ce
          JOIN channel c ON c.id = ce.channel_id
          LEFT JOIN LATERAL (
-             SELECT array_agg(cm.model ORDER BY cm.model) AS models,
+             SELECT array_agg(cm.model ORDER BY cm.model) FILTER (
+                        WHERE cp.billing_meter = 'token'
+                          AND cp.enabled = TRUE
+                          AND {BILLABLE_PRICE_CONDITION_CP}
+                    ) AS models,
                     array_agg(cm.model ORDER BY cm.model) FILTER (
-                        WHERE COALESCE(cp.billing_meter, pm.billing_meter) = 'image'
-                           OR lower(cm.model) LIKE '%image%'
-                           OR lower(cm.model) LIKE 'image-%'
+                        WHERE cp.billing_meter = 'image'
+                          AND cp.enabled = TRUE
+                          AND {BILLABLE_PRICE_CONDITION_CP}
                     ) AS image_models,
                     array_agg(cm.model ORDER BY cm.model) FILTER (
-                        WHERE COALESCE(cp.billing_meter, pm.billing_meter) = 'video'
-                           OR lower(cm.model) LIKE '%t2v%'
-                           OR lower(cm.model) LIKE '%i2v%'
-                           OR lower(cm.model) LIKE '%r2v%'
-                           OR lower(cm.model) LIKE '%video%'
+                        WHERE cp.billing_meter = 'video'
+                          AND cp.enabled = TRUE
+                          AND {BILLABLE_PRICE_CONDITION_CP}
                     ) AS video_models
              FROM channel_model cm
-             LEFT JOIN channel_price cp
+             JOIN channel_price cp
                ON cp.channel_id = cm.channel_id
               AND cp.model = cm.model
-             LEFT JOIN provider_model pm
-               ON pm.provider = c.provider
-              AND pm.model = cm.model
              WHERE cm.channel_id = ce.channel_id
          ) cm ON TRUE
          WHERE ce.channel_id = $1
          ORDER BY CASE protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END,
-                  ce.created_at ASC",
-    )
+                  ce.created_at ASC"
+    )))
     .bind(channel_id)
     .fetch_all(&state.db.pool)
     .await?;
@@ -2277,61 +2228,27 @@ mod tests {
     }
 
     #[test]
-    fn configured_non_text_models_do_not_fallback_to_discovered_text_probe() {
-        let configured = vec!["glm-video-1".to_string()];
-
-        assert!(diagnostic_probe_models(&configured).is_empty());
-    }
-
-    #[test]
-    fn text_to_video_models_use_video_probe_not_text_probe() {
-        let configured = vec!["happyhorse-1.1-t2v".to_string()];
-
-        assert!(diagnostic_probe_models(&configured).is_empty());
-        assert_eq!(
-            diagnostic_video_probe_models(&configured),
-            vec!["happyhorse-1.1-t2v".to_string()]
-        );
-    }
-
-    #[test]
-    fn text_to_video_probe_does_not_depend_on_discovered_models() {
-        let configured = vec!["happyhorse-1.1-t2v".to_string()];
-
-        assert_eq!(
-            diagnostic_video_probe_models(&configured),
-            vec!["happyhorse-1.1-t2v".to_string()]
-        );
-    }
-
-    #[test]
-    fn configured_image_models_use_image_probe() {
-        let configured = vec!["image-2".to_string()];
-
-        assert!(diagnostic_probe_models(&configured).is_empty());
-        assert_eq!(
-            diagnostic_image_probe_models(&configured),
-            vec!["image-2".to_string()]
-        );
-    }
-
-    #[test]
-    fn configured_text_and_image_models_are_both_selected() {
+    fn priced_text_models_are_used_without_name_guessing() {
         let configured = vec![
             "gpt-5.4".to_string(),
-            "gpt-5.5".to_string(),
-            "gpt-image-2".to_string(),
+            "doubao-seedance-2-0-fast-260128".to_string(),
         ];
-        let image_models = vec!["gpt-image-2".to_string()];
 
-        assert_eq!(
-            diagnostic_probe_models(&configured),
-            vec!["gpt-5.4".to_string(), "gpt-5.5".to_string()]
-        );
-        assert_eq!(
-            diagnostic_image_probe_models(&image_models),
-            vec!["gpt-image-2".to_string()]
-        );
+        assert_eq!(diagnostic_probe_models(&configured), configured);
+    }
+
+    #[test]
+    fn priced_video_models_are_used_without_name_guessing() {
+        let configured = vec!["doubao-seedance-2-0-fast-260128".to_string()];
+
+        assert_eq!(diagnostic_video_probe_models(&configured), configured);
+    }
+
+    #[test]
+    fn priced_image_models_are_used_without_name_guessing() {
+        let configured = vec!["gpt-image-2".to_string()];
+
+        assert_eq!(diagnostic_image_probe_models(&configured), configured);
     }
 
     #[test]

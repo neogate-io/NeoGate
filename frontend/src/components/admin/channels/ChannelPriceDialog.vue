@@ -22,6 +22,7 @@ export type ChannelPriceForm = {
   channelId: number
   provider: string
   model: string
+  modelCategory: 'text' | 'image' | 'video'
   billingMeter: BillingMeter | null
   videoBillingMode: VideoBillingMode | null
   videoPriceTiers: ChannelVideoPriceTierForm[]
@@ -65,15 +66,15 @@ const activePriceTab = ref('text')
 const priceFormList = computed(() => Object.values(props.forms))
 
 const textPriceForms = computed(() =>
-  priceFormList.value.filter((form) => !form.canUseSeedanceVideoBilling && !form.canUseImageBilling)
+  priceFormList.value.filter((form) => form.modelCategory === 'text')
 )
 
 const imagePriceForms = computed(() =>
-  priceFormList.value.filter((form) => !form.canUseSeedanceVideoBilling && form.canUseImageBilling)
+  priceFormList.value.filter((form) => form.modelCategory === 'image')
 )
 
 const videoPriceForms = computed(() =>
-  priceFormList.value.filter((form) => form.canUseSeedanceVideoBilling)
+  priceFormList.value.filter((form) => form.modelCategory === 'video')
 )
 
 const standardPriceSections = computed(() =>

@@ -165,6 +165,55 @@ function pricingBasisLabel(template: ModelReferenceCatalogRecord) {
   }
 }
 
+function capabilityValues(capabilities: Record<string, unknown>, path: string[]) {
+  let current: unknown = capabilities
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return []
+    current = (current as Record<string, unknown>)[key]
+  }
+  return Array.isArray(current)
+    ? current.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+    : []
+}
+
+function isVideoTokenReference(template: ModelReferenceCatalogRecord) {
+  return (
+    template.pricing_basis === 'token' &&
+    capabilityValues(template.capabilities, ['modalities', 'output']).includes('video')
+  )
+}
+
+function hasSameTokenInputOutputPrice(template: ModelReferenceCatalogRecord) {
+  return template.input_price_micros === template.output_price_micros
+}
+
+function referencePriceNote(template: ModelReferenceCatalogRecord) {
+  if (isVideoTokenReference(template) && hasSameTokenInputOutputPrice(template)) return ''
+  if (isVideoTokenReference(template)) return t('inputOutputPriceShort')
+  return ''
+}
+
+function videoTokenReferenceUnit(template: ModelReferenceCatalogRecord) {
+  return isVideoTokenReference(template) && hasSameTokenInputOutputPrice(template)
+    ? t('pricePerMillionTokens')
+    : ''
+}
+
+function referencePriceUnit(template: ModelReferenceCatalogRecord) {
+  switch (template.pricing_basis) {
+    case 'image':
+      return t('perImage')
+    case 'call':
+      return t('perCall')
+    case 'hour':
+      return t('perHour')
+    case 'second':
+      return t('perSecond')
+    default:
+      return videoTokenReferenceUnit(template)
+  }
+}
+
 const VIDEO_TIER_DIMENSION_LABELS: Record<string, string> = {
   input_without_video: 'videoTierInputWithoutVideo',
   input_with_video: 'videoTierInputWithVideo',
@@ -207,7 +256,11 @@ function formatVideoTier(tier: VideoTier) {
         microsFromCny(tier.tiers?.[d as VideoTierDimension] ?? null)
       )
       const unit = videoTierPriceUnit(tier, d)
-      return `${t(labelKey)} ${amount}/${unit}`
+      return {
+        label: t(labelKey),
+        amount,
+        unit
+      }
     })
   return { resolution: videoTierDisplayLabel(tier), parts, hasAudioTier }
 }
@@ -236,13 +289,10 @@ function microsFromCny(value: number | null | undefined) {
 function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
   switch (template.pricing_basis) {
     case 'image':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perImage')}`
     case 'call':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perCall')}`
     case 'hour':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perHour')}`
     case 'second':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perSecond')}`
+      return formatReferenceMicros(template.unit_price_micros)
     case 'per_10k_token':
       return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
         template.output_price_micros
@@ -252,6 +302,9 @@ function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
         'multiTierRepresentative'
       )})`
     default:
+      if (isVideoTokenReference(template) && hasSameTokenInputOutputPrice(template)) {
+        return formatReferenceMicros(template.input_price_micros)
+      }
       return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
         template.output_price_micros
       )}`
@@ -261,6 +314,13 @@ function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
 function formatCachePricePair(template: ModelReferenceCatalogRecord) {
   const noCacheBases = ['image', 'call', 'hour', 'second', 'multi_tier_video']
   if (noCacheBases.includes(template.pricing_basis)) return '-'
+  if (
+    isVideoTokenReference(template) &&
+    template.cache_read_price_micros == null &&
+    template.cache_write_price_micros == null
+  ) {
+    return '-'
+  }
   const zero = `${currencySymbol(billingCurrency.value)}0`
   const cacheRead =
     template.cache_read_price_micros == null
@@ -292,10 +352,7 @@ function referenceSyncConfirmContent() {
 }
 
 function readReferenceSyncError(err: unknown) {
-  if (
-    err instanceof ApiError &&
-    err.code === 'pricing_reference_source_unavailable'
-  ) {
+  if (err instanceof ApiError && err.code === 'pricing_reference_source_unavailable') {
     return referencePricesSourceUnavailableText.value
   }
 
@@ -573,11 +630,23 @@ onMounted(load)
                   :key="pIdx"
                   class="reference-video-tier-price"
                 >
-                  {{ part }}
+                  <span>{{ part.label }}</span>
+                  <span class="reference-price-amount">{{ part.amount }}</span>
+                  <span class="reference-price-slash">/</span>
+                  <span class="reference-price-unit">{{ part.unit }}</span>
                 </span>
               </div>
             </div>
-            <span v-else class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
+            <span v-else class="reference-price-value">
+              <span>{{ formatReferencePricePair(row) }}</span>
+              <span v-if="referencePriceUnit(row)" class="reference-price-slash">/</span>
+              <span v-if="referencePriceUnit(row)" class="reference-price-unit">
+                {{ referencePriceUnit(row) }}
+              </span>
+            </span>
+            <span v-if="referencePriceNote(row)" class="reference-price-note">
+              {{ referencePriceNote(row) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column
@@ -778,12 +847,24 @@ onMounted(load)
 }
 
 .reference-price-value {
+  align-items: baseline;
   color: #263242;
-  display: block;
+  display: inline-flex;
+  gap: 4px;
+  justify-content: flex-end;
   font-variant-numeric: tabular-nums;
   font-weight: 620;
   text-align: right;
   white-space: nowrap;
+}
+
+.reference-price-note {
+  color: #7a8798;
+  display: block;
+  font-size: 11px;
+  font-weight: 560;
+  margin-top: 4px;
+  text-align: right;
 }
 
 .reference-video-tiers {
@@ -813,15 +894,37 @@ onMounted(load)
 }
 
 .reference-video-tier-price {
+  align-items: baseline;
   color: #263242;
+  display: inline-flex;
+  gap: 4px;
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   font-weight: 620;
   white-space: nowrap;
 }
 
+.reference-price-amount {
+  color: #263242;
+}
+
+.reference-price-slash {
+  color: #7a8798;
+  font-size: 11px;
+  font-weight: 560;
+  margin-left: -2px;
+  margin-right: -2px;
+}
+
+.reference-price-unit {
+  color: #7a8798;
+  font-size: 11px;
+  font-weight: 560;
+}
+
 .reference-video-tier.has-audio-tier .reference-video-tier-price {
   flex-basis: 100%;
+  justify-content: flex-end;
 }
 
 .reference-video-tier-note {

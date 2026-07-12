@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { CircleCheck, CircleCloseFilled, Tickets, Warning } from '@element-plus/icons-vue'
+import {
+  CircleCheck,
+  CircleCloseFilled,
+  CopyDocument,
+  Tickets,
+  Warning
+} from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { Channel } from '../../../types/admin'
+import { copyTextWithMessage } from '../../../utils/clipboard'
 
 export type ChannelExpandPriceGroup = {
   label: string
@@ -82,6 +89,10 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
     ? row.videoTiers
     : [{ specs: t('videoTierAnyResolution'), price: t('noKnownVideoTiers') }]
 }
+
+async function copyModelName(model: string) {
+  await copyTextWithMessage(model, t('modelNameCopied'))
+}
 </script>
 
 <template>
@@ -125,7 +136,19 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
               'is-upstream-missing': item.upstreamMissing
             }"
           >
-            <span class="channel-price-model">{{ item.model }}</span>
+            <span class="channel-price-model">
+              <span class="channel-price-model-text">{{ item.model }}</span>
+              <el-tooltip :content="t('copy')" placement="top" :show-after="600">
+                <el-button
+                  class="channel-model-copy-button"
+                  text
+                  :aria-label="t('copy')"
+                  @click.stop="copyModelName(item.model)"
+                >
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </span>
             <span class="channel-detail-meter">{{ item.videoBillingMode }}</span>
             <div class="channel-video-tier-stack">
               <div
@@ -226,7 +249,19 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
               'is-upstream-missing': item.upstreamMissing
             }"
           >
-            <span class="channel-price-model">{{ item.model }}</span>
+            <span class="channel-price-model">
+              <span class="channel-price-model-text">{{ item.model }}</span>
+              <el-tooltip :content="t('copy')" placement="top" :show-after="600">
+                <el-button
+                  class="channel-model-copy-button"
+                  text
+                  :aria-label="t('copy')"
+                  @click.stop="copyModelName(item.model)"
+                >
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </span>
             <span v-if="section.key === 'image'" class="channel-detail-meter">
               {{ item.billingMeterLabel }}
             </span>
@@ -692,18 +727,18 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
 }
 
 .channel-expand-price-row .channel-price-model {
+  align-items: center;
   background: transparent;
   border: 0;
   border-radius: 0;
   color: #1d2129;
-  display: inline-block;
+  display: inline-flex;
+  gap: 6px;
   font-size: 13px;
   font-weight: 400;
   max-width: 100%;
   overflow: hidden;
   padding: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .channel-expand-video-model-row .channel-price-model,
@@ -717,6 +752,42 @@ function videoTiersForDisplay(row: ChannelExpandPriceRow) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.channel-expand-video-model-row .channel-price-model {
+  gap: 6px;
+}
+
+.channel-price-model-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-model-copy-button.el-button {
+  align-items: center;
+  color: #64748b;
+  display: inline-flex;
+  flex: 0 0 24px;
+  height: 24px;
+  justify-content: center;
+  margin-left: 0;
+  min-height: 24px;
+  opacity: 0.62;
+  padding: 0;
+  width: 24px;
+}
+
+.channel-model-copy-button.el-button:hover,
+.channel-model-copy-button.el-button:focus {
+  background: #eef6ff;
+  color: var(--admin-primary);
+  opacity: 1;
+}
+
+.channel-model-copy-button.el-button .el-icon {
+  font-size: 14px;
 }
 
 .channel-detail-price {

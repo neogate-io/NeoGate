@@ -587,6 +587,10 @@
   max-width: 820px;
 }
 
+.interfaces-page .docs-hero {
+  max-width: 100%;
+}
+
 .docs-hero h1 {
   color: var(--public-text);
   font-size: clamp(30px, 3.4vw, 42px);
@@ -645,6 +649,11 @@
 }
 
 .docs-sidebar a:hover {
+  border-left-color: var(--brand-blue);
+  color: var(--brand-blue);
+}
+
+.docs-sidebar a.docs-sidebar-active-link {
   border-left-color: var(--brand-blue);
   color: var(--brand-blue);
 }
@@ -770,6 +779,99 @@
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.interface-path-list {
+  display: grid;
+  gap: 8px;
+}
+
+.interface-path-list article {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(216, 225, 236, 0.86);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) minmax(120px, 0.34fr);
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.interface-path-list code {
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.interface-path-list p {
+  color: var(--public-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.interface-endpoint-list {
+  display: grid;
+  gap: 14px;
+}
+
+.interface-endpoint-list > article {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(216, 225, 236, 0.86);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+}
+
+.interface-endpoint-heading {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.interface-endpoint-heading h3 {
+  color: var(--public-text);
+  font-size: 17px;
+  font-weight: 780;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.interface-endpoint-heading p {
+  color: var(--public-muted);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.interface-endpoint-url {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.interface-endpoint-url code {
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.interface-endpoint-list h4 {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.25;
+  margin: 0 0 10px;
 }
 
 .interface-table-wrap {
@@ -1340,6 +1442,20 @@
 
   .interface-meta-grid {
     grid-template-columns: 1fr;
+  }
+
+  .interface-path-list article {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .interface-path-list p {
+    grid-column: 1 / -1;
+  }
+
+  .interface-endpoint-url {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .docs-section-heading h2 {

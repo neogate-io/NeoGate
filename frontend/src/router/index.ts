@@ -4,6 +4,17 @@ import { useAuthStore } from '../stores/auth'
 
 export const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
+    if (to.hash) {
+      return new Promise((resolve) => {
+        window.setTimeout(() => {
+          resolve({ el: to.hash, top: 96, behavior: 'smooth' })
+        }, 0)
+      })
+    }
+    return { top: 0 }
+  },
   routes: [
     {
       path: '/setup',
@@ -32,7 +43,41 @@ export const router = createRouter({
     {
       path: '/interfaces',
       name: 'interfaces',
+      redirect: '/interfaces/before-start'
+    },
+    {
+      path: '/interfaces/before-start',
+      name: 'interfacesBeforeStart',
       component: () => import('../views/public/InterfacesView.vue'),
+      props: { section: 'before-start' },
+      meta: { messageKey: 'interfaces' }
+    },
+    {
+      path: '/interfaces/openai',
+      name: 'interfacesOpenAi',
+      component: () => import('../views/public/InterfacesView.vue'),
+      props: { section: 'openai' },
+      meta: { messageKey: 'interfaces' }
+    },
+    {
+      path: '/interfaces/anthropic',
+      name: 'interfacesAnthropic',
+      component: () => import('../views/public/InterfacesView.vue'),
+      props: { section: 'anthropic' },
+      meta: { messageKey: 'interfaces' }
+    },
+    {
+      path: '/interfaces/errors',
+      name: 'interfacesErrors',
+      component: () => import('../views/public/InterfacesView.vue'),
+      props: { section: 'errors' },
+      meta: { messageKey: 'interfaces' }
+    },
+    {
+      path: '/interfaces/billing',
+      name: 'interfacesBilling',
+      component: () => import('../views/public/InterfacesView.vue'),
+      props: { section: 'billing' },
       meta: { messageKey: 'interfaces' }
     },
     {

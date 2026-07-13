@@ -329,11 +329,10 @@ export function useChannels(t: Translate) {
           use_credentials: form.use_credentials
         })
 
-        fetchedModels.value = models
+        const selectableModels = mergeModelLists(models, existingModels)
+        fetchedModels.value = selectableModels
         selectedFetchedModels.value =
-          shouldKeepAllSelected || (formTarget === 'create' && existingModels.length === 0)
-            ? models
-            : models.filter((model) => existingModels.includes(model))
+          shouldKeepAllSelected ? selectableModels : existingModels
         syncSelectedModelsToInput()
         modelPickerDialogOpen.value = true
         if (models.length === 0) {
@@ -352,6 +351,10 @@ export function useChannels(t: Translate) {
         ElMessage.error(readModelFetchError(err, t))
       }
     })
+  }
+
+  function mergeModelLists(primary: string[], secondary: string[]) {
+    return Array.from(new Set([...primary, ...secondary]))
   }
 
   function validateModelFetchInput(form: ChannelForm, baseUrl: string, secret?: string) {

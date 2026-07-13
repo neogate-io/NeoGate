@@ -23,8 +23,8 @@ use crate::{
 };
 
 use super::{
-    constant_time_eq, extract_xml_value, runtime::run_app_message, runtime_for_endpoint,
-    secret_plaintext, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
+    constant_time_eq, extract_xml_value, runtime_for_endpoint, secret_plaintext,
+    spawn_app_message_reply, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
     WECOM_ENCODING_AES_KEY_ENGINE,
 };
 
@@ -112,23 +112,15 @@ pub(super) async fn message(
         metadata: json!({ "source": "wecom" }),
         trace_id: Uuid::new_v4().to_string(),
     };
-    let state_clone = Arc::clone(&state);
     let target_user = from_user;
-    tokio::spawn(async move {
-        match run_app_message(Arc::clone(&state_clone), runtime.clone(), message).await {
-            Ok(outcome) if !outcome.duplicate => {
-                if let Err(err) =
-                    send_text(&state_clone, &runtime, &target_user, &outcome.message).await
-                {
-                    tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to send wecom app message");
-                }
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(endpoint_id = runtime.endpoint_id, error = %err, "failed to handle wecom app message")
-            }
-        }
-    });
+    spawn_app_message_reply(
+        Arc::clone(&state),
+        runtime,
+        message,
+        move |state, runtime, message| async move {
+            send_text(&state, &runtime, &target_user, &message).await
+        },
+    );
     Ok("success".into_response())
 }
 

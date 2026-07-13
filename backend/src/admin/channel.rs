@@ -6,7 +6,7 @@ use sqlx::{AssertSqlSafe, Postgres, Row, Transaction};
 
 use crate::{
     auth::key_prefix,
-    billing::{BILLABLE_PROVIDER_PRICE_CONDITION, BILLABLE_PROVIDER_PRICE_CONDITION_PP},
+    billing::{BILLABLE_PRICE_CONDITION, BILLABLE_PRICE_CONDITION_CP},
     error::{AppError, AppResult},
     id::DbId,
     input::trimmed_non_empty,
@@ -16,8 +16,7 @@ use crate::{
 use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
     ensure_builtin_manual_provider_by_code, provider_default_endpoint_base_url,
-    provider_default_endpoints, provider_default_models, record_provider_models,
-    OPENAI_OAUTH_PROTOCOL,
+    provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -391,6 +390,22 @@ pub async fn update_channel_model(
                  WHEN status = 'disabled' THEN 'available'
                  ELSE status
              END,
+             runtime_status = CASE
+                 WHEN $3 = TRUE THEN 'normal'
+                 ELSE runtime_status
+             END,
+             cooldown_until = CASE
+                 WHEN $3 = TRUE THEN NULL
+                 ELSE cooldown_until
+             END,
+             last_error = CASE
+                 WHEN $3 = TRUE THEN NULL
+                 ELSE last_error
+             END,
+             last_status_code = CASE
+                 WHEN $3 = TRUE THEN NULL
+                 ELSE last_status_code
+             END,
              updated_at = now()
          WHERE channel_id = $1
            AND model = $2
@@ -605,18 +620,13 @@ async fn normalize_create_endpoints(
         && !(provider_code == "openai" && req.use_credentials)
     {
         if let Some(defaults) = provider_default_endpoints(state, provider_code).await? {
-            let default_models = provider_default_models(state, provider_code)
-                .await?
-                .ok_or_else(|| {
-                    AppError::BadRequest(format!("invalid provider: {provider_code}"))
-                })?;
             let inputs: Vec<ChannelEndpointInput> = defaults
                 .into_iter()
                 .filter(|endpoint| !endpoint.base_url.trim().is_empty())
                 .map(|endpoint| ChannelEndpointInput {
                     protocol: endpoint.protocol,
                     base_url: Some(endpoint.base_url),
-                    models: default_models.clone(),
+                    models: Vec::new(),
                     enabled: true,
                 })
                 .collect();
@@ -886,7 +896,7 @@ async fn upsert_endpoint(
 async fn sync_channel_models_for_channel(
     tx: &mut Transaction<'_, Postgres>,
     channel_id: DbId,
-    provider: &str,
+    _provider: &str,
 ) -> AppResult<()> {
     let rows = sqlx::query("SELECT models FROM channel_endpoint WHERE channel_id = $1")
         .bind(channel_id)
@@ -902,7 +912,7 @@ async fn sync_channel_models_for_channel(
             if model.is_empty() || !seen.insert(model.to_string()) {
                 continue;
             }
-            let price_configured = model_has_enabled_price(tx, provider, model).await?;
+            let price_configured = model_has_enabled_price(tx, channel_id, model).await?;
             active_models.push(model.to_string());
             sqlx::query(
                 "INSERT INTO channel_model
@@ -946,19 +956,19 @@ async fn sync_channel_models_for_channel(
 
 async fn model_has_enabled_price(
     tx: &mut Transaction<'_, Postgres>,
-    provider: &str,
+    channel_id: DbId,
     model: &str,
 ) -> AppResult<bool> {
     let exists: Option<i32> = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT 1
-         FROM provider_price
-         WHERE provider = $1
+         FROM channel_price
+         WHERE channel_id = $1
            AND model = $2
            AND enabled = TRUE
-           AND {BILLABLE_PROVIDER_PRICE_CONDITION}
+           AND {BILLABLE_PRICE_CONDITION}
          LIMIT 1"
     )))
-    .bind(provider)
+    .bind(channel_id)
     .bind(model)
     .fetch_optional(&mut **tx)
     .await?;
@@ -1051,20 +1061,20 @@ async fn models_by_channel(
                 cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
                 cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
                 COALESCE(
-                    pp.enabled
-                    AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP},
+                    cp.enabled
+                    AND {BILLABLE_PRICE_CONDITION_CP},
                     FALSE
                 ) AS billing_enabled,
-                (pp.id IS NOT NULL) AS price_configured,
-                pp.input_price_micros, pp.output_price_micros,
-                pp.cache_read_price_micros, pp.cache_write_price_micros,
-                pp.billing_meter,
-                pp.unit_price_micros
+                (cp.id IS NOT NULL) AS price_configured,
+                cp.input_price_micros, cp.output_price_micros,
+                cp.cache_read_price_micros, cp.cache_write_price_micros,
+                cp.billing_meter,
+                cp.unit_price_micros
          FROM channel_model cm
          JOIN channel c ON c.id = cm.channel_id
-         LEFT JOIN provider_price pp
-           ON pp.provider = c.provider
-          AND pp.model = cm.model
+         LEFT JOIN channel_price cp
+           ON cp.channel_id = cm.channel_id
+          AND cp.model = cm.model
          WHERE cm.channel_id = ANY($1)
          ORDER BY cm.model ASC"
     )))
@@ -1088,12 +1098,11 @@ async fn ensure_channel_model_has_enabled_price(
     let row = sqlx::query(AssertSqlSafe(format!(
         "SELECT 1
          FROM channel_model cm
-         JOIN channel c ON c.id = cm.channel_id
-         JOIN provider_price pp
-          ON pp.provider = c.provider
-         AND pp.model = cm.model
-         AND pp.enabled = TRUE
-         AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+         JOIN channel_price cp
+          ON cp.channel_id = cm.channel_id
+         AND cp.model = cm.model
+         AND cp.enabled = TRUE
+         AND {BILLABLE_PRICE_CONDITION_CP}
          WHERE cm.channel_id = $1
            AND cm.model = $2
          LIMIT 1"
@@ -1212,7 +1221,7 @@ fn channel_key_from_row(row: &sqlx::postgres::PgRow, secret: &str) -> AppResult<
     })
 }
 
-fn mask_channel_key(secret: &str) -> String {
+pub(crate) fn mask_channel_key(secret: &str) -> String {
     const HEAD_LEN: usize = 8;
     const TAIL_LEN: usize = 6;
     const MASK_THRESHOLD: usize = 18;

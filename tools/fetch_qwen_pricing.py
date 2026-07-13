@@ -154,6 +154,8 @@ def clean_key(value: str) -> str:
         "模型ID": "model",
         "服务部署范围": "deployment_scope",
         "模式": "mode",
+        "输出视频模式": "mode",
+        "输出视频类型": "mode",
         "单次请求的输入Token数": "condition",
         "单次请求的输入Token范围": "condition",
         "输入Token范围": "condition",
@@ -365,6 +367,15 @@ def new_model_entry(model_id: str, name: str, record: dict[str, Any]) -> dict[st
     }
 
 
+def video_tier_label(record: dict[str, Any], resolution: str) -> str:
+    parts = [
+        str(record.get("region") or "").strip(),
+        str(record.get("mode") or "").strip(),
+        resolution.strip(),
+    ]
+    return " · ".join(part for part in parts if part)
+
+
 def to_provider_payload(records: list[dict[str, Any]], tables: list[dict[str, Any]], source_url: str) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = {}
     # 视频多档聚合:同模型同 section 多档(分辨率)合并
@@ -378,9 +389,11 @@ def to_provider_payload(records: list[dict[str, Any]], tables: list[dict[str, An
         subsection = record.get("subsection") or ""
         if subsection == "视频生成" and cost.get("basis") == "second":
             res = record.get("condition") or ""
-            video_tiers_by_model.setdefault(model_id, []).append(
-                {"resolution": res, "tiers": {"price": cost.get("per_second")}}
-            )
+            tier = {"resolution": res, "unit": "per_second", "tiers": {"price": cost.get("per_second")}}
+            label = video_tier_label(record, res)
+            if label and label != res:
+                tier["label"] = label
+            video_tiers_by_model.setdefault(model_id, []).append(tier)
             continue
         if cost and "cost" not in entry:
             entry["cost"] = cost
@@ -402,7 +415,20 @@ def to_provider_payload(records: list[dict[str, Any]], tables: list[dict[str, An
         entry = models.get(model_id)
         if not entry:
             continue
-        valid = [t for t in tiers if t["tiers"].get("price") is not None]
+        valid = []
+        seen: set[tuple[str, str, str]] = set()
+        for tier in tiers:
+            if tier["tiers"].get("price") is None:
+                continue
+            key = (
+                str(tier.get("label") or ""),
+                str(tier.get("resolution") or ""),
+                str(tier["tiers"].get("price")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            valid.append(tier)
         if not valid:
             continue
         prices_list = [t["tiers"]["price"] for t in valid]

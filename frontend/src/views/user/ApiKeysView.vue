@@ -287,7 +287,11 @@ async function confirmDeleteApiKey(row: UserKey) {
 
 <style scoped>
 .user-api-keys-view {
+  color: #354154;
   display: grid;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   gap: 12px;
   width: min(1120px, 100%);
 }
@@ -302,13 +306,12 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .api-base-url-panel > span {
-  color: #64748b;
+  color: #6f7b8f;
   flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: 0;
   line-height: 1;
-  text-transform: uppercase;
 }
 
 .api-base-url-row {
@@ -321,9 +324,10 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .api-base-url-row code {
-  color: #0f172a;
-  font-size: 14px;
-  font-weight: 500;
+  color: #354154;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
   letter-spacing: 0;
   min-width: 0;
   overflow: hidden;
@@ -396,9 +400,9 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-list-name-row strong {
-  color: #111827;
-  font-size: 16px;
-  font-weight: 650;
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 500;
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -417,11 +421,11 @@ async function confirmDeleteApiKey(row: UserKey) {
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
   border-radius: 999px;
-  color: #475569;
+  color: #586579;
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   gap: 6px;
   line-height: 1;
   padding: 6px 9px;
@@ -460,12 +464,11 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-list-secret span {
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  color: #7b8798;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
   line-height: 1;
-  text-transform: uppercase;
 }
 
 .key-list-secret div {
@@ -479,10 +482,11 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-list-secret .user-key-value {
-  color: #0f172a;
+  color: #354154;
   flex: 1 1 auto;
-  font-size: 16px;
-  font-weight: 500;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
   letter-spacing: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -521,14 +525,14 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-card-meta dt {
-  color: #94a3b8;
+  color: #929daf;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.2;
 }
 
 .key-card-meta dd {
-  color: #64748b;
+  color: #586579;
   font-size: 13px;
   font-weight: 400;
   line-height: 1.25;
@@ -583,8 +587,8 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-empty-hint {
-  color: #64748b;
-  font-size: 14px;
+  color: #6f7b8f;
+  font-size: 13px;
   line-height: 1.6;
   margin: 0 auto;
   max-width: 420px;
@@ -592,8 +596,8 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .key-create-card strong {
-  font-size: 15px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .key-create-icon {
@@ -614,6 +618,7 @@ async function confirmDeleteApiKey(row: UserKey) {
 
 .new-api-key-hint {
   color: var(--el-text-color-secondary);
+  font-size: 13px;
   line-height: 1.6;
   margin: 0 0 12px;
 }
@@ -644,9 +649,9 @@ async function confirmDeleteApiKey(row: UserKey) {
 }
 
 .new-api-key-box code {
-  color: #111827;
+  color: #354154;
   flex: 1 1 auto;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
   min-width: 0;

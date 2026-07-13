@@ -10,13 +10,13 @@ use axum::{
 };
 use chrono::{Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, PgPool, Row};
+use sqlx::{postgres::PgRow, AssertSqlSafe, PgPool, Row};
 
 use crate::{
     auth::AdminAuth,
     error::{AppError, AppResult},
     id::DbId,
-    input::{bounded_limit, trimmed_non_empty},
+    input::{bounded_limit, page_number, trimmed_non_empty},
     AppState,
 };
 
@@ -297,6 +297,29 @@ struct UsageStatsPage<T> {
     limit: i64,
 }
 
+#[derive(Clone, Copy)]
+struct UsageStatsPageParams {
+    page: i64,
+    limit: i64,
+}
+
+impl UsageStatsPageParams {
+    const fn new(page: i64, limit: i64) -> Self {
+        Self { page, limit }
+    }
+
+    fn from_params(params: &UsageStatsParams) -> Self {
+        Self {
+            page: page_number(params.page),
+            limit: bounded_limit(params.limit, 20, 100),
+        }
+    }
+
+    fn offset(self) -> i64 {
+        (self.page - 1) * self.limit
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct UsageStatsOptions {
     models: Vec<ModelOption>,
@@ -326,7 +349,13 @@ async fn summary(
     let granularity = SummaryGranularity::from_param(params.granularity.as_deref())?;
     let totals = aggregate_totals(&state.db.pool, &filter).await?;
     let daily = daily_stats(&state.db.pool, &filter, granularity).await?;
-    let top_users = user_stats(&state.db.pool, &filter, 1, 10, SortMode::Cost).await?;
+    let top_users = user_stats(
+        &state.db.pool,
+        &filter,
+        UsageStatsPageParams::new(1, 10),
+        SortMode::Cost,
+    )
+    .await?;
     let top_models = model_stats(&state.db.pool, &filter, 10, SortMode::Cost).await?;
 
     Ok(Json(UsageStatsSummary {
@@ -366,12 +395,9 @@ async fn users(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Json<UsageStatsPage<UserUsageStats>>> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let page = params.page.unwrap_or(1).max(1);
-    let limit = bounded_limit(params.limit, 20, 100);
+    let page = UsageStatsPageParams::from_params(&params);
     let sort = SortMode::from_param(params.sort.as_deref());
-    Ok(Json(
-        user_stats(&state.db.pool, &filter, page, limit, sort).await?,
-    ))
+    Ok(Json(user_stats(&state.db.pool, &filter, page, sort).await?))
 }
 
 async fn user_models(
@@ -380,11 +406,10 @@ async fn user_models(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Json<UsageStatsPage<UserModelUsageStats>>> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let page = params.page.unwrap_or(1).max(1);
-    let limit = bounded_limit(params.limit, 20, 100);
+    let page = UsageStatsPageParams::from_params(&params);
     let sort = SortMode::from_param(params.sort.as_deref());
     Ok(Json(
-        user_model_stats(&state.db.pool, &filter, page, limit, sort).await?,
+        user_model_stats(&state.db.pool, &filter, page, sort).await?,
     ))
 }
 
@@ -394,11 +419,10 @@ async fn models(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Json<UsageStatsPage<ModelUsageStats>>> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let page = params.page.unwrap_or(1).max(1);
-    let limit = bounded_limit(params.limit, 20, 100);
+    let page = UsageStatsPageParams::from_params(&params);
     let sort = SortMode::from_param(params.sort.as_deref());
     Ok(Json(
-        model_stats_page(&state.db.pool, &filter, page, limit, sort).await?,
+        model_stats_page(&state.db.pool, &filter, page, sort).await?,
     ))
 }
 
@@ -408,16 +432,15 @@ async fn projects(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Response> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let page = params.page.unwrap_or(1).max(1);
-    let limit = bounded_limit(params.limit, 20, 100);
+    let page = UsageStatsPageParams::from_params(&params);
     let sort = SortMode::from_param(params.sort.as_deref());
     match ProjectGroupBy::from_param(params.group_by.as_deref())? {
         ProjectGroupBy::Project => {
-            let page = project_stats(&state.db.pool, &filter, page, limit, sort).await?;
+            let page = project_stats(&state.db.pool, &filter, page, sort).await?;
             Ok(Json(page).into_response())
         }
         ProjectGroupBy::User => {
-            let page = project_member_stats(&state.db.pool, &filter, page, limit, sort).await?;
+            let page = project_member_stats(&state.db.pool, &filter, page, sort).await?;
             Ok(Json(page).into_response())
         }
     }
@@ -429,12 +452,9 @@ async fn keys(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Json<UsageStatsPage<KeyUsageStats>>> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let page = params.page.unwrap_or(1).max(1);
-    let limit = bounded_limit(params.limit, 20, 100);
+    let page = UsageStatsPageParams::from_params(&params);
     let sort = SortMode::from_param(params.sort.as_deref());
-    Ok(Json(
-        key_stats(&state.db.pool, &filter, page, limit, sort).await?,
-    ))
+    Ok(Json(key_stats(&state.db.pool, &filter, page, sort).await?))
 }
 
 async fn options(
@@ -493,7 +513,7 @@ impl UsageStatsFilter {
 
         let billing_meter = trimmed_non_empty(params.billing_meter.as_deref()).map(str::to_string);
         if let Some(value) = billing_meter.as_deref() {
-            if value != "token" && value != "image" {
+            if value != "token" && value != "image" && value != "video" {
                 return Err(AppError::BadRequest("invalid billing_meter".to_string()));
             }
         }
@@ -940,8 +960,7 @@ async fn model_usage_timeseries(
 async fn user_stats(
     pool: &PgPool,
     filter: &UsageStatsFilter,
-    page: i64,
-    limit: i64,
+    page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<UserUsageStats>> {
     let total = sqlx::query_scalar::<_, i64>(
@@ -1016,7 +1035,6 @@ async fn user_stats(
         "#,
         sort.user_order_by()
     );
-    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -1028,27 +1046,18 @@ async fn user_stats(
         .bind(filter.project_id)
         .bind(filter.user_key_id)
         .bind(filter.channel_id)
-        .bind(offset)
-        .bind(limit)
+        .bind(page.offset())
+        .bind(page.limit)
         .fetch_all(pool)
         .await?;
 
-    Ok(UsageStatsPage {
-        items: rows
-            .iter()
-            .map(user_stats_from_row)
-            .collect::<Result<_, sqlx::Error>>()?,
-        total,
-        page,
-        limit,
-    })
+    usage_stats_page(rows, total, page, user_stats_from_row)
 }
 
 async fn user_model_stats(
     pool: &PgPool,
     filter: &UsageStatsFilter,
-    page: i64,
-    limit: i64,
+    page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<UserModelUsageStats>> {
     let total = sqlx::query_scalar::<_, i64>(
@@ -1117,7 +1126,6 @@ async fn user_model_stats(
         "#,
         sort.model_order_by()
     );
-    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -1126,20 +1134,12 @@ async fn user_model_stats(
         .bind(filter.project_query_pattern.as_deref())
         .bind(filter.model.as_deref())
         .bind(filter.billing_meter.as_deref())
-        .bind(offset)
-        .bind(limit)
+        .bind(page.offset())
+        .bind(page.limit)
         .fetch_all(pool)
         .await?;
 
-    Ok(UsageStatsPage {
-        items: rows
-            .iter()
-            .map(user_model_stats_from_row)
-            .collect::<Result<_, sqlx::Error>>()?,
-        total,
-        page,
-        limit,
-    })
+    usage_stats_page(rows, total, page, user_model_stats_from_row)
 }
 
 async fn model_stats(
@@ -1148,14 +1148,17 @@ async fn model_stats(
     limit: i64,
     sort: SortMode,
 ) -> AppResult<Vec<ModelUsageStats>> {
-    Ok(model_stats_page(pool, filter, 1, limit, sort).await?.items)
+    Ok(
+        model_stats_page(pool, filter, UsageStatsPageParams::new(1, limit), sort)
+            .await?
+            .items,
+    )
 }
 
 async fn model_stats_page(
     pool: &PgPool,
     filter: &UsageStatsFilter,
-    page: i64,
-    limit: i64,
+    page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<ModelUsageStats>> {
     let total = sqlx::query_scalar::<_, i64>(
@@ -1232,7 +1235,6 @@ async fn model_stats_page(
         "#,
         sort.model_order_by()
     );
-    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -1244,27 +1246,18 @@ async fn model_stats_page(
         .bind(filter.project_id)
         .bind(filter.user_key_id)
         .bind(filter.channel_id)
-        .bind(offset)
-        .bind(limit)
+        .bind(page.offset())
+        .bind(page.limit)
         .fetch_all(pool)
         .await?;
 
-    Ok(UsageStatsPage {
-        items: rows
-            .iter()
-            .map(model_stats_from_row)
-            .collect::<Result<_, sqlx::Error>>()?,
-        total,
-        page,
-        limit,
-    })
+    usage_stats_page(rows, total, page, model_stats_from_row)
 }
 
 async fn project_stats(
     pool: &PgPool,
     filter: &UsageStatsFilter,
-    page: i64,
-    limit: i64,
+    page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<ProjectUsageStats>> {
     let sql = format!(
@@ -1315,7 +1308,6 @@ async fn project_stats(
         "#,
         sort.project_order_by()
     );
-    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -1327,32 +1319,19 @@ async fn project_stats(
         .bind(filter.billing_meter.as_deref())
         .bind(filter.user_key_id)
         .bind(filter.channel_id)
-        .bind(offset)
-        .bind(limit)
+        .bind(page.offset())
+        .bind(page.limit)
         .fetch_all(pool)
         .await?;
-    let total = rows
-        .first()
-        .map(|row| row.try_get("total"))
-        .transpose()?
-        .unwrap_or(0);
+    let total = window_total(&rows)?;
 
-    Ok(UsageStatsPage {
-        items: rows
-            .iter()
-            .map(project_stats_from_row)
-            .collect::<Result<_, sqlx::Error>>()?,
-        total,
-        page,
-        limit,
-    })
+    usage_stats_page(rows, total, page, project_stats_from_row)
 }
 
 async fn project_member_stats(
     pool: &PgPool,
     filter: &UsageStatsFilter,
-    page: i64,
-    limit: i64,
+    page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<ProjectMemberUsageStats>> {
     let sql = format!(
@@ -1406,7 +1385,6 @@ async fn project_member_stats(
         "#,
         sort.user_order_by()
     );
-    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -1418,32 +1396,19 @@ async fn project_member_stats(
         .bind(filter.billing_meter.as_deref())
         .bind(filter.user_key_id)
         .bind(filter.channel_id)
-        .bind(offset)
-        .bind(limit)
+        .bind(page.offset())
+        .bind(page.limit)
         .fetch_all(pool)
         .await?;
-    let total = rows
-        .first()
-        .map(|row| row.try_get("total"))
-        .transpose()?
-        .unwrap_or(0);
+    let total = window_total(&rows)?;
 
-    Ok(UsageStatsPage {
-        items: rows
-            .iter()
-            .map(project_member_stats_from_row)
-            .collect::<Result<_, sqlx::Error>>()?,
-        total,
-        page,
-        limit,
-    })
+    usage_stats_page(rows, total, page, project_member_stats_from_row)
 }
 
 async fn key_stats(
     pool: &PgPool,
     filter: &UsageStatsFilter,
-    page: i64,
-    limit: i64,
+    page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<KeyUsageStats>> {
     let sql = format!(
@@ -1503,7 +1468,6 @@ async fn key_stats(
         "#,
         sort.key_order_by()
     );
-    let offset = (page - 1) * limit;
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter.start)
         .bind(filter.end)
@@ -1515,25 +1479,13 @@ async fn key_stats(
         .bind(filter.billing_meter.as_deref())
         .bind(filter.user_key_id)
         .bind(filter.channel_id)
-        .bind(offset)
-        .bind(limit)
+        .bind(page.offset())
+        .bind(page.limit)
         .fetch_all(pool)
         .await?;
-    let total = rows
-        .first()
-        .map(|row| row.try_get("total"))
-        .transpose()?
-        .unwrap_or(0);
+    let total = window_total(&rows)?;
 
-    Ok(UsageStatsPage {
-        items: rows
-            .iter()
-            .map(key_stats_from_row)
-            .collect::<Result<_, sqlx::Error>>()?,
-        total,
-        page,
-        limit,
-    })
+    usage_stats_page(rows, total, page, key_stats_from_row)
 }
 
 async fn option_models(pool: &PgPool, filter: &UsageStatsFilter) -> AppResult<Vec<ModelOption>> {
@@ -1632,51 +1584,54 @@ async fn export_projects(
     filter: &UsageStatsFilter,
     sort: SortMode,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
-    let page = project_stats(pool, filter, 1, EXPORT_LIMIT + 1, sort).await?;
-    ensure_export_limit(page.items.len())?;
-    let mut rows = vec![vec![
-        "project_id".into(),
-        "project_name".into(),
-        "owner_user_id".into(),
-        "member_count".into(),
-        "key_count".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "chat_cost_micros".into(),
-        "image_cost_micros".into(),
-        "coding_cost_micros".into(),
-        "other_cost_micros".into(),
-        "avg_latency_ms".into(),
-    ]];
-    rows.extend(page.items.into_iter().map(|item| {
-        vec![
-            optional_id(item.project_id),
-            item.project_name,
-            optional_id(item.owner_user_id),
-            item.member_count.to_string(),
-            item.key_count.to_string(),
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            item.cost_breakdown.chat_cost_micros.to_string(),
-            item.cost_breakdown.image_cost_micros.to_string(),
-            item.cost_breakdown.coding_cost_micros.to_string(),
-            item.cost_breakdown.other_cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-        ]
-    }));
-    Ok((export_filename("projects", filter), rows))
+    let page = project_stats(pool, filter, export_page(), sort).await?;
+    export_rows(
+        "projects",
+        filter,
+        page.items,
+        &[
+            "project_id",
+            "project_name",
+            "owner_user_id",
+            "member_count",
+            "key_count",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "chat_cost_micros",
+            "image_cost_micros",
+            "coding_cost_micros",
+            "other_cost_micros",
+            "avg_latency_ms",
+        ],
+        |item| {
+            vec![
+                optional_id(item.project_id),
+                item.project_name,
+                optional_id(item.owner_user_id),
+                item.member_count.to_string(),
+                item.key_count.to_string(),
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                item.cost_breakdown.chat_cost_micros.to_string(),
+                item.cost_breakdown.image_cost_micros.to_string(),
+                item.cost_breakdown.coding_cost_micros.to_string(),
+                item.cost_breakdown.other_cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+            ]
+        },
+    )
 }
 
 async fn export_project_members(
@@ -1684,55 +1639,58 @@ async fn export_project_members(
     filter: &UsageStatsFilter,
     sort: SortMode,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
-    let page = project_member_stats(pool, filter, 1, EXPORT_LIMIT + 1, sort).await?;
-    ensure_export_limit(page.items.len())?;
-    let mut rows = vec![vec![
-        "project_id".into(),
-        "project_name".into(),
-        "user_id".into(),
-        "user_email".into(),
-        "user_username".into(),
-        "key_count".into(),
-        "model_count".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "chat_cost_micros".into(),
-        "image_cost_micros".into(),
-        "coding_cost_micros".into(),
-        "other_cost_micros".into(),
-        "avg_latency_ms".into(),
-    ]];
-    rows.extend(page.items.into_iter().map(|item| {
-        vec![
-            optional_id(item.project_id),
-            item.project_name,
-            optional_id(item.user_id),
-            item.user_email.unwrap_or_default(),
-            item.user_username.unwrap_or_default(),
-            item.key_count.to_string(),
-            item.model_count.to_string(),
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            item.cost_breakdown.chat_cost_micros.to_string(),
-            item.cost_breakdown.image_cost_micros.to_string(),
-            item.cost_breakdown.coding_cost_micros.to_string(),
-            item.cost_breakdown.other_cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-        ]
-    }));
-    Ok((export_filename("project-members", filter), rows))
+    let page = project_member_stats(pool, filter, export_page(), sort).await?;
+    export_rows(
+        "project-members",
+        filter,
+        page.items,
+        &[
+            "project_id",
+            "project_name",
+            "user_id",
+            "user_email",
+            "user_username",
+            "key_count",
+            "model_count",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "chat_cost_micros",
+            "image_cost_micros",
+            "coding_cost_micros",
+            "other_cost_micros",
+            "avg_latency_ms",
+        ],
+        |item| {
+            vec![
+                optional_id(item.project_id),
+                item.project_name,
+                optional_id(item.user_id),
+                item.user_email.unwrap_or_default(),
+                item.user_username.unwrap_or_default(),
+                item.key_count.to_string(),
+                item.model_count.to_string(),
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                item.cost_breakdown.chat_cost_micros.to_string(),
+                item.cost_breakdown.image_cost_micros.to_string(),
+                item.cost_breakdown.coding_cost_micros.to_string(),
+                item.cost_breakdown.other_cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+            ]
+        },
+    )
 }
 
 async fn export_keys(
@@ -1740,59 +1698,62 @@ async fn export_keys(
     filter: &UsageStatsFilter,
     sort: SortMode,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
-    let page = key_stats(pool, filter, 1, EXPORT_LIMIT + 1, sort).await?;
-    ensure_export_limit(page.items.len())?;
-    let mut rows = vec![vec![
-        "user_key_id".into(),
-        "user_key_name".into(),
-        "key_prefix".into(),
-        "project_id".into(),
-        "project_name".into(),
-        "user_id".into(),
-        "user_email".into(),
-        "user_username".into(),
-        "model_count".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "chat_cost_micros".into(),
-        "image_cost_micros".into(),
-        "coding_cost_micros".into(),
-        "other_cost_micros".into(),
-        "avg_latency_ms".into(),
-    ]];
-    rows.extend(page.items.into_iter().map(|item| {
-        vec![
-            optional_id(item.user_key_id),
-            item.user_key_name,
-            item.key_prefix.unwrap_or_default(),
-            optional_id(item.project_id),
-            item.project_name,
-            optional_id(item.user_id),
-            item.user_email.unwrap_or_default(),
-            item.user_username.unwrap_or_default(),
-            item.model_count.to_string(),
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            item.cost_breakdown.chat_cost_micros.to_string(),
-            item.cost_breakdown.image_cost_micros.to_string(),
-            item.cost_breakdown.coding_cost_micros.to_string(),
-            item.cost_breakdown.other_cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-        ]
-    }));
-    Ok((export_filename("keys", filter), rows))
+    let page = key_stats(pool, filter, export_page(), sort).await?;
+    export_rows(
+        "keys",
+        filter,
+        page.items,
+        &[
+            "user_key_id",
+            "user_key_name",
+            "key_prefix",
+            "project_id",
+            "project_name",
+            "user_id",
+            "user_email",
+            "user_username",
+            "model_count",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "chat_cost_micros",
+            "image_cost_micros",
+            "coding_cost_micros",
+            "other_cost_micros",
+            "avg_latency_ms",
+        ],
+        |item| {
+            vec![
+                optional_id(item.user_key_id),
+                item.user_key_name,
+                item.key_prefix.unwrap_or_default(),
+                optional_id(item.project_id),
+                item.project_name,
+                optional_id(item.user_id),
+                item.user_email.unwrap_or_default(),
+                item.user_username.unwrap_or_default(),
+                item.model_count.to_string(),
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                item.cost_breakdown.chat_cost_micros.to_string(),
+                item.cost_breakdown.image_cost_micros.to_string(),
+                item.cost_breakdown.coding_cost_micros.to_string(),
+                item.cost_breakdown.other_cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+            ]
+        },
+    )
 }
 
 async fn export_users(
@@ -1800,41 +1761,44 @@ async fn export_users(
     filter: &UsageStatsFilter,
     sort: SortMode,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
-    let page = user_stats(pool, filter, 1, EXPORT_LIMIT + 1, sort).await?;
-    ensure_export_limit(page.items.len())?;
-    let mut rows = vec![vec![
-        "user_id".into(),
-        "user_email".into(),
-        "user_username".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "avg_latency_ms".into(),
-        "model_count".into(),
-    ]];
-    rows.extend(page.items.into_iter().map(|item| {
-        vec![
-            optional_id(item.user_id),
-            item.user_email.unwrap_or_default(),
-            item.user_username.unwrap_or_default(),
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-            item.model_count.to_string(),
-        ]
-    }));
-    Ok((export_filename("users", filter), rows))
+    let page = user_stats(pool, filter, export_page(), sort).await?;
+    export_rows(
+        "users",
+        filter,
+        page.items,
+        &[
+            "user_id",
+            "user_email",
+            "user_username",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "avg_latency_ms",
+            "model_count",
+        ],
+        |item| {
+            vec![
+                optional_id(item.user_id),
+                item.user_email.unwrap_or_default(),
+                item.user_username.unwrap_or_default(),
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+                item.model_count.to_string(),
+            ]
+        },
+    )
 }
 
 async fn export_user_models(
@@ -1842,45 +1806,48 @@ async fn export_user_models(
     filter: &UsageStatsFilter,
     sort: SortMode,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
-    let page = user_model_stats(pool, filter, 1, EXPORT_LIMIT + 1, sort).await?;
-    ensure_export_limit(page.items.len())?;
-    let mut rows = vec![vec![
-        "user_id".into(),
-        "user_email".into(),
-        "user_username".into(),
-        "channel_name".into(),
-        "model".into(),
-        "billing_meter".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "avg_latency_ms".into(),
-    ]];
-    rows.extend(page.items.into_iter().map(|item| {
-        vec![
-            optional_id(item.user_id),
-            item.user_email.unwrap_or_default(),
-            item.user_username.unwrap_or_default(),
-            item.channel_name,
-            item.model,
-            item.billing_meter,
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-        ]
-    }));
-    Ok((export_filename("user-models", filter), rows))
+    let page = user_model_stats(pool, filter, export_page(), sort).await?;
+    export_rows(
+        "user-models",
+        filter,
+        page.items,
+        &[
+            "user_id",
+            "user_email",
+            "user_username",
+            "channel_name",
+            "model",
+            "billing_meter",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "avg_latency_ms",
+        ],
+        |item| {
+            vec![
+                optional_id(item.user_id),
+                item.user_email.unwrap_or_default(),
+                item.user_username.unwrap_or_default(),
+                item.channel_name,
+                item.model,
+                item.billing_meter,
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+            ]
+        },
+    )
 }
 
 async fn export_daily(
@@ -1889,34 +1856,37 @@ async fn export_daily(
     granularity: SummaryGranularity,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
     let items = daily_stats(pool, filter, granularity).await?;
-    ensure_export_limit(items.len())?;
-    let mut rows = vec![vec![
-        "period".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "avg_latency_ms".into(),
-    ]];
-    rows.extend(items.into_iter().map(|item| {
-        vec![
-            item.date,
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-        ]
-    }));
-    Ok((export_filename("trend", filter), rows))
+    export_rows(
+        "trend",
+        filter,
+        items,
+        &[
+            "period",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "avg_latency_ms",
+        ],
+        |item| {
+            vec![
+                item.date,
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+            ]
+        },
+    )
 }
 
 async fn export_models(
@@ -1925,42 +1895,45 @@ async fn export_models(
     sort: SortMode,
 ) -> AppResult<(String, Vec<Vec<String>>)> {
     let items = model_stats(pool, filter, EXPORT_LIMIT + 1, sort).await?;
-    ensure_export_limit(items.len())?;
-    let mut rows = vec![vec![
-        "channel_id".into(),
-        "channel_name".into(),
-        "model".into(),
-        "billing_meter".into(),
-        "request_count".into(),
-        "success_count".into(),
-        "error_count".into(),
-        "input_tokens".into(),
-        "output_tokens".into(),
-        "total_tokens".into(),
-        "billable_units".into(),
-        "cost_micros".into(),
-        "avg_latency_ms".into(),
-        "user_count".into(),
-    ]];
-    rows.extend(items.into_iter().map(|item| {
-        vec![
-            optional_id(item.channel_id),
-            item.channel_name,
-            item.model,
-            item.billing_meter,
-            item.request_count.to_string(),
-            item.success_count.to_string(),
-            item.error_count.to_string(),
-            item.input_tokens.to_string(),
-            item.output_tokens.to_string(),
-            item.total_tokens.to_string(),
-            item.billable_units.to_string(),
-            item.cost_micros.to_string(),
-            optional_f64(item.avg_latency_ms),
-            item.user_count.to_string(),
-        ]
-    }));
-    Ok((export_filename("models", filter), rows))
+    export_rows(
+        "models",
+        filter,
+        items,
+        &[
+            "channel_id",
+            "channel_name",
+            "model",
+            "billing_meter",
+            "request_count",
+            "success_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_units",
+            "cost_micros",
+            "avg_latency_ms",
+            "user_count",
+        ],
+        |item| {
+            vec![
+                optional_id(item.channel_id),
+                item.channel_name,
+                item.model,
+                item.billing_meter,
+                item.request_count.to_string(),
+                item.success_count.to_string(),
+                item.error_count.to_string(),
+                item.input_tokens.to_string(),
+                item.output_tokens.to_string(),
+                item.total_tokens.to_string(),
+                item.billable_units.to_string(),
+                item.cost_micros.to_string(),
+                optional_f64(item.avg_latency_ms),
+                item.user_count.to_string(),
+            ]
+        },
+    )
 }
 
 fn aggregate_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageStatsAggregate, sqlx::Error> {
@@ -2177,6 +2150,27 @@ fn cost_breakdown_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageCostBreak
     })
 }
 
+fn usage_stats_page<T>(
+    rows: Vec<PgRow>,
+    total: i64,
+    page: UsageStatsPageParams,
+    from_row: fn(&PgRow) -> Result<T, sqlx::Error>,
+) -> AppResult<UsageStatsPage<T>> {
+    Ok(UsageStatsPage {
+        items: rows.iter().map(from_row).collect::<Result<_, _>>()?,
+        total,
+        page: page.page,
+        limit: page.limit,
+    })
+}
+
+fn window_total(rows: &[PgRow]) -> Result<i64, sqlx::Error> {
+    rows.first()
+        .map(|row| row.try_get("total"))
+        .transpose()
+        .map(|total| total.unwrap_or(0))
+}
+
 fn user_display_name(
     user_id: Option<DbId>,
     email: &Option<String>,
@@ -2202,6 +2196,24 @@ fn ensure_export_limit(len: usize) -> AppResult<()> {
         });
     }
     Ok(())
+}
+
+fn export_page() -> UsageStatsPageParams {
+    UsageStatsPageParams::new(1, EXPORT_LIMIT + 1)
+}
+
+fn export_rows<T>(
+    scope: &str,
+    filter: &UsageStatsFilter,
+    items: Vec<T>,
+    header: &[&str],
+    row: impl Fn(T) -> Vec<String>,
+) -> AppResult<(String, Vec<Vec<String>>)> {
+    ensure_export_limit(items.len())?;
+    let mut rows = Vec::with_capacity(items.len() + 1);
+    rows.push(header.iter().map(|value| (*value).to_string()).collect());
+    rows.extend(items.into_iter().map(row));
+    Ok((export_filename(scope, filter), rows))
 }
 
 fn export_filename(scope: &str, filter: &UsageStatsFilter) -> String {

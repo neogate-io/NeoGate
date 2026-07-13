@@ -58,13 +58,16 @@ const navGroups = computed(() => {
       ]
     })
   }
+  const usageItems: AdminNavItem[] = [
+    { path: '/admin/statistics', key: 'consumptionOverview', icon: DataAnalysis }
+  ]
+  if (serviceMode !== 'paid') {
+    usageItems.push({ path: '/admin/cost-attribution', key: 'costAttribution', icon: FolderOpened })
+  }
+  usageItems.push({ path: '/admin/usage', key: 'usage', icon: Monitor })
   groups.push({
     key: 'adminNavUsage',
-    items: [
-      { path: '/admin/statistics', key: 'consumptionOverview', icon: DataAnalysis },
-      { path: '/admin/cost-attribution', key: 'costAttribution', icon: FolderOpened },
-      { path: '/admin/usage', key: 'usage', icon: Monitor }
-    ]
+    items: usageItems
   })
   return groups
 })

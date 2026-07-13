@@ -15,8 +15,8 @@ import { readError } from '../../utils/errors'
 import { formatDateTime } from '../../utils/format'
 
 const { locale, t } = useLocale()
-const { formatMoney, majorToMicroAmount } = useBillingCurrency()
-const selectedAmount = ref(100)
+const { billingCurrency, currencySymbol, formatMoney, majorToMicroAmount } = useBillingCurrency()
+const selectedAmount = ref<number | null>(null)
 const customAmount = ref<number | null>(null)
 const payType = ref<PayType>('wxpay')
 const submitting = ref(false)
@@ -26,20 +26,49 @@ const ordersLoaded = ref(false)
 const loading = ref(false)
 const ordersInitialLoading = computed(() => loading.value && !ordersLoaded.value)
 
+const planAmounts = computed(() =>
+  billingCurrency.value === 'CNY' ? [2, 10, 20, 50, 200, 500] : [10, 50, 100, 200, 1000, 2000]
+)
+
+const recommendedPlanIndex = computed(() => (billingCurrency.value === 'CNY' ? 3 : 2))
+
 const plans = computed(() => [
-  { key: 'trial', amount: 10, name: t('trialPlan'), hint: t('trialPlanHint') },
-  { key: 'builder', amount: 50, name: t('builderPlan'), hint: t('builderPlanHint') },
+  { key: 'trial', amount: planAmounts.value[0], name: t('trialPlan'), hint: t('trialPlanHint') },
+  {
+    key: 'builder',
+    amount: planAmounts.value[1],
+    name: t('builderPlan'),
+    hint: t('builderPlanHint')
+  },
   {
     key: 'growth',
-    amount: 100,
+    amount: planAmounts.value[2],
     name: t('growthPlan'),
     hint: t('growthPlanHint'),
-    recommended: true
+    recommended: recommendedPlanIndex.value === 2
   },
-  { key: 'pro', amount: 200, name: t('proPlan'), hint: t('proPlanHint') },
-  { key: 'business', amount: 1000, name: t('businessPlan'), hint: t('businessPlanHint') },
-  { key: 'enterprise', amount: 2000, name: t('enterprisePlan'), hint: t('enterprisePlanHint') }
+  {
+    key: 'pro',
+    amount: planAmounts.value[3],
+    name: t('proPlan'),
+    hint: t('proPlanHint'),
+    recommended: recommendedPlanIndex.value === 3
+  },
+  {
+    key: 'business',
+    amount: planAmounts.value[4],
+    name: t('businessPlan'),
+    hint: t('businessPlanHint')
+  },
+  {
+    key: 'enterprise',
+    amount: planAmounts.value[5],
+    name: t('enterprisePlan'),
+    hint: t('enterprisePlanHint')
+  }
 ])
+
+const defaultPlanAmount = computed(() => planAmounts.value[recommendedPlanIndex.value])
 
 const paymentOptions = computed(() => [
   { label: t('wechatPay'), value: 'wxpay' as PayType, icon: '/icons/wechat-pay.svg' },
@@ -48,10 +77,16 @@ const paymentOptions = computed(() => [
 
 const amountMajor = computed(() => {
   const custom = Number(customAmount.value)
-  return Number.isInteger(custom) && custom > 0 ? custom : selectedAmount.value
+  return Number.isInteger(custom) && custom > 0
+    ? custom
+    : (selectedAmount.value ?? defaultPlanAmount.value)
 })
 
 const amountMicro = computed(() => majorToMicroAmount(amountMajor.value))
+
+const customAmountStyle = computed(() => ({
+  '--recharge-currency-symbol': JSON.stringify(currencySymbol.value)
+}))
 
 function selectPlan(amount: number) {
   selectedAmount.value = amount
@@ -158,7 +193,7 @@ async function submitRecharge() {
             :key="plan.key"
             class="plan-card"
             :class="{
-              active: customAmount == null && selectedAmount === plan.amount,
+              active: customAmount == null && amountMajor === plan.amount,
               recommended: plan.recommended
             }"
             type="button"
@@ -170,7 +205,7 @@ async function submitRecharge() {
             </span>
             <strong>{{ formatMajorAmount(plan.amount) }}</strong>
             <span class="plan-hint">{{ plan.hint }}</span>
-            <el-icon v-if="customAmount == null && selectedAmount === plan.amount"
+            <el-icon v-if="customAmount == null && amountMajor === plan.amount"
               ><Check
             /></el-icon>
           </button>
@@ -181,8 +216,9 @@ async function submitRecharge() {
           <el-input-number
             v-model="customAmount"
             class="custom-amount-input"
+            :style="customAmountStyle"
             :min="1"
-            :max="1000000"
+            :max="9999"
             :step="1"
             :precision="0"
             step-strictly
@@ -208,10 +244,10 @@ async function submitRecharge() {
         </div>
         <div class="recharge-summary-total">
           <span>{{ t('payAmount') }}</span>
-          <strong>{{ formatMoney(amountMicro, locale, 2) }}</strong>
+          <strong>{{ formatMajorAmount(amountMajor) }}</strong>
         </div>
         <dl class="recharge-summary-list">
-          <div>
+          <div v-if="billingCurrency !== 'CNY'">
             <dt>{{ t('creditedAmount') }}</dt>
             <dd>{{ formatMajorAmount(amountMajor) }}</dd>
           </div>
@@ -338,7 +374,11 @@ async function submitRecharge() {
 
 <style scoped>
 .recharge-view {
+  color: #354154;
   display: grid;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   gap: 12px;
   width: min(1120px, 100%);
 }
@@ -367,7 +407,7 @@ async function submitRecharge() {
   background: #ffffff;
   border: 1px solid #dfe7f1;
   border-radius: 8px;
-  color: #111827;
+  color: #354154;
   cursor: pointer;
   display: grid;
   gap: 8px;
@@ -395,30 +435,30 @@ async function submitRecharge() {
   border-radius: 999px;
   color: #fff;
   font-size: 12px;
-  font-weight: 780;
+  font-weight: 500;
   padding: 4px 9px;
   white-space: nowrap;
 }
 
 .plan-name {
-  color: #334155;
+  color: #354154;
   font-size: 14px;
-  font-weight: 800;
+  font-weight: 500;
   min-width: 0;
 }
 
 .plan-card strong {
-  color: #111827;
-  font-size: 26px;
-  font-weight: 840;
+  color: #1f2937;
+  font-size: 25px;
+  font-weight: 600;
   line-height: 1;
   white-space: nowrap;
 }
 
 .plan-hint {
-  color: #8a95a5;
+  color: #7b8798;
   font-size: 12px;
-  font-weight: 560;
+  font-weight: 400;
 }
 
 .plan-card .el-icon {
@@ -441,23 +481,23 @@ async function submitRecharge() {
 }
 
 .recharge-section h3 {
-  color: #697586;
+  color: #667085;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
   margin: 0;
 }
 
 .custom-amount-input {
   position: relative;
-  width: min(104px, calc(100vw - 120px));
+  width: min(70px, calc(100vw - 120px));
 }
 
 .custom-amount-input::before {
   color: #8a95a5;
-  content: '$';
+  content: var(--recharge-currency-symbol);
   font-size: 14px;
-  font-weight: 720;
-  left: 12px;
+  font-weight: 400;
+  left: 10px;
   pointer-events: none;
   position: absolute;
   top: 50%;
@@ -466,7 +506,16 @@ async function submitRecharge() {
 }
 
 .custom-amount-input :deep(.el-input__inner) {
-  padding-left: 26px;
+  font-size: 14px;
+  font-weight: 400;
+  height: 28px;
+  padding-left: 18px;
+  text-align: left;
+}
+
+.custom-amount-input :deep(.el-input__wrapper) {
+  min-height: 28px;
+  padding-inline: 4px;
 }
 
 .payment-methods {
@@ -481,6 +530,8 @@ async function submitRecharge() {
 .payment-methods :deep(.el-segmented__item) {
   border-radius: 6px;
   color: #b4bfcc;
+  font-size: 13px;
+  font-weight: 400;
   min-height: 42px;
   padding: 0 8px;
 }
@@ -537,15 +588,15 @@ async function submitRecharge() {
 
 .recharge-summary-total span,
 .recharge-summary-list dt {
-  color: #697586;
+  color: #667085;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .recharge-summary-total strong {
-  color: #111827;
-  font-size: 34px;
-  font-weight: 820;
+  color: #1f2937;
+  font-size: 32px;
+  font-weight: 600;
   line-height: 1.1;
 }
 
@@ -564,23 +615,24 @@ async function submitRecharge() {
 }
 
 .recharge-summary-list dd {
-  color: #111827;
+  color: #354154;
   font-size: 14px;
-  font-weight: 740;
+  font-weight: 400;
   margin: 0;
 }
 
 .recharge-submit {
   border-radius: 7px;
-  font-size: 15px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 500;
   min-height: 46px;
   width: 100%;
 }
 
 .recharge-history-trigger {
-  color: #697586;
-  font-weight: 720;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 400;
   padding-inline: 6px;
 }
 
@@ -734,13 +786,13 @@ async function submitRecharge() {
   .recharge-order-card span {
     color: #8a95a5;
     font-size: 12px;
-    font-weight: 720;
+    font-weight: 400;
   }
 
   .recharge-order-card strong {
-    color: #111827;
+    color: #354154;
     font-size: 14px;
-    font-weight: 740;
+    font-weight: 400;
   }
 
   .recharge-order-card .el-tag {

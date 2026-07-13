@@ -17,7 +17,7 @@ use crate::{
     auth::AdminAuth,
     error::{AppError, AppResult},
     id::DbId,
-    input::{bounded_limit, trimmed_non_empty},
+    input::{bounded_limit, page_number, trimmed_non_empty},
     pagination::{created_id_cursor_page, parse_created_id_cursor},
     project::models::UsageRoutingCandidateSummary,
     AppState,
@@ -126,7 +126,7 @@ async fn usage(
     _admin: AdminAuth,
     Query(params): Query<ListUsageParams>,
 ) -> AppResult<Json<UsagePage>> {
-    let page = params.page.unwrap_or(1).max(1);
+    let page = page_number(params.page);
     let limit = bounded_limit(params.limit, 20, 500);
     let cursor = parse_created_id_cursor(params.cursor.as_deref(), "invalid usage cursor")?;
     let rows = usage_rows(&state, &params, limit + 1, cursor).await?;

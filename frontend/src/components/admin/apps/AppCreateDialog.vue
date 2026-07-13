@@ -40,6 +40,7 @@ function showCreatedAppDetail() {
   <el-dialog
     v-model="open"
     class="app-dialog"
+    :close-on-click-modal="false"
     :title="
       mode === 'edit'
         ? `编辑${create.typeLabel(create.form.appType)}`
@@ -680,11 +681,6 @@ function showCreatedAppDetail() {
   font-size: 18px;
   font-weight: 760;
   line-height: 1.2;
-}
-
-:global(.app-dialog .el-dialog__headerbtn) {
-  right: 12px;
-  top: 10px;
 }
 
 :global(.app-dialog .el-dialog__body) {

@@ -54,16 +54,16 @@ use self::{
         CredentialModelRecord, CredentialRecord, CredentialUploadResult,
     },
     diagnostics::{
-        diagnose_channel, diagnose_channel_with_progress, ChannelDiagnosticEvent,
-        ChannelDiagnosticReport,
+        diagnose_channel_with_scope, ChannelDiagnosticEvent, ChannelDiagnosticReport,
+        DiagnoseChannelRequest,
     },
     price::{
-        list_model_reference_catalog, list_pricing_policies, list_pricing_templates,
-        list_provider_models, list_provider_prices, live_model_reference_catalog,
-        sync_pricing_templates, upsert_pricing_policy, upsert_provider_price,
+        list_channel_prices, list_model_reference_catalog, list_pricing_policies,
+        list_pricing_templates, list_provider_models, live_model_reference_catalog,
+        sync_pricing_templates, upsert_channel_price, upsert_pricing_policy, ChannelPriceRecord,
         ModelReferenceCatalogRecord, PricingPolicyRecord, PricingTemplateRecord,
-        PricingTemplateSyncResult, ProviderModelRecord, ProviderPriceRecord,
-        SyncPricingTemplatesRequest, UpsertPricingPolicyRequest, UpsertProviderPriceRequest,
+        PricingTemplateSyncResult, ProviderModelRecord, SyncPricingTemplatesRequest,
+        UpsertChannelPriceRequest, UpsertPricingPolicyRequest,
     },
     project::{
         add_project_member, create_project, delete_project, delete_project_member,
@@ -212,8 +212,8 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/admin/settings/version", get(version_check_handler))
         .route(
-            "/api/admin/provider-prices",
-            get(provider_prices).post(upsert_provider_price_handler),
+            "/api/admin/channel-prices",
+            get(channel_prices).post(upsert_channel_price_handler),
         )
         .route("/api/admin/channel-keys", get(all_channel_keys))
         .route("/api/admin/credentials", get(credentials))
@@ -595,11 +595,11 @@ async fn providers(
     Ok(Json(list_providers(&state).await?))
 }
 
-async fn provider_prices(
+async fn channel_prices(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
-) -> AppResult<Json<Vec<ProviderPriceRecord>>> {
-    Ok(Json(list_provider_prices(&state).await?))
+) -> AppResult<Json<Vec<ChannelPriceRecord>>> {
+    Ok(Json(list_channel_prices(&state).await?))
 }
 
 async fn provider_models(
@@ -727,9 +727,10 @@ async fn update_admin_password_handler(
     Json(req): Json<UpdateAdminPasswordRequest>,
 ) -> AppResult<Json<Value>> {
     if req.current_password.is_empty() {
-        return Err(AppError::BadRequest(
-            "current password is required".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "current_password_required",
+            message: "current password is required",
+        });
     }
     auth::validate_user_password_input(&req.new_password)?;
 
@@ -753,9 +754,10 @@ async fn update_admin_password_handler(
         &state.config.admin_token_secret,
         &password_hash,
     ) {
-        return Err(AppError::BadRequest(
-            "current password is incorrect".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "current_password_incorrect",
+            message: "current password is incorrect",
+        });
     }
 
     let password_hash =
@@ -801,16 +803,16 @@ async fn pricing_policies(
     Ok(Json(list_pricing_policies(&state).await?))
 }
 
-async fn upsert_provider_price_handler(
+async fn upsert_channel_price_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
-    Json(req): Json<UpsertProviderPriceRequest>,
-) -> AppResult<Json<ProviderPriceRecord>> {
-    let price = upsert_provider_price(&state, req).await?;
+    Json(req): Json<UpsertChannelPriceRequest>,
+) -> AppResult<Json<ChannelPriceRecord>> {
+    let price = upsert_channel_price(&state, req).await?;
     invalidate_cache(
         &state,
         InvalidationEvent::Price {
-            provider: price.provider.clone(),
+            channel_id: price.channel_id,
             model: price.model.clone(),
         },
     )
@@ -878,8 +880,10 @@ async fn diagnose_channel_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
     Path(id): Path<DbId>,
+    req: Option<Json<DiagnoseChannelRequest>>,
 ) -> AppResult<Json<ChannelDiagnosticReport>> {
-    let report = diagnose_channel(&state, id).await?;
+    let scope = req.map(|Json(req)| req.scope).unwrap_or_default();
+    let report = diagnose_channel_with_scope(&state, id, scope, None).await?;
     invalidate_cache(&state, InvalidationEvent::Routing).await;
     Ok(Json(report))
 }
@@ -888,10 +892,12 @@ async fn diagnose_channel_stream_handler(
     State(state): State<Arc<AppState>>,
     _admin: AdminAuth,
     Path(id): Path<DbId>,
+    req: Option<Json<DiagnoseChannelRequest>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ChannelDiagnosticEvent>();
+    let scope = req.map(|Json(req)| req.scope).unwrap_or_default();
     tokio::spawn(async move {
-        match diagnose_channel_with_progress(&state, id, Some(tx.clone())).await {
+        match diagnose_channel_with_scope(&state, id, scope, Some(tx.clone())).await {
             Ok(_) => {
                 invalidate_cache(&state, InvalidationEvent::Routing).await;
             }

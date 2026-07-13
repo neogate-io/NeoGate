@@ -1,6 +1,7 @@
 import { computed, nextTick, ref } from 'vue'
 import {
   streamChannelDiagnostic,
+  type ChannelDiagnosticScope,
   type ChannelDiagnosticStreamEvent
 } from '../api/channels'
 import type { Channel, ChannelDiagnosticReport } from '../types/admin'
@@ -29,7 +30,7 @@ export function useChannelDiagnostics(onComplete?: () => Promise<void> | void) {
     if (list) list.scrollTop = list.scrollHeight
   }
 
-  async function run(row: Channel) {
+  async function run(row: Channel, scope: ChannelDiagnosticScope = 'all') {
     if (inProgress.value) return
 
     channel.value = row
@@ -40,7 +41,7 @@ export function useChannelDiagnostics(onComplete?: () => Promise<void> | void) {
     dialogOpen.value = true
     diagnosingChannelId.value = row.id
     try {
-      report.value = await streamChannelDiagnostic(row.id, (event) => {
+      report.value = await streamChannelDiagnostic(row.id, scope, (event) => {
         if (event.type === 'model_started') {
           currentModel.value = event.model
         }

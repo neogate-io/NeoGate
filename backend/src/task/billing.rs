@@ -1,7 +1,12 @@
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use uuid::Uuid;
+
 use crate::{
     auth::UserAuth,
     billing::{
-        BillableUsage, BillingAccounts, CreditAccountId, DebitHold, SettleRequest, TokenUsage,
+        video, BillableUsage, BillingAccounts, BillingMeter, CreditAccountId, DebitHold,
+        SettleRequest, TokenUsage, VideoBillingMode,
     },
     error::AppResult,
     id::DbId,
@@ -104,38 +109,97 @@ async fn finalize_loaded(
     billing_context: AsyncTaskBillingContext,
     usage: Option<TokenUsage>,
 ) -> AppResult<()> {
-    let target = if usage.is_some() {
-        "settled"
+    let video_success = task.task_type == UpstreamTaskType::OpenAiVideo
+        && openai_video_success_status(&task.status);
+    let video_billing_metadata = (task.task_type == UpstreamTaskType::OpenAiVideo)
+        .then(|| video::video_billing_metadata(&task.upstream_metadata))
+        .flatten();
+    let video_settlement = video_billing_metadata
+        .as_ref()
+        .and_then(|metadata| {
+            video_success
+                .then(|| video::settlement_usage_and_price(metadata, &task.upstream_metadata))
+        })
+        .flatten();
+    if video_billing_metadata.is_some() && video_success && video_settlement.is_none() {
+        tracing::warn!(
+            task_id = task.id,
+            upstream_task_id = %task.upstream_task_id,
+            status = %task.status,
+            "seedance official token video task finished without usage.total_tokens; releasing hold"
+        );
+    }
+    let provider_video_seconds = (task.task_type == UpstreamTaskType::OpenAiVideo
+        && video_success
+        && video_billing_metadata.is_none())
+    .then(|| video::provider_video_duration_seconds(&task.upstream_metadata))
+    .flatten();
+    let usage = if task.task_type == UpstreamTaskType::OpenAiVideo && !video_success {
+        None
     } else {
-        "released"
+        usage
     };
+    let settle_without_usage = task.task_type == UpstreamTaskType::OpenAiVideo
+        && video_billing_metadata.is_none()
+        && video_success
+        && usage.is_none();
+    let should_settle = video_settlement.is_some()
+        || usage.is_some()
+        || provider_video_seconds.is_some()
+        || settle_without_usage;
+    let target = if should_settle { "settled" } else { "released" };
     let Some(hold) = upstream::mark_billing_status(&state.db.pool, task.id, "held", target).await?
     else {
         return Ok(());
     };
-    if let Some(usage) = usage {
+    if should_settle {
         let Some(model) = task.model.as_deref() else {
             fail_settled_task_billing(state, task.id, hold, "async task missing model").await?;
             return Ok(());
         };
         let upstream_model = task.upstream_model.as_deref().unwrap_or(model);
-        let price = match state
-            .billing
-            .price_for(
-                &state.db.pool,
-                &task.provider,
-                upstream_model,
-                &billing_context.user_group,
-            )
-            .await
-        {
-            Ok(price) => price,
-            Err(err) => {
-                fail_settled_task_billing(state, task.id, hold, "async task price lookup error")
+        let (billable_usage, price) = if let Some((billable_usage, price)) = video_settlement {
+            (Some(billable_usage), price)
+        } else {
+            let price = match state
+                .billing
+                .price_for(
+                    &state.db.pool,
+                    task.channel_id,
+                    upstream_model,
+                    &billing_context.user_group,
+                )
+                .await
+            {
+                Ok(price) => price,
+                Err(err) => {
+                    fail_settled_task_billing(
+                        state,
+                        task.id,
+                        hold,
+                        "async task price lookup error",
+                    )
                     .await?;
-                return Err(err);
-            }
+                    return Err(err);
+                }
+            };
+            let billable_usage = if task.task_type == UpstreamTaskType::OpenAiVideo
+                && price.billing_meter == BillingMeter::Video
+            {
+                match price.video_billing_mode {
+                    Some(VideoBillingMode::PerSecond) => provider_video_seconds
+                        .map(BillableUsage::video_seconds)
+                        .or_else(|| usage.map(BillableUsage::token)),
+                    Some(VideoBillingMode::OfficialToken) => usage.map(BillableUsage::token),
+                    None => usage.map(BillableUsage::token),
+                }
+            } else {
+                usage.map(BillableUsage::token)
+            };
+            (billable_usage, price)
         };
+        let billable_token_usage = billable_usage.and_then(|usage| usage.token_usage);
+        let record_token_usage = usage.or(billable_token_usage);
         let billing = match state
             .billing
             .settle(
@@ -152,7 +216,7 @@ async fn finalize_loaded(
                         project_credit_account: &billing_context.project_credit_account,
                     },
                     hold: hold.clone(),
-                    usage: Some(BillableUsage::token(usage)),
+                    usage: billable_usage,
                     price: &price,
                 },
             )
@@ -172,7 +236,7 @@ async fn finalize_loaded(
             channel_id: upstream.channel_id,
             channel_key_id: upstream.channel_key_id,
             credential_id: upstream.credential_id,
-            relay_trace_id: None,
+            relay_trace_id: async_task_relay_trace_id(&task.upstream_metadata),
             relay_attempt: 1,
             relay_final: true,
             model: Some(model.to_string()),
@@ -181,11 +245,11 @@ async fn finalize_loaded(
             routing: None,
             status_code: Some(200),
             streamed: false,
-            latency_ms: 0,
+            latency_ms: async_task_latency_ms(task),
             first_response_ms: None,
             output_tokens_per_second: None,
             error_summary: None,
-            token_usage: Some(usage),
+            token_usage: record_token_usage,
             billing_meter: billing.billing_meter,
             billable_units: billing.billable_units,
             billing: Some(billing),
@@ -194,6 +258,31 @@ async fn finalize_loaded(
         release_empty_hold(state, hold, "async task terminal without usage").await;
     }
     Ok(())
+}
+
+fn async_task_latency_ms(task: &UpstreamTask) -> i64 {
+    let started_at = async_task_started_at(&task.upstream_metadata).unwrap_or(task.created_at);
+    Utc::now()
+        .signed_duration_since(started_at)
+        .num_milliseconds()
+        .max(0)
+}
+
+fn async_task_started_at(value: &Value) -> Option<DateTime<Utc>> {
+    value
+        .get("neogate")
+        .and_then(|neogate| neogate.get("relay_started_at"))
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn async_task_relay_trace_id(value: &Value) -> Option<Uuid> {
+    value
+        .get("neogate")
+        .and_then(|neogate| neogate.get("relay_trace_id"))
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
 }
 
 async fn fail_settled_task_billing(
@@ -207,8 +296,59 @@ async fn fail_settled_task_billing(
     Ok(())
 }
 
+fn openai_video_success_status(status: &str) -> bool {
+    matches!(status, "completed" | "succeeded" | "success")
+}
+
 async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
     if let Err(err) = state.billing.release_hold(&state.db.pool, hold).await {
         tracing::warn!("failed to release {context} hold: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{async_task_relay_trace_id, async_task_started_at, openai_video_success_status};
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn seedance_success_statuses_are_billable_video_terminals() {
+        assert!(openai_video_success_status("completed"));
+        assert!(openai_video_success_status("succeeded"));
+        assert!(openai_video_success_status("success"));
+        assert!(!openai_video_success_status("failed"));
+        assert!(!openai_video_success_status("cancelled"));
+    }
+
+    #[test]
+    fn reads_async_task_relay_metadata() {
+        let trace_id = Uuid::new_v4();
+        let metadata = json!({
+            "neogate": {
+                "relay_trace_id": trace_id.to_string(),
+                "relay_started_at": "2026-07-12T11:45:22Z"
+            }
+        });
+
+        assert_eq!(async_task_relay_trace_id(&metadata), Some(trace_id));
+        assert_eq!(
+            async_task_started_at(&metadata),
+            Utc.with_ymd_and_hms(2026, 7, 12, 11, 45, 22).single()
+        );
+    }
+
+    #[test]
+    fn ignores_invalid_async_task_relay_metadata() {
+        let metadata = json!({
+            "neogate": {
+                "relay_trace_id": "not-a-uuid",
+                "relay_started_at": "not-a-date"
+            }
+        });
+
+        assert_eq!(async_task_relay_trace_id(&metadata), None);
+        assert_eq!(async_task_started_at(&metadata), None);
     }
 }

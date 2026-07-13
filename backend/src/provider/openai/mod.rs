@@ -1,13 +1,16 @@
 mod background;
 mod images;
+mod multipart;
+mod videos;
 
 pub(crate) use background::response_terminal;
+pub(crate) use videos::{video_status_text, video_terminal};
 
 use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{OriginalUri, Path, Query, State},
-    http::{HeaderMap, Method, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::Response,
 };
 use bytes::Bytes;
@@ -17,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     provider::adapters::{adapter_for_provider, AdapterResponseMode, RelayRoute},
     task::{jobs, upstream as upstream_task},
     AppState,
@@ -56,6 +59,47 @@ fn project_model_request_context(
     serde_json::from_slice::<Value>(body)
         .ok()
         .map(|value| crate::project::models::ProjectModelRequestContext::from_value(&value))
+}
+
+fn content_type_header(headers: &HeaderMap) -> AppResult<(HeaderValue, String)> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+    let text = content_type
+        .to_str()
+        .map_err(|_| AppError::BadRequest("invalid content-type header".to_string()))?
+        .to_string();
+    Ok((content_type, text))
+}
+
+fn json_string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn required_json_string_field(value: &Value, key: &str) -> AppResult<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::BadRequest(format!("{key} is required")))
+}
+
+fn positive_i64_text(value: &str) -> Option<i64> {
+    value.trim().parse::<i64>().ok().filter(|value| *value > 0)
+}
+
+fn positive_i64_field(value: &Value, key: &str) -> Option<i64> {
+    value.get(key).and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(positive_i64_text))
+            .filter(|value| *value > 0)
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +208,31 @@ pub(crate) async fn openai_image_variations(
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
     images::relay_openai_image(state, auth, headers, body, "/v1/images/variations").await
+}
+
+pub(crate) async fn openai_videos(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    body: RelayBody,
+) -> AppResult<Response> {
+    videos::openai_videos(state, auth, headers, body).await
+}
+
+pub(crate) async fn openai_video(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    path: Path<String>,
+) -> AppResult<Response> {
+    videos::openai_video(state, auth, path).await
+}
+
+pub(crate) async fn openai_video_content(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    path: Path<String>,
+) -> AppResult<Response> {
+    videos::openai_video_content(state, auth, path).await
 }
 
 pub(crate) async fn openai_response(
@@ -380,7 +449,7 @@ async fn relay_openai(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )
@@ -456,8 +525,7 @@ async fn relay_openai(
 
         match response {
             Ok(upstream_response) => {
-                let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let status = reqwest_status(upstream_response.status());
                 if status.is_success() {
                     mark_credential_model_available(&ctx).await?;
                     ctx.mark_final_with_permit(&mut request_permit);
@@ -710,8 +778,11 @@ async fn select_upstream_excluding(
                 protocols,
                 model,
                 channel_id,
-                attempted,
-                &excluded_endpoint_ids,
+                SelectionConstraints {
+                    attempted,
+                    excluded_endpoint_ids: &excluded_endpoint_ids,
+                    ..SelectionConstraints::default()
+                },
             )
             .await;
         if selected.is_ok() || excluded_endpoint_ids.is_empty() {
@@ -725,8 +796,10 @@ async fn select_upstream_excluding(
                 protocols,
                 model,
                 channel_id,
-                attempted,
-                &[],
+                SelectionConstraints {
+                    attempted,
+                    ..SelectionConstraints::default()
+                },
             )
             .await;
     }

@@ -1209,7 +1209,7 @@
 }
 
 .channel-table.admin-table.el-table {
-  min-width: 1118px;
+  min-width: 1232px;
 }
 
 .user-table.admin-table.el-table {
@@ -1251,6 +1251,7 @@
 
 /* Admin dialog chrome — shared across all management dialogs */
 :is(
+  .app-dialog,
   .channel-dialog,
   .model-picker-dialog,
   .settings-dialog,
@@ -1264,6 +1265,7 @@
 }
 
 :is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1278,6 +1280,7 @@
 }
 
 :is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1292,6 +1295,7 @@
 }
 
 :is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1299,13 +1303,48 @@
     .reference-prices-dialog
   )
   .el-dialog__headerbtn {
+  align-items: center;
+  border-radius: 7px;
+  display: inline-flex;
   height: 34px;
+  justify-content: center;
   right: 12px;
-  top: 10px;
+  top: 12px;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
   width: 34px;
 }
 
 :is(
+    .app-dialog,
+    .channel-dialog,
+    .model-picker-dialog,
+    .settings-dialog,
+    .user-admin-dialog,
+    .reference-prices-dialog
+  )
+  .el-dialog__headerbtn:hover {
+  background: #f1f5f9;
+}
+
+:is(
+    .app-dialog,
+    .channel-dialog,
+    .model-picker-dialog,
+    .settings-dialog,
+    .user-admin-dialog,
+    .reference-prices-dialog
+  )
+  .el-dialog__headerbtn
+  .el-dialog__close {
+  color: #7b8797;
+  font-size: 18px;
+  font-weight: 400;
+}
+
+:is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1318,6 +1357,7 @@
 }
 
 :is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1331,6 +1371,7 @@
 }
 
 :is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1525,6 +1566,7 @@
 }
 
 :is(
+    .app-dialog,
     .channel-dialog,
     .model-picker-dialog,
     .settings-dialog,
@@ -1570,7 +1612,6 @@
   font-weight: 680;
 }
 
-
 .channel-toolbar,
 .user-toolbar,
 .usage-toolbar,
@@ -1595,12 +1636,10 @@
   white-space: nowrap;
 }
 
-
 .channel-row-is-disabled,
 .user-row-is-disabled {
   opacity: 0.72;
 }
-
 
 .admin-page-label,
 .admin-result-count,
@@ -1768,7 +1807,6 @@
     width: 100%;
   }
 
-
   .user-search-actions.el-form-item {
     grid-column: 1 / -1;
   }
@@ -1846,7 +1884,6 @@
   border-color: var(--admin-border);
   box-shadow: var(--admin-shadow);
 }
-
 
 .channel-toolbar,
 .user-toolbar,
@@ -1941,7 +1978,6 @@
   box-shadow: none;
   padding: 10px 0 0;
 }
-
 
 .admin-shell .el-menu-item,
 .admin-shell .el-sub-menu__title,
@@ -2108,8 +2144,7 @@
     .project-count-cell,
     .usage-cost-cell,
     .usage-mono,
-    .channel-detail-price,
-    .channel-price-value
+    .channel-detail-price
   ) {
   font-variant-numeric: tabular-nums;
 }
@@ -2179,7 +2214,6 @@
   --el-button-hover-border-color: transparent;
   --el-button-hover-text-color: #b91c1c;
 }
-
 
 .admin-pagination-bar.is-compact {
   border-top-color: var(--admin-border);

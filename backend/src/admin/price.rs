@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    billing::{BillingMeter, PricingBasis},
+    billing::{BillingMeter, PricingBasis, VideoBillingMode, VideoPriceTier},
     config::BillingCurrency,
     error::{AppError, AppResult},
     id::DbId,
@@ -19,8 +19,9 @@ const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
 const PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX: &str = "local_cny_fx";
 
 #[derive(Debug, Serialize)]
-pub struct ProviderPriceRecord {
+pub struct ChannelPriceRecord {
     pub id: DbId,
+    pub channel_id: DbId,
     pub provider: String,
     pub model: String,
     pub input_price_micros: i64,
@@ -29,6 +30,8 @@ pub struct ProviderPriceRecord {
     pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_micros: Option<i64>,
+    pub video_billing_mode: Option<VideoBillingMode>,
+    pub video_price_tiers: Vec<VideoPriceTier>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -111,8 +114,8 @@ pub struct PricingTemplateSyncResult {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpsertProviderPriceRequest {
-    pub provider: String,
+pub struct UpsertChannelPriceRequest {
+    pub channel_id: DbId,
     pub model: String,
     pub input_price_micros: i64,
     pub output_price_micros: i64,
@@ -120,6 +123,9 @@ pub struct UpsertProviderPriceRequest {
     pub cache_write_price_micros: Option<i64>,
     pub billing_meter: BillingMeter,
     pub unit_price_micros: Option<i64>,
+    pub video_billing_mode: Option<VideoBillingMode>,
+    #[serde(default)]
+    pub video_price_tiers: Vec<VideoPriceTier>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -248,19 +254,21 @@ pub async fn list_provider_models(state: &AppState) -> AppResult<Vec<ProviderMod
     rows.iter().map(provider_model_from_row).collect()
 }
 
-pub async fn list_provider_prices(state: &AppState) -> AppResult<Vec<ProviderPriceRecord>> {
+pub async fn list_channel_prices(state: &AppState) -> AppResult<Vec<ChannelPriceRecord>> {
     let rows = sqlx::query(
-        "SELECT id, provider, model, input_price_micros,
-                output_price_micros, cache_read_price_micros,
-                cache_write_price_micros, billing_meter,
-                unit_price_micros,
-                enabled, created_at, updated_at
-         FROM provider_price
-         ORDER BY provider ASC, model ASC",
+        "SELECT cp.id, cp.channel_id, c.provider, cp.model,
+                cp.input_price_micros, cp.output_price_micros,
+                cp.cache_read_price_micros, cp.cache_write_price_micros,
+                cp.billing_meter, cp.unit_price_micros,
+                cp.video_billing_mode, cp.video_price_tiers,
+                cp.enabled, cp.created_at, cp.updated_at
+         FROM channel_price cp
+         JOIN channel c ON c.id = cp.channel_id
+         ORDER BY c.provider ASC, cp.channel_id ASC, cp.model ASC",
     )
     .fetch_all(&state.db.pool)
     .await?;
-    rows.iter().map(provider_price_from_row).collect()
+    rows.iter().map(channel_price_from_row).collect()
 }
 
 pub async fn list_pricing_templates(state: &AppState) -> AppResult<Vec<PricingTemplateRecord>> {
@@ -412,36 +420,48 @@ pub async fn sync_pricing_templates(
     }
 }
 
-pub async fn upsert_provider_price(
+pub async fn upsert_channel_price(
     state: &AppState,
-    req: UpsertProviderPriceRequest,
-) -> AppResult<ProviderPriceRecord> {
+    req: UpsertChannelPriceRequest,
+) -> AppResult<ChannelPriceRecord> {
     validate_price(&req)?;
-    ensure_model_is_known(state, &req.provider, &req.model).await?;
+    ensure_channel_model_is_known(state, req.channel_id, &req.model).await?;
     let row = sqlx::query(
-        "INSERT INTO provider_price
-         (provider, model, input_price_micros,
-          output_price_micros, cache_read_price_micros,
-          cache_write_price_micros, billing_meter,
-          unit_price_micros, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (provider, model)
-         DO UPDATE SET
-             input_price_micros = EXCLUDED.input_price_micros,
-             output_price_micros = EXCLUDED.output_price_micros,
-             cache_read_price_micros = EXCLUDED.cache_read_price_micros,
-             cache_write_price_micros = EXCLUDED.cache_write_price_micros,
-             billing_meter = EXCLUDED.billing_meter,
-             unit_price_micros = EXCLUDED.unit_price_micros,
-             enabled = EXCLUDED.enabled,
-             updated_at = now()
-         RETURNING id, provider, model, input_price_micros,
-                   output_price_micros, cache_read_price_micros,
-                   cache_write_price_micros, billing_meter,
-                   unit_price_micros,
-                   enabled, created_at, updated_at",
+        "WITH upserted AS (
+            INSERT INTO channel_price
+             (channel_id, model, input_price_micros,
+              output_price_micros, cache_read_price_micros,
+              cache_write_price_micros, billing_meter,
+              unit_price_micros, video_billing_mode, video_price_tiers, enabled)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (channel_id, model)
+             DO UPDATE SET
+                 input_price_micros = EXCLUDED.input_price_micros,
+                 output_price_micros = EXCLUDED.output_price_micros,
+                 cache_read_price_micros = EXCLUDED.cache_read_price_micros,
+                 cache_write_price_micros = EXCLUDED.cache_write_price_micros,
+                 billing_meter = EXCLUDED.billing_meter,
+                 unit_price_micros = EXCLUDED.unit_price_micros,
+                 video_billing_mode = EXCLUDED.video_billing_mode,
+                 video_price_tiers = EXCLUDED.video_price_tiers,
+                 enabled = EXCLUDED.enabled,
+                 updated_at = now()
+             RETURNING id, channel_id, model, input_price_micros,
+                       output_price_micros, cache_read_price_micros,
+                       cache_write_price_micros, billing_meter,
+                       unit_price_micros, video_billing_mode, video_price_tiers,
+                       enabled, created_at, updated_at
+         )
+         SELECT upserted.id, upserted.channel_id, c.provider, upserted.model,
+                upserted.input_price_micros, upserted.output_price_micros,
+                upserted.cache_read_price_micros, upserted.cache_write_price_micros,
+                upserted.billing_meter, upserted.unit_price_micros,
+                upserted.video_billing_mode, upserted.video_price_tiers,
+                upserted.enabled, upserted.created_at, upserted.updated_at
+         FROM upserted
+         JOIN channel c ON c.id = upserted.channel_id",
     )
-    .bind(req.provider)
+    .bind(req.channel_id)
     .bind(req.model)
     .bind(req.input_price_micros)
     .bind(req.output_price_micros)
@@ -449,17 +469,19 @@ pub async fn upsert_provider_price(
     .bind(req.cache_write_price_micros)
     .bind(req.billing_meter.as_str())
     .bind(req.unit_price_micros)
+    .bind(req.video_billing_mode.map(VideoBillingMode::as_str))
+    .bind(serde_json::to_value(&req.video_price_tiers)?)
     .bind(req.enabled)
     .fetch_one(&state.db.pool)
     .await?;
-    let price = provider_price_from_row(&row)?;
+    let price = channel_price_from_row(&row)?;
     sync_channel_model_enabled_for_price(state, &price).await?;
     Ok(price)
 }
 
 async fn sync_channel_model_enabled_for_price(
     state: &AppState,
-    price: &ProviderPriceRecord,
+    price: &ChannelPriceRecord,
 ) -> AppResult<()> {
     if price.enabled {
         sqlx::query(
@@ -467,14 +489,13 @@ async fn sync_channel_model_enabled_for_price(
              SET enabled = TRUE,
                  updated_at = now()
              FROM channel_endpoint ce
-             JOIN channel c ON c.id = ce.channel_id
              WHERE cm.channel_id = ce.channel_id
-               AND c.provider = $1
+               AND cm.channel_id = $1
                AND cm.model = $2
                AND cm.model = ANY(ce.models)
                AND cm.status = 'available'",
         )
-        .bind(&price.provider)
+        .bind(price.channel_id)
         .bind(&price.model)
         .execute(&state.db.pool)
         .await?;
@@ -483,12 +504,10 @@ async fn sync_channel_model_enabled_for_price(
             "UPDATE channel_model cm
              SET enabled = FALSE,
                  updated_at = now()
-             FROM channel c
-             WHERE c.id = cm.channel_id
-               AND c.provider = $1
+             WHERE cm.channel_id = $1
                AND cm.model = $2",
         )
-        .bind(&price.provider)
+        .bind(price.channel_id)
         .bind(&price.model)
         .execute(&state.db.pool)
         .await?;
@@ -499,18 +518,7 @@ async fn sync_channel_model_enabled_for_price(
 async fn sync_models_dev_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
-    let upstream = state
-        .http
-        .get(MODELS_DEV_PRICING_URL)
-        .send()
-        .await
-        .map_err(models_dev_pricing_unavailable)?
-        .error_for_status()
-        .map_err(models_dev_pricing_unavailable)?
-        .json::<HashMap<String, ModelsDevProvider>>()
-        .await
-        .map_err(models_dev_pricing_unavailable)?;
-
+    let upstream = fetch_models_dev_pricing_json(state).await?;
     let provider_codes = enabled_provider_codes(state).await?;
     let mut fetched = 0usize;
     let mut skipped = 0usize;
@@ -569,33 +577,36 @@ async fn fetch_local_cny_pricing_json(
         ));
     };
     let url = format!("{base_url}{LOCAL_CNY_PRICING_JSON_PATH}");
-    state
-        .http
-        .get(&url)
-        .send()
-        .await
-        .map_err(local_cny_pricing_unavailable)?
-        .error_for_status()
-        .map_err(local_cny_pricing_unavailable)?
-        .json::<HashMap<String, ModelsDevProvider>>()
-        .await
-        .map_err(local_cny_pricing_unavailable)
+    fetch_pricing_json(state, &url, local_cny_pricing_unavailable).await
 }
 
 async fn fetch_models_dev_pricing_json(
     state: &AppState,
 ) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    fetch_pricing_json(
+        state,
+        MODELS_DEV_PRICING_URL,
+        models_dev_pricing_unavailable,
+    )
+    .await
+}
+
+async fn fetch_pricing_json(
+    state: &AppState,
+    url: &str,
+    map_error: fn(reqwest::Error) -> AppError,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
     state
         .http
-        .get(MODELS_DEV_PRICING_URL)
+        .get(url)
         .send()
         .await
-        .map_err(models_dev_pricing_unavailable)?
+        .map_err(map_error)?
         .error_for_status()
-        .map_err(models_dev_pricing_unavailable)?
+        .map_err(map_error)?
         .json::<HashMap<String, ModelsDevProvider>>()
         .await
-        .map_err(models_dev_pricing_unavailable)
+        .map_err(map_error)
 }
 
 async fn apply_local_cny_pricing_templates(
@@ -647,7 +658,7 @@ fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
         error_debug = ?err,
         "failed to sync pricing templates from models.dev"
     );
-    AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
+    pricing_reference_source_unavailable()
 }
 fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
     tracing::warn!(
@@ -655,7 +666,14 @@ fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
         error_debug = ?err,
         "failed to sync local CNY pricing templates from public base url"
     );
-    AppError::UpstreamUnavailable("pricing reference source is temporarily unavailable".to_string())
+    pricing_reference_source_unavailable()
+}
+
+fn pricing_reference_source_unavailable() -> AppError {
+    AppError::UpstreamUnavailableWithCode {
+        code: "pricing_reference_source_unavailable",
+        message: "pricing reference source is temporarily unavailable",
+    }
 }
 
 async fn enabled_provider_codes(state: &AppState) -> AppResult<HashSet<String>> {
@@ -726,7 +744,7 @@ fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<Pri
 
 /// 按 `cost.basis` 口径分流构造参考价微单位。
 /// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
-/// `billing_meter` 仅 token/image,不引入新值,实际计费链路不受影响。
+/// `pricing_basis` 影响参考价展示文案;实际计费链路仍以 `billing_meter` 为准。
 fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
     let basis = parse_pricing_basis(cost.basis.as_deref());
     use PricingBasis::*;
@@ -794,7 +812,7 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         MultiTierVideo => {
-            // input/output 已由抓取脚本取代表档(最低档)写入,按 token 微单位处理。
+            // input/output 已由抓取脚本取代表档(最低档)写入,作为视频参考价代表档。
             let input = per_million_to_micros(cost.input)?;
             let output =
                 per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
@@ -803,7 +821,7 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
                 output_price_micros: output,
                 cache_read_price_micros: None,
                 cache_write_price_micros: None,
-                billing_meter: BillingMeter::Token,
+                billing_meter: BillingMeter::Video,
                 unit_price_micros: None,
                 pricing_basis: MultiTierVideo,
             })
@@ -838,6 +856,12 @@ fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
 
 fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
     if model
+        .modalities
+        .as_ref()
+        .is_some_and(|modalities| modality_contains(&modalities.output, "video"))
+    {
+        BillingMeter::Video
+    } else if model
         .modalities
         .as_ref()
         .is_some_and(|modalities| modality_contains(&modalities.output, "image"))
@@ -1060,11 +1084,12 @@ pub async fn upsert_pricing_policy(
     pricing_policy_from_row(&row)
 }
 
-fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
-    if req.provider.trim().is_empty() || req.model.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "provider and model are required".to_string(),
-        ));
+fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
+    if req.channel_id <= 0 || req.model.trim().is_empty() {
+        return Err(AppError::BadRequestWithCode {
+            code: "price_model_required",
+            message: "channel and model are required",
+        });
     }
     let prices = PricingMicros {
         input_price_micros: req.input_price_micros,
@@ -1076,25 +1101,102 @@ fn validate_price(req: &UpsertProviderPriceRequest) -> AppResult<()> {
         // 手动录入价格默认按 token 口径展示;image 计费时展示口径同步为 image。
         pricing_basis: match req.billing_meter {
             BillingMeter::Image => PricingBasis::Image,
+            BillingMeter::Video => PricingBasis::MultiTierVideo,
             BillingMeter::Token => PricingBasis::Token,
         },
     };
     if !prices_are_non_negative(prices) {
-        return Err(AppError::BadRequest(
-            "price must be non-negative".to_string(),
-        ));
+        return Err(AppError::BadRequestWithCode {
+            code: "price_must_be_non_negative",
+            message: "price must be non-negative",
+        });
     }
     if prices.billing_meter == BillingMeter::Image {
         match prices.unit_price_micros {
             Some(price) if price > 0 => {}
             _ => {
-                return Err(AppError::BadRequest(
-                    "unit price is required for image billing".to_string(),
-                ));
+                return Err(AppError::BadRequestWithCode {
+                    code: "image_unit_price_required",
+                    message: "unit price is required for image billing",
+                });
             }
         }
     }
+    validate_video_price(req)?;
     Ok(())
+}
+
+fn validate_video_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
+    if req.billing_meter == BillingMeter::Video && req.video_billing_mode.is_none() {
+        return Err(AppError::BadRequestWithCode {
+            code: "video_billing_mode_required",
+            message: "video billing mode is required for video billing",
+        });
+    }
+    if req.video_billing_mode.is_none() {
+        if !req.video_price_tiers.is_empty() {
+            return Err(AppError::BadRequestWithCode {
+                code: "video_billing_mode_required",
+                message: "video billing mode is required for video price tiers",
+            });
+        }
+        return Ok(());
+    }
+    if req.billing_meter != BillingMeter::Video {
+        return Err(AppError::BadRequestWithCode {
+            code: "video_billing_meter_required",
+            message: "video billing mode requires video billing meter",
+        });
+    }
+    if req.video_price_tiers.is_empty() {
+        return Err(AppError::BadRequestWithCode {
+            code: "video_price_tiers_required",
+            message: "video price tiers are required",
+        });
+    }
+    for tier in &req.video_price_tiers {
+        if tier.resolutions.iter().all(|value| value.trim().is_empty()) {
+            return Err(AppError::BadRequestWithCode {
+                code: "video_price_tier_resolution_required",
+                message: "video price tier resolutions are required",
+            });
+        }
+        match req.video_billing_mode {
+            Some(VideoBillingMode::OfficialToken) => {
+                require_positive(tier.input_with_video_micros, "input_with_video_micros")?;
+                require_positive(
+                    tier.input_without_video_micros,
+                    "input_without_video_micros",
+                )?;
+                require_positive(
+                    tier.estimated_tokens_per_second,
+                    "estimated_tokens_per_second",
+                )?;
+            }
+            Some(VideoBillingMode::PerSecond) => {
+                require_positive(
+                    tier.input_with_video_unit_micros,
+                    "input_with_video_unit_micros",
+                )?;
+                require_positive(
+                    tier.input_without_video_unit_micros,
+                    "input_without_video_unit_micros",
+                )?;
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+fn require_positive(value: Option<i64>, _field: &str) -> AppResult<()> {
+    match value {
+        Some(value) if value > 0 => Ok(()),
+        _ => Err(AppError::BadRequestWithCode {
+            code: "video_price_tier_price_required",
+            message: "video price tier price must be positive",
+        }),
+    }
 }
 
 fn prices_are_non_negative(prices: PricingMicros) -> bool {
@@ -1132,24 +1234,28 @@ fn validate_pricing_policy(req: &UpsertPricingPolicyRequest) -> AppResult<()> {
     Ok(())
 }
 
-async fn ensure_model_is_known(state: &AppState, provider: &str, model: &str) -> AppResult<()> {
+async fn ensure_channel_model_is_known(
+    state: &AppState,
+    channel_id: DbId,
+    model: &str,
+) -> AppResult<()> {
     let row = sqlx::query(
         r#"
         SELECT 1
-        FROM provider_model
-        WHERE provider = $1
+        FROM channel_model
+        WHERE channel_id = $1
           AND model = $2
         LIMIT 1
         "#,
     )
-    .bind(provider)
+    .bind(channel_id)
     .bind(model)
     .fetch_optional(&state.db.pool)
     .await?;
 
     if row.is_none() {
         return Err(AppError::BadRequest(
-            "model is not known for this provider".to_string(),
+            "model is not configured for this channel".to_string(),
         ));
     }
 
@@ -1172,9 +1278,10 @@ fn provider_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderMod
     })
 }
 
-fn provider_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderPriceRecord> {
-    Ok(ProviderPriceRecord {
+fn channel_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelPriceRecord> {
+    Ok(ChannelPriceRecord {
         id: row.try_get("id")?,
+        channel_id: row.try_get("channel_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         input_price_micros: row.try_get("input_price_micros")?,
@@ -1183,6 +1290,8 @@ fn provider_price_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ProviderPri
         cache_write_price_micros: row.try_get("cache_write_price_micros")?,
         billing_meter: billing_meter_from_row(row)?,
         unit_price_micros: row.try_get("unit_price_micros")?,
+        video_billing_mode: video_billing_mode_from_row(row)?,
+        video_price_tiers: serde_json::from_value(row.try_get("video_price_tiers")?)?,
         enabled: row.try_get("enabled")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -1241,6 +1350,16 @@ fn billing_meter_from_row(row: &sqlx::postgres::PgRow) -> Result<BillingMeter, s
 fn pricing_basis_from_row(row: &sqlx::postgres::PgRow) -> Result<PricingBasis, sqlx::Error> {
     let value: String = row.try_get("pricing_basis")?;
     Ok(PricingBasis::from_str_lenient(&value))
+}
+
+fn video_billing_mode_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<VideoBillingMode>, sqlx::Error> {
+    let value: Option<String> = row.try_get("video_billing_mode")?;
+    value
+        .map(|value| VideoBillingMode::from_strict_str(&value))
+        .transpose()
+        .map_err(|err| sqlx::Error::Decode(err.into()))
 }
 
 fn pricing_policy_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingPolicyRecord> {
@@ -1361,8 +1480,21 @@ mod tests {
         let prices = pricing_micros_from_models_dev_model(&model).unwrap();
 
         assert_eq!(prices.pricing_basis, PricingBasis::MultiTierVideo);
+        assert_eq!(prices.billing_meter, BillingMeter::Video);
         assert_eq!(prices.input_price_micros, 16_000_000);
         assert_eq!(prices.output_price_micros, 16_000_000);
+    }
+
+    #[test]
+    fn video_output_models_use_video_billing_meter() {
+        let model: ModelsDevModel =
+            serde_json::from_str(r#"{"modalities":{"input":["text"],"output":["video"]}}"#)
+                .unwrap();
+
+        assert_eq!(
+            billing_meter_from_models_dev_model(&model),
+            BillingMeter::Video
+        );
     }
 
     #[test]

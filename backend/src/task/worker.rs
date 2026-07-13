@@ -1,6 +1,6 @@
 use std::{future::Future, sync::Arc};
 
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method};
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::{stream, StreamExt};
@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     billing::{parse_usage_from_bytes, TokenUsage},
-    error::AppResult,
+    error::{reqwest_status, AppResult},
     relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
     AppState,
 };
@@ -116,6 +116,16 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             )
             .await?
         }
+        UpstreamTaskType::OpenAiVideo => {
+            let path = format!("/v1/videos/{}", task.upstream_task_id);
+            poll_upstream_response(
+                state,
+                forward_openai_bound(state, &upstream, Method::GET, &path, None),
+                task.id,
+                task.task_type,
+            )
+            .await?
+        }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {
             let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
@@ -135,13 +145,25 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             .await?
         }
     };
-    let status = StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(response.status());
+    let body = read_response_bytes(state, response, task.id, task.task_type).await?;
+    tracing::info!(
+        task_id = task.id,
+        ?task.task_type,
+        upstream_task_id = %task.upstream_task_id,
+        provider = %upstream.provider,
+        channel_id = upstream.channel_id,
+        upstream_status = status.as_u16(),
+        upstream_response = %String::from_utf8_lossy(&body),
+        "upstream async task poll response"
+    );
     if !status.is_success() {
         return Ok(());
     }
-    let body = read_response_bytes(state, response, task.id, task.task_type).await?;
-    let value: Value = serde_json::from_slice(&body)?;
+    let mut value: Value = serde_json::from_slice(&body)?;
+    if task.task_type == UpstreamTaskType::OpenAiVideo {
+        crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
+    }
     let (status_text, terminal) = task_status_from_value(&value, &task);
     let mut usage = parse_usage_from_bytes(&body, false);
     upstream::update_task_from_upstream_value(
@@ -152,7 +174,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             upstream_task_id: task.upstream_task_id.clone(),
             status: status_text.clone(),
             terminal,
-            metadata: value,
+            metadata: value.clone(),
             usage,
             poll_interval: state.config.task.upstream_poll_interval,
         },
@@ -170,6 +192,16 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             };
             usage = Some(results_usage);
         }
+        let task = if task.task_type == UpstreamTaskType::OpenAiVideo {
+            UpstreamTask {
+                status: status_text,
+                terminal,
+                upstream_metadata: value,
+                ..task
+            }
+        } else {
+            task
+        };
         task_billing::finalize_polled(state, task, upstream, usage).await?;
     }
     Ok(())
@@ -235,8 +267,7 @@ async fn poll_anthropic_batch_results_usage(
         task.task_type,
     )
     .await?;
-    let status = StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(response.status());
     if !status.is_success() {
         return Ok(None);
     }
@@ -271,6 +302,11 @@ fn task_status_from_value(value: &Value, task: &UpstreamTask) -> (String, bool) 
                 .unwrap_or(&task.status)
                 .to_string();
             let terminal = openai_response_terminal(&status);
+            (status, terminal)
+        }
+        UpstreamTaskType::OpenAiVideo => {
+            let status = crate::provider::openai::video_status_text(value, &task.status);
+            let terminal = crate::provider::openai::video_terminal(&status);
             (status, terminal)
         }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),

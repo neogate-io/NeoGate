@@ -241,9 +241,9 @@ function probeSampleTitle(sample: ChannelProbeSample) {
   display: inline-grid;
   gap: 3px;
   justify-items: center;
-  min-width: 156px;
   padding: 4px 0;
   text-align: center;
+  width: 156px;
 }
 
 .probe-trend-cell.is-failed {

@@ -37,7 +37,7 @@ use crate::{
         BillingCharge, DebitHold, Price, TokenUsage,
     },
     cache::InvalidationEvent,
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     policy, AppState,
 };
 
@@ -51,7 +51,8 @@ pub(crate) use error::{describe_upstream_http_failure, is_model_error_text, Upst
 pub(crate) use limit::UserRequestLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{
-    prepare_relay_body, rewrite_relay_body_model, BodyKind, PreparedRelayBody, RelayRequestParams,
+    prepare_relay_body, rewrite_relay_body_model, safe_log_label, BodyKind, PreparedRelayBody,
+    RelayRequestParams,
 };
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
 pub(crate) use upstream::{
@@ -96,6 +97,12 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/images/variations",
             post(openai::openai_image_variations),
         )
+        .route("/v1/videos", post(openai::openai_videos))
+        .route(
+            "/v1/videos/{video_id}/content",
+            get(openai::openai_video_content),
+        )
+        .route("/v1/videos/{video_id}", get(openai::openai_video))
         .route(
             "/anthropic",
             get(anthropic_gateway_probe).head(anthropic_gateway_probe),
@@ -136,16 +143,26 @@ pub(crate) async fn finish_task_json_response(
     task: UpstreamTask,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
+    tracing::info!(
+        task_id = task.id,
+        ?task.task_type,
+        upstream_task_id = %task.upstream_task_id,
+        upstream_status = status.as_u16(),
+        upstream_response = %String::from_utf8_lossy(&body),
+        "upstream async task bound response"
+    );
     if status.is_success() {
-        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
+            if task.task_type == UpstreamTaskType::OpenAiVideo {
+                crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
+            }
             let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
             let usage = parse_usage_from_bytes(&body, false);
             upstream_task::update_task_from_upstream_value(
@@ -181,8 +198,7 @@ pub(crate) async fn finish_task_json_response(
 pub(crate) async fn raw_upstream_response(
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")
@@ -219,6 +235,11 @@ pub(crate) fn task_status_from_value(
             let terminal = openai::response_terminal(&status);
             (status, terminal)
         }
+        UpstreamTaskType::OpenAiVideo => {
+            let status = openai::video_status_text(value, &task.status);
+            let terminal = openai::video_terminal(&status);
+            (status, terminal)
+        }
         UpstreamTaskType::AnthropicMessageBatch => {
             let status = value
                 .get("processing_status")
@@ -246,8 +267,7 @@ pub(crate) async fn finish_relay(
 ) -> AppResult<Response> {
     match response {
         Ok(upstream_response) => {
-            let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status = reqwest_status(upstream_response.status());
             if !status.is_success() {
                 return handle_upstream_http_error(ctx, status, upstream_response).await;
             }
@@ -307,11 +327,12 @@ fn rewrite_response_model(body: Bytes, external_model: &str) -> AppResult<Bytes>
     Ok(body)
 }
 
-async fn finish_relay_error(ctx: RelayContext, err: AppError) -> AppResult<Response> {
+async fn finish_relay_error(mut ctx: RelayContext, err: AppError) -> AppResult<Response> {
     let err = relay_upstream_error(&ctx, err);
     let summary = err.to_string();
     log_relay_upstream_failure(&ctx, &err);
     let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
+    ctx.release_request_permit();
     let failure = key_failure_from_context(&ctx, summary).await;
     release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
     enqueue_relay_usage(&ctx.state, usage, failure).await;
@@ -329,7 +350,7 @@ pub(crate) async fn handle_upstream_http_error(
 }
 
 pub(crate) async fn respond_upstream_http_failure(
-    ctx: RelayContext,
+    mut ctx: RelayContext,
     status: StatusCode,
     failure: UpstreamHttpFailure,
 ) -> AppResult<Response> {
@@ -346,6 +367,7 @@ pub(crate) async fn respond_upstream_http_failure(
     });
     let client_response = payload.to_string();
     log_upstream_http_failure(&ctx, status, &failure, Some(&client_response));
+    ctx.release_request_permit();
     record_upstream_http_failure(&ctx, status, &failure, "upstream error").await;
 
     let mut builder = Response::builder()
@@ -864,6 +886,8 @@ fn push_request_params(line: &mut String, params: &RelayRequestParams) {
         params.image_quality.as_deref(),
     );
     push_opt_str(line, "request_image_style", params.image_style.as_deref());
+    push_opt_str(line, "request_video_size", params.video_size.as_deref());
+    push_opt(line, "request_video_seconds", params.video_seconds);
 }
 
 fn push_info_request_params(line: &mut String, params: &RelayRequestParams) {

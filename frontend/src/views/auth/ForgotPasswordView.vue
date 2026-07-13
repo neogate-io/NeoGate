@@ -7,7 +7,7 @@ import { requestPasswordReset } from '../../api/auth'
 import LocaleToggleButton from '../../components/common/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
-import { ApiError, isSmtpConfigError } from '../../utils/errors'
+import { ApiError, isSmtpConfigError, readError } from '../../utils/errors'
 
 const { locale, t } = useLocale()
 const email = ref('')
@@ -38,7 +38,7 @@ function readForgotPasswordError(err: unknown) {
   if (err instanceof ApiError && err.status === 400) {
     return t('invalidEmail')
   }
-  return err instanceof Error ? err.message : String(err)
+  return readError(err)
 }
 </script>
 

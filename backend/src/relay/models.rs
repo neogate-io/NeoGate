@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, Row};
 
 use crate::{
-    auth::UserAuth, billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP, error::AppError,
-    error::AppResult, AppState,
+    auth::UserAuth, billing::BILLABLE_PRICE_CONDITION_CP, error::AppError, error::AppResult,
+    AppState,
 };
 
 use super::selector::UpstreamProtocol;
@@ -139,19 +139,19 @@ async fn available_models(
             SELECT
                 c.provider,
                 cm.model,
-                pp.billing_meter,
-                pp.unit_price_micros,
-                pp.input_price_micros,
-                pp.output_price_micros
+                cp.billing_meter,
+                cp.unit_price_micros,
+                cp.input_price_micros,
+                cp.output_price_micros
             FROM channel c
             JOIN provider p ON p.code = c.provider
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
-            JOIN provider_price pp
-             ON pp.provider = c.provider
-             AND pp.model = cm.model
-             AND pp.enabled = TRUE
-             AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp
+             ON cp.channel_id = c.id
+             AND cp.model = cm.model
+             AND cp.enabled = TRUE
+             AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
               AND ($1::TEXT[] IS NULL OR ce.protocol = ANY($1))

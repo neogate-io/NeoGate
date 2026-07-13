@@ -36,6 +36,7 @@ const generalApiErrorMessageKeys = {
   upstream_connect_error: 'genericUpstreamError',
   upstream_request_error: 'genericUpstreamError',
   upstream_unavailable: 'genericUpstreamError',
+  pricing_reference_source_unavailable: 'referencePricesSourceUnavailable',
   database_password_invalid: 'databasePasswordInvalid',
   database_not_found: 'databaseNotFound',
   database_permission_denied: 'databasePermissionDenied',
@@ -46,7 +47,26 @@ const generalApiErrorMessageKeys = {
   database_connection_timeout: 'databaseConnectionTimeout',
   database_url_invalid: 'databaseUrlFormatInvalid',
   database_network_error: 'databaseNetworkError',
-  database_tls_error: 'databaseTlsError'
+  database_tls_error: 'databaseTlsError',
+  password_required: 'passwordRequired',
+  current_password_required: 'passwordRequired',
+  password_min_length: 'passwordMinLength',
+  current_password_incorrect: 'currentPasswordIncorrect',
+  password_same_as_current: 'passwordSameAsCurrent',
+  registration_closed: 'registrationClosed',
+  account_pending_approval: 'accountPendingApproval',
+  verification_code_required: 'loginVerificationRequired',
+  invalid_verification_code: 'loginVerificationInvalid',
+  login_verification_rate_limited: 'loginVerificationRateLimited',
+  password_reset_rate_limited: 'passwordResetRateLimited',
+  price_model_required: 'priceModelRequired',
+  price_must_be_non_negative: 'priceMustBeNonNegative',
+  image_unit_price_required: 'imageUnitPriceRequired',
+  video_billing_mode_required: 'videoBillingModeRequired',
+  video_billing_meter_required: 'videoBillingMeterRequired',
+  video_price_tiers_required: 'videoPriceTiersRequired',
+  video_price_tier_resolution_required: 'videoPriceTierResolutionRequired',
+  video_price_tier_price_required: 'videoPriceTierPriceRequired'
 } as Record<string, MessageKey>
 
 function tError(key: MessageKey) {
@@ -101,7 +121,7 @@ export function readModelFetchError(err: unknown, t: Translate) {
 }
 
 export function isNoModelsReturnedError(err: unknown) {
-  return err instanceof ApiError && err.message.trim().toLowerCase() === 'no models returned'
+  return err instanceof ApiError && err.code === 'no_models_returned'
 }
 
 function readMappedApiError(

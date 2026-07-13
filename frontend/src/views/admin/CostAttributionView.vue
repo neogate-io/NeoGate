@@ -20,7 +20,7 @@ import {
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
-import { downloadBlob, formatDurationMs, formatNumber, toDateKey } from '../../utils/format'
+import { downloadBlob, formatNumber, toDateKey } from '../../utils/format'
 
 const { locale, t } = useLocale()
 const { formatMoney } = useBillingCurrency()
@@ -44,7 +44,7 @@ type DrilldownContext = {
   model?: string
   channel_id?: number
   channel_name?: string
-  billing_meter?: 'token' | 'image'
+  billing_meter?: 'token' | 'image' | 'video'
 }
 
 const DEFAULT_PAGE_SIZE = 20
@@ -408,18 +408,23 @@ async function refineProject(row: ProjectUsageStatistics) {
   await reloadDetails()
 }
 
+function clearRefinementKeys(keys: Array<keyof DrilldownContext>) {
+  const next = { ...refinements.value }
+  for (const key of keys) {
+    delete next[key]
+  }
+  refinements.value = next
+}
+
 async function clearRefinement(kind?: keyof DrilldownContext) {
   if (!kind) {
     refinements.value = {}
   } else if (kind === 'model' || kind === 'channel_id' || kind === 'billing_meter') {
-    const { model: _model, channel_id: _channelId, channel_name: _channelName, billing_meter: _meter, ...rest } = refinements.value
-    refinements.value = rest
+    clearRefinementKeys(['model', 'channel_id', 'channel_name', 'billing_meter'])
   } else if (kind === 'project_id') {
-    const { project_id: _projectId, project_name: _projectName, ...rest } = refinements.value
-    refinements.value = rest
+    clearRefinementKeys(['project_id', 'project_name'])
   } else if (kind === 'user_id') {
-    const { user_id: _userId, user_name: _userName, ...rest } = refinements.value
-    refinements.value = rest
+    clearRefinementKeys(['user_id', 'user_name'])
   }
   resetDetailPages()
   await reloadDetails()
@@ -586,6 +591,7 @@ function currentPrimaryPage() {
 
 function billingMeterLabel(value?: string | null) {
   if (value === 'image') return t('billingMeterImageGeneration')
+  if (value === 'video') return t('billingMeterVideo')
   if (value === 'token') return t('billingMeterToken')
   return t('billingMeterAll')
 }

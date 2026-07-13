@@ -46,7 +46,11 @@ import {
   readModelFetchError,
   readSmtpTestError
 } from '../../utils/errors'
-import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
+import {
+  isManualBaseUrlProvider,
+  sortProvidersForDisplay,
+  splitCommaList
+} from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
@@ -364,8 +368,8 @@ const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
 const providerOptions = computed(() => sortProvidersForDisplay(providers.value))
-const isManualBaseUrlProviderSelected = computed(
-  () => selectedProvider.value?.code === 'custom' || selectedProvider.value?.code === 'newapi'
+const isManualBaseUrlProviderSelected = computed(() =>
+  Boolean(selectedProvider.value && isManualBaseUrlProvider(selectedProvider.value.code))
 )
 const bootstrapMissingDatabase = computed(() => !status.value?.database_configured)
 const clusterBlocked = computed(
@@ -722,7 +726,7 @@ async function submitSetup() {
       setSiteBrand({
         site_name: completedStatus.site_name || bootstrapForm.siteName,
         public_base_url: completedStatus.public_base_url || bootstrapForm.publicBaseUrl,
-        logo_url: '/logos/logo.svg',
+        logo_url: null,
         billing_currency: completedStatus.billing_currency,
         env_write_supported: completedStatus.env_write_supported
       })
@@ -890,8 +894,7 @@ async function sendSmtpTestEmail() {
 function readReferenceSyncError(err: unknown) {
   if (
     err instanceof ApiError &&
-    err.status === 502 &&
-    err.message.includes('pricing reference source')
+    err.code === 'pricing_reference_source_unavailable'
   ) {
     return t('referencePricesSourceUnavailable')
   }
@@ -982,7 +985,7 @@ function isBusinessStepDone(step: BusinessSetupStep) {
 function applyProviderDefaults() {
   const provider = selectedProvider.value
   if (!provider) return
-  if (provider.code === 'custom' || provider.code === 'newapi') {
+  if (isManualBaseUrlProvider(provider.code)) {
     setupForm.channelName = ''
     setupForm.baseUrl = ''
     setupForm.openAiBaseUrl = ''
@@ -1006,7 +1009,7 @@ function applyProviderDefaults() {
 function setupEndpointsForSubmit(models: string[]) {
   const provider = selectedProvider.value
   const endpointModels = [...models]
-  if (!provider || provider.code === 'custom' || provider.code === 'newapi') {
+  if (!provider || isManualBaseUrlProvider(provider.code)) {
     const endpoints: SetupEndpointPayload[] = []
     const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
     const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()

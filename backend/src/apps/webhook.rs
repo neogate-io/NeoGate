@@ -16,8 +16,8 @@ use crate::{
 };
 
 use super::{
-    constant_time_eq, hmac_sha256_hex, runtime::run_app_message, runtime_for_endpoint,
-    secret_plaintext, AppMessageResponse, AppRuntime, IncomingAppMessage,
+    app_message_response, constant_time_eq, hmac_sha256_hex, runtime::run_app_message,
+    runtime_for_endpoint, secret_plaintext, AppMessageResponse, AppRuntime, IncomingAppMessage,
 };
 
 const SECRET_KEY: &str = "secret";
@@ -54,13 +54,7 @@ pub(super) async fn message(
         trace_id: req.trace_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
     };
     let outcome = run_app_message(Arc::clone(&state), runtime, message).await?;
-    Ok(Json(AppMessageResponse {
-        ok: true,
-        conversation_id: outcome.conversation_id,
-        message: outcome.message,
-        trace_id: outcome.trace_id,
-        duplicate: outcome.duplicate,
-    }))
+    Ok(Json(app_message_response(outcome)))
 }
 
 fn verify_signature(

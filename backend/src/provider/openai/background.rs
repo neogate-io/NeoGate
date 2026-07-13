@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::parse_usage_from_bytes,
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     project::models::UsageRoutingSnapshot,
     provider::newapi,
     relay::{
@@ -67,8 +67,7 @@ pub(super) async fn create_background_response(
                 &[UpstreamProtocol::Openai],
                 &target_model,
                 channel_id,
-                &[],
-                &[],
+                SelectionConstraints::default(),
             )
             .await?
             .1
@@ -94,7 +93,7 @@ pub(super) async fn create_background_response(
         .billing
         .price_for(
             &state.db.pool,
-            &upstream.provider,
+            upstream.channel_id,
             &target_model,
             &auth.user_group,
         )
@@ -147,7 +146,7 @@ pub(super) async fn create_background_response(
         "/v1/responses",
     )
     .await;
-    let ctx = RelayContext {
+    let mut ctx = RelayContext {
         state: Arc::clone(&state),
         auth: auth.clone(),
         upstream: upstream.clone(),
@@ -176,8 +175,7 @@ pub(super) async fn create_background_response(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -188,8 +186,12 @@ pub(super) async fn create_background_response(
         .cloned()
         .unwrap_or_else(|| axum::http::HeaderValue::from_static("application/json"));
     let body = match upstream_response.bytes().await {
-        Ok(body) => body,
+        Ok(body) => {
+            ctx.release_request_permit();
+            body
+        }
         Err(err) => {
+            ctx.release_request_permit();
             release_empty_hold(&state, hold, "openai background response body read error").await;
             return Err(err.into());
         }
@@ -262,8 +264,7 @@ pub(super) fn finish_stream_response(
     upstream: SelectedUpstream,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")
@@ -341,8 +342,7 @@ async fn refresh_task_after_stream(
 ) -> AppResult<()> {
     let path = format!("/v1/responses/{}", task.upstream_task_id);
     let response = forward_openai_bound(state, upstream, Method::GET, &path, None).await?;
-    let status = StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(response.status());
     if !status.is_success() {
         return Ok(());
     }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import { splitCommaList } from '../../../utils/channel'
 
@@ -17,6 +17,19 @@ const emit = defineEmits<{
 
 const { t } = useLocale()
 const manualModelInput = ref('')
+const modelSearchQuery = ref('')
+
+const filteredModels = computed(() => {
+  const query = modelSearchQuery.value.trim().toLowerCase()
+  if (!query) return models.value
+  return models.value.filter((model) => model.toLowerCase().includes(query))
+})
+
+watch(open, (isOpen) => {
+  if (!isOpen) {
+    modelSearchQuery.value = ''
+  }
+})
 
 function addManualModels() {
   const manualModels = splitCommaList(manualModelInput.value)
@@ -34,18 +47,30 @@ function addManualModels() {
   selectedModels.value = Array.from(new Set([...selectedModels.value, ...manualModels]))
   manualModelInput.value = ''
 }
+
+function saveModels() {
+  addManualModels()
+  open.value = false
+}
 </script>
 
 <template>
   <el-dialog
     v-model="open"
     class="model-picker-dialog"
+    :close-on-click-modal="false"
     :title="t('selectModels')"
     width="560px"
     append-to-body
   >
     <div class="model-picker">
       <div class="model-picker-toolbar">
+        <el-input
+          v-model="modelSearchQuery"
+          class="model-search-input"
+          clearable
+          :placeholder="t('modelSearchPlaceholder')"
+        />
         <span class="model-count">
           {{ t('selectedModelCount') }} {{ selectedModels.length }}/{{ models.length }}
         </span>
@@ -61,26 +86,29 @@ function addManualModels() {
             />
             <span>{{ t('allModels') }}</span>
           </label>
-          <label v-for="model in models" :key="model" class="model-checkbox-item">
+          <label v-for="model in filteredModels" :key="model" class="model-checkbox-item">
             <input v-model="selectedModels" type="checkbox" :value="model" />
             <span>{{ model }}</span>
           </label>
+          <div v-if="filteredModels.length === 0" class="model-empty-state">
+            {{ t('noMatchingModels') }}
+          </div>
         </div>
         <div class="manual-model-add">
+          <p class="manual-model-hint">{{ t('manualModelHint') }}</p>
           <el-input
             v-model="manualModelInput"
             class="manual-model-input"
             :placeholder="t('manualModelPlaceholder')"
-            @keyup.enter="addManualModels"
+            @keyup.enter="saveModels"
           />
-          <el-button @click="addManualModels">{{ t('addManualModel') }}</el-button>
         </div>
       </div>
     </div>
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button type="primary" @click="open = false">
+        <el-button type="primary" @click="saveModels">
           {{ t('save') }}
         </el-button>
       </div>
@@ -97,7 +125,8 @@ function addManualModels() {
 .model-picker-toolbar {
   align-items: center;
   display: flex;
-  justify-content: flex-start;
+  gap: 12px;
+  justify-content: space-between;
   min-width: 0;
 }
 
@@ -108,25 +137,35 @@ function addManualModels() {
   white-space: nowrap;
 }
 
+.model-search-input {
+  flex: 0 1 240px;
+  min-width: 180px;
+}
+
+.model-search-input :deep(.el-input__wrapper) {
+  border-radius: 7px;
+  min-height: 32px;
+}
+
 .manual-model-add {
-  align-items: center;
-  display: flex;
+  align-items: stretch;
+  display: grid;
   gap: 8px;
-  justify-content: stretch;
+  margin-top: 8px;
   min-width: 0;
   width: 100%;
 }
 
-.manual-model-input {
-  flex: 1;
-  min-width: 0;
+.manual-model-hint {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  grid-column: 1 / -1;
 }
 
-.manual-model-add :deep(.el-button) {
-  border-radius: 7px;
-  flex: 0 0 auto;
-  font-weight: 680;
-  min-height: 32px;
+.manual-model-input {
+  min-width: 0;
 }
 
 .model-select-panel {
@@ -170,6 +209,16 @@ function addManualModels() {
   grid-column: 1 / -1;
 }
 
+.model-empty-state {
+  align-items: center;
+  color: #94a3b8;
+  display: flex;
+  font-size: 13px;
+  grid-column: 1 / -1;
+  min-height: 56px;
+  padding: 0 8px;
+}
+
 .model-checkbox-item input {
   accent-color: var(--brand-blue);
   cursor: pointer;
@@ -207,11 +256,6 @@ function addManualModels() {
   line-height: 1.2;
 }
 
-:global(.model-picker-dialog .el-dialog__headerbtn) {
-  right: 12px;
-  top: 10px;
-}
-
 :global(.model-picker-dialog .el-dialog__body) {
   padding: 18px 22px;
 }
@@ -229,8 +273,19 @@ function addManualModels() {
 }
 
 @media (max-width: 760px) {
+  .model-picker-toolbar {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .model-count {
     white-space: normal;
+  }
+
+  .model-search-input {
+    min-width: 0;
+    width: 100%;
   }
 
   .manual-model-add {

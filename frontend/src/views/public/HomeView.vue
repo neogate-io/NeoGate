@@ -64,7 +64,7 @@ async function createHomeApiKey() {
       homeKeySent.value = true
       ElMessage.success(t('apiKeySentToast'))
     } catch (err) {
-      if (err instanceof ApiError && err.message.includes('account pending approval')) {
+      if (err instanceof ApiError && err.code === 'account_pending_approval') {
         ElMessage.warning(t('accountPendingApproval'))
         apiKeyDialogOpen.value = false
         return

@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{parse_usage_from_sse_data, DebitHold, TokenUsage},
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     id::DbId,
     relay::{
         describe_upstream_http_failure, forward_openai, read_upstream_error_body,
@@ -447,8 +447,7 @@ async fn run_streamed_response(
     )
     .await?;
     if !response.status().is_success() {
-        let status = StatusCode::from_u16(response.status().as_u16())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status = reqwest_status(response.status());
         let body = read_upstream_error_body(response).await;
         let failure = describe_upstream_http_failure(status, &body);
         return Err(AppError::BadRequest(failure.summary));

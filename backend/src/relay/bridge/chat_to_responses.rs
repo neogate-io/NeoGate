@@ -766,8 +766,11 @@ impl OpenAiChatSseToOpenAiResponse {
     }
 
     fn push_event(&self, out: &mut Vec<u8>, event: &str, data: Value) {
-        out.extend_from_slice(format!("event: {event}\n").as_bytes());
-        out.extend_from_slice(format!("data: {data}\n\n").as_bytes());
+        out.extend_from_slice(b"event: ");
+        out.extend_from_slice(event.as_bytes());
+        out.extend_from_slice(b"\ndata: ");
+        serde_json::to_writer(&mut *out, &data).expect("serializing JSON value to Vec cannot fail");
+        out.extend_from_slice(b"\n\n");
     }
 
     fn next_sequence_number(&mut self) -> i64 {

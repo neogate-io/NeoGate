@@ -130,6 +130,23 @@ def condition_from_model_cell(raw: str) -> str | None:
     return None
 
 
+def descriptive_condition(row: list[str], name_col: int, price_col: int) -> str | None:
+    for idx, cell in enumerate(row):
+        if idx in {name_col, price_col}:
+            continue
+        value = cell.strip()
+        if value:
+            return value
+    return None
+
+
+def video_resolution_from_condition(condition: str | None) -> str:
+    if not condition:
+        return ""
+    match = re.search(r"\b\d{3,4}P\b", condition, flags=re.IGNORECASE)
+    return match.group(0).upper() if match else ""
+
+
 def parse_markdown_tables(text: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     section = ""
@@ -160,15 +177,14 @@ def parse_markdown_tables(text: str) -> list[dict[str, Any]]:
                     break
             if not name:
                 continue
+            # 确定价格列(最后一列)
+            price_col = len(row) - 1
+            price_raw = row[price_col]
             # 视频/音乐/图像/MCP 表:功能/说明列(含分辨率/时长)作为 condition
             if unit == "百万tokens":
                 condition = condition_from_model_cell(row[0]) or None
             else:
-                cond_cell = row[2] if len(row) > 2 and name_col != 2 else (row[1] if len(row) > 1 else "")
-                condition = cond_cell.strip() if cond_cell else None
-            # 确定价格列(最后一个含数字的列)
-            price_col = len(row) - 1
-            price_raw = row[price_col]
+                condition = descriptive_condition(row, name_col, price_col)
             record = {
                 "section": section,
                 "model": name,
@@ -268,10 +284,14 @@ def to_provider_payload(records: list[dict[str, Any]], source_url: str) -> dict[
         cost = cost_from_record(record)
         if record.get("section") == "视频" and cost.get("basis") == "call":
             # 视频按次计费但有多档(分辨率/时长),收集档位
+            condition = record.get("condition") or ""
             tier = {
-                "resolution": record.get("condition") or "",
+                "resolution": video_resolution_from_condition(condition),
+                "unit": "per_video",
                 "tiers": {"price": cost.get("per_call")},
             }
+            if condition and condition != tier["resolution"]:
+                tier["label"] = condition
             video_tiers_by_model.setdefault(model_id, []).append(tier)
             continue
         if cost and "cost" not in entry:

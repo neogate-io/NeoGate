@@ -58,11 +58,7 @@ import type {
 import { copyTextWithMessage } from '../../utils/clipboard'
 import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
-import {
-  formatCompactDateTime,
-  formatDateTime,
-  maskApiKey
-} from '../../utils/format'
+import { formatCompactDateTime, formatDateTime, maskApiKey } from '../../utils/format'
 
 defineOptions({
   name: 'ProjectsView'
@@ -497,7 +493,9 @@ function suggestionChannelLabel(suggestion: AutoSuggestion) {
 }
 
 function autoConfigSourceLabel(source: string) {
-  return source === 'llm' ? t('projectModelAutoConfigSourceLlm') : t('projectModelAutoConfigSourceRules')
+  return source === 'llm'
+    ? t('projectModelAutoConfigSourceLlm')
+    : t('projectModelAutoConfigSourceRules')
 }
 
 function autoConfigWarningText(warning: string) {
@@ -524,7 +522,10 @@ function smartRouteFallbackCandidate(items: ProjectModelCandidateForm[]) {
   return items.find((item) => item.enabled) || items[0] || null
 }
 
-async function persistSmartRouteCandidates(items: ProjectModelCandidateForm[], successMessage: string) {
+async function persistSmartRouteCandidates(
+  items: ProjectModelCandidateForm[],
+  successMessage: string
+) {
   const projectId = selectedProject.value?.id
   if (!projectId) return false
   const fallback = smartRouteFallbackCandidate(items)
@@ -645,7 +646,10 @@ async function applySmartAutoConfig() {
     smartAutoDialogVisible.value = false
     return
   }
-  const saved = await persistSmartRouteCandidates(nextCandidates, t('projectModelAutoConfigApplied'))
+  const saved = await persistSmartRouteCandidates(
+    nextCandidates,
+    t('projectModelAutoConfigApplied')
+  )
   if (saved) {
     smartAutoDialogVisible.value = false
     smartAutoSuggestions.value = []
@@ -659,7 +663,9 @@ async function removeSmartRouteCandidate(index: number) {
   const projectId = selectedProject.value?.id
   if (!row || !projectId) return
   const candidate = smartRouteCandidates.value[index]
-  const nextCandidates = smartRouteCandidates.value.filter((_, candidateIndex) => candidateIndex !== index)
+  const nextCandidates = smartRouteCandidates.value.filter(
+    (_, candidateIndex) => candidateIndex !== index
+  )
   const message =
     nextCandidates.length === 0
       ? t('projectModelDeleteLastCandidateConfirm')
@@ -716,11 +722,15 @@ async function submitProjectModelForm() {
 async function confirmDeleteProjectModel(row: ProjectModel) {
   const projectId = selectedProject.value?.id
   if (!projectId) return
-  const confirmed = await confirmDialog(t('projectModelDeleteConfirm', { model: row.model }), t('confirmDelete'), {
-    confirmText: t('delete'),
-    danger: true,
-    type: 'warning'
-  })
+  const confirmed = await confirmDialog(
+    t('projectModelDeleteConfirm', { model: row.model }),
+    t('confirmDelete'),
+    {
+      confirmText: t('delete'),
+      danger: true,
+      type: 'warning'
+    }
+  )
   if (!confirmed) return
   await withLoadingValue(deletingProjectModelName, row.model, null, async () => {
     try {
@@ -1184,6 +1194,7 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="projectDialogVisible"
       class="user-admin-dialog project-create-dialog"
+      :close-on-click-modal="false"
       :title="projectDialogTitle"
       width="560px"
     >
@@ -1263,6 +1274,7 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="modelsDialogVisible"
       class="user-admin-dialog project-models-dialog"
+      :close-on-click-modal="false"
       :title="t('projectModels')"
       width="720px"
     >
@@ -1366,7 +1378,12 @@ onMounted(loadServicePolicy)
                     }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column :label="t('actions')" width="56" align="center" header-align="center">
+                <el-table-column
+                  :label="t('actions')"
+                  width="56"
+                  align="center"
+                  header-align="center"
+                >
                   <template #default="{ row }">
                     <div class="table-row-actions">
                       <el-tooltip :content="t('delete')" placement="top" :show-after="600">
@@ -1506,7 +1523,12 @@ onMounted(loadServicePolicy)
                       }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column :label="t('actions')" width="58" align="center" header-align="center">
+                  <el-table-column
+                    :label="t('actions')"
+                    width="58"
+                    align="center"
+                    header-align="center"
+                  >
                     <template #default="{ $index }">
                       <div class="table-row-actions">
                         <el-tooltip :content="t('delete')" placement="top" :show-after="600">
@@ -1533,6 +1555,7 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="smartAutoDialogVisible"
       class="user-admin-dialog smart-auto-dialog"
+      :close-on-click-modal="false"
       :title="t('projectModelAutoConfigSuggestions')"
       width="680px"
     >
@@ -1598,6 +1621,7 @@ onMounted(loadServicePolicy)
     <el-dialog
       v-model="membersDialogVisible"
       class="user-admin-dialog project-members-dialog"
+      :close-on-click-modal="false"
       :title="t('projectMembers')"
       width="820px"
     >

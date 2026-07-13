@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
+    input::bounded_limit,
     provider::adapters::{adapter_for_provider, RelayRoute},
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
@@ -100,8 +101,10 @@ pub(crate) async fn anthropic_messages(
                     &ANTHROPIC_MESSAGE_PROTOCOLS,
                     &resolved.target_model,
                     channel_id,
-                    &attempted_upstreams,
-                    &[],
+                    SelectionConstraints {
+                        attempted: &attempted_upstreams,
+                        ..SelectionConstraints::default()
+                    },
                 )
                 .await?
         } else {
@@ -126,7 +129,7 @@ pub(crate) async fn anthropic_messages(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )
@@ -191,8 +194,7 @@ pub(crate) async fn anthropic_messages(
 
         match response {
             Ok(upstream_response) => {
-                let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let status = reqwest_status(upstream_response.status());
                 if status.is_success() {
                     ctx.mark_final_with_permit(&mut request_permit);
                     if protocol == UpstreamProtocol::Openai {
@@ -305,8 +307,7 @@ pub(crate) async fn create_anthropic_message_batch(
                 &[UpstreamProtocol::Anthropic],
                 &resolved.target_model,
                 channel_id,
-                &[],
-                &[],
+                SelectionConstraints::default(),
             )
             .await?
             .1
@@ -326,7 +327,7 @@ pub(crate) async fn create_anthropic_message_batch(
         .billing
         .price_for(
             &state.db.pool,
-            &upstream.provider,
+            upstream.channel_id,
             &resolved.target_model,
             &auth.user_group,
         )
@@ -381,7 +382,7 @@ pub(crate) async fn list_anthropic_message_batches(
     auth: UserAuth,
     Query(query): Query<AnthropicBatchListQuery>,
 ) -> AppResult<Response> {
-    let requested_limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let requested_limit = bounded_limit(query.limit, 100, 1000);
     let tasks = upstream_task::list_tasks_for_auth(
         &state.db.pool,
         &auth,
@@ -515,8 +516,7 @@ async fn finish_batch_create(
     hold: crate::billing::DebitHold,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")
@@ -588,8 +588,7 @@ async fn finish_results_response(
     task: UpstreamTask,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     let content_type = upstream_response
         .headers()
         .get("content-type")

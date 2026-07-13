@@ -7,19 +7,22 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 use crate::{
-    billing::BILLABLE_PROVIDER_PRICE_CONDITION_PP,
+    billing::BILLABLE_PRICE_CONDITION_CP,
     cache::InvalidationEvent,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     input::trimmed_non_empty,
     provider::adapters::{adapter_for_provider, RelayRoute},
-    relay::upstream_url,
+    relay::{
+        selector::{SelectedUpstream, UpstreamProtocol},
+        upstream_url,
+    },
     AppState,
 };
 
-use super::credentials::runtime_secret_from_enabled_credential;
 use super::provider::OPENAI_OAUTH_PROTOCOL;
+use super::{channel::mask_channel_key, credentials::runtime_secret_from_enabled_credential};
 
 const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
 
@@ -127,6 +130,7 @@ pub struct EndpointDiagnosticReport {
 pub struct KeyDiagnosticReport {
     pub key_id: Option<DbId>,
     pub key_name: String,
+    pub masked_key: Option<String>,
     pub key_prefix: Option<String>,
     pub status: DiagnosticStatus,
     pub summary: String,
@@ -143,6 +147,41 @@ pub struct DiagnosticStep {
     pub status_code: Option<u16>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticScope {
+    #[default]
+    All,
+    Models,
+    Text,
+    Image,
+    Video,
+}
+
+impl DiagnosticScope {
+    fn includes_models(self) -> bool {
+        matches!(self, Self::All | Self::Models)
+    }
+
+    fn includes_text(self) -> bool {
+        matches!(self, Self::All | Self::Text)
+    }
+
+    fn includes_image(self) -> bool {
+        matches!(self, Self::All | Self::Image)
+    }
+
+    fn includes_video(self) -> bool {
+        matches!(self, Self::All | Self::Video)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DiagnoseChannelRequest {
+    #[serde(default)]
+    pub scope: DiagnosticScope,
+}
+
 struct ChannelDiagnosticTarget {
     id: DbId,
     provider: String,
@@ -157,27 +196,24 @@ struct EndpointTarget {
     protocol: String,
     base_url: String,
     models: Vec<String>,
+    image_models: Vec<String>,
+    video_models: Vec<String>,
     enabled: bool,
 }
 
 struct KeyTarget {
     id: Option<DbId>,
     name: String,
+    masked_key: Option<String>,
     key_prefix: Option<String>,
     secret: String,
     enabled: bool,
 }
 
-pub async fn diagnose_channel(
+pub async fn diagnose_channel_with_scope(
     state: &AppState,
     channel_id: DbId,
-) -> AppResult<ChannelDiagnosticReport> {
-    diagnose_channel_with_progress(state, channel_id, None).await
-}
-
-pub async fn diagnose_channel_with_progress(
-    state: &AppState,
-    channel_id: DbId,
+    scope: DiagnosticScope,
     progress: Option<tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
 ) -> AppResult<ChannelDiagnosticReport> {
     let started = Instant::now();
@@ -197,7 +233,8 @@ pub async fn diagnose_channel_with_progress(
     );
 
     if let Some(endpoint) = select_diagnostic_endpoint(&endpoints) {
-        let report = diagnose_endpoint(state, &channel, endpoint, &keys, progress.as_ref()).await;
+        let report =
+            diagnose_endpoint(state, &channel, endpoint, &keys, scope, progress.as_ref()).await;
         if report.status != DiagnosticStatus::Skipped {
             persist_endpoint_health(state, endpoint.id, &report).await?;
         }
@@ -300,55 +337,41 @@ async fn diagnose_endpoint(
     channel: &ChannelDiagnosticTarget,
     endpoint: &EndpointTarget,
     keys: &[KeyTarget],
+    scope: DiagnosticScope,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
 ) -> EndpointDiagnosticReport {
     if !endpoint.enabled {
-        return EndpointDiagnosticReport {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            status: DiagnosticStatus::Skipped,
-            summary: "端点已停用，未执行诊断".to_string(),
-            discovered_models: Vec::new(),
-            configured_models: endpoint.models.clone(),
-            missing_configured_models: Vec::new(),
-            keys: Vec::new(),
-        };
+        return empty_endpoint_report(
+            endpoint,
+            DiagnosticStatus::Skipped,
+            "端点已停用，未执行诊断",
+            Vec::new(),
+        );
     }
 
     if !channel.enabled {
-        return EndpointDiagnosticReport {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            status: DiagnosticStatus::Skipped,
-            summary: "通道已停用，未执行诊断".to_string(),
-            discovered_models: Vec::new(),
-            configured_models: endpoint.models.clone(),
-            missing_configured_models: Vec::new(),
-            keys: Vec::new(),
-        };
+        return empty_endpoint_report(
+            endpoint,
+            DiagnosticStatus::Skipped,
+            "通道已停用，未执行诊断",
+            Vec::new(),
+        );
     }
 
     let enabled_keys: Vec<_> = keys.iter().filter(|key| key.enabled).collect();
     if enabled_keys.is_empty() {
-        return EndpointDiagnosticReport {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            status: DiagnosticStatus::Failed,
-            summary: "没有启用的上游 Key 或凭证".to_string(),
-            discovered_models: Vec::new(),
-            configured_models: endpoint.models.clone(),
-            missing_configured_models: endpoint.models.clone(),
-            keys: Vec::new(),
-        };
+        return empty_endpoint_report(
+            endpoint,
+            DiagnosticStatus::Failed,
+            "没有启用的上游 Key 或凭证",
+            endpoint.models.clone(),
+        );
     }
 
     let mut discovered_models = Vec::new();
     let mut key_reports = Vec::new();
     for key in enabled_keys {
-        let report = diagnose_key(state, channel, endpoint, key, progress).await;
+        let report = diagnose_key(state, channel, endpoint, key, scope, progress).await;
         for model in report.discovered_models.clone() {
             if !discovered_models.iter().any(|item| item == &model) {
                 discovered_models.push(model);
@@ -362,22 +385,60 @@ async fn diagnose_endpoint(
     persist_model_probe_results_best_effort(state, endpoint, &key_reports).await;
 
     discovered_models.sort();
-    let missing_configured_models = missing_models(&endpoint.models, &discovered_models);
+    let missing_configured_models = if scope.includes_models() {
+        missing_models(&endpoint.models, &discovered_models)
+    } else {
+        Vec::new()
+    };
     let mut status = aggregate_status(key_reports.iter().map(|item| item.status));
     if status == DiagnosticStatus::Ok && !missing_configured_models.is_empty() {
         status = DiagnosticStatus::Warning;
     }
 
+    endpoint_report(
+        endpoint,
+        status,
+        endpoint_summary(status, &missing_configured_models),
+        discovered_models,
+        missing_configured_models,
+        key_reports,
+    )
+}
+
+fn empty_endpoint_report(
+    endpoint: &EndpointTarget,
+    status: DiagnosticStatus,
+    summary: &str,
+    missing_configured_models: Vec<String>,
+) -> EndpointDiagnosticReport {
+    endpoint_report(
+        endpoint,
+        status,
+        summary.to_string(),
+        Vec::new(),
+        missing_configured_models,
+        Vec::new(),
+    )
+}
+
+fn endpoint_report(
+    endpoint: &EndpointTarget,
+    status: DiagnosticStatus,
+    summary: String,
+    discovered_models: Vec<String>,
+    missing_configured_models: Vec<String>,
+    keys: Vec<KeyDiagnosticReport>,
+) -> EndpointDiagnosticReport {
     EndpointDiagnosticReport {
         endpoint_id: endpoint.id,
         protocol: endpoint.protocol.clone(),
         base_url: endpoint.base_url.clone(),
         status,
-        summary: endpoint_summary(status, &missing_configured_models),
+        summary,
         discovered_models,
         configured_models: endpoint.models.clone(),
         missing_configured_models,
-        keys: key_reports,
+        keys,
     }
 }
 
@@ -386,73 +447,98 @@ async fn diagnose_key(
     _channel: &ChannelDiagnosticTarget,
     endpoint: &EndpointTarget,
     key: &KeyTarget,
+    scope: DiagnosticScope,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<ChannelDiagnosticEvent>>,
 ) -> KeyDiagnosticReport {
     if endpoint.protocol == OPENAI_OAUTH_PROTOCOL {
         return KeyDiagnosticReport {
             key_id: key.id,
             key_name: mask_possible_secret_label(&key.name),
+            masked_key: key.masked_key.clone(),
             key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
             status: DiagnosticStatus::Warning,
             summary: "OpenAI OAuth 通道需要账号上下文，已跳过主动调用诊断".to_string(),
             discovered_models: Vec::new(),
-            steps: vec![DiagnosticStep {
-                name: "probe".to_string(),
-                status: DiagnosticStatus::Skipped,
-                message: "OpenAI OAuth 主动诊断暂未启用；请以实际调用结果为准".to_string(),
-                duration_ms: 0,
-                status_code: None,
-            }],
+            steps: vec![skipped_step(
+                "probe",
+                "OpenAI OAuth 主动诊断暂未启用；请以实际调用结果为准",
+            )],
         };
     }
 
     let mut steps = Vec::new();
-    let models_step = run_models_step(state, endpoint, key).await;
-    let discovered_models = models_step.models.clone();
-    steps.push(models_step.step);
+    let discovered_models = if scope.includes_models() {
+        let models_step = run_models_step(state, endpoint, key).await;
+        let discovered_models = models_step.models.clone();
+        steps.push(models_step.step);
+        discovered_models
+    } else {
+        Vec::new()
+    };
 
-    let probe_models: Vec<_> = endpoint
-        .models
-        .iter()
-        .filter(|&model| is_text_probe_model(model))
-        .filter(|&model| discovered_models.is_empty() || discovered_models.contains(model))
-        .cloned()
-        .collect();
-    if !probe_models.is_empty() {
-        for model in probe_models {
-            send_model_started_event(progress, endpoint, key, &model);
-            let step = run_probe_step(state, endpoint, key, &model).await;
-            send_model_result_event(progress, endpoint, key, &model, &step);
+    let probe_models = diagnostic_probe_models(&endpoint.models);
+    if scope.includes_text() && !probe_models.is_empty() {
+        for model in &probe_models {
+            send_model_started_event(progress, endpoint, key, model);
+            let step = run_probe_step(state, endpoint, key, model).await;
+            send_model_result_event(progress, endpoint, key, model, &step);
             steps.push(step);
         }
-    } else if let Some(model) = discovered_models
-        .iter()
-        .find(|model| is_text_probe_model(model))
-    {
-        send_model_started_event(progress, endpoint, key, model);
-        let step = run_probe_step(state, endpoint, key, model).await;
-        send_model_result_event(progress, endpoint, key, model, &step);
-        steps.push(step);
-    } else {
-        steps.push(DiagnosticStep {
-            name: "probe".to_string(),
-            status: DiagnosticStatus::Skipped,
-            message: "没有可用于轻量调用测试的文本模型".to_string(),
-            duration_ms: 0,
-            status_code: None,
-        });
+    }
+    let video_probe_models = diagnostic_video_probe_models(&endpoint.video_models);
+    if scope.includes_video() && !video_probe_models.is_empty() {
+        for model in &video_probe_models {
+            send_model_started_event(progress, endpoint, key, model);
+            let step = run_video_probe_step(state, endpoint, key, model).await;
+            send_model_result_event(progress, endpoint, key, model, &step);
+            steps.push(step);
+        }
+    }
+    let image_probe_models = diagnostic_image_probe_models(&endpoint.image_models);
+    if scope.includes_image() && !image_probe_models.is_empty() {
+        for model in &image_probe_models {
+            send_model_started_event(progress, endpoint, key, model);
+            let step = run_image_probe_step(state, endpoint, key, model).await;
+            send_model_result_event(progress, endpoint, key, model, &step);
+            steps.push(step);
+        }
     }
 
-    let status = aggregate_status(steps.iter().map(|item| item.status));
+    let status = if steps.is_empty() {
+        DiagnosticStatus::Skipped
+    } else {
+        aggregate_status(steps.iter().map(|item| item.status))
+    };
     KeyDiagnosticReport {
         key_id: key.id,
         key_name: mask_possible_secret_label(&key.name),
+        masked_key: key.masked_key.clone(),
         key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
         status,
         summary: key_summary(status),
         discovered_models,
         steps,
     }
+}
+
+fn diagnostic_step(
+    name: impl Into<String>,
+    status: DiagnosticStatus,
+    message: impl Into<String>,
+    duration_ms: i64,
+    status_code: Option<u16>,
+) -> DiagnosticStep {
+    DiagnosticStep {
+        name: name.into(),
+        status,
+        message: message.into(),
+        duration_ms,
+        status_code,
+    }
+}
+
+fn skipped_step(name: &str, message: &str) -> DiagnosticStep {
+    diagnostic_step(name, DiagnosticStatus::Skipped, message, 0, None)
 }
 
 fn send_model_started_event(
@@ -513,14 +599,15 @@ async fn run_models_step(
         Ok(response) => {
             let status = response.status();
             if !status.is_success() {
+                let message = upstream_failure_message(status, response).await;
                 return ModelsStepResult {
-                    step: DiagnosticStep {
-                        name: "models".to_string(),
-                        status: DiagnosticStatus::Failed,
-                        message: upstream_status_message(status),
-                        duration_ms: started.elapsed().as_millis() as i64,
-                        status_code: Some(status.as_u16()),
-                    },
+                    step: diagnostic_step(
+                        "models",
+                        DiagnosticStatus::Failed,
+                        message,
+                        started.elapsed().as_millis() as i64,
+                        Some(status.as_u16()),
+                    ),
                     models: Vec::new(),
                 };
             }
@@ -533,40 +620,40 @@ async fn run_models_step(
                         DiagnosticStatus::Ok
                     };
                     ModelsStepResult {
-                        step: DiagnosticStep {
-                            name: "models".to_string(),
+                        step: diagnostic_step(
+                            "models",
                             status,
-                            message: if models.is_empty() {
+                            if models.is_empty() {
                                 "模型列表接口可访问，但没有返回模型".to_string()
                             } else {
                                 format!("模型列表可访问，发现 {} 个模型", models.len())
                             },
-                            duration_ms: started.elapsed().as_millis() as i64,
-                            status_code: Some(StatusCode::OK.as_u16()),
-                        },
+                            started.elapsed().as_millis() as i64,
+                            Some(StatusCode::OK.as_u16()),
+                        ),
                         models,
                     }
                 }
                 Err(_) => ModelsStepResult {
-                    step: DiagnosticStep {
-                        name: "models".to_string(),
-                        status: DiagnosticStatus::Failed,
-                        message: "模型列表响应不是有效 JSON".to_string(),
-                        duration_ms: started.elapsed().as_millis() as i64,
-                        status_code: Some(status.as_u16()),
-                    },
+                    step: diagnostic_step(
+                        "models",
+                        DiagnosticStatus::Failed,
+                        "模型列表响应不是有效 JSON",
+                        started.elapsed().as_millis() as i64,
+                        Some(status.as_u16()),
+                    ),
                     models: Vec::new(),
                 },
             }
         }
         Err(err) => ModelsStepResult {
-            step: DiagnosticStep {
-                name: "models".to_string(),
-                status: DiagnosticStatus::Failed,
-                message: transport_error_message(&err),
-                duration_ms: started.elapsed().as_millis() as i64,
-                status_code: None,
-            },
+            step: diagnostic_step(
+                "models",
+                DiagnosticStatus::Failed,
+                transport_error_message(&err),
+                started.elapsed().as_millis() as i64,
+                None,
+            ),
             models: Vec::new(),
         },
     }
@@ -627,21 +714,22 @@ async fn run_probe_step(
                     "diagnostic probe request failed"
                 );
             }
-            DiagnosticStep {
-                name: format!("probe:{model}"),
-                status: if status.is_success() {
+            let message = if status.is_success() {
+                format!("模型 {model} 轻量调用成功")
+            } else {
+                upstream_failure_message(status, response).await
+            };
+            diagnostic_step(
+                format!("probe:{model}"),
+                if status.is_success() {
                     DiagnosticStatus::Ok
                 } else {
                     DiagnosticStatus::Failed
                 },
-                message: if status.is_success() {
-                    format!("模型 {model} 轻量调用成功")
-                } else {
-                    upstream_status_message(status)
-                },
+                message,
                 duration_ms,
-                status_code: Some(status.as_u16()),
-            }
+                Some(status.as_u16()),
+            )
         }
         Err(err) => {
             let duration_ms = started.elapsed().as_millis() as i64;
@@ -655,13 +743,214 @@ async fn run_probe_step(
                 error = %message,
                 "diagnostic probe request errored"
             );
-            DiagnosticStep {
-                name: format!("probe:{model}"),
-                status: DiagnosticStatus::Failed,
+            diagnostic_step(
+                format!("probe:{model}"),
+                DiagnosticStatus::Failed,
                 message,
                 duration_ms,
-                status_code: None,
+                None,
+            )
+        }
+    }
+}
+
+async fn run_video_probe_step(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+) -> DiagnosticStep {
+    let started = Instant::now();
+    let request = match video_probe_request(endpoint, key, model) {
+        Ok(request) => request,
+        Err(err) => {
+            return diagnostic_step(
+                format!("video_probe:{model}"),
+                DiagnosticStatus::Failed,
+                err.to_string(),
+                started.elapsed().as_millis() as i64,
+                None,
+            );
+        }
+    };
+    let key_label = diagnostic_key_log_label(key);
+    tracing::info!(
+        endpoint_id = endpoint.id,
+        protocol = %endpoint.protocol,
+        base_url = %endpoint.base_url,
+        key = %key_label,
+        model = %model,
+        path = %request.log_path,
+        url = %request.url,
+        "diagnostic video probe request started"
+    );
+    let response = upstream_request_url(
+        state,
+        endpoint,
+        key,
+        "POST",
+        &request.url,
+        request.extra_headers,
+        Some(request.body),
+    )
+    .send()
+    .await;
+    match response {
+        Ok(response) => {
+            let status = response.status();
+            let duration_ms = started.elapsed().as_millis() as i64;
+            if status.is_success() {
+                tracing::info!(
+                    endpoint_id = endpoint.id,
+                    protocol = %endpoint.protocol,
+                    key = %key_label,
+                    model = %model,
+                    status = status.as_u16(),
+                    duration_ms,
+                    "diagnostic video probe request succeeded"
+                );
+            } else {
+                tracing::warn!(
+                    endpoint_id = endpoint.id,
+                    protocol = %endpoint.protocol,
+                    key = %key_label,
+                    model = %model,
+                    status = status.as_u16(),
+                    duration_ms,
+                    "diagnostic video probe request failed"
+                );
             }
+            let message = if status.is_success() {
+                format!("视频模型 {model} 任务创建成功")
+            } else {
+                upstream_failure_message(status, response).await
+            };
+            diagnostic_step(
+                format!("video_probe:{model}"),
+                if status.is_success() {
+                    DiagnosticStatus::Ok
+                } else {
+                    DiagnosticStatus::Failed
+                },
+                message,
+                duration_ms,
+                Some(status.as_u16()),
+            )
+        }
+        Err(err) => {
+            let duration_ms = started.elapsed().as_millis() as i64;
+            let message = transport_error_message(&err);
+            tracing::warn!(
+                endpoint_id = endpoint.id,
+                protocol = %endpoint.protocol,
+                key = %key_label,
+                model = %model,
+                duration_ms,
+                error = %message,
+                "diagnostic video probe request errored"
+            );
+            diagnostic_step(
+                format!("video_probe:{model}"),
+                DiagnosticStatus::Failed,
+                message,
+                duration_ms,
+                None,
+            )
+        }
+    }
+}
+
+async fn run_image_probe_step(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+) -> DiagnosticStep {
+    let started = Instant::now();
+    let request = image_probe_request(endpoint, model);
+    let key_label = diagnostic_key_log_label(key);
+    tracing::info!(
+        endpoint_id = endpoint.id,
+        protocol = %endpoint.protocol,
+        base_url = %endpoint.base_url,
+        key = %key_label,
+        model = %model,
+        path = %request.log_path,
+        url = %request.url,
+        "diagnostic image probe request started"
+    );
+    let response = upstream_request_url(
+        state,
+        endpoint,
+        key,
+        "POST",
+        &request.url,
+        request.extra_headers,
+        Some(request.body),
+    )
+    .send()
+    .await;
+    match response {
+        Ok(response) => {
+            let status = response.status();
+            let duration_ms = started.elapsed().as_millis() as i64;
+            if status.is_success() {
+                tracing::info!(
+                    endpoint_id = endpoint.id,
+                    protocol = %endpoint.protocol,
+                    key = %key_label,
+                    model = %model,
+                    status = status.as_u16(),
+                    duration_ms,
+                    "diagnostic image probe request succeeded"
+                );
+            } else {
+                tracing::warn!(
+                    endpoint_id = endpoint.id,
+                    protocol = %endpoint.protocol,
+                    key = %key_label,
+                    model = %model,
+                    status = status.as_u16(),
+                    duration_ms,
+                    "diagnostic image probe request failed"
+                );
+            }
+            let message = if status.is_success() {
+                format!("图片模型 {model} 生成请求成功")
+            } else {
+                upstream_failure_message(status, response).await
+            };
+            diagnostic_step(
+                format!("image_probe:{model}"),
+                if status.is_success() {
+                    DiagnosticStatus::Ok
+                } else {
+                    DiagnosticStatus::Failed
+                },
+                message,
+                duration_ms,
+                Some(status.as_u16()),
+            )
+        }
+        Err(err) => {
+            let duration_ms = started.elapsed().as_millis() as i64;
+            let message = transport_error_message(&err);
+            tracing::warn!(
+                endpoint_id = endpoint.id,
+                protocol = %endpoint.protocol,
+                key = %key_label,
+                model = %model,
+                duration_ms,
+                error = %message,
+                "diagnostic image probe request errored"
+            );
+            diagnostic_step(
+                format!("image_probe:{model}"),
+                DiagnosticStatus::Failed,
+                message,
+                duration_ms,
+                None,
+            )
         }
     }
 }
@@ -794,30 +1083,86 @@ fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeReque
     }
 }
 
-fn probe_model(endpoint: &EndpointTarget) -> Option<String> {
-    endpoint
-        .models
-        .iter()
-        .find(|model| is_text_probe_model(model))
-        .cloned()
+fn video_probe_request(
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+) -> AppResult<DiagnosticProbeRequest> {
+    let adapter = adapter_for_provider(&endpoint.provider);
+    let route = RelayRoute::Videos;
+    let body = serde_json::to_vec(&json!({
+        "model": model,
+        "prompt": "ping",
+        "resolution": "720P",
+        "seconds": 3
+    }))?;
+    let prepared = adapter.prepare_openai_request(
+        &SelectedUpstream {
+            channel_id: 0,
+            channel_endpoint_id: endpoint.id,
+            channel_key_id: key.id,
+            credential_id: None,
+            provider: endpoint.provider.clone(),
+            channel_name: "diagnostic".to_string(),
+            base_url: endpoint.base_url.clone(),
+            responses_chat_fallback: false,
+            secret: key.secret.clone(),
+            account_id: None,
+        },
+        upstream_protocol_from_str(&endpoint.protocol)?,
+        route,
+        body.into(),
+        &reqwest::header::HeaderMap::new(),
+        false,
+    )?;
+    let body: Value = serde_json::from_slice(&prepared.body)?;
+    Ok(DiagnosticProbeRequest {
+        log_path: prepared.log_path,
+        url: prepared.url,
+        extra_headers: prepared.extra_headers,
+        body,
+    })
 }
 
-fn is_text_probe_model(model: &str) -> bool {
-    let lowered = model.to_ascii_lowercase();
-    ![
-        "embedding",
-        "moderation",
-        "image",
-        "dall-e",
-        "whisper",
-        "tts",
-        "audio",
-        "rerank",
-        "clip",
-        "vision",
-    ]
-    .iter()
-    .any(|marker| lowered.contains(marker))
+fn image_probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeRequest {
+    let adapter = adapter_for_provider(&endpoint.provider);
+    let route = RelayRoute::ImageGenerations;
+    DiagnosticProbeRequest {
+        log_path: route.path().to_string(),
+        url: adapter.resolve_url(&endpoint.base_url, route),
+        extra_headers: reqwest::header::HeaderMap::new(),
+        body: json!({
+            "model": model,
+            "prompt": "ping",
+            "size": "1024x1024",
+            "n": 1
+        }),
+    }
+}
+
+fn upstream_protocol_from_str(protocol: &str) -> AppResult<UpstreamProtocol> {
+    match protocol {
+        "openai" => Ok(UpstreamProtocol::Openai),
+        "openai_oauth" => Ok(UpstreamProtocol::OpenAiOauth),
+        "anthropic" => Ok(UpstreamProtocol::Anthropic),
+        other => Err(AppError::BadRequest(format!("invalid protocol: {other}"))),
+    }
+}
+
+fn probe_model(endpoint: &EndpointTarget) -> Option<String> {
+    endpoint.models.first().cloned()
+}
+
+fn diagnostic_probe_models(configured_models: &[String]) -> Vec<String> {
+    configured_models.to_vec()
+}
+
+fn diagnostic_video_probe_models(configured_video_models: &[String]) -> Vec<String> {
+    configured_video_models.to_vec()
+}
+
+fn diagnostic_image_probe_models(configured_image_models: &[String]) -> Vec<String> {
+    configured_image_models.to_vec()
 }
 
 async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDiagnosticTarget> {
@@ -841,14 +1186,40 @@ async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDi
 }
 
 async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<EndpointTarget>> {
-    let rows = sqlx::query(
-        "SELECT ce.id, c.provider, ce.protocol, ce.base_url, ce.models, ce.enabled
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT ce.id, c.provider, ce.protocol, ce.base_url,
+                COALESCE(cm.models, ARRAY[]::TEXT[]) AS models,
+                COALESCE(cm.image_models, ARRAY[]::TEXT[]) AS image_models,
+                COALESCE(cm.video_models, ARRAY[]::TEXT[]) AS video_models,
+                ce.enabled
          FROM channel_endpoint ce
          JOIN channel c ON c.id = ce.channel_id
+         LEFT JOIN LATERAL (
+             SELECT array_agg(cm.model ORDER BY cm.model) FILTER (
+                        WHERE cp.billing_meter = 'token'
+                          AND cp.enabled = TRUE
+                          AND {BILLABLE_PRICE_CONDITION_CP}
+                    ) AS models,
+                    array_agg(cm.model ORDER BY cm.model) FILTER (
+                        WHERE cp.billing_meter = 'image'
+                          AND cp.enabled = TRUE
+                          AND {BILLABLE_PRICE_CONDITION_CP}
+                    ) AS image_models,
+                    array_agg(cm.model ORDER BY cm.model) FILTER (
+                        WHERE cp.billing_meter = 'video'
+                          AND cp.enabled = TRUE
+                          AND {BILLABLE_PRICE_CONDITION_CP}
+                    ) AS video_models
+             FROM channel_model cm
+             JOIN channel_price cp
+               ON cp.channel_id = cm.channel_id
+              AND cp.model = cm.model
+             WHERE cm.channel_id = ce.channel_id
+         ) cm ON TRUE
          WHERE ce.channel_id = $1
          ORDER BY CASE protocol WHEN 'openai' THEN 0 WHEN 'openai_oauth' THEN 1 WHEN 'anthropic' THEN 2 ELSE 3 END,
-                  ce.created_at ASC",
-    )
+                  ce.created_at ASC"
+    )))
     .bind(channel_id)
     .fetch_all(&state.db.pool)
     .await?;
@@ -861,6 +1232,8 @@ async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<End
             protocol: row.try_get("protocol").unwrap_or_default(),
             base_url: row.try_get("base_url").unwrap_or_default(),
             models: row.try_get("models").unwrap_or_default(),
+            image_models: row.try_get("image_models").unwrap_or_default(),
+            video_models: row.try_get("video_models").unwrap_or_default(),
             enabled: row.try_get("enabled").unwrap_or_default(),
         })
         .collect())
@@ -875,6 +1248,7 @@ async fn load_keys(
         return Ok(vec![KeyTarget {
             id: None,
             name: "启用的凭证文件".to_string(),
+            masked_key: None,
             key_prefix: None,
             secret,
             enabled: true,
@@ -895,11 +1269,13 @@ async fn load_keys(
         .map(|row| {
             let id: DbId = row.try_get("id")?;
             let ciphertext: String = row.try_get("secret_ciphertext")?;
+            let secret = state.secrets.plaintext(id, &ciphertext)?;
             Ok(KeyTarget {
                 id: Some(id),
                 name: row.try_get("name")?,
+                masked_key: Some(mask_channel_key(&secret)),
                 key_prefix: row.try_get("key_prefix")?,
-                secret: state.secrets.plaintext(id, &ciphertext)?,
+                secret,
                 enabled: row.try_get("enabled")?,
             })
         })
@@ -1221,10 +1597,10 @@ async fn can_cooldown_endpoint(state: &AppState, endpoint_id: DbId) -> AppResult
             FROM target
             JOIN channel c ON c.id = target.channel_id
             JOIN channel_model cm ON cm.channel_id = target.channel_id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
-                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
+                                  AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE cm.enabled = TRUE
               AND cm.status = 'available'
               AND (
@@ -1267,11 +1643,11 @@ async fn can_cooldown_endpoint(state: &AppState, endpoint_id: DbId) -> AppResult
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
-                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
+                            AND {BILLABLE_PRICE_CONDITION_CP}
                       )
                       AND (
                           cm.runtime_status = 'normal'
@@ -1340,10 +1716,10 @@ async fn can_cooldown_key(state: &AppState, key_id: DbId) -> AppResult<bool> {
             JOIN provider p ON p.code = c.provider
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
-                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
+                                  AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE p.enabled = TRUE
               AND c.enabled = TRUE
               AND ce.enabled = TRUE
@@ -1390,11 +1766,11 @@ async fn can_cooldown_key(state: &AppState, key_id: DbId) -> AppResult<bool> {
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
-                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
+                            AND {BILLABLE_PRICE_CONDITION_CP}
                       )
                       AND (
                           cm.runtime_status = 'normal'
@@ -1464,10 +1840,10 @@ async fn can_disable_channel_model_for_endpoint(
             JOIN channel c ON c.id = target.channel_id
             JOIN channel_endpoint ce ON ce.channel_id = c.id
             JOIN channel_model cm ON cm.channel_id = c.id
-            JOIN provider_price pp ON pp.provider = c.provider
-                                  AND pp.model = cm.model
-                                  AND pp.enabled = TRUE
-                                  AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+            JOIN channel_price cp ON cp.channel_id = c.id
+                                  AND cp.model = cm.model
+                                  AND cp.enabled = TRUE
+                                  AND {BILLABLE_PRICE_CONDITION_CP}
             WHERE ce.enabled = TRUE
               AND ce.healthy = TRUE
               AND (ce.cooldown_until IS NULL OR ce.cooldown_until <= now())
@@ -1514,11 +1890,11 @@ async fn can_disable_channel_model_for_endpoint(
                       AND cm.status = 'available'
                       AND EXISTS (
                           SELECT 1
-                          FROM provider_price pp
-                          WHERE pp.provider = c.provider
-                            AND pp.model = cm.model
-                            AND pp.enabled = TRUE
-                            AND {BILLABLE_PROVIDER_PRICE_CONDITION_PP}
+                          FROM channel_price cp
+                          WHERE cp.channel_id = c.id
+                            AND cp.model = cm.model
+                            AND cp.enabled = TRUE
+                            AND {BILLABLE_PRICE_CONDITION_CP}
                       )
                       AND (
                           cm.runtime_status = 'normal'
@@ -1681,6 +2057,51 @@ fn upstream_status_message(status: StatusCode) -> String {
     }
 }
 
+async fn upstream_failure_message(status: StatusCode, response: reqwest::Response) -> String {
+    let base = upstream_status_message(status);
+    match response.text().await {
+        Ok(body) => {
+            let summary = upstream_error_body_summary(&body);
+            if summary.is_empty() {
+                base
+            } else {
+                format!("{base}: {summary}")
+            }
+        }
+        Err(_) => base,
+    }
+}
+
+fn upstream_error_body_summary(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(message) = value
+            .get("error")
+            .and_then(|error| error.get("message").or_else(|| error.get("detail")))
+            .and_then(Value::as_str)
+            .or_else(|| value.get("message").and_then(Value::as_str))
+            .or_else(|| value.get("detail").and_then(Value::as_str))
+        {
+            return truncate_error_summary(message);
+        }
+    }
+    truncate_error_summary(trimmed)
+}
+
+fn truncate_error_summary(value: &str) -> String {
+    const MAX_CHARS: usize = 300;
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if value.chars().count() <= MAX_CHARS {
+        return value;
+    }
+    let mut output: String = value.chars().take(MAX_CHARS).collect();
+    output.push_str("...");
+    output
+}
+
 fn transport_error_message(err: &reqwest::Error) -> String {
     match UpstreamErrorKind::from_reqwest(err) {
         UpstreamErrorKind::Timeout => "连接上游超时，请检查网络或上游状态".to_string(),
@@ -1770,6 +2191,7 @@ mod tests {
         let key_report_404 = KeyDiagnosticReport {
             key_id: Some(1),
             key_name: "key".to_string(),
+            masked_key: None,
             key_prefix: None,
             status: DiagnosticStatus::Failed,
             summary: "failed".to_string(),
@@ -1798,5 +2220,50 @@ mod tests {
             ..key_report_404
         };
         assert!(key_report_has_hard_cooldown_failure(&key_report_401));
+    }
+
+    #[test]
+    fn priced_text_models_are_used_without_name_guessing() {
+        let configured = vec![
+            "gpt-5.4".to_string(),
+            "doubao-seedance-2-0-fast-260128".to_string(),
+        ];
+
+        assert_eq!(diagnostic_probe_models(&configured), configured);
+    }
+
+    #[test]
+    fn priced_video_models_are_used_without_name_guessing() {
+        let configured = vec!["doubao-seedance-2-0-fast-260128".to_string()];
+
+        assert_eq!(diagnostic_video_probe_models(&configured), configured);
+    }
+
+    #[test]
+    fn priced_image_models_are_used_without_name_guessing() {
+        let configured = vec!["gpt-image-2".to_string()];
+
+        assert_eq!(diagnostic_image_probe_models(&configured), configured);
+    }
+
+    #[test]
+    fn upstream_error_summary_reads_nested_error_message() {
+        let body = r#"{"error":{"message":"model permission denied","type":"forbidden"}}"#;
+
+        assert_eq!(upstream_error_body_summary(body), "model permission denied");
+    }
+
+    #[test]
+    fn upstream_error_summary_truncates_plain_text() {
+        let body = "x".repeat(400);
+
+        assert!(upstream_error_body_summary(&body).ends_with("..."));
+    }
+
+    #[test]
+    fn empty_configured_models_do_not_fallback_to_discovered_text_probe() {
+        let configured = Vec::new();
+
+        assert!(diagnostic_probe_models(&configured).is_empty());
     }
 }

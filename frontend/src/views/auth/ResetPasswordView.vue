@@ -7,7 +7,7 @@ import { resetPassword } from '../../api/auth'
 import LocaleToggleButton from '../../components/common/LocaleToggleButton.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
-import { ApiError } from '../../utils/errors'
+import { ApiError, readError } from '../../utils/errors'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,10 +48,10 @@ function readResetError(err: unknown) {
   if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
     return t('passwordResetInvalid')
   }
-  if (err instanceof ApiError && err.message.includes('password must be at least 8 characters')) {
+  if (err instanceof ApiError && err.code === 'password_min_length') {
     return t('passwordMinLength')
   }
-  return err instanceof Error ? err.message : String(err)
+  return readError(err)
 }
 </script>
 

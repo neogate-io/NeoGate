@@ -27,8 +27,6 @@ use crate::{
 pub(crate) mod settings;
 mod zpay;
 
-const MICROS_PER_CNY: i64 = MICROS_PER_MAJOR_UNIT * 5;
-
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route(
         "/api/payments/{provider}/notify",
@@ -498,16 +496,12 @@ fn payable_amount_minor_units(
     }
 
     match billing_currency {
-        BillingCurrency::Cny => Ok(("CNY", micros_to_cny_minor_units(amount_micros))),
-        BillingCurrency::Usd => Ok(("USD", micros_to_usd_minor_units(amount_micros))),
+        BillingCurrency::Cny => Ok(("CNY", micros_to_minor_units(amount_micros))),
+        BillingCurrency::Usd => Ok(("USD", micros_to_minor_units(amount_micros))),
     }
 }
 
-fn micros_to_cny_minor_units(amount_micros: i64) -> i64 {
-    (amount_micros + (MICROS_PER_CNY / 100) - 1) / (MICROS_PER_CNY / 100)
-}
-
-fn micros_to_usd_minor_units(amount_micros: i64) -> i64 {
+fn micros_to_minor_units(amount_micros: i64) -> i64 {
     (amount_micros + (MICROS_PER_MAJOR_UNIT / 100) - 1) / (MICROS_PER_MAJOR_UNIT / 100)
 }
 
@@ -558,5 +552,28 @@ impl ZpayConfig {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cny_recharge_amount_is_payable_cny_amount() {
+        let (currency, payable_amount_minor) =
+            payable_amount_minor_units(BillingCurrency::Cny, 20 * MICROS_PER_MAJOR_UNIT).unwrap();
+
+        assert_eq!(currency, "CNY");
+        assert_eq!(payable_amount_minor, 2000);
+    }
+
+    #[test]
+    fn usd_recharge_amount_is_payable_usd_amount() {
+        let (currency, payable_amount_minor) =
+            payable_amount_minor_units(BillingCurrency::Usd, 20 * MICROS_PER_MAJOR_UNIT).unwrap();
+
+        assert_eq!(currency, "USD");
+        assert_eq!(payable_amount_minor, 2000);
     }
 }

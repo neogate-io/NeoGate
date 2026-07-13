@@ -31,7 +31,7 @@ use tracing_subscriber::{
 use crate::{
     admin, apps, auth,
     billing::{outbox::BillingOutbox, Billing},
-    cache,
+    cache::{self, RedisInvalidationListener},
     config::{Config, RuntimeProbe, DEFAULT_RELAY_BODY_LIMIT_BYTES},
     db::Db,
     email::EmailService,
@@ -77,21 +77,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let probe = RuntimeProbe::from_env()?;
     if !probe.full_config_ready() {
-        let (bootstrap_restart_tx, bootstrap_restart_rx) = watch::channel(false);
-        let app = bootstrap::router(bootstrap_restart_tx)
-            .merge(install::bootstrap_router())
-            .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
-            .layer(cors_layer_from_origins(&["*".to_string()])?)
-            .layer(middleware::from_fn(log_bootstrap_http_request));
-        let listener = tokio::net::TcpListener::bind(&probe.bind_addr).await?;
-        tracing::info!(
-            "neogate bootstrap listener running on {} because runtime configuration is incomplete",
-            probe.bind_addr
-        );
-        axum::serve(listener, app)
-            .with_graceful_shutdown(bootstrap_shutdown_signal(bootstrap_restart_rx))
-            .await?;
-        return Ok(());
+        return run_bootstrap_listener(&probe).await;
     }
 
     let config = Config::from_env()?;
@@ -108,14 +94,37 @@ pub async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let app = router(Arc::clone(&state))
-        .layer(DefaultBodyLimit::max(config.relay.body_limit_bytes))
-        .layer(cors_layer(&config)?)
-        .layer(middleware::from_fn_with_state(
-            config.admin_token_secret.clone(),
-            log_http_request,
-        ));
+    run_api_listener(&config, state, runtime_restart_rx).await
+}
 
+async fn run_bootstrap_listener(probe: &RuntimeProbe) -> anyhow::Result<()> {
+    let (bootstrap_restart_tx, bootstrap_restart_rx) = watch::channel(false);
+    let app = bootstrap_router(bootstrap_restart_tx)?;
+    let listener = tokio::net::TcpListener::bind(&probe.bind_addr).await?;
+    tracing::info!(
+        "neogate bootstrap listener running on {} because runtime configuration is incomplete",
+        probe.bind_addr
+    );
+    axum::serve(listener, app)
+        .with_graceful_shutdown(bootstrap_shutdown_signal(bootstrap_restart_rx))
+        .await?;
+    Ok(())
+}
+
+fn bootstrap_router(bootstrap_restart_tx: watch::Sender<bool>) -> anyhow::Result<Router> {
+    Ok(bootstrap::router(bootstrap_restart_tx)
+        .merge(install::bootstrap_router())
+        .layer(DefaultBodyLimit::max(DEFAULT_RELAY_BODY_LIMIT_BYTES))
+        .layer(cors_layer_from_origins(&["*".to_string()])?)
+        .layer(middleware::from_fn(log_bootstrap_http_request)))
+}
+
+async fn run_api_listener(
+    config: &Config,
+    state: Arc<AppState>,
+    runtime_restart_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let app = api_router(config, Arc::clone(&state))?;
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
     axum::serve(listener, app)
@@ -123,6 +132,16 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     flush_shutdown_work(&state).await;
     Ok(())
+}
+
+fn api_router(config: &Config, state: Arc<AppState>) -> anyhow::Result<Router> {
+    Ok(router(state)
+        .layer(DefaultBodyLimit::max(config.relay.body_limit_bytes))
+        .layer(cors_layer(config)?)
+        .layer(middleware::from_fn_with_state(
+            config.admin_token_secret.clone(),
+            log_http_request,
+        )))
 }
 
 fn init_tracing() {
@@ -372,6 +391,7 @@ fn parse_error_body_for_log(status: StatusCode, bytes: &[u8]) -> (Option<String>
 
 fn truncate_log_value(value: &str) -> String {
     const MAX_CHARS: usize = 240;
+    let value = sanitize_log_text(value);
     let mut result = String::new();
     for (index, ch) in value.chars().enumerate() {
         if index >= MAX_CHARS {
@@ -381,6 +401,103 @@ fn truncate_log_value(value: &str) -> String {
         result.push(ch);
     }
     result
+}
+
+fn sanitize_log_field(field_name: &str, value: String) -> String {
+    if is_sensitive_log_field(field_name) {
+        return "[redacted]".to_string();
+    }
+    sanitize_log_text(&value)
+}
+
+fn is_sensitive_log_field(field_name: &str) -> bool {
+    let normalized = field_name.replace('-', "_").to_ascii_lowercase();
+    normalized == "authorization"
+        || normalized == "cookie"
+        || normalized == "set_cookie"
+        || normalized == "x_api_key"
+        || normalized == "api_key"
+        || normalized == "apikey"
+        || normalized == "token"
+        || normalized.ends_with("_token")
+        || normalized.contains("access_token")
+        || normalized.contains("refresh_token")
+        || normalized.contains("id_token")
+        || normalized.contains("password")
+        || normalized.contains("secret")
+        || normalized.contains("ciphertext")
+}
+
+fn sanitize_log_text(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut token_start = None;
+    let mut redact_next_token = false;
+
+    for (index, ch) in value.char_indices() {
+        if is_log_token_char(ch) {
+            token_start.get_or_insert(index);
+            continue;
+        }
+
+        if let Some(start) = token_start.take() {
+            let token = &value[start..index];
+            push_sanitized_log_token(&mut sanitized, token, &mut redact_next_token);
+        }
+        sanitized.push(ch);
+    }
+
+    if let Some(start) = token_start {
+        let token = &value[start..];
+        push_sanitized_log_token(&mut sanitized, token, &mut redact_next_token);
+    }
+
+    sanitized
+}
+
+fn is_log_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '=' | '/' | '+')
+}
+
+fn push_sanitized_log_token(sanitized: &mut String, token: &str, redact_next_token: &mut bool) {
+    if *redact_next_token && token.len() > 3 {
+        sanitized.push_str("[redacted]");
+        *redact_next_token = false;
+        return;
+    }
+
+    if token.eq_ignore_ascii_case("bearer") || token.eq_ignore_ascii_case("basic") {
+        sanitized.push_str(token);
+        *redact_next_token = true;
+        return;
+    }
+
+    if looks_like_secret_token(token) {
+        sanitized.push_str("[redacted]");
+    } else {
+        sanitized.push_str(token);
+    }
+}
+
+fn looks_like_secret_token(token: &str) -> bool {
+    if token.len() < 12 {
+        return false;
+    }
+
+    let lower = token.to_ascii_lowercase();
+    lower.starts_with("sk-")
+        || lower.starts_with("sk_")
+        || lower.starts_with("xai-")
+        || lower.starts_with("gsk_")
+        || lower.starts_with("ghp_")
+        || lower.starts_with("github_pat_")
+        || lower.starts_with("hf_")
+        || token.starts_with("AIza")
+        || lower.starts_with("ya29.")
+        || looks_like_jwt(token)
+}
+
+fn looks_like_jwt(token: &str) -> bool {
+    token.len() >= 40 && token.starts_with("eyJ") && token.matches('.').count() >= 2
 }
 
 struct NeogateLogFormat;
@@ -454,6 +571,7 @@ struct LogFields {
 
 impl LogFields {
     fn record_value(&mut self, field: &Field, value: String) {
+        let value = sanitize_log_field(field.name(), value);
         if field.name() == "message" {
             self.message = Some(value);
         } else {
@@ -484,58 +602,16 @@ pub(crate) async fn build_state(
     let secrets = SecretStore::new(&config.upstream_secret_key, config.cache.secret_max_entries);
     let email = EmailService::new(db.clone(), secrets.clone());
 
-    let http = Client::builder()
-        .read_timeout(config.http.upstream_timeout)
-        .connect_timeout(config.http.upstream_connect_timeout)
-        .pool_max_idle_per_host(config.http.pool_max_idle_per_host)
-        .pool_idle_timeout(config.http.pool_idle_timeout)
-        .no_gzip()
-        .no_brotli()
-        .no_zstd()
-        .no_deflate()
-        .tcp_nodelay(true)
-        .build()?;
-    let redis = if config.runtime_mode.is_distributed() {
-        Some(redis::Client::open(
-            config.redis_url.as_deref().expect("validated redis url"),
-        )?)
-    } else {
-        None
-    };
+    let http = build_http_client(&config)?;
+    let redis = build_redis_client(&config)?;
     let selector = Selector::with_cache_ttl(config.cache.routing_ttl);
     let channel_affinity = ChannelAffinityCache::new(
         config.relay.channel_affinity_enabled,
         config.relay.channel_affinity_ttl,
         config.relay.channel_affinity_max_entries,
     );
-    let billing = if config.runtime_mode.is_distributed() {
-        Billing::new_redis(
-            config.redis_url.as_deref().expect("validated redis url"),
-            config.redis_key_prefix.clone(),
-            config.cache.price_ttl,
-            config.cache.price_max_entries,
-            config.billing.credit_prefetch_micros,
-            config.billing.default_output_tokens,
-        )
-        .await?
-    } else {
-        Billing::new_memory(
-            config.cache.price_ttl,
-            config.cache.price_max_entries,
-            config.billing.credit_prefetch_micros,
-            config.billing.default_output_tokens,
-        )
-    };
-    let (cache_invalidator, invalidation_listener) = if config.runtime_mode.is_distributed() {
-        let (invalidator, listener) = cache::CacheInvalidator::redis(
-            config.redis_url.as_deref().expect("validated redis url"),
-            &config.redis_key_prefix,
-        )
-        .await?;
-        (invalidator, Some(listener))
-    } else {
-        (cache::CacheInvalidator::local(), None)
-    };
+    let billing = build_billing(&config).await?;
+    let (cache_invalidator, invalidation_listener) = build_cache_invalidator(&config).await?;
     let usage_daily = UsageDailyRecorder::spawn(
         db.pool.clone(),
         config
@@ -580,15 +656,7 @@ pub(crate) async fn build_state(
         );
     }
 
-    let auth_rate_limiter = if config.runtime_mode.is_distributed() {
-        auth::AuthRateLimiter::redis(
-            config.redis_url.as_deref().expect("validated redis url"),
-            config.redis_key_prefix.clone(),
-        )
-        .await?
-    } else {
-        auth::AuthRateLimiter::local()
-    };
+    let auth_rate_limiter = build_auth_rate_limiter(&config).await?;
 
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -625,6 +693,77 @@ pub(crate) async fn build_state(
     task::worker::spawn(Arc::clone(&state));
 
     Ok(state)
+}
+
+fn build_http_client(config: &Config) -> anyhow::Result<Client> {
+    Ok(Client::builder()
+        .read_timeout(config.http.upstream_timeout)
+        .connect_timeout(config.http.upstream_connect_timeout)
+        .pool_max_idle_per_host(config.http.pool_max_idle_per_host)
+        .pool_idle_timeout(config.http.pool_idle_timeout)
+        .no_gzip()
+        .no_brotli()
+        .no_zstd()
+        .no_deflate()
+        .tcp_nodelay(true)
+        .build()?)
+}
+
+fn build_redis_client(config: &Config) -> anyhow::Result<Option<redis::Client>> {
+    if config.runtime_mode.is_distributed() {
+        Ok(Some(redis::Client::open(runtime_redis_url(config))?))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn build_billing(config: &Config) -> anyhow::Result<Billing> {
+    if config.runtime_mode.is_distributed() {
+        Billing::new_redis(
+            runtime_redis_url(config),
+            config.redis_key_prefix.clone(),
+            config.cache.price_ttl,
+            config.cache.price_max_entries,
+            config.billing.credit_prefetch_micros,
+            config.billing.default_output_tokens,
+        )
+        .await
+        .map_err(Into::into)
+    } else {
+        Ok(Billing::new_memory(
+            config.cache.price_ttl,
+            config.cache.price_max_entries,
+            config.billing.credit_prefetch_micros,
+            config.billing.default_output_tokens,
+        ))
+    }
+}
+
+async fn build_cache_invalidator(
+    config: &Config,
+) -> anyhow::Result<(cache::CacheInvalidator, Option<RedisInvalidationListener>)> {
+    if config.runtime_mode.is_distributed() {
+        let (invalidator, listener) =
+            cache::CacheInvalidator::redis(runtime_redis_url(config), &config.redis_key_prefix)
+                .await?;
+        Ok((invalidator, Some(listener)))
+    } else {
+        Ok((cache::CacheInvalidator::local(), None))
+    }
+}
+
+async fn build_auth_rate_limiter(config: &Config) -> anyhow::Result<auth::AuthRateLimiter> {
+    if config.runtime_mode.is_distributed() {
+        auth::AuthRateLimiter::redis(runtime_redis_url(config), config.redis_key_prefix.clone())
+            .await
+            .map_err(Into::into)
+    } else {
+        Ok(auth::AuthRateLimiter::local())
+    }
+}
+
+fn runtime_redis_url(config: &Config) -> &str {
+    config.redis_url.as_deref().expect("validated redis url")
 }
 
 fn router(state: Arc<AppState>) -> Router {
@@ -1004,5 +1143,42 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(bytes.len(), body.len());
+    }
+
+    #[test]
+    fn error_log_message_redacts_common_secret_tokens() {
+        let body = br#"{"error":{"code":"invalid_api_key","message":"Incorrect API key provided: sk-proj-abc1234567890secret. Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signaturevalue"}}"#;
+
+        let (code, message) = parse_error_body_for_log(StatusCode::UNAUTHORIZED, body);
+
+        assert_eq!(code.as_deref(), Some("invalid_api_key"));
+        let message = message.unwrap();
+        assert!(message.contains("[redacted]"));
+        assert!(!message.contains("sk-proj-abc1234567890secret"));
+        assert!(!message.contains("eyJhbGciOiJIUzI1NiJ9"));
+    }
+
+    #[test]
+    fn log_field_sanitizer_redacts_sensitive_field_names() {
+        assert_eq!(
+            sanitize_log_field("authorization", "Bearer sk-proj-abc1234567890".to_string()),
+            "[redacted]"
+        );
+        assert_eq!(
+            sanitize_log_field("refresh_token", "plain-refresh-token-value".to_string()),
+            "[redacted]"
+        );
+        assert_eq!(sanitize_log_field("input_tokens", "128".to_string()), "128");
+    }
+
+    #[test]
+    fn log_text_sanitizer_keeps_non_secret_context() {
+        let sanitized =
+            sanitize_log_text("provider=openai model=gpt-4.1 channel_id=7 status=502 tokens=128");
+
+        assert_eq!(
+            sanitized,
+            "provider=openai model=gpt-4.1 channel_id=7 status=502 tokens=128"
+        );
     }
 }

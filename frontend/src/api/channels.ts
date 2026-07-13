@@ -12,6 +12,7 @@ import { useAuthStore } from '../stores/auth'
 import { ApiError } from '../utils/errors'
 
 export type KeySelectionMode = 'polling' | 'random'
+export type ChannelDiagnosticScope = 'all' | 'models' | 'text' | 'image' | 'video'
 
 export function getChannels() {
   return adminRequest<Channel[]>('/api/admin/channels')
@@ -163,9 +164,10 @@ export function deleteChannel(id: number) {
   })
 }
 
-export function diagnoseChannel(id: number) {
+export function diagnoseChannel(id: number, scope: ChannelDiagnosticScope = 'all') {
   return adminRequest<ChannelDiagnosticReport>(`/api/admin/channels/${id}/diagnose`, {
-    method: 'POST'
+    method: 'POST',
+    body: JSON.stringify({ scope })
   })
 }
 
@@ -208,15 +210,18 @@ export type ChannelDiagnosticStreamEvent =
 
 export async function streamChannelDiagnostic(
   id: number,
+  scope: ChannelDiagnosticScope,
   onEvent: (event: ChannelDiagnosticStreamEvent) => void
 ) {
   const auth = useAuthStore()
   const headers = new Headers()
   if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
+  headers.set('content-type', 'application/json')
 
   const response = await fetch(`/api/admin/channels/${id}/diagnose/stream`, {
     method: 'POST',
-    headers
+    headers,
+    body: JSON.stringify({ scope })
   })
   if (!response.ok || !response.body) {
     throw new ApiError(response.statusText, response.status)

@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{BillableUsage, BillingAccounts, BillingMeter, SettleRequest},
-    error::{AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult},
     provider::newapi,
     relay::{
         describe_upstream_http_failure, finish_relay, forward_openai_with_content_type,
@@ -26,7 +26,11 @@ use crate::{
     AppState,
 };
 
-use super::{log_relay_transport_failover, select_upstream_excluding};
+use super::{
+    content_type_header, json_string_field, log_relay_transport_failover,
+    multipart::{multipart_boundary, multipart_text_fields, rewrite_multipart_model_field},
+    positive_i64_text, required_json_string_field, select_upstream_excluding,
+};
 
 #[derive(Debug, Clone)]
 struct ImageRequestMeta {
@@ -83,7 +87,7 @@ pub(super) async fn relay_openai_image(
             .billing
             .price_for(
                 &state.db.pool,
-                &upstream.provider,
+                upstream.channel_id,
                 &resolved.target_model,
                 &auth.user_group,
             )
@@ -153,8 +157,7 @@ pub(super) async fn relay_openai_image(
 
         match response {
             Ok(upstream_response) => {
-                let status = StatusCode::from_u16(upstream_response.status().as_u16())
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let status = reqwest_status(upstream_response.status());
                 if status.is_success() {
                     ctx.mark_final_with_permit(&mut request_permit);
                     if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
@@ -240,7 +243,7 @@ pub(super) async fn relay_openai_image(
 }
 
 async fn finish_image_relay(
-    ctx: RelayContext,
+    mut ctx: RelayContext,
     response: AppResult<reqwest::Response>,
     requested_image_count: i64,
 ) -> AppResult<Response> {
@@ -251,8 +254,7 @@ async fn finish_image_relay(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -262,6 +264,7 @@ async fn finish_image_relay(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
+    ctx.release_request_permit();
     let image_count = image_count_from_response_body(&body).ok_or_else(|| {
         AppError::BadRequest("image response missing non-empty data array".to_string())
     })?;
@@ -287,8 +290,7 @@ async fn finish_streamed_image_relay(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -352,9 +354,10 @@ struct ImageStreamRelay {
 
 impl ImageStreamRelay {
     async fn finish_success(mut self) {
-        let Some(ctx) = self.ctx.take() else {
+        let Some(mut ctx) = self.ctx.take() else {
             return;
         };
+        ctx.release_request_permit();
         let billing = settle_image_hold(&ctx, self.image_count, "streamed image relay").await;
         let usage = crate::relay::usage_from_context(
             &ctx,
@@ -368,9 +371,10 @@ impl ImageStreamRelay {
     }
 
     async fn finish_error(mut self, error: String) {
-        let Some(ctx) = self.ctx.take() else {
+        let Some(mut ctx) = self.ctx.take() else {
             return;
         };
+        ctx.release_request_permit();
         release_empty_hold(&ctx.state, ctx.hold.clone(), "streamed image relay error").await;
         let failure = crate::relay::key_failure_from_context(&ctx, error.clone()).await;
         let usage = crate::relay::usage_from_context(
@@ -387,7 +391,8 @@ impl ImageStreamRelay {
 
 impl Drop for ImageStreamRelay {
     fn drop(&mut self) {
-        if self.ctx.is_some() {
+        if let Some(ctx) = self.ctx.as_mut() {
+            ctx.release_request_permit();
             tracing::warn!("image stream ended before completion; skipping image billing settle");
         }
     }
@@ -436,8 +441,7 @@ async fn finish_newapi_image_stream(
         Ok(response) => response,
         Err(err) => return finish_relay(ctx, Err(err)).await,
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = reqwest_status(upstream_response.status());
     if !status.is_success() {
         return handle_upstream_http_error(ctx, status, upstream_response).await;
     }
@@ -483,14 +487,7 @@ fn image_request_meta(
     headers: &HeaderMap,
     body: &[u8],
 ) -> AppResult<ImageRequestMeta> {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
-    let content_type_text = content_type
-        .to_str()
-        .map_err(|_| AppError::BadRequest("invalid content-type header".to_string()))?;
-    let content_type_text = content_type_text.to_string();
+    let (content_type, content_type_text) = content_type_header(headers)?;
     let lower_content_type = content_type_text.to_ascii_lowercase();
 
     if lower_content_type.starts_with("application/json") {
@@ -519,12 +516,7 @@ fn image_request_meta(
 fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<ImageRequestMeta> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
-    let model = value
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|model| !model.is_empty())
-        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))?
-        .to_string();
+    let model = required_json_string_field(&value, "model")?;
     let stream = value
         .get("stream")
         .and_then(Value::as_bool)
@@ -536,9 +528,9 @@ fn json_image_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
         image_count,
         request_params: RelayRequestParams::image(
             image_count,
-            string_field(&value, "size"),
-            string_field(&value, "quality"),
-            string_field(&value, "style"),
+            json_string_field(&value, "size"),
+            json_string_field(&value, "quality"),
+            json_string_field(&value, "style"),
         ),
         content_type,
     })
@@ -560,7 +552,7 @@ fn multipart_image_request_meta(
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
             "stream" => stream = value == "true",
-            "n" => image_count = parse_positive_image_count(&value).unwrap_or(1),
+            "n" => image_count = positive_i64_text(&value).unwrap_or(1),
             "size" if !value.is_empty() => size = Some(value),
             "quality" if !value.is_empty() => quality = Some(value),
             "style" if !value.is_empty() => style = Some(value),
@@ -577,22 +569,11 @@ fn multipart_image_request_meta(
     })
 }
 
-fn string_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-}
-
 fn image_count_from_value(value: &Value) -> Option<i64> {
     value
         .get("n")
         .and_then(Value::as_i64)
         .filter(|count| *count > 0)
-}
-
-fn parse_positive_image_count(value: &str) -> Option<i64> {
-    value.trim().parse::<i64>().ok().filter(|count| *count > 0)
 }
 
 fn image_count_from_response_body(body: &[u8]) -> Option<i64> {
@@ -602,158 +583,6 @@ fn image_count_from_response_body(body: &[u8]) -> Option<i64> {
         .and_then(Value::as_array)
         .map(|items| items.len() as i64)?;
     (count > 0).then_some(count)
-}
-
-fn multipart_boundary(content_type: &str) -> AppResult<String> {
-    for part in content_type.split(';').skip(1) {
-        let Some((key, value)) = part.trim().split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("boundary") {
-            let boundary = value.trim().trim_matches('"');
-            if boundary.is_empty() {
-                break;
-            }
-            return Ok(boundary.to_string());
-        }
-    }
-    Err(AppError::BadRequest(
-        "multipart/form-data boundary is required".to_string(),
-    ))
-}
-
-fn multipart_text_fields(body: &[u8], boundary: &str) -> AppResult<Vec<(String, String)>> {
-    multipart_text_fields_with_ranges(body, boundary).map(|fields| {
-        fields
-            .into_iter()
-            .map(|field| (field.name, field.value))
-            .collect()
-    })
-}
-
-struct MultipartTextField {
-    name: String,
-    value: String,
-    value_start: usize,
-    value_end: usize,
-}
-
-fn multipart_text_fields_with_ranges(
-    body: &[u8],
-    boundary: &str,
-) -> AppResult<Vec<MultipartTextField>> {
-    let marker = format!("--{boundary}").into_bytes();
-    let mut fields = Vec::new();
-    let Some(mut cursor) = find_bytes(body, &marker) else {
-        return Err(AppError::BadRequest("invalid multipart body".to_string()));
-    };
-
-    loop {
-        cursor += marker.len();
-        if body.get(cursor..cursor + 2) == Some(b"--") {
-            break;
-        }
-        cursor = skip_line_break(body, cursor)?;
-        let Some(next_marker_offset) = find_bytes(&body[cursor..], &marker) else {
-            return Err(AppError::BadRequest("invalid multipart body".to_string()));
-        };
-        let mut part = &body[cursor..cursor + next_marker_offset];
-        if part.ends_with(b"\r\n") {
-            part = &part[..part.len() - 2];
-        } else if part.ends_with(b"\n") {
-            part = &part[..part.len() - 1];
-        }
-        if let Some(field) = multipart_text_field(part, cursor)? {
-            fields.push(field);
-        }
-        cursor += next_marker_offset;
-    }
-
-    Ok(fields)
-}
-
-fn rewrite_multipart_model_field(
-    body: &[u8],
-    content_type: &str,
-    target_model: &str,
-) -> AppResult<Bytes> {
-    let boundary = multipart_boundary(content_type)?;
-    let fields = multipart_text_fields_with_ranges(body, &boundary)?;
-    let Some(field) = fields.into_iter().find(|field| field.name == "model") else {
-        return Err(AppError::BadRequest("model is required".to_string()));
-    };
-    let mut output =
-        Vec::with_capacity(body.len().saturating_sub(field.value.len()) + target_model.len());
-    output.extend_from_slice(&body[..field.value_start]);
-    output.extend_from_slice(target_model.as_bytes());
-    output.extend_from_slice(&body[field.value_end..]);
-    Ok(Bytes::from(output))
-}
-
-fn skip_line_break(body: &[u8], cursor: usize) -> AppResult<usize> {
-    if body.get(cursor..cursor + 2) == Some(b"\r\n") {
-        return Ok(cursor + 2);
-    }
-    if body.get(cursor..cursor + 1) == Some(b"\n") {
-        return Ok(cursor + 1);
-    }
-    Err(AppError::BadRequest("invalid multipart body".to_string()))
-}
-
-fn multipart_text_field(part: &[u8], part_start: usize) -> AppResult<Option<MultipartTextField>> {
-    let (headers, value, value_start_offset) = if let Some(offset) = find_bytes(part, b"\r\n\r\n") {
-        (&part[..offset], &part[offset + 4..], offset + 4)
-    } else if let Some(offset) = find_bytes(part, b"\n\n") {
-        (&part[..offset], &part[offset + 2..], offset + 2)
-    } else {
-        return Err(AppError::BadRequest("invalid multipart body".to_string()));
-    };
-    let headers = std::str::from_utf8(headers)
-        .map_err(|_| AppError::BadRequest("invalid multipart headers".to_string()))?;
-    let Some(disposition) = headers.lines().find(|line| {
-        line.to_ascii_lowercase()
-            .starts_with("content-disposition:")
-    }) else {
-        return Ok(None);
-    };
-    if disposition.contains("filename=") {
-        return Ok(None);
-    }
-    let Some(name) = multipart_disposition_name(disposition) else {
-        return Ok(None);
-    };
-    let value_text = std::str::from_utf8(value)
-        .map_err(|_| AppError::BadRequest("invalid multipart text field".to_string()))?
-        .trim()
-        .to_string();
-    let leading_ws = value.len() - value.trim_ascii_start().len();
-    let trailing_ws = value.trim_ascii_end().len();
-    Ok(Some(MultipartTextField {
-        name,
-        value: value_text,
-        value_start: part_start + value_start_offset + leading_ws,
-        value_end: part_start + value_start_offset + trailing_ws,
-    }))
-}
-
-fn multipart_disposition_name(disposition: &str) -> Option<String> {
-    let (_, params) = disposition.split_once(':')?;
-    for param in params.split(';').skip(1) {
-        let (key, value) = param.trim().split_once('=')?;
-        if key.trim().eq_ignore_ascii_case("name") {
-            return Some(value.trim().trim_matches('"').to_string());
-        }
-    }
-    None
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 #[cfg(test)]

@@ -5,7 +5,9 @@ import type {
   PricingTemplate,
   PricingTemplateSyncResult,
   ProviderModel,
-  ProviderPrice
+  ChannelPrice,
+  VideoBillingMode,
+  VideoPriceTier
 } from '../types/admin'
 import { adminRequest } from './request'
 
@@ -13,8 +15,8 @@ export function getProviderModels() {
   return adminRequest<ProviderModel[]>('/api/admin/provider-models')
 }
 
-export function getProviderPrices() {
-  return adminRequest<ProviderPrice[]>('/api/admin/provider-prices')
+export function getChannelPrices() {
+  return adminRequest<ChannelPrice[]>('/api/admin/channel-prices')
 }
 
 export function getPricingTemplates() {
@@ -42,8 +44,8 @@ export function getPricingPolicies() {
   return adminRequest<PricingPolicy[]>('/api/admin/pricing-policies')
 }
 
-export function upsertProviderPrice(input: {
-  provider: string
+export function upsertChannelPrice(input: {
+  channel_id: number
   model: string
   input_price_micros: number
   output_price_micros: number
@@ -51,9 +53,11 @@ export function upsertProviderPrice(input: {
   cache_write_price_micros?: number | null
   billing_meter: BillingMeter
   unit_price_micros?: number | null
+  video_billing_mode?: VideoBillingMode | null
+  video_price_tiers?: VideoPriceTier[]
   enabled: boolean
 }) {
-  return adminRequest<ProviderPrice>('/api/admin/provider-prices', {
+  return adminRequest<ChannelPrice>('/api/admin/channel-prices', {
     method: 'POST',
     body: JSON.stringify(input)
   })

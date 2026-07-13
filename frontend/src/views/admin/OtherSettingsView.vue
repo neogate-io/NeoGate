@@ -17,10 +17,7 @@ import {
   syncPricingTemplates
 } from '../../api/prices'
 import { getAdminServicePolicy, saveAdminServicePolicy, type ServicePolicy } from '../../api/policy'
-import {
-  getAdminModelSetting,
-  saveAdminModelSetting
-} from '../../api/settings'
+import { getAdminModelSetting, saveAdminModelSetting } from '../../api/settings'
 import { useLocale } from '../../composables/useLocale'
 import { type MessageKey } from '../../i18n'
 import { withLoading } from '../../composables/useLoadingTask'
@@ -116,11 +113,7 @@ const textModelOptions = computed(() => {
   for (const channel of channels.value) {
     if (!channel.enabled) continue
     for (const model of channel.models) {
-      if (
-        !model.enabled ||
-        model.status !== 'available' ||
-        model.runtime_status === 'failed'
-      ) {
+      if (!model.enabled || model.status !== 'available' || model.runtime_status === 'failed') {
         continue
       }
       const key = `${channel.id}:${model.model}`
@@ -172,6 +165,55 @@ function pricingBasisLabel(template: ModelReferenceCatalogRecord) {
   }
 }
 
+function capabilityValues(capabilities: Record<string, unknown>, path: string[]) {
+  let current: unknown = capabilities
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return []
+    current = (current as Record<string, unknown>)[key]
+  }
+  return Array.isArray(current)
+    ? current.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+    : []
+}
+
+function isVideoTokenReference(template: ModelReferenceCatalogRecord) {
+  return (
+    template.pricing_basis === 'token' &&
+    capabilityValues(template.capabilities, ['modalities', 'output']).includes('video')
+  )
+}
+
+function hasSameTokenInputOutputPrice(template: ModelReferenceCatalogRecord) {
+  return template.input_price_micros === template.output_price_micros
+}
+
+function referencePriceNote(template: ModelReferenceCatalogRecord) {
+  if (isVideoTokenReference(template) && hasSameTokenInputOutputPrice(template)) return ''
+  if (isVideoTokenReference(template)) return t('inputOutputPriceShort')
+  return ''
+}
+
+function videoTokenReferenceUnit(template: ModelReferenceCatalogRecord) {
+  return isVideoTokenReference(template) && hasSameTokenInputOutputPrice(template)
+    ? t('pricePerMillionTokens')
+    : ''
+}
+
+function referencePriceUnit(template: ModelReferenceCatalogRecord) {
+  switch (template.pricing_basis) {
+    case 'image':
+      return t('perImage')
+    case 'call':
+      return t('perCall')
+    case 'hour':
+      return t('perHour')
+    case 'second':
+      return t('perSecond')
+    default:
+      return videoTokenReferenceUnit(template)
+  }
+}
+
 const VIDEO_TIER_DIMENSION_LABELS: Record<string, string> = {
   input_without_video: 'videoTierInputWithoutVideo',
   input_with_video: 'videoTierInputWithVideo',
@@ -182,11 +224,30 @@ const VIDEO_TIER_DIMENSION_LABELS: Record<string, string> = {
 
 function videoTiersOf(template: ModelReferenceCatalogRecord) {
   const value = template.capabilities?.video_tiers
-  return Array.isArray(value) ? (value as VideoTier[]) : []
+  const tiers = Array.isArray(value) ? (value as VideoTier[]) : []
+  return filterVideoTiersForCurrency(tiers)
+}
+
+function isMainlandVideoTier(tier: { label?: string }) {
+  const label = tier.label?.trim() ?? ''
+  return (
+    label.includes('中国内地') ||
+    label.includes('中国大陆') ||
+    /mainland\s*china|china\s*mainland|chinese\s*mainland/i.test(label)
+  )
+}
+
+function filterVideoTiersForCurrency<T extends { label?: string }>(tiers: T[]) {
+  if (billingCurrency.value !== 'CNY') return tiers
+  const mainlandTiers = tiers.filter(isMainlandVideoTier)
+  return mainlandTiers.length > 0 ? mainlandTiers : tiers
 }
 
 function formatVideoTier(tier: VideoTier) {
-  const dimensions = Object.keys(tier.tiers ?? {}) as string[]
+  const hasAudioTier = tier.tiers?.with_audio != null || tier.tiers?.without_audio != null
+  const dimensions = (
+    hasAudioTier ? ['with_audio', 'without_audio'] : Object.keys(tier.tiers ?? {})
+  ) as string[]
   const parts = dimensions
     .filter((d) => tier.tiers?.[d as VideoTierDimension] != null)
     .map((d) => {
@@ -194,9 +255,30 @@ function formatVideoTier(tier: VideoTier) {
       const amount = formatReferenceMicros(
         microsFromCny(tier.tiers?.[d as VideoTierDimension] ?? null)
       )
-      return `${t(labelKey)} ${amount}/${t('pricePerMillionTokens')}`
+      const unit = videoTierPriceUnit(tier, d)
+      return {
+        label: t(labelKey),
+        amount,
+        unit
+      }
     })
-  return { resolution: tier.resolution || '', parts }
+  return { resolution: videoTierDisplayLabel(tier), parts, hasAudioTier }
+}
+
+function videoTierPriceUnit(tier: VideoTier, dimension: string) {
+  if (dimension !== 'price') return t('pricePerMillionTokens')
+  return tier.unit === 'per_video' ? t('perVideo') : t('perSecond')
+}
+
+function videoTierDisplayLabel(tier: VideoTier) {
+  const label = tier.label?.trim()
+  if (!label) return tier.resolution || ''
+  if (billingCurrency.value !== 'CNY' || !isMainlandVideoTier(tier)) return label
+  const strippedLabel = label
+    .replace(/^(中国内地|中国大陆)\s*(?:[·・|/\\-]\s*)?/u, '')
+    .replace(/^(mainland\s*china|china\s*mainland|chinese\s*mainland)\s*(?:[·・|/\\-]\s*)?/iu, '')
+    .trim()
+  return strippedLabel || tier.resolution || label
 }
 
 function microsFromCny(value: number | null | undefined) {
@@ -207,13 +289,10 @@ function microsFromCny(value: number | null | undefined) {
 function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
   switch (template.pricing_basis) {
     case 'image':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perImage')}`
     case 'call':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perCall')}`
     case 'hour':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perHour')}`
     case 'second':
-      return `${formatReferenceMicros(template.unit_price_micros)} / ${t('perSecond')}`
+      return formatReferenceMicros(template.unit_price_micros)
     case 'per_10k_token':
       return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
         template.output_price_micros
@@ -223,6 +302,9 @@ function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
         'multiTierRepresentative'
       )})`
     default:
+      if (isVideoTokenReference(template) && hasSameTokenInputOutputPrice(template)) {
+        return formatReferenceMicros(template.input_price_micros)
+      }
       return `${formatReferenceMicros(template.input_price_micros)} / ${formatReferenceMicros(
         template.output_price_micros
       )}`
@@ -232,6 +314,13 @@ function formatReferencePricePair(template: ModelReferenceCatalogRecord) {
 function formatCachePricePair(template: ModelReferenceCatalogRecord) {
   const noCacheBases = ['image', 'call', 'hour', 'second', 'multi_tier_video']
   if (noCacheBases.includes(template.pricing_basis)) return '-'
+  if (
+    isVideoTokenReference(template) &&
+    template.cache_read_price_micros == null &&
+    template.cache_write_price_micros == null
+  ) {
+    return '-'
+  }
   const zero = `${currencySymbol(billingCurrency.value)}0`
   const cacheRead =
     template.cache_read_price_micros == null
@@ -263,11 +352,7 @@ function referenceSyncConfirmContent() {
 }
 
 function readReferenceSyncError(err: unknown) {
-  if (
-    err instanceof ApiError &&
-    err.status === 502 &&
-    err.message.includes('pricing reference source')
-  ) {
+  if (err instanceof ApiError && err.code === 'pricing_reference_source_unavailable') {
     return referencePricesSourceUnavailableText.value
   }
 
@@ -486,6 +571,7 @@ onMounted(load)
     <el-dialog
       v-model="referencePricesDialogOpen"
       class="reference-prices-dialog"
+      :close-on-click-modal="false"
       :title="t('modelReferencePrices')"
       width="1120px"
     >
@@ -510,7 +596,7 @@ onMounted(load)
         stripe
       >
         <el-table-column prop="provider" :label="t('provider')" width="112" />
-        <el-table-column prop="model" :label="t('modelName')" min-width="240" />
+        <el-table-column prop="model" :label="t('modelName')" min-width="220" />
         <el-table-column :label="t('pricingBasis')" width="92" align="center" header-align="center">
           <template #default="{ row }">
             <span class="reference-meter-badge">{{ pricingBasisLabel(row) }}</span>
@@ -518,7 +604,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column
           class-name="reference-price-column"
-          min-width="200"
+          min-width="230"
           align="right"
           header-align="right"
         >
@@ -534,20 +620,33 @@ onMounted(load)
                 v-for="(tier, idx) in videoTiersOf(row)"
                 :key="idx"
                 class="reference-video-tier"
+                :class="{ 'has-audio-tier': formatVideoTier(tier).hasAudioTier }"
               >
-                <span v-if="tier.resolution" class="reference-video-tier-res">
-                  {{ tier.resolution }}
+                <span v-if="formatVideoTier(tier).resolution" class="reference-video-tier-res">
+                  {{ formatVideoTier(tier).resolution }}
                 </span>
                 <span
                   v-for="(part, pIdx) in formatVideoTier(tier).parts"
                   :key="pIdx"
                   class="reference-video-tier-price"
                 >
-                  {{ part }}
+                  <span>{{ part.label }}</span>
+                  <span class="reference-price-amount">{{ part.amount }}</span>
+                  <span class="reference-price-slash">/</span>
+                  <span class="reference-price-unit">{{ part.unit }}</span>
                 </span>
               </div>
             </div>
-            <span v-else class="reference-price-value">{{ formatReferencePricePair(row) }}</span>
+            <span v-else class="reference-price-value">
+              <span>{{ formatReferencePricePair(row) }}</span>
+              <span v-if="referencePriceUnit(row)" class="reference-price-slash">/</span>
+              <span v-if="referencePriceUnit(row)" class="reference-price-unit">
+                {{ referencePriceUnit(row) }}
+              </span>
+            </span>
+            <span v-if="referencePriceNote(row)" class="reference-price-note">
+              {{ referencePriceNote(row) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column
@@ -748,12 +847,24 @@ onMounted(load)
 }
 
 .reference-price-value {
+  align-items: baseline;
   color: #263242;
-  display: block;
+  display: inline-flex;
+  gap: 4px;
+  justify-content: flex-end;
   font-variant-numeric: tabular-nums;
   font-weight: 620;
   text-align: right;
   white-space: nowrap;
+}
+
+.reference-price-note {
+  color: #7a8798;
+  display: block;
+  font-size: 11px;
+  font-weight: 560;
+  margin-top: 4px;
+  text-align: right;
 }
 
 .reference-video-tiers {
@@ -783,11 +894,37 @@ onMounted(load)
 }
 
 .reference-video-tier-price {
+  align-items: baseline;
   color: #263242;
+  display: inline-flex;
+  gap: 4px;
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   font-weight: 620;
   white-space: nowrap;
+}
+
+.reference-price-amount {
+  color: #263242;
+}
+
+.reference-price-slash {
+  color: #7a8798;
+  font-size: 11px;
+  font-weight: 560;
+  margin-left: -2px;
+  margin-right: -2px;
+}
+
+.reference-price-unit {
+  color: #7a8798;
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.reference-video-tier.has-audio-tier .reference-video-tier-price {
+  flex-basis: 100%;
+  justify-content: flex-end;
 }
 
 .reference-video-tier-note {

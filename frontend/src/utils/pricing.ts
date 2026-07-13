@@ -87,6 +87,11 @@ export function pricingReferenceModelAliases(model: string) {
     const withoutRouterPrefix = alias.replace(/^\d+:/, '')
     if (withoutRouterPrefix !== alias) queue.push(withoutRouterPrefix)
 
+    // Dreamina exposes Seedance under a provider namespace; match it with the
+    // canonical Seedance references used for video capabilities and pricing.
+    const withoutDreaminaSeedancePrefix = alias.replace(/^dreamina-(?=seedance-)/, '')
+    if (withoutDreaminaSeedancePrefix !== alias) queue.push(withoutDreaminaSeedancePrefix)
+
     const doubaoSeedanceAlias = alias.replace(/^seedance-/, 'doubao-seedance-')
     if (doubaoSeedanceAlias !== alias) queue.push(doubaoSeedanceAlias)
 

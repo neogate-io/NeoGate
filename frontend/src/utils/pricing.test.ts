@@ -13,6 +13,12 @@ describe('pricingReferenceModelAliases', () => {
     )
   })
 
+  it('normalizes Dreamina Seedance ids to canonical Seedance references', () => {
+    expect(pricingReferenceModelAliases('dreamina-seedance-2-0-260128')).toContain(
+      'doubao-seedance-2.0'
+    )
+  })
+
   it('finds token-priced reference templates for dated doubao seedance model ids', () => {
     const template: PricingTemplate = {
       id: 1,

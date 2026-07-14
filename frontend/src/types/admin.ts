@@ -428,6 +428,13 @@ export type UsageRecord = {
   billable_units: number
   cost_micros?: number | null
   billing_status: string
+  video_billing?: {
+    mode: VideoBillingMode
+    resolution: string
+    duration_seconds: number
+    has_video_input: boolean
+    price_micros: number
+  } | null
   routing?: UsageRouting | null
   created_at: string
 }

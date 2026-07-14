@@ -96,8 +96,18 @@ struct UsageRecord {
     cost_micros: Option<i64>,
     billing_status: String,
     error_summary: Option<String>,
+    video_billing: Option<VideoBillingDetails>,
     routing: Option<UsageRouting>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct VideoBillingDetails {
+    mode: String,
+    resolution: String,
+    duration_seconds: i64,
+    has_video_input: bool,
+    price_micros: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -200,6 +210,7 @@ async fn usage_rows(
                 usage_record.audio_out_tokens, usage_record.billing_meter,
                 usage_record.billable_units, usage_record.cost_micros,
                 usage_record.billing_status, usage_record.error_summary, usage_record.created_at,
+                video_task.video_billing,
                 usage_routing.id AS routing_id,
                 usage_routing.project_id AS routing_project_id,
                 usage_routing.project_model_id AS routing_project_model_id,
@@ -222,6 +233,16 @@ async fn usage_rows(
          LEFT JOIN "user" u ON u.id = usage_record.user_id
          LEFT JOIN channel current_channel ON current_channel.id = usage_record.channel_id
          LEFT JOIN usage_routing ON usage_routing.usage_id = usage_record.id
+         LEFT JOIN LATERAL (
+           SELECT task.upstream_metadata #> '{neogate,video_billing}' AS video_billing
+           FROM task_upstream task
+           WHERE task.task_type = 'openai_video'
+             AND task.upstream_metadata #>> '{neogate,relay_trace_id}'
+                 = usage_record.relay_trace_id::text
+           ORDER BY task.created_at DESC, task.id DESC
+           LIMIT 1
+         ) video_task ON usage_record.billing_meter = 'video'
+                    AND usage_record.relay_trace_id IS NOT NULL
          LEFT JOIN LATERAL (
            SELECT
              string_agg('#' || sibling.channel_id::text, ' → '
@@ -317,6 +338,9 @@ fn usage_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageRecord, sqlx::Erro
         cost_micros: row.try_get("cost_micros")?,
         billing_status: row.try_get("billing_status")?,
         error_summary: row.try_get("error_summary")?,
+        video_billing: row
+            .try_get::<Option<sqlx::types::Json<VideoBillingDetails>>, _>("video_billing")?
+            .map(|value| value.0),
         routing: usage_routing_from_row(row)?,
         created_at: row.try_get("created_at")?,
     })

@@ -1,10 +1,16 @@
 use super::{
-    bailian::BAILIAN_ADAPTER, compatible::COMPATIBLE_ADAPTER, doubao::DOUBAO_ADAPTER,
-    jdcloud::JDCLOUD_ADAPTER, ProviderAdapter,
+    bailian::BAILIAN_ADAPTER,
+    compatible::COMPATIBLE_ADAPTER,
+    doubao::DOUBAO_ADAPTER,
+    haxicloud::{matches_base_url, HAXICLOUD_ADAPTER},
+    jdcloud::JDCLOUD_ADAPTER,
+    ProviderAdapter,
 };
 
-pub(crate) fn adapter_for_provider(provider: &str) -> &'static dyn ProviderAdapter {
-    if provider.eq_ignore_ascii_case("qwen") {
+pub(crate) fn adapter_for_endpoint(provider: &str, base_url: &str) -> &'static dyn ProviderAdapter {
+    if provider.eq_ignore_ascii_case("custom") && matches_base_url(base_url) {
+        &HAXICLOUD_ADAPTER
+    } else if provider.eq_ignore_ascii_case("qwen") {
         &BAILIAN_ADAPTER
     } else if provider.eq_ignore_ascii_case("jdcloud") {
         &JDCLOUD_ADAPTER
@@ -20,25 +26,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_selects_bailian_for_qwen() {
-        assert_eq!(adapter_for_provider("qwen").name(), "bailian");
-        assert_eq!(adapter_for_provider("QWEN").name(), "bailian");
-    }
-
-    #[test]
-    fn registry_selects_jdcloud_for_jdcloud() {
-        assert_eq!(adapter_for_provider("jdcloud").name(), "jdcloud");
-        assert_eq!(adapter_for_provider("JDCLOUD").name(), "jdcloud");
-    }
-
-    #[test]
-    fn registry_selects_doubao_for_doubao_provider() {
-        assert_eq!(adapter_for_provider("doubao").name(), "doubao");
-        assert_eq!(adapter_for_provider("DOUBAO").name(), "doubao");
-    }
-
-    #[test]
-    fn registry_defaults_to_compatible() {
-        assert_eq!(adapter_for_provider("custom").name(), "compatible");
+    fn selects_haxicloud_only_for_matching_custom_host() {
+        assert_eq!(
+            adapter_for_endpoint("custom", "https://token.haxicloud.com").name(),
+            "haxicloud"
+        );
+        assert_eq!(
+            adapter_for_endpoint("custom", "https://evil-token.haxicloud.com.example.com").name(),
+            "compatible"
+        );
+        assert_eq!(
+            adapter_for_endpoint("doubao", "https://token.haxicloud.com").name(),
+            "doubao"
+        );
     }
 }

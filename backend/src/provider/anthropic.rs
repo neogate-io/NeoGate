@@ -16,7 +16,7 @@ use crate::{
     auth::UserAuth,
     error::{reqwest_status, AppError, AppResult},
     input::bounded_limit,
-    provider::adapters::{adapter_for_provider, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -174,7 +174,7 @@ pub(crate) async fn anthropic_messages(
             UpstreamProtocol::Openai => {
                 let body = bridge::messages_to_openai_chat(upstream_body.clone())?;
                 let route = RelayRoute::ChatCompletions;
-                let adapter = adapter_for_provider(&ctx.upstream.provider);
+                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,

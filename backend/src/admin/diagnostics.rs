@@ -13,7 +13,7 @@ use crate::{
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     input::trimmed_non_empty,
-    provider::adapters::{adapter_for_provider, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{
         selector::{SelectedUpstream, UpstreamProtocol},
         upstream_url,
@@ -1065,7 +1065,7 @@ fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeReque
         };
     }
 
-    let adapter = adapter_for_provider(&endpoint.provider);
+    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
     let route = RelayRoute::ChatCompletions;
     let mut extra_headers = reqwest::header::HeaderMap::new();
     if endpoint.provider.eq_ignore_ascii_case("qwen") {
@@ -1088,7 +1088,7 @@ fn video_probe_request(
     key: &KeyTarget,
     model: &str,
 ) -> AppResult<DiagnosticProbeRequest> {
-    let adapter = adapter_for_provider(&endpoint.provider);
+    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
     let route = RelayRoute::Videos;
     let body = serde_json::to_vec(&json!({
         "model": model,
@@ -1125,7 +1125,7 @@ fn video_probe_request(
 }
 
 fn image_probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeRequest {
-    let adapter = adapter_for_provider(&endpoint.provider);
+    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
     let route = RelayRoute::ImageGenerations;
     DiagnosticProbeRequest {
         log_path: route.path().to_string(),

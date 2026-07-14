@@ -82,4 +82,8 @@ pub(crate) trait ProviderAdapter: Sync {
         client_headers: &HeaderMap,
         streamed: bool,
     ) -> AppResult<PreparedUpstreamRequest>;
+
+    fn normalize_response_body(&self, _route: RelayRoute, body: Bytes) -> AppResult<Bytes> {
+        Ok(body)
+    }
 }

@@ -12,9 +12,9 @@ TESTS_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = TESTS_DIR.parent
 ENV_FILE = BACKEND_DIR / ".env"
 DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1"
-DEFAULT_VIDEO_MODEL = "sora-2"
-DEFAULT_VIDEO_SIZE = "1280x720"
-DEFAULT_VIDEO_SECONDS = 4
+DEFAULT_VIDEO_MODEL = "dreamina-seedance-2-0-260128"
+DEFAULT_VIDEO_SIZE = "854x480"
+DEFAULT_VIDEO_SECONDS = 3
 REQUEST_TIMEOUT_SECONDS = 600
 VIDEO_POLL_TIMEOUT_SECONDS = 1800
 VIDEO_POLL_INTERVAL_SECONDS = 10
@@ -67,9 +67,11 @@ API_KEY = env_value("NEOGATE_API_KEY")
 VIDEO_MODEL = env_value("NEOGATE_VIDEO_MODEL") or DEFAULT_VIDEO_MODEL
 VIDEO_SIZE = env_value("NEOGATE_VIDEO_SIZE") or DEFAULT_VIDEO_SIZE
 VIDEO_SECONDS = int(env_value("NEOGATE_VIDEO_SECONDS") or DEFAULT_VIDEO_SECONDS)
+VIDEO_RATIO = env_value("NEOGATE_VIDEO_RATIO")
+VIDEO_RESOLUTION = env_value("NEOGATE_VIDEO_RESOLUTION")
 VIDEO_PROMPT = (
     env_value("NEOGATE_VIDEO_PROMPT")
-    or "A calm five second shot of a glass teapot on a walnut table, soft morning light."
+    or "A short calm shot of a glass teapot on a walnut table, soft morning light."
 )
 
 
@@ -172,6 +174,13 @@ def video_request_payload():
         "size": VIDEO_SIZE,
         "seconds": VIDEO_SECONDS,
     }
+    if VIDEO_MODEL.startswith("dreamina-seedance-"):
+        payload.update(
+            {
+                "ratio": VIDEO_RATIO or "16:9",
+                "resolution": VIDEO_RESOLUTION or "480p",
+            }
+        )
     extra = env_value("NEOGATE_VIDEO_EXTRA_JSON")
     if extra:
         value = json.loads(extra)

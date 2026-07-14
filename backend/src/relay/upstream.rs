@@ -6,7 +6,7 @@ use crate::{
     admin::credentials::refresh_openai_runtime_credential,
     config::DEFAULT_ANTHROPIC_VERSION,
     error::{AppError, AppResult, UpstreamErrorKind, UpstreamRequestError},
-    provider::adapters::{adapter_for_provider, PreparedUpstreamRequest},
+    provider::adapters::{adapter_for_endpoint, PreparedUpstreamRequest},
     AppState,
 };
 
@@ -223,7 +223,7 @@ pub(crate) async fn forward_openai_bound(
     path: &str,
     body: Option<Bytes>,
 ) -> AppResult<reqwest::Response> {
-    let adapter = adapter_for_provider(&upstream.provider);
+    let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
     let (url, log_path) = adapter.resolve_bound_url(&upstream.base_url, path);
     send_upstream_request(state, upstream, UpstreamProtocol::Openai, &log_path, || {
         let mut request = state

@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     error::{reqwest_status, AppError, AppResult},
-    provider::adapters::{adapter_for_provider, AdapterResponseMode, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, AdapterResponseMode, RelayRoute},
     task::{jobs, upstream as upstream_task},
     AppState,
 };
@@ -507,7 +507,7 @@ async fn relay_openai(
                 "Anthropic fallback is not supported for {path}"
             ))),
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
-                let adapter = adapter_for_provider(&ctx.upstream.provider);
+                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,

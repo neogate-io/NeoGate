@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, BufReader};
 use uuid::Uuid;
 
+use crate::provider::adapters::{adapter_for_endpoint, RelayRoute};
 use crate::provider::{anthropic, openai};
 use crate::{
     auth::UserAuth,
@@ -150,6 +151,8 @@ pub(crate) async fn finish_task_json_response(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
+    let body = adapter_for_endpoint(&task.provider, &task.upstream_base_url)
+        .normalize_response_body(RelayRoute::Videos, body)?;
     tracing::info!(
         task_id = task.id,
         ?task.task_type,

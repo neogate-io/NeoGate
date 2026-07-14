@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::{
     billing::{parse_usage_from_bytes, TokenUsage},
     error::{reqwest_status, AppResult},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
     AppState,
 };
@@ -160,6 +161,12 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     if !status.is_success() {
         return Ok(());
     }
+    let body = if task.task_type == UpstreamTaskType::OpenAiVideo {
+        adapter_for_endpoint(&upstream.provider, &upstream.base_url)
+            .normalize_response_body(RelayRoute::Videos, body)?
+    } else {
+        body
+    };
     let mut value: Value = serde_json::from_slice(&body)?;
     if task.task_type == UpstreamTaskType::OpenAiVideo {
         crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);

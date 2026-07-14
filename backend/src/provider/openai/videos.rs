@@ -14,7 +14,7 @@ use crate::{
     auth::UserAuth,
     billing::video::{self, VideoBillingInput, VideoBillingMetadata},
     error::{reqwest_status, AppError, AppResult},
-    provider::adapters::{adapter_for_provider, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_task_json_response, forward_openai_bound,
         forward_openai_with_content_type, forward_prepared_openai, raw_upstream_response,
@@ -185,8 +185,8 @@ async fn relay_openai_video_create(
             upstream_request_path: Some(RelayRoute::Videos.path().to_string()),
             upstream_response_mode: None,
         };
-        let adapter = adapter_for_provider(&ctx.upstream.provider);
-        let response = if meta.is_json || adapter.name() == "doubao" {
+        let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+        let response = if meta.is_json || matches!(adapter.name(), "doubao" | "haxicloud") {
             let prepared = adapter.prepare_openai_request(
                 &ctx.upstream,
                 protocol,
@@ -294,7 +294,8 @@ async fn finish_video_create_success(
     let body = match upstream_response.bytes().await {
         Ok(body) => {
             ctx.release_request_permit();
-            body
+            adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url)
+                .normalize_response_body(RelayRoute::Videos, body)?
         }
         Err(err) => {
             ctx.release_request_permit();

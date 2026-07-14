@@ -316,8 +316,14 @@ mod tests {
             script.contains("[Parameter(ValueFromRemainingArguments=$true)][object[]]$MessageArgs")
         );
         assert!(script.contains("function Get-CommandVersion"));
+        assert!(script.contains("function Find-ApplicationCommand"));
+        assert!(script.contains("-CommandType Application"));
+        assert!(script.contains("execution policy even when npm.cmd is usable"));
         assert!(script.contains("function Get-NpmGlobalPaths"));
-        assert!(script.contains("npm config get prefix"));
+        assert!(script.contains("$npm.Path config get prefix"));
+        assert!(script.contains("$npmCmd = Join-Path $nodeBin 'npm.cmd'"));
+        assert!(script.contains("Get-CommandVersion $npmCmd"));
+        assert!(script.contains("stale command lookup after PATH changes"));
         assert!(script.contains("openai_base_url = `\"$(Escape-Toml $BaseUrl)`\""));
         assert!(script.contains("[model_providers.`\"$providerIdEscaped`\"]"));
         assert!(script.contains(r#""?neogate"?\s*\]?\s*$"#));

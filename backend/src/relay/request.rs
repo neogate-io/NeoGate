@@ -92,7 +92,7 @@ pub(crate) fn prepare_relay_body(
         None => (0, true),
     };
     let needs_stream_usage = meta.stream
-        && matches!(kind, BodyKind::OpenaiChat | BodyKind::OpenaiResponses)
+        && matches!(kind, BodyKind::OpenaiChat)
         && !openai_stream_usage_included_value(&value);
     let changed = (needs_output_limit && !has_output_limit) || needs_stream_usage;
     if !changed {
@@ -399,6 +399,18 @@ mod tests {
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
 
         assert_eq!(value["stream_options"]["include_usage"], true);
+        assert!(prepared.meta.stream);
+    }
+
+    #[test]
+    fn does_not_add_stream_usage_for_openai_responses() {
+        let body = Bytes::from_static(br#"{"model":"gpt-5","stream":true}"#);
+
+        let prepared = prepare_relay_body(body, BodyKind::OpenaiResponses, 4096).unwrap();
+        let value: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert!(value.get("stream_options").is_none());
+        assert_eq!(value["max_output_tokens"], 4096);
         assert!(prepared.meta.stream);
     }
 

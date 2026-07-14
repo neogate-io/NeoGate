@@ -961,7 +961,7 @@ pub(crate) mod tests {
                     credit_prefetch_micros: 100_000,
                     credit_allocation_recovery_after: Duration::from_secs(3600),
                     credit_allocation_recovery_interval: Duration::from_secs(60),
-                    default_output_tokens: 4096,
+                    default_output_tokens: 16_384,
                 },
                 usage_queue: config::UsageQueueConfig {
                     flush_interval: Duration::from_secs(1),

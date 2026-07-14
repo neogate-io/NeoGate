@@ -138,16 +138,22 @@ function Invoke-NeoGateRequest {
   }
 }
 
+function Find-ApplicationCommand([string]$Name) {
+  # Prefer .exe/.cmd shims over PowerShell wrapper scripts. Node's npm.ps1 can
+  # be blocked by a restrictive execution policy even when npm.cmd is usable.
+  return Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+
 function Assert-Command([string]$Name) {
-  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+  return $null -ne (Find-ApplicationCommand $Name)
 }
 
 function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')) {
-  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  $cmd = Find-ApplicationCommand $Name
   if (-not $cmd) { return $null }
 
   try {
-    $output = & $Name @Arguments 2>$null
+    $output = & $cmd.Path @Arguments 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     return (@($output) | Where-Object { $_ } | Select-Object -First 1)
   } catch {
@@ -158,7 +164,9 @@ function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')
 function Get-NpmGlobalPaths {
   $paths = @()
   try {
-    $prefixOutput = & npm config get prefix 2>$null
+    $npm = Find-ApplicationCommand 'npm'
+    if (-not $npm) { return @() }
+    $prefixOutput = & $npm.Path config get prefix 2>$null
     if ($LASTEXITCODE -eq 0) {
       foreach ($prefix in @($prefixOutput)) {
         if ($prefix -and $prefix -ne 'undefined') {
@@ -424,14 +432,25 @@ function Install-NodeZip {
   $nodeExe = Get-ChildItem -Path $targetDir -Recurse -Filter 'node.exe' | Select-Object -First 1
   if (-not $nodeExe) { Fail (Get-Message node_path_missing) }
   $nodeBin = $nodeExe.DirectoryName
+  $npmCmd = Join-Path $nodeBin 'npm.cmd'
+  if (-not (Test-Path -LiteralPath $npmCmd -PathType Leaf)) { Fail (Get-Message npm_path_missing) }
 
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ($userPath -notlike "*$nodeBin*") {
     $newPath = if ($userPath) { "$nodeBin;$userPath" } else { $nodeBin }
     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
   }
-  $env:Path = "$nodeBin;$env:Path"
+  # The registry update above is not reflected in this PowerShell process.
+  # Keep the extracted directory first so node.exe and npm.cmd are usable now.
+  $env:Path = (@(
+    $nodeBin
+    $env:Path
+    [Environment]::GetEnvironmentVariable('Path', 'User')
+    [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  ) | Where-Object { $_ } | ForEach-Object { $_ -split ';' } |
+    Where-Object { $_ } | Select-Object -Unique) -join ';'
   $env:NPM_CONFIG_REGISTRY = $NpmRegistry
+  return $nodeBin
 }
 
 function Install-Node {
@@ -441,8 +460,20 @@ function Install-Node {
   if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
-  Install-NodeZip
+  $nodeBin = Install-NodeZip
   Update-SessionPath
+
+  # Test the newly extracted executables explicitly. Get-Command can retain a
+  # stale command lookup after PATH changes in the same PowerShell session.
+  $nodeExe = Join-Path $nodeBin 'node.exe'
+  $npmCmd = Join-Path $nodeBin 'npm.cmd'
+  $nodeVersion = Get-CommandVersion $nodeExe
+  $npmVersion = Get-CommandVersion $npmCmd
+  if ($nodeVersion -and $npmVersion) {
+    Detail (Get-Message node_found $nodeVersion)
+    Detail (Get-Message npm_found $npmVersion)
+    return
+  }
 
   if (Confirm-NodeReady) { return }
   $versions = Get-NodeToolVersions

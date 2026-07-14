@@ -336,7 +336,7 @@ impl Config {
                     "CREDIT_RELEASE_INTERVAL_SECONDS",
                     60,
                 )?),
-                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 8192)?,
+                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 16_384)?,
             },
             usage_queue: UsageQueueConfig {
                 flush_interval: Duration::from_millis(parse_u64("USAGE_FLUSH_INTERVAL_MS", 1000)?),

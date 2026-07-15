@@ -300,7 +300,7 @@ impl Config {
                     "CREDENTIAL_UPLOAD_LIMIT_BYTES",
                     DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
                 )?,
-                user_concurrent_request_limit: parse_usize("USER_CONCURRENT_REQUEST_LIMIT", 10)?,
+                user_concurrent_request_limit: parse_usize("USER_CONCURRENT_REQUEST_LIMIT", 100)?,
                 global_concurrent_request_limit: parse_usize("GLOBAL_CONCURRENT_REQUEST_LIMIT", 0)?,
                 channel_affinity_enabled: parse_bool("CHANNEL_AFFINITY_ENABLED", true)?,
                 channel_affinity_ttl: Duration::from_secs(parse_u64(

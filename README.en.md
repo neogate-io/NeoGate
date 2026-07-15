@@ -463,7 +463,7 @@ Check by scenario:
     </tr>
     <tr>
       <td>🚦 User concurrency</td>
-      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 10 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
+      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 100 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
     </tr>
     <tr>
       <td>🔀 Upstream failover</td>

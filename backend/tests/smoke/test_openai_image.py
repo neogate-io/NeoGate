@@ -104,6 +104,7 @@ class NeoGateClient:
         self.api_key = api_key
 
     def post_json(self, path, payload):
+        save_http_json("request", "POST", path, payload)
         body = json.dumps(payload).encode("utf-8")
         return self.request(
             "POST",
@@ -144,11 +145,19 @@ class NeoGateClient:
             response = conn.getresponse()
             response_body = response.read()
             response_headers = {key.lower(): value for key, value in response.getheaders()}
+            record_json_response(
+                method,
+                path,
+                response.status,
+                response_headers,
+                response_body,
+            )
             return response.status, response_headers, response_body
         finally:
             conn.close()
 
     def stream_json(self, path, payload):
+        save_http_json("request", "POST", path, payload)
         body = json.dumps(payload).encode("utf-8")
         conn = make_connection(self.parsed)
         request_path = f"{self.base_path}{path}"
@@ -205,6 +214,48 @@ def parse_json_body(body):
     except json.JSONDecodeError as exc:
         preview = body[:500].decode("utf-8", errors="replace")
         raise AssertionError(f"response body is not JSON: {preview}") from exc
+
+
+def record_json_response(method, path, status, headers, body):
+    content_type = headers.get("content-type", "").lower()
+    stripped = body.lstrip()
+    if "json" not in content_type and not stripped.startswith((b"{", b"[")):
+        return
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return
+    save_http_json("response", method, path, value, status=status)
+
+
+def save_http_json(direction, method, path, value, status=None):
+    record = {
+        "direction": direction,
+        "method": method,
+        "path": path,
+        "json": value,
+    }
+    if status is not None:
+        record["status"] = status
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    path_name = "_".join(
+        part
+        for part in "".join(
+            char if char.isalnum() else "_" for char in path
+        ).split("_")
+        if part
+    )
+    status_name = f"_{status}" if status is not None else ""
+    output_path = unique_output_path(
+        f"{direction}_{method.lower()}_{path_name}{status_name}",
+        ".json",
+    )
+    output_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"saved json: {output_path}")
+    return output_path
 
 
 def assert_success(status, body):
@@ -404,8 +455,22 @@ def _test_images_generation_stream():
     finally:
         conn.close()
 
+    record_json_response(
+        "POST",
+        "/images/generations",
+        response.status,
+        {"content-type": response.getheader("content-type", "")},
+        body,
+    )
     assert_success(response.status, body)
     events = parse_sse_events(body)
+    save_http_json(
+        "response",
+        "POST",
+        "/images/generations",
+        events,
+        status=response.status,
+    )
     if not events:
         raise AssertionError("stream response did not contain SSE events")
     event_types = {event.get("type") or event.get("event") for event in events}
@@ -441,10 +506,25 @@ def _test_images_edit_json_stream():
     finally:
         conn.close()
 
+    response_headers = {"content-type": response.getheader("content-type", "")}
+    record_json_response(
+        "POST",
+        "/images/edits",
+        response.status,
+        response_headers,
+        body,
+    )
     assert_success(response.status, body)
-    content_type = response.getheader("content-type", "")
+    content_type = response_headers["content-type"]
     if "text/event-stream" in content_type:
         events = parse_sse_events(body)
+        save_http_json(
+            "response",
+            "POST",
+            "/images/edits",
+            events,
+            status=response.status,
+        )
         if not events:
             raise AssertionError("stream response did not contain SSE events")
         payloads = collect_image_payloads(events)

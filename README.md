@@ -465,7 +465,7 @@ sudo systemctl reload nginx
     </tr>
     <tr>
       <td>🚦 用户并发</td>
-      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 10 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
+      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 100 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
     </tr>
     <tr>
       <td>🔀 上游故障切换</td>

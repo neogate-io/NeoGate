@@ -1020,7 +1020,10 @@ impl StreamUsageParser {
 
     fn observe_parsed_line(&mut self, parsed: ParsedLine) {
         if let Some(usage) = parsed.usage {
-            self.latest = Some(usage);
+            match &mut self.latest {
+                Some(latest) => merge_token_usage(latest, usage),
+                None => self.latest = Some(usage),
+            }
         }
         if let Some(event) = parsed.event {
             self.last_event = Some(event);
@@ -1090,6 +1093,28 @@ impl StreamUsageParser {
         }
         self.latest
     }
+}
+
+fn merge_token_usage(current: &mut TokenUsage, incoming: TokenUsage) {
+    // SSE providers may put cache details in an early event and final output usage later.
+    // Merge fields so the later partial update cannot discard previously reported usage.
+    current.input_tokens = current.input_tokens.max(incoming.input_tokens);
+    current.output_tokens = current.output_tokens.max(incoming.output_tokens);
+    current.cached_input_tokens = incoming.cached_input_tokens.or(current.cached_input_tokens);
+    current.cache_creation_input_tokens = incoming
+        .cache_creation_input_tokens
+        .or(current.cache_creation_input_tokens);
+    current.cache_creation_input_tokens_5m = incoming
+        .cache_creation_input_tokens_5m
+        .or(current.cache_creation_input_tokens_5m);
+    current.cache_creation_input_tokens_1h = incoming
+        .cache_creation_input_tokens_1h
+        .or(current.cache_creation_input_tokens_1h);
+    current.reasoning_output_tokens = incoming
+        .reasoning_output_tokens
+        .or(current.reasoning_output_tokens);
+    current.audio_input_tokens = incoming.audio_input_tokens.or(current.audio_input_tokens);
+    current.audio_output_tokens = incoming.audio_output_tokens.or(current.audio_output_tokens);
 }
 
 fn stream_event_is_terminal(event: &str) -> bool {
@@ -1365,6 +1390,24 @@ data: [DONE]
         let usage = parser.finish().expect("latest usage should be retained");
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn stream_usage_parser_preserves_cache_details_from_earlier_events() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"message":{"usage":{"input_tokens":100,"output_tokens":0,"cache_read_input_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":12}}}}
+data: {"usage":{"input_tokens":0,"output_tokens":20}}
+"#,
+        );
+
+        let usage = parser.finish().expect("merged usage should be retained");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cached_input_tokens, Some(80));
+        assert_eq!(usage.cache_creation_input_tokens, Some(12));
+        assert_eq!(usage.cache_creation_input_tokens_5m, Some(12));
     }
 
     #[test]

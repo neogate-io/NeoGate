@@ -12,7 +12,10 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
-    billing::{BillableUsage, BillingAccounts, BillingMeter, SettleRequest},
+    billing::{
+        parse_usage_from_bytes, BillableUsage, BillingAccounts, BillingMeter, SettleRequest,
+        TokenUsage,
+    },
     error::{reqwest_status, AppError, AppResult},
     provider::adapters::{adapter_for_endpoint, AdapterErrorDisposition, RelayRoute},
     relay::{
@@ -313,13 +316,14 @@ async fn finish_image_relay(
     let image_count = image_count_from_response_body(&body).ok_or_else(|| {
         AppError::BadRequest("image response missing non-empty data array".to_string())
     })?;
-    let billing = settle_image_hold(&ctx, image_count, "image relay").await;
+    let token_usage = parse_usage_from_bytes(&body, false);
+    let billing = settle_image_hold(&ctx, image_count, token_usage, "image relay").await;
     let usage = crate::relay::usage_from_context(
         &ctx,
         Some(status.as_u16() as i32),
         None,
         None,
-        None,
+        token_usage,
         billing,
     );
     crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
@@ -361,11 +365,13 @@ async fn finish_streamed_image_upstream(
     upstream_response: reqwest::Response,
     requested_image_count: i64,
 ) -> AppResult<Response> {
+    let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
     let relay = ImageStreamRelay {
         ctx: Some(ctx),
         status,
         stream: upstream_response.bytes_stream().boxed(),
         image_count: requested_image_count,
+        usage: crate::relay::StreamUsageParser::new(usage_buffer_limit_bytes),
     };
     Response::builder()
         .status(status)
@@ -375,7 +381,10 @@ async fn finish_streamed_image_upstream(
             |relay| async move {
                 let mut relay = relay?;
                 match relay.stream.next().await {
-                    Some(Ok(chunk)) => Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay))),
+                    Some(Ok(chunk)) => {
+                        relay.usage.observe(&chunk);
+                        Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
+                    }
                     Some(Err(err)) => {
                         relay.finish_error(err.to_string()).await;
                         Some((Err(std::io::Error::other(err)), None))
@@ -395,6 +404,7 @@ struct ImageStreamRelay {
     status: StatusCode,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
     image_count: i64,
+    usage: crate::relay::StreamUsageParser,
 }
 
 impl ImageStreamRelay {
@@ -403,13 +413,15 @@ impl ImageStreamRelay {
             return;
         };
         ctx.release_request_permit();
-        let billing = settle_image_hold(&ctx, self.image_count, "streamed image relay").await;
+        let token_usage = self.usage.finish();
+        let billing =
+            settle_image_hold(&ctx, self.image_count, token_usage, "streamed image relay").await;
         let usage = crate::relay::usage_from_context(
             &ctx,
             Some(self.status.as_u16() as i32),
             None,
             None,
-            None,
+            token_usage,
             billing,
         );
         crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
@@ -446,6 +458,7 @@ impl Drop for ImageStreamRelay {
 async fn settle_image_hold(
     ctx: &RelayContext,
     image_count: i64,
+    token_usage: Option<TokenUsage>,
     context: &str,
 ) -> Option<crate::billing::BillingCharge> {
     match ctx
@@ -463,7 +476,7 @@ async fn settle_image_hold(
                     project_credit_account: &ctx.auth.project_credit_account,
                 },
                 hold: ctx.hold.clone(),
-                usage: Some(BillableUsage::image(image_count)),
+                usage: Some(BillableUsage::image_with_usage(image_count, token_usage)),
                 price: &ctx.price,
             },
         )
@@ -764,6 +777,18 @@ mod tests {
             Some(2)
         );
         assert_eq!(image_count_from_response_body(br#"{"data":[]}"#), None);
+    }
+
+    #[test]
+    fn parses_gpt_image_usage_from_response() {
+        let usage = parse_usage_from_bytes(
+            br#"{"created":0,"data":[{}],"usage":{"input_tokens":125,"output_tokens":4096,"total_tokens":4221}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 125);
+        assert_eq!(usage.output_tokens, 4096);
     }
 
     #[test]

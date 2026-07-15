@@ -375,7 +375,7 @@ function usageDetailRows(row: UsageRecord) {
   if (row.status_code != null) rows.push({ label: t('status'), value: `HTTP ${row.status_code}` })
   rows.push({ label: t('model'), value: usageModelDisplay(row) })
   if (
-    row.billing_meter === 'token' &&
+    (row.billing_meter === 'token' || row.billing_meter === 'image') &&
     ((row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0)
   ) {
     rows.push({
@@ -383,8 +383,17 @@ function usageDetailRows(row: UsageRecord) {
       value: `${formatNumber(row.input_tokens, locale.value)} / ${formatNumber(row.output_tokens, locale.value)}`
     })
   }
+  if ((row.total_tokens ?? 0) > 0) {
+    rows.push({
+      label: t('totalTokensDetail'),
+      value: formatNumber(row.total_tokens, locale.value)
+    })
+  }
   if (row.billing_meter !== 'token' && row.billable_units > 0) {
     rows.push({ label: t('billingUnits'), value: usageBillingUnitsDisplay(row) })
+  }
+  if (row.cost_micros != null) {
+    rows.push({ label: t('cost'), value: formatMoney(row.cost_micros, locale.value, 6) })
   }
   if (videoBillingDetailsAvailable(row)) {
     const details = row.video_billing!
@@ -402,7 +411,13 @@ function usageDetailRows(row: UsageRecord) {
       })
     }
   }
-  rows.push({ label: t('relayTipLatency'), value: formatDurationMs(row.latency_ms) })
+  if (row.first_response_ms != null) {
+    rows.push({
+      label: t('firstResponseLatencyDetail'),
+      value: formatDurationMs(row.first_response_ms)
+    })
+  }
+  rows.push({ label: t('totalLatencyDetail'), value: formatDurationMs(row.latency_ms) })
   if (row.channel_name || row.channel_id != null) {
     rows.push({
       label: t('relayTipPath'),
@@ -582,10 +597,19 @@ async function exportUsage() {
               <span class="usage-mono">-</span>
             </div>
             <div v-else-if="row.billing_meter === 'image'" class="usage-stack">
-              <span class="usage-mono">
-                {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
+              <span
+                v-if="(row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0"
+                class="usage-mono"
+              >
+                {{ formatNumber(row.input_tokens, locale) }} /
+                {{ formatNumber(row.output_tokens, locale) }}
               </span>
-              <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+              <template v-else>
+                <span class="usage-mono">
+                  {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
+                </span>
+                <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+              </template>
             </div>
             <div
               v-else-if="row.billing_meter === 'video' && (row.total_tokens ?? 0) === 0"

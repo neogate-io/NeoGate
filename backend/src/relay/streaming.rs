@@ -940,7 +940,7 @@ struct ParsedLine {
     done: bool,
 }
 
-struct StreamUsageParser {
+pub(crate) struct StreamUsageParser {
     buffered: Vec<u8>,
     latest: Option<TokenUsage>,
     completed: bool,
@@ -954,7 +954,7 @@ struct StreamUsageParser {
 }
 
 impl StreamUsageParser {
-    fn new(limit_bytes: usize) -> Self {
+    pub(crate) fn new(limit_bytes: usize) -> Self {
         Self {
             buffered: Vec::new(),
             latest: None,
@@ -969,7 +969,7 @@ impl StreamUsageParser {
         }
     }
 
-    fn observe(&mut self, chunk: &[u8]) {
+    pub(crate) fn observe(&mut self, chunk: &[u8]) {
         if self.skipping_oversized_line {
             if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
                 self.skipping_oversized_line = false;
@@ -1083,7 +1083,7 @@ impl StreamUsageParser {
         }
     }
 
-    fn finish(&mut self) -> Option<TokenUsage> {
+    pub(crate) fn finish(&mut self) -> Option<TokenUsage> {
         if self.skipping_oversized_line {
             return self.latest;
         }

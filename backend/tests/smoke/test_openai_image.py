@@ -23,6 +23,7 @@ RESPONSE_POLL_TIMEOUT_SECONDS = 900
 RESPONSE_POLL_INTERVAL_SECONDS = 5
 OUTPUT_DIR = TESTS_DIR / "output" / "openai_image"
 TEST_IMAGE_PATH = TESTS_DIR / "fixtures" / "test.png"
+TEST2_IMAGE_PATH = TESTS_DIR / "fixtures" / "test2.jpg"
 
 
 def load_env_file(path):
@@ -117,6 +118,7 @@ class NeoGateClient:
         )
 
     def post_multipart(self, path, fields, files):
+        save_http_json("request", "POST", path, multipart_request_record(fields, files))
         body, content_type = encode_multipart_form(fields, files)
         return self.request(
             "POST",
@@ -128,16 +130,17 @@ class NeoGateClient:
             },
         )
 
-    def get_json(self, path):
+    def get_json(self, path, record_response=True):
         status, headers, body = self.request(
             "GET",
             path,
             None,
             {"Authorization": f"Bearer {self.api_key}"},
+            record_response=record_response,
         )
         return status, headers, parse_json_body(body)
 
-    def request(self, method, path, body, headers):
+    def request(self, method, path, body, headers, record_response=True):
         conn = make_connection(self.parsed)
         request_path = f"{self.base_path}{path}"
         try:
@@ -145,13 +148,14 @@ class NeoGateClient:
             response = conn.getresponse()
             response_body = response.read()
             response_headers = {key.lower(): value for key, value in response.getheaders()}
-            record_json_response(
-                method,
-                path,
-                response.status,
-                response_headers,
-                response_body,
-            )
+            if record_response:
+                record_json_response(
+                    method,
+                    path,
+                    response.status,
+                    response_headers,
+                    response_body,
+                )
             return response.status, response_headers, response_body
         finally:
             conn.close()
@@ -206,6 +210,22 @@ def encode_multipart_form(fields, files):
 
     chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def multipart_request_record(fields, files):
+    file_records = {}
+    for name, file_path in files.items():
+        path = Path(file_path)
+        file_records[name] = {
+            "filename": path.name,
+            "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            "bytes": path.stat().st_size,
+        }
+    return {
+        "content_type": "multipart/form-data",
+        "fields": {name: str(value) for name, value in fields.items()},
+        "files": file_records,
+    }
 
 
 def parse_json_body(body):
@@ -404,6 +424,12 @@ def test_png_data_url():
     return f"data:image/png;base64,{encoded}"
 
 
+def test2_jpg_path():
+    if not TEST2_IMAGE_PATH.exists():
+        raise AssertionError(f"test image is missing: {TEST2_IMAGE_PATH}")
+    return TEST2_IMAGE_PATH
+
+
 def client():
     require_api_key()
     return NeoGateClient(BASE_URL, API_KEY)
@@ -437,6 +463,27 @@ def _test_images_edit_multipart():
     assert_success(status, body)
     value = parse_json_body(body)
     save_image_payloads("test_images_edit_multipart", image_payloads_from_images_response(value))
+
+
+def _test_images_edit_extract_dog():
+    status, _headers, body = client().post_multipart(
+        "/images/edits",
+        {
+            "model": MODEL,
+            "prompt": "Cut out the dog from this image.",
+            "size": "1024x1536",
+            "background": "transparent",
+            "output_format": "png",
+        },
+        {"image": test2_jpg_path()},
+    )
+
+    assert_success(status, body)
+    value = parse_json_body(body)
+    save_image_payloads(
+        "test_images_edit_extract_dog",
+        image_payloads_from_images_response(value),
+    )
 
 
 def _test_images_generation_stream():
@@ -572,16 +619,21 @@ def _test_responses_image_generation_background():
 
     terminal_statuses = {"completed", "failed", "cancelled", "canceled", "incomplete"}
     deadline = time.monotonic() + RESPONSE_POLL_TIMEOUT_SECONDS
+    response_path = f"/responses/{response_id}"
     while value.get("status") not in terminal_statuses:
         if time.monotonic() >= deadline:
             raise AssertionError(f"response {response_id} did not finish before timeout: {value}")
         time.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
-        status, _headers, value = client().get_json(f"/responses/{response_id}")
+        status, _headers, value = client().get_json(
+            response_path,
+            record_response=False,
+        )
         if not 200 <= status < 300:
             raise AssertionError(f"failed to poll response {response_id}: HTTP {status} {value}")
 
     if value.get("status") != "completed":
         raise AssertionError(value)
+    save_http_json("response", "GET", response_path, value, status=status)
     payloads = response_image_payloads(value)
     if not payloads:
         raise AssertionError(f"completed response did not include image output: {value}")
@@ -598,6 +650,10 @@ def test_images_generation_json():
 
 def test_images_edit_multipart():
     return make_test_case(_test_images_edit_multipart)
+
+
+def test_images_edit_extract_dog():
+    return make_test_case(_test_images_edit_extract_dog)
 
 
 def test_images_generation_stream():
@@ -622,6 +678,7 @@ def load_tests(loader, tests, pattern):
         [
             test_images_generation_json(),
             test_images_edit_multipart(),
+            test_images_edit_extract_dog(),
             test_images_generation_stream(),
             test_images_edit_json_stream(),
             test_images_variation(),

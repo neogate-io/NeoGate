@@ -55,7 +55,7 @@ pub(crate) use request::{
     prepare_relay_body, rewrite_relay_body_model, safe_log_label, BodyKind, PreparedRelayBody,
     RelayRequestParams,
 };
-pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
+pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext, StreamUsageParser};
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
     log_relay_upstream_failure, relay_upstream_error, upstream_url,

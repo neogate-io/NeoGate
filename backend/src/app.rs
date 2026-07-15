@@ -15,7 +15,7 @@ use axum::{
 use chrono::{SecondsFormat, Utc};
 use reqwest::Client;
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{
     field::{Field, Visit},
@@ -68,6 +68,7 @@ pub struct AppState {
     pub(crate) user_request_limiter: relay::UserRequestLimiter,
     pub service_policy_cache: policy::ServicePolicyCache,
     pub cache_invalidator: cache::CacheInvalidator,
+    pub(crate) task_wakeup: Arc<Notify>,
     pub runtime_restart_tx: watch::Sender<bool>,
 }
 
@@ -683,6 +684,7 @@ pub(crate) async fn build_state(
         ),
         service_policy_cache: policy::ServicePolicyCache::default(),
         cache_invalidator,
+        task_wakeup: Arc::new(Notify::new()),
         runtime_restart_tx,
     });
     if config.process_role.runs_api() {
@@ -972,13 +974,11 @@ pub(crate) mod tests {
                     billing_outbox_max_age: Duration::from_secs(300),
                 },
                 task: config::TaskConfig {
-                    upstream_poll_interval: Duration::from_secs(30),
                     upstream_poll_batch_size: 100,
                     upstream_retention: Duration::from_secs(2_592_000),
                 },
                 response_assets: config::ResponseAssetConfig {
                     dir: std::env::temp_dir().join("neogate-test-assets"),
-                    retention: Duration::from_secs(604_800),
                 },
                 db_pool: config::DbPoolConfig {
                     min_connections: 0,
@@ -1008,6 +1008,7 @@ pub(crate) mod tests {
             user_request_limiter: relay::UserRequestLimiter::new(10, 0),
             service_policy_cache: policy::ServicePolicyCache::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
+            task_wakeup: Arc::new(Notify::new()),
             runtime_restart_tx,
         })
     }

@@ -351,7 +351,7 @@ async fn finish_video_create_success(
             hold: &ctx.hold,
             upstream_metadata: task_metadata,
         },
-        ctx.state.config.task.upstream_poll_interval,
+        crate::task::POLL_INTERVAL,
         ctx.state.config.task.upstream_retention,
     )
     .await

@@ -178,7 +178,7 @@ pub(crate) async fn finish_task_json_response(
                     terminal,
                     metadata: value,
                     usage,
-                    poll_interval: state.config.task.upstream_poll_interval,
+                    poll_interval: crate::task::POLL_INTERVAL,
                 },
             )
             .await?;

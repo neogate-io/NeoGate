@@ -479,7 +479,7 @@ def _test_responses_image_generation_background():
         {
             "model": RESPONSE_MODEL,
             "input": "Generate an image of a compact glass teapot on a walnut table.",
-            "tools": [{"type": "image_generation"}],
+            "tools": [{"type": "image_generation", "model": MODEL}],
             "background": True,
             "store": True,
         },

@@ -571,7 +571,7 @@ async fn finish_batch_create(
             hold: &hold,
             upstream_metadata: value,
         },
-        state.config.task.upstream_poll_interval,
+        crate::task::POLL_INTERVAL,
         state.config.task.upstream_retention,
     )
     .await

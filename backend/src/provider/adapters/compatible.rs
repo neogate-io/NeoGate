@@ -71,4 +71,19 @@ mod tests {
             "https://api.openai.com/v1/responses"
         );
     }
+
+    #[test]
+    fn compatible_adapter_does_not_translate_response_image_generation() {
+        assert!(
+            !COMPATIBLE_ADAPTER
+                .capabilities()
+                .translates_response_image_generation
+        );
+        assert!(COMPATIBLE_ADAPTER
+            .prepare_response_image_generation_request(Bytes::from_static(
+                br#"{"model":"gpt","input":"draw","tools":[{"type":"image_generation"}]}"#,
+            ))
+            .unwrap()
+            .is_none());
+    }
 }

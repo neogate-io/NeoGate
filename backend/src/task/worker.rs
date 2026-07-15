@@ -26,12 +26,40 @@ pub(crate) fn spawn(state: Arc<AppState>) {
     if !state.config.process_role.runs_background() {
         return;
     }
+    let cleanup_state = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(state.config.task.upstream_poll_interval);
+        let mut ticker = tokio::time::interval(super::WORKER_TICK_INTERVAL);
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = state.task_wakeup.notified() => {}
+            }
             if let Err(err) = poll_due_tasks(&state).await {
                 tracing::warn!("failed to poll upstream async tasks: {err}");
+            }
+        }
+    });
+    tokio::spawn(async move {
+        let mut cleanup_ticker = tokio::time::interval(super::CLEANUP_INTERVAL);
+        let mut orphan_ticker = tokio::time::interval(super::ORPHAN_CLEANUP_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = cleanup_ticker.tick() => {
+                    if let Err(err) = cleanup_expired_tasks(&cleanup_state).await {
+                        tracing::warn!("failed to clean expired async tasks: {err}");
+                    }
+                }
+                _ = orphan_ticker.tick() => {
+                    match jobs::cleanup_orphaned_asset_directories(&cleanup_state).await {
+                        Ok(deleted) if deleted > 0 => {
+                            tracing::info!(deleted, "deleted orphaned response asset directories");
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            tracing::warn!("failed to clean orphaned response assets: {err}");
+                        }
+                    }
+                }
             }
         }
     });
@@ -41,7 +69,7 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
     let tasks = upstream::claim_due_tasks(
         &state.db.pool,
         state.config.task.upstream_poll_batch_size,
-        state.config.task.upstream_poll_interval,
+        super::POLL_INTERVAL,
     )
     .await?;
     let concurrency = tasks.len().clamp(1, MAX_CONCURRENT_POLLED_TASKS);
@@ -65,7 +93,6 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
         })
         .await;
     release_stale_terminal_holds(state).await?;
-    cleanup_expired_tasks(state).await?;
     Ok(())
 }
 
@@ -87,14 +114,25 @@ async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
 }
 
 async fn cleanup_expired_tasks(state: &Arc<AppState>) -> AppResult<()> {
-    jobs::cleanup_expired_assets(state, state.config.task.upstream_poll_batch_size).await?;
-    let deleted = upstream::delete_expired_terminal_tasks(
-        &state.db.pool,
-        state.config.task.upstream_poll_batch_size,
-    )
-    .await?;
-    if deleted > 0 {
-        tracing::info!(deleted, "deleted expired upstream async task metadata");
+    let limit = state.config.task.upstream_poll_batch_size;
+    let mut deleted_assets = 0;
+    loop {
+        let deleted = jobs::cleanup_expired_assets(state, limit).await?;
+        deleted_assets += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    let mut deleted_tasks = 0;
+    loop {
+        let deleted = upstream::delete_expired_terminal_tasks(&state.db.pool, limit).await?;
+        deleted_tasks += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    if deleted_assets > 0 || deleted_tasks > 0 {
+        tracing::info!(deleted_assets, deleted_tasks, "deleted expired async tasks");
     }
     Ok(())
 }
@@ -183,7 +221,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             terminal,
             metadata: value.clone(),
             usage,
-            poll_interval: state.config.task.upstream_poll_interval,
+            poll_interval: super::POLL_INTERVAL,
         },
     )
     .await?;

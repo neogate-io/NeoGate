@@ -14,7 +14,7 @@ use crate::{
     auth::UserAuth,
     billing::{BillableUsage, BillingAccounts, BillingMeter, SettleRequest},
     error::{reqwest_status, AppError, AppResult},
-    provider::newapi,
+    provider::adapters::{adapter_for_endpoint, AdapterErrorDisposition, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_relay, forward_openai_with_content_type,
         handle_upstream_http_error, log_upstream_http_failure, read_upstream_error_body,
@@ -48,6 +48,7 @@ pub(super) async fn relay_openai_image(
     body: Bytes,
     path: &'static str,
 ) -> AppResult<Response> {
+    let route = image_relay_route(path)?;
     let meta = image_request_meta(path, &headers, &body)?;
     let resolved =
         crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
@@ -83,6 +84,7 @@ pub(super) async fn relay_openai_image(
         )
         .await?;
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
+        let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
         let price = state
             .billing
             .price_for(
@@ -160,8 +162,11 @@ pub(super) async fn relay_openai_image(
                 let status = reqwest_status(upstream_response.status());
                 if status.is_success() {
                     ctx.mark_final_with_permit(&mut request_permit);
-                    if newapi::should_wrap_image_stream(&upstream.provider, meta.stream, path) {
-                        return finish_newapi_image_stream(
+                    if adapter.capabilities().handles_image_stream_response
+                        && meta.stream
+                        && matches!(route, RelayRoute::ImageGenerations | RelayRoute::ImageEdits)
+                    {
+                        return finish_adapter_image_stream(
                             ctx,
                             Ok(upstream_response),
                             estimated_image_units,
@@ -180,9 +185,49 @@ pub(super) async fn relay_openai_image(
                 }
 
                 let error_body = read_upstream_error_body(upstream_response).await;
+                if let Some(retry) = adapter.prepare_http_error_retry(
+                    route,
+                    status,
+                    &error_body,
+                    &upstream_body,
+                    &meta.content_type,
+                )? {
+                    tracing::warn!(
+                        provider = %ctx.upstream.provider,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_name = %ctx.upstream.channel_name,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        model = %ctx.model,
+                        path = ctx.path,
+                        retry_path = retry.route.path(),
+                        "retrying provider image request with adapter fallback"
+                    );
+                    ctx.upstream_request_path = Some(retry.route.path().to_string());
+                    ctx.mark_final_with_permit(&mut request_permit);
+                    let response = forward_openai_with_content_type(
+                        &state,
+                        &upstream,
+                        protocol,
+                        retry.body,
+                        retry.route.path(),
+                        retry.content_type,
+                        meta.stream,
+                    )
+                    .await;
+                    if adapter.capabilities().handles_image_stream_response && meta.stream {
+                        return finish_adapter_image_stream(ctx, response, estimated_image_units)
+                            .await;
+                    }
+                    if ctx.price.billing_meter == BillingMeter::Image {
+                        return finish_image_relay(ctx, response, estimated_image_units).await;
+                    }
+                    return finish_relay(ctx, response).await;
+                }
                 let mut failure = describe_upstream_http_failure(status, &error_body);
-                if newapi::should_retry_image_variation(&upstream.provider, path)
-                    && newapi::should_retry_variation_as_edit(ctx.path, status, &error_body)
+                if adapter.classify_http_error(route, status, &error_body)
+                    == AdapterErrorDisposition::Retryable
                 {
                     failure.retryable = true;
                 }
@@ -432,7 +477,7 @@ async fn settle_image_hold(
     }
 }
 
-async fn finish_newapi_image_stream(
+async fn finish_adapter_image_stream(
     ctx: RelayContext,
     response: AppResult<reqwest::Response>,
     requested_image_count: i64,
@@ -450,7 +495,7 @@ async fn finish_newapi_image_stream(
         .get("content-type")
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
-    if newapi::is_event_stream(&content_type) {
+    if is_event_stream(&content_type) {
         if ctx.price.billing_meter == BillingMeter::Image {
             return finish_streamed_image_upstream(
                 ctx,
@@ -473,12 +518,29 @@ async fn finish_newapi_image_stream(
         credential_id = ?ctx.upstream.credential_id,
         model = %ctx.model,
         path = ctx.path,
-        "NewAPI image stream request returned non-SSE response; relaying upstream body without JSON-to-SSE buffering"
+        "provider image stream request returned non-SSE response; relaying upstream body without JSON-to-SSE buffering"
     );
     if ctx.price.billing_meter == BillingMeter::Image {
         finish_image_relay(ctx, Ok(upstream_response), requested_image_count).await
     } else {
         finish_relay(ctx, Ok(upstream_response)).await
+    }
+}
+
+fn is_event_stream(content_type: &HeaderValue) -> bool {
+    content_type
+        .to_str()
+        .is_ok_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
+}
+
+fn image_relay_route(path: &str) -> AppResult<RelayRoute> {
+    match path {
+        "/v1/images/generations" => Ok(RelayRoute::ImageGenerations),
+        "/v1/images/edits" => Ok(RelayRoute::ImageEdits),
+        "/v1/images/variations" => Ok(RelayRoute::ImageVariations),
+        _ => Err(AppError::BadRequest(format!(
+            "unsupported image relay path: {path}"
+        ))),
     }
 }
 

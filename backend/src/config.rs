@@ -224,7 +224,6 @@ pub struct HealthConfig {
 
 #[derive(Clone, Debug)]
 pub struct TaskConfig {
-    pub upstream_poll_interval: Duration,
     pub upstream_poll_batch_size: i64,
     pub upstream_retention: Duration,
 }
@@ -232,7 +231,6 @@ pub struct TaskConfig {
 #[derive(Clone, Debug)]
 pub struct ResponseAssetConfig {
     pub dir: PathBuf,
-    pub retention: Duration,
 }
 
 impl Config {
@@ -350,10 +348,6 @@ impl Config {
                 )?),
             },
             task: TaskConfig {
-                upstream_poll_interval: Duration::from_secs(parse_u64(
-                    "TASK_UPSTREAM_POLL_INTERVAL_SECONDS",
-                    30,
-                )?),
                 upstream_poll_batch_size: parse_i64("TASK_UPSTREAM_POLL_BATCH_SIZE", 100)?,
                 upstream_retention: Duration::from_secs(parse_u64(
                     "TASK_UPSTREAM_RETENTION_SECONDS",
@@ -364,11 +358,7 @@ impl Config {
                 dir: env::var("NEOGATE_ASSET_DIR")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
-                    .map_or_else(|| PathBuf::from("data/assets"), PathBuf::from),
-                retention: Duration::from_secs(parse_u64(
-                    "NEOGATE_RESPONSE_RETENTION_SECONDS",
-                    604_800,
-                )?),
+                    .map_or_else(default_response_asset_dir, PathBuf::from),
             },
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", ""),
@@ -417,17 +407,11 @@ impl Config {
         if self.health.billing_outbox_max_pending < 0 {
             anyhow::bail!("BILLING_OUTBOX_MAX_PENDING must be non-negative");
         }
-        if self.task.upstream_poll_interval.is_zero() {
-            anyhow::bail!("TASK_UPSTREAM_POLL_INTERVAL_SECONDS must be positive");
-        }
         if self.task.upstream_poll_batch_size <= 0 {
             anyhow::bail!("TASK_UPSTREAM_POLL_BATCH_SIZE must be positive");
         }
         if self.task.upstream_retention.is_zero() {
             anyhow::bail!("TASK_UPSTREAM_RETENTION_SECONDS must be positive");
-        }
-        if self.response_assets.retention.is_zero() {
-            anyhow::bail!("NEOGATE_RESPONSE_RETENTION_SECONDS must be positive");
         }
         if self.relay.user_concurrent_request_limit == 0 {
             anyhow::bail!("USER_CONCURRENT_REQUEST_LIMIT must be positive");
@@ -458,6 +442,10 @@ impl Config {
 
         Ok(())
     }
+}
+
+fn default_response_asset_dir() -> PathBuf {
+    env::temp_dir().join("neogate/assets")
 }
 
 impl RuntimeProbe {

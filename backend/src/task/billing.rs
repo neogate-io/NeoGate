@@ -143,9 +143,11 @@ async fn finalize_loaded(
         && video_billing_metadata.is_none()
         && video_success
         && usage.is_none();
+    let image_count = completed_image_count(task.task_type, &task.status, &task.upstream_metadata);
     let should_settle = video_settlement.is_some()
         || usage.is_some()
         || provider_video_seconds.is_some()
+        || image_count.is_some()
         || settle_without_usage;
     let target = if should_settle { "settled" } else { "released" };
     let Some(hold) = upstream::mark_billing_status(&state.db.pool, task.id, "held", target).await?
@@ -183,7 +185,11 @@ async fn finalize_loaded(
                     return Err(err);
                 }
             };
-            let billable_usage = if task.task_type == UpstreamTaskType::OpenAiVideo
+            let billable_usage = if task.task_type == UpstreamTaskType::NeogateResponse
+                && price.billing_meter == BillingMeter::Image
+            {
+                image_count.map(BillableUsage::image)
+            } else if task.task_type == UpstreamTaskType::OpenAiVideo
                 && price.billing_meter == BillingMeter::Video
             {
                 match price.video_billing_mode {
@@ -268,6 +274,21 @@ fn async_task_latency_ms(task: &UpstreamTask) -> i64 {
         .max(0)
 }
 
+fn completed_image_count(
+    task_type: UpstreamTaskType,
+    status: &str,
+    metadata: &Value,
+) -> Option<i64> {
+    if task_type != UpstreamTaskType::NeogateResponse || status != "completed" {
+        return None;
+    }
+    metadata
+        .get("assets")
+        .and_then(Value::as_array)
+        .map(|assets| assets.len() as i64)
+        .filter(|count| *count > 0)
+}
+
 fn async_task_started_at(value: &Value) -> Option<DateTime<Utc>> {
     value
         .get("neogate")
@@ -308,7 +329,11 @@ async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{async_task_relay_trace_id, async_task_started_at, openai_video_success_status};
+    use super::{
+        async_task_relay_trace_id, async_task_started_at, completed_image_count,
+        openai_video_success_status,
+    };
+    use crate::task::upstream::UpstreamTaskType;
     use chrono::{TimeZone, Utc};
     use serde_json::json;
     use uuid::Uuid;
@@ -350,5 +375,23 @@ mod tests {
 
         assert_eq!(async_task_relay_trace_id(&metadata), None);
         assert_eq!(async_task_started_at(&metadata), None);
+    }
+
+    #[test]
+    fn counts_completed_neogate_image_assets_for_billing() {
+        let metadata = serde_json::json!({"assets": [{"index": 0}, {"index": 1}]});
+
+        assert_eq!(
+            completed_image_count(UpstreamTaskType::NeogateResponse, "completed", &metadata),
+            Some(2)
+        );
+        assert_eq!(
+            completed_image_count(UpstreamTaskType::NeogateResponse, "failed", &metadata),
+            None
+        );
+        assert_eq!(
+            completed_image_count(UpstreamTaskType::OpenAiVideo, "completed", &metadata),
+            None
+        );
     }
 }

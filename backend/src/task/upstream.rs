@@ -230,6 +230,7 @@ pub(crate) async fn delete_expired_terminal_tasks(pool: &PgPool, limit: i64) -> 
             SELECT id
             FROM task_upstream
             WHERE terminal = TRUE
+              AND task_type <> 'neogate_response'
               AND billing_status IN ('settled', 'released', 'failed')
               AND expires_at IS NOT NULL
               AND expires_at <= now()

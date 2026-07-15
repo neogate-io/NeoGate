@@ -69,6 +69,11 @@ export function pricingReferenceModelAliases(model: string) {
     if (!alias || aliases.has(alias)) continue
     aliases.add(alias)
 
+    // Upstream model lists sometimes decorate a model ID with a billing label,
+    // such as "【按秒计费】dreamina-seedance-2-0-260128".
+    const withoutDisplayPrefix = alias.replace(/^(?:【[^】]+】|\[[^\]]+\])+\s*/, '')
+    if (withoutDisplayPrefix !== alias) queue.push(withoutDisplayPrefix)
+
     const dotVersionAlias = alias.replace(/-(\d+)-(\d+)(?=-|$)/g, '-$1.$2')
     if (dotVersionAlias !== alias) queue.push(dotVersionAlias)
 

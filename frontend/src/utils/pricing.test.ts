@@ -19,6 +19,12 @@ describe('pricingReferenceModelAliases', () => {
     )
   })
 
+  it('ignores billing display prefixes on Dreamina Seedance ids', () => {
+    expect(
+      pricingReferenceModelAliases('【按秒计费】dreamina-seedance-2-0-260128')
+    ).toContain('doubao-seedance-2.0')
+  })
+
   it('finds token-priced reference templates for dated doubao seedance model ids', () => {
     const template: PricingTemplate = {
       id: 1,

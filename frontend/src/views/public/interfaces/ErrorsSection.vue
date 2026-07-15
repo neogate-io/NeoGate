@@ -27,7 +27,7 @@ const content = computed(() => {
           '请求体格式错误、缺少字段或异步参数不满足要求',
           '检查 JSON、model、messages、store 等字段。'
         ],
-        ['402/400', '余额不足或额度校验未通过', '充值或联系管理员调整额度策略。'],
+        ['429', '余额或配额不足', '充值或联系管理员调整额度策略。'],
         [
           '404/503',
           '模型没有可用渠道或上游服务不可用',
@@ -56,8 +56,8 @@ const content = computed(() => {
         'Check JSON, model, messages, store, and related fields.'
       ],
       [
-        '402/400',
-        'Insufficient balance or failed credit check',
+        '429',
+        'Insufficient balance or exhausted quota',
         'Recharge or ask an admin to adjust the credit policy.'
       ],
       [

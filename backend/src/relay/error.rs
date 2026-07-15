@@ -125,6 +125,14 @@ pub(crate) fn describe_upstream_http_failure(
     )
 }
 
+impl UpstreamHttpFailure {
+    /// An exhausted upstream account cannot serve this request, but another selected upstream
+    /// may still be healthy. This is distinct from asking the client to retry the request.
+    pub(crate) fn should_failover(&self) -> bool {
+        self.retryable || self.error_type == "upstream_quota_exhausted"
+    }
+}
+
 fn upstream_http_failure(
     status: StatusCode,
     detail: String,
@@ -328,6 +336,7 @@ mod tests {
         assert_eq!(failure.error_type, "upstream_quota_exhausted");
         assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
         assert!(!failure.retryable);
+        assert!(failure.should_failover());
         assert!(failure.summary.contains("insufficient_quota"));
     }
 
@@ -338,6 +347,7 @@ mod tests {
 
         assert_eq!(failure.error_type, "upstream_quota_exhausted");
         assert!(!failure.retryable);
+        assert!(failure.should_failover());
     }
 
     #[test]

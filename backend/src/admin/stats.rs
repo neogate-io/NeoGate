@@ -710,7 +710,13 @@ async fn aggregate_totals(
           COALESCE(SUM(ud.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(ud.cache_in_tokens), 0)::BIGINT AS cache_in_tokens,
-          COALESCE(SUM(ud.cache_create_in_tokens + ud.cache_create_5m_in_tokens + ud.cache_create_1h_in_tokens), 0)::BIGINT AS cache_write_tokens,
+          COALESCE(SUM(
+            CASE
+              WHEN ud.cache_create_5m_in_tokens + ud.cache_create_1h_in_tokens > 0
+                THEN ud.cache_create_5m_in_tokens + ud.cache_create_1h_in_tokens
+              ELSE ud.cache_create_in_tokens
+            END
+          ), 0)::BIGINT AS cache_write_tokens,
           COALESCE(SUM(ud.reason_out_tokens), 0)::BIGINT AS reason_out_tokens,
           COALESCE(SUM(ud.audio_in_tokens), 0)::BIGINT AS audio_in_tokens,
           COALESCE(SUM(ud.audio_out_tokens), 0)::BIGINT AS audio_out_tokens,

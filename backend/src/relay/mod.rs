@@ -747,6 +747,9 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_opt(&mut info, "first_ms", usage.first_response_ms);
     push_opt(&mut info, "in", input_tokens);
     push_opt(&mut info, "out", output_tokens);
+    push_opt(&mut info, "cache_read", cached_input_tokens);
+    push_opt(&mut info, "cache_write", cache_creation_input_tokens);
+    // Retain the original field for existing log queries and parsers.
     push_opt(&mut info, "cached", cached_input_tokens);
     push_opt(&mut info, "reasoning", reasoning_output_tokens);
     push_opt(&mut info, "cost", cost_micros);

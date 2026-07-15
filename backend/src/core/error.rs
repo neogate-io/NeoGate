@@ -204,7 +204,9 @@ impl AppError {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::PasswordChangeRequired => StatusCode::FORBIDDEN,
-            AppError::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
+            // OpenAI-compatible APIs report exhausted credits as 429. It differs from a
+            // transient rate limit through the `insufficient_quota` code and retryable flag.
+            AppError::PaymentRequired => StatusCode::TOO_MANY_REQUESTS,
             AppError::Conflict(_) | AppError::ConflictWithCode { .. } => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
@@ -232,7 +234,7 @@ impl AppError {
             AppError::Unauthorized => "unauthorized",
             AppError::Forbidden(_) => "forbidden",
             AppError::PasswordChangeRequired => "password_change_required",
-            AppError::PaymentRequired => "payment_required",
+            AppError::PaymentRequired => "insufficient_quota",
             AppError::Conflict(_) => "conflict",
             AppError::ConflictWithCode { code, .. } => code,
             AppError::PayloadTooLarge(_) => "payload_too_large",
@@ -325,13 +327,17 @@ fn error_response(status: StatusCode, code: &'static str, message: String) -> Re
     response
         .headers_mut()
         .insert("x-neogate-error-code", HeaderValue::from_static(code));
-    if status == StatusCode::TOO_MANY_REQUESTS {
+    if status == StatusCode::TOO_MANY_REQUESTS && code != "insufficient_quota" {
         response
             .headers_mut()
             .insert("x-neogate-retryable", HeaderValue::from_static("true"));
         response
             .headers_mut()
             .insert("retry-after", HeaderValue::from_static("1"));
+    } else if code == "insufficient_quota" {
+        response
+            .headers_mut()
+            .insert("x-neogate-retryable", HeaderValue::from_static("false"));
     }
     response
 }
@@ -395,6 +401,22 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"]["code"], "bad_request");
         assert_eq!(value["error"]["message"], "invalid provider");
+    }
+
+    #[tokio::test]
+    async fn insufficient_credit_returns_openai_compatible_quota_error() {
+        let response = AppError::PaymentRequired.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers()["x-neogate-error-code"],
+            "insufficient_quota"
+        );
+        assert_eq!(response.headers()["x-neogate-retryable"], "false");
+        assert!(response.headers().get("retry-after").is_none());
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "insufficient_quota");
     }
 
     #[tokio::test]

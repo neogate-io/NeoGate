@@ -189,7 +189,7 @@ pub(super) async fn relay_openai_image(
                 if should_failover_retryable_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.retryable,
+                    failure.should_failover(),
                     retryable_failovers,
                 )
                 .await

@@ -430,6 +430,11 @@ def test2_jpg_path():
     return TEST2_IMAGE_PATH
 
 
+def test2_jpg_data_url():
+    encoded = base64.b64encode(test2_jpg_path().read_bytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
 def client():
     require_api_key()
     return NeoGateClient(BASE_URL, API_KEY)
@@ -640,6 +645,63 @@ def _test_responses_image_generation_background():
     save_image_payloads("test_responses_image_generation_background", payloads)
 
 
+def _test_responses_image_edit_extract_dog_background():
+    status, _headers, body = client().post_json(
+        "/responses",
+        {
+            "model": RESPONSE_MODEL,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Cut out the dog from this image."},
+                        {"type": "input_image", "image_url": test2_jpg_data_url()},
+                    ],
+                }
+            ],
+            "tools": [
+                {
+                    "type": "image_generation",
+                    "model": MODEL,
+                    "action": "edit",
+                    "size": "1024x1536",
+                    "background": "transparent",
+                    "output_format": "png",
+                }
+            ],
+            "background": True,
+            "store": True,
+        },
+    )
+    assert_success(status, body)
+    value = parse_json_body(body)
+    response_id = value.get("id")
+    if not isinstance(response_id, str) or not response_id:
+        raise AssertionError(f"response id is missing: {value}")
+
+    terminal_statuses = {"completed", "failed", "cancelled", "canceled", "incomplete"}
+    deadline = time.monotonic() + RESPONSE_POLL_TIMEOUT_SECONDS
+    response_path = f"/responses/{response_id}"
+    while value.get("status") not in terminal_statuses:
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"response {response_id} did not finish before timeout: {value}")
+        time.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+        status, _headers, value = client().get_json(
+            response_path,
+            record_response=False,
+        )
+        if not 200 <= status < 300:
+            raise AssertionError(f"failed to poll response {response_id}: HTTP {status} {value}")
+
+    if value.get("status") != "completed":
+        raise AssertionError(value)
+    save_http_json("response", "GET", response_path, value, status=status)
+    payloads = response_image_payloads(value)
+    if not payloads:
+        raise AssertionError(f"completed response did not include image output: {value}")
+    save_image_payloads("test_responses_image_edit_extract_dog_background", payloads)
+
+
 def make_test_case(test_func):
     return unittest.FunctionTestCase(test_func, description=test_func.__name__.removeprefix("_"))
 
@@ -672,6 +734,10 @@ def test_responses_image_generation_background():
     return make_test_case(_test_responses_image_generation_background)
 
 
+def test_responses_image_edit_extract_dog_background():
+    return make_test_case(_test_responses_image_edit_extract_dog_background)
+
+
 def load_tests(loader, tests, pattern):
     suite = unittest.TestSuite()
     suite.addTests(
@@ -683,6 +749,7 @@ def load_tests(loader, tests, pattern):
             test_images_edit_json_stream(),
             test_images_variation(),
             test_responses_image_generation_background(),
+            test_responses_image_edit_extract_dog_background(),
         ]
     )
     return suite

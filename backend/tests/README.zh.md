@@ -28,7 +28,12 @@ NEOGATE_IMAGE_SIZE=1536x1024
 ```
 
 图片模型固定为 `gpt-image-2`，生成的图片会保存到
-`tests/output/openai_image/`。
+`tests/output/openai_image/`。请求和响应的 JSON 快照也会保存到同一目录；
+multipart 请求快照会记录表单字段以及上传文件的名称、MIME 类型和字节数。
+
+`fixtures/test2.jpg` 用于狗抠图测试。同步用例调用 `/images/edits`；异步用例
+创建携带 `image_generation` 工具的 Responses 后台任务，并设置
+`action: "edit"`。两个用例都会请求 `1024x1536` 的透明 PNG 结果。
 
 在 `backend/` 目录下运行全部图片冒烟测试：
 
@@ -41,10 +46,12 @@ python -m unittest tests.smoke.test_openai_image
 ```bash
 python -m unittest tests.smoke.test_openai_image.test_images_generation_json
 python -m unittest tests.smoke.test_openai_image.test_images_edit_multipart
+python -m unittest tests.smoke.test_openai_image.test_images_edit_extract_dog
 python -m unittest tests.smoke.test_openai_image.test_images_generation_stream
 python -m unittest tests.smoke.test_openai_image.test_images_edit_json_stream
 python -m unittest tests.smoke.test_openai_image.test_images_variation
 python -m unittest tests.smoke.test_openai_image.test_responses_image_generation_background
+python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_extract_dog_background
 ```
 
 ## OpenAI 视频冒烟测试

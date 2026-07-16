@@ -105,6 +105,8 @@ pub(crate) fn body_from_stream(
     let path = ctx.path;
     let model_rewriter = (ctx.streamed && ctx.external_model != ctx.model)
         .then(|| SseModelRewriter::new(ctx.external_model.clone()));
+    let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+    let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     tracing::debug!(
         relay_trace_id = %ctx.relay_trace_id,
         relay_attempt = ctx.relay_attempt,
@@ -117,9 +119,12 @@ pub(crate) fn body_from_stream(
         credential_id = ?ctx.upstream.credential_id,
         protocol = ctx.protocol.as_str(),
         model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
+        external_model = %ctx.external_model,
+        upstream_model = %ctx.upstream_model,
         path = ctx.path,
+        upstream_path,
+        response_mode,
+        responses_chat_fallback = response_mode == "openai_chat_as_openai_response",
         base_url = %ctx.upstream.base_url,
         status = status.as_u16(),
         streamed = ctx.streamed,

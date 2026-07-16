@@ -727,10 +727,20 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens);
     let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
     let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
+    let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+    let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
+    let responses_chat_fallback = response_mode == "openai_chat_as_openai_response";
 
     let mut info = String::from("relay request");
     push_field(&mut info, "trace", short_trace_id(ctx.relay_trace_id));
     push_field(&mut info, "path", ctx.path);
+    push_field(&mut info, "upstream_path", upstream_path);
+    push_field(&mut info, "response_mode", response_mode);
+    push_field(
+        &mut info,
+        "responses_chat_fallback",
+        responses_chat_fallback,
+    );
     push_field(&mut info, "user", usage.user_id);
     push_field(&mut info, "key", usage.user_key_id);
     push_field(
@@ -776,6 +786,13 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let mut detail = String::from("relay request detail");
     push_field(&mut detail, "relay_trace_id", ctx.relay_trace_id);
     push_field(&mut detail, "path", ctx.path);
+    push_field(&mut detail, "upstream_path", upstream_path);
+    push_field(&mut detail, "response_mode", response_mode);
+    push_field(
+        &mut detail,
+        "responses_chat_fallback",
+        responses_chat_fallback,
+    );
     push_field(&mut detail, "user_id", usage.user_id);
     push_field(&mut detail, "project_id", usage.project_id);
     push_field(&mut detail, "user_key_id", usage.user_key_id);

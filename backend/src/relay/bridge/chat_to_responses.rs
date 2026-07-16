@@ -19,12 +19,15 @@ pub(crate) async fn finish_openai_chat_as_openai_response(
     status: StatusCode,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
+    let warning_context = ReasoningMarkupWarningContext::from(&ctx);
     if ctx.streamed {
         return finish_bridge_stream(
             ctx,
             status,
             upstream_response,
-            OpenAiChatSseToOpenAiResponse::new,
+            move |model| {
+                OpenAiChatSseToOpenAiResponse::new_with_warning_context(model, warning_context)
+            },
             "ignored trailing upstream body read error after completed OpenAI chat response fallback stream",
         );
     }
@@ -32,10 +35,112 @@ pub(crate) async fn finish_openai_chat_as_openai_response(
         ctx,
         status,
         upstream_response,
-        openai_chat_response_to_openai_response,
+        move |body, fallback_model| {
+            warn_if_nonstream_reasoning_markup(body, &warning_context);
+            openai_chat_response_to_openai_response(body, fallback_model)
+        },
         "ignored trailing upstream body read error after parsing complete OpenAI chat response fallback",
     )
     .await
+}
+
+#[derive(Clone)]
+struct ReasoningMarkupWarningContext {
+    relay_trace_id: uuid::Uuid,
+    provider: String,
+    channel_id: crate::id::DbId,
+    channel_name: String,
+    channel_endpoint_id: crate::id::DbId,
+    protocol: &'static str,
+    model: String,
+    path: &'static str,
+    upstream_path: String,
+    response_mode: &'static str,
+}
+
+impl From<&RelayContext> for ReasoningMarkupWarningContext {
+    fn from(ctx: &RelayContext) -> Self {
+        Self {
+            relay_trace_id: ctx.relay_trace_id,
+            provider: ctx.upstream.provider.clone(),
+            channel_id: ctx.upstream.channel_id,
+            channel_name: ctx.upstream.channel_name.clone(),
+            channel_endpoint_id: ctx.upstream.channel_endpoint_id,
+            protocol: ctx.protocol.as_str(),
+            model: ctx.model.clone(),
+            path: ctx.path,
+            upstream_path: ctx
+                .upstream_request_path
+                .clone()
+                .unwrap_or_else(|| ctx.path.to_string()),
+            response_mode: ctx.upstream_response_mode.unwrap_or("passthrough"),
+        }
+    }
+}
+
+impl ReasoningMarkupWarningContext {
+    fn warn(&self) {
+        tracing::warn!(
+            relay_trace_id = %self.relay_trace_id,
+            provider = %self.provider,
+            channel_id = self.channel_id,
+            channel_name = %self.channel_name,
+            channel_endpoint_id = self.channel_endpoint_id,
+            protocol = self.protocol,
+            model = %self.model,
+            path = self.path,
+            upstream_path = %self.upstream_path,
+            response_mode = self.response_mode,
+            "reasoning markup detected in assistant content during chat-to-responses fallback"
+        );
+    }
+}
+
+#[derive(Default)]
+struct ReasoningMarkupDetector {
+    tail: String,
+    detected: bool,
+}
+
+impl ReasoningMarkupDetector {
+    fn observe(&mut self, fragment: &str) -> bool {
+        if self.detected {
+            return false;
+        }
+        let mut combined = self.tail.clone();
+        combined.extend(fragment.chars().flat_map(char::to_lowercase));
+        if combined.contains("<thinking>") || combined.contains("</thinking>") {
+            self.detected = true;
+            return true;
+        }
+        self.tail = combined
+            .chars()
+            .rev()
+            .take("</thinking>".len() - 1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        false
+    }
+}
+
+fn warn_if_nonstream_reasoning_markup(body: &[u8], context: &ReasoningMarkupWarningContext) {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return;
+    };
+    let content = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .map(text_field_content_to_text)
+        .unwrap_or_default();
+    let mut detector = ReasoningMarkupDetector::default();
+    if detector.observe(&content) {
+        context.warn();
+    }
 }
 
 pub(super) fn openai_chat_response_to_openai_response(
@@ -168,6 +273,8 @@ pub(super) struct OpenAiChatSseToOpenAiResponse {
     message_finished: bool,
     text: String,
     reasoning_text: String,
+    reasoning_markup_detector: ReasoningMarkupDetector,
+    warning_context: Option<ReasoningMarkupWarningContext>,
     input_tokens: i64,
     output_tokens: i64,
     cached_input_tokens: i64,
@@ -175,7 +282,19 @@ pub(super) struct OpenAiChatSseToOpenAiResponse {
 }
 
 impl OpenAiChatSseToOpenAiResponse {
+    #[cfg(test)]
     pub(super) fn new(model: String) -> Self {
+        Self::new_inner(model, None)
+    }
+
+    fn new_with_warning_context(
+        model: String,
+        warning_context: ReasoningMarkupWarningContext,
+    ) -> Self {
+        Self::new_inner(model, Some(warning_context))
+    }
+
+    fn new_inner(model: String, warning_context: Option<ReasoningMarkupWarningContext>) -> Self {
         Self {
             buffer: Vec::new(),
             model,
@@ -193,6 +312,8 @@ impl OpenAiChatSseToOpenAiResponse {
             message_finished: false,
             text: String::new(),
             reasoning_text: String::new(),
+            reasoning_markup_detector: ReasoningMarkupDetector::default(),
+            warning_context,
             input_tokens: 0,
             output_tokens: 0,
             cached_input_tokens: 0,
@@ -270,6 +391,11 @@ impl OpenAiChatSseToOpenAiResponse {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
         {
+            if self.reasoning_markup_detector.observe(content) {
+                if let Some(context) = &self.warning_context {
+                    context.warn();
+                }
+            }
             self.push_content_delta(content, out);
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
@@ -835,5 +961,22 @@ mod tests {
         assert!(output.contains(r#""status":"completed""#));
         assert!(!output.contains(r#""reason":"max_output_tokens""#));
         assert!(converter.stopped());
+    }
+
+    #[test]
+    fn reasoning_markup_detector_matches_case_and_stream_boundaries() {
+        let mut detector = ReasoningMarkupDetector::default();
+
+        assert!(!detector.observe("before <THINK"));
+        assert!(detector.observe("ING>internal"));
+        assert!(!detector.observe("</thinking> after"));
+    }
+
+    #[test]
+    fn reasoning_markup_detector_ignores_normal_content() {
+        let mut detector = ReasoningMarkupDetector::default();
+
+        assert!(!detector.observe("ordinary reasoning summary"));
+        assert!(!detector.observe(" and final answer"));
     }
 }

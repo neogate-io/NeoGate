@@ -202,7 +202,7 @@ const openAiResponseImageGeneration = computed(
 )
 
 const openAiResponseImageEdit = computed(
-  () => `IMG_B64="$(base64 < input.png | tr -d '\\n')"
+  () => `IMG_B64="$(base64 < input.jpg | tr -d '\\n')"
 
 curl ${openAiBaseUrl.value}/responses \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -212,13 +212,14 @@ curl ${openAiBaseUrl.value}/responses \\
   "model": "gpt-5.5",
   "background": true,
   "store": true,
-  "image_format": "both",
   "tools": [
     {
       "type": "image_generation",
       "model": "gpt-image-2",
       "action": "edit",
-      "size": "1024x1024"
+      "size": "1024x1536",
+      "background": "transparent",
+      "output_format": "png"
     }
   ],
   "input": [
@@ -227,11 +228,11 @@ curl ${openAiBaseUrl.value}/responses \\
       "content": [
         {
           "type": "input_text",
-          "text": "基于这张图重新生成：保持主体姿态，改成赛博朋克夜景风格。"
+          "text": "Cut out the dog from this image."
         },
         {
           "type": "input_image",
-          "image_url": "data:image/png;base64,$IMG_B64"
+          "image_url": "data:image/jpeg;base64,$IMG_B64"
         }
       ]
     }
@@ -580,11 +581,12 @@ const content = computed(() => {
           title: 'Responses Image Task',
           method: 'POST',
           path: `${openAiBaseUrl.value}/responses`,
-          description: '通过 Responses 的 image_generation 工具创建图片后台任务。',
+          description: '通过 Responses 的 image_generation 工具创建图片后台任务；编辑时传入 input_image 并设置 action=edit。',
           requestParams: [
             ['model', 'string，必填', 'Responses 主模型。'],
             ['input', 'string | array，必填', '文生图或图生图输入。'],
             ['tools[].type', '"image_generation"', '启用图片生成工具。'],
+            ['tools[].action', 'generate | edit | auto', '编辑输入图片时设置为 edit。'],
             ['background', 'boolean，必填 true', '创建后台任务。'],
             ['image_format', 'base64 | url | both', 'NeoGate 扩展，控制图片结果格式。']
           ],
@@ -1110,6 +1112,7 @@ const content = computed(() => {
         ['tools[].action', 'generate | edit | auto', '控制生成、编辑或由模型自动决定动作。'],
         ['tools[].size', 'string', '图片尺寸，例如 1024x1024、1536x1024、1024x1536 或 auto。'],
         ['tools[].quality', 'string', '图片质量，例如 auto、low、medium、high。'],
+        ['tools[].background', 'string', '背景模式，例如 transparent 或 opaque；取决于所选模型和上游能力。'],
         ['tools[].output_format', 'string', '图片输出格式，例如 png、jpeg 或 webp。'],
         [
           'background',
@@ -1373,11 +1376,12 @@ const content = computed(() => {
         title: 'Responses Image Task',
         method: 'POST',
         path: `${openAiBaseUrl.value}/responses`,
-        description: 'Create an image background task through the Responses image_generation tool.',
+        description: 'Create an image background task through the Responses image_generation tool. For edits, provide input_image and set action=edit.',
         requestParams: [
           ['model', 'string, required', 'Responses model.'],
           ['input', 'string | array, required', 'Text-to-image or image-to-image input.'],
           ['tools[].type', '"image_generation"', 'Enables the image generation tool.'],
+          ['tools[].action', 'generate | edit | auto', 'Set edit when editing an input image.'],
           ['background', 'boolean, required true', 'Creates a background task.'],
           [
             'image_format',
@@ -2020,6 +2024,7 @@ const content = computed(() => {
       ],
       ['tools[].size', 'string', 'Image size, such as 1024x1024, 1536x1024, 1024x1536, or auto.'],
       ['tools[].quality', 'string', 'Image quality, such as auto, low, medium, or high.'],
+      ['tools[].background', 'string', 'Background mode, such as transparent or opaque, subject to model and upstream support.'],
       ['tools[].output_format', 'string', 'Output image format, such as png, jpeg, or webp.'],
       [
         'image_format',

@@ -779,6 +779,7 @@ async fn run_image_generation(
         .and_then(Value::as_str)
         .unwrap_or("");
     let requested_image_count = request.get("n").and_then(Value::as_i64).unwrap_or(1);
+    let upstream_path = image_generation_upstream_path(&request);
     let started = Instant::now();
     tracing::info!(
         task_id = task.id,
@@ -789,7 +790,7 @@ async fn run_image_generation(
         channel_key_id = ?upstream.channel_key_id,
         credential_id = ?upstream.credential_id,
         upstream = %upstream.base_url,
-        upstream_path = "/v1/images/generations",
+        upstream_path,
         response_model,
         image_model = %task.model.as_deref().unwrap_or(image_model),
         upstream_image_model = %task.upstream_model.as_deref().unwrap_or(image_model),
@@ -805,7 +806,7 @@ async fn run_image_generation(
         upstream,
         UpstreamProtocol::Openai,
         body.clone(),
-        "/v1/images/generations",
+        upstream_path,
     )
     .await
     {
@@ -817,7 +818,7 @@ async fn run_image_generation(
                 provider = %upstream.provider,
                 channel_id = upstream.channel_id,
                 channel_endpoint_id = upstream.channel_endpoint_id,
-                upstream_path = "/v1/images/generations",
+                upstream_path,
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 error = %err,
                 "async image upstream request failed"
@@ -835,7 +836,7 @@ async fn run_image_generation(
             provider = %upstream.provider,
             channel_id = upstream.channel_id,
             channel_endpoint_id = upstream.channel_endpoint_id,
-            upstream_path = "/v1/images/generations",
+            upstream_path,
             upstream_status = status.as_u16(),
             elapsed_ms = started.elapsed().as_millis() as u64,
             upstream_error = %failure.summary,
@@ -890,7 +891,7 @@ async fn run_image_generation(
         provider = %upstream.provider,
         channel_id = upstream.channel_id,
         channel_endpoint_id = upstream.channel_endpoint_id,
-        upstream_path = "/v1/images/generations",
+        upstream_path,
         upstream_status = status.as_u16(),
         content_type = %content_type,
         elapsed_ms = started.elapsed().as_millis() as u64,
@@ -915,6 +916,14 @@ async fn run_image_generation(
         assets,
         usage,
     })
+}
+
+fn image_generation_upstream_path(request: &Value) -> &'static str {
+    if request.get("images").and_then(Value::as_array).is_some() {
+        "/v1/images/edits"
+    } else {
+        "/v1/images/generations"
+    }
 }
 
 fn image_output_type(request: &Value) -> (&'static str, &'static str) {
@@ -1291,6 +1300,20 @@ mod tests {
             ("image/webp", "webp")
         );
         assert_eq!(image_output_type(&json!({})), ("image/png", "png"));
+    }
+
+    #[test]
+    fn selects_image_edit_path_when_reference_images_are_present() {
+        assert_eq!(
+            image_generation_upstream_path(&json!({
+                "images": [{"image_url": "data:image/png;base64,AAAA"}]
+            })),
+            "/v1/images/edits"
+        );
+        assert_eq!(
+            image_generation_upstream_path(&json!({"prompt": "Draw a teapot."})),
+            "/v1/images/generations"
+        );
     }
 
     #[test]

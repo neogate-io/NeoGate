@@ -226,6 +226,19 @@ fn image_generation_request(request: &Value) -> AppResult<Value> {
     let mut output = serde_json::Map::new();
     output.insert("model".into(), Value::String(model.to_string()));
     output.insert("prompt".into(), Value::String(prompt));
+    let mut images = Vec::new();
+    if let Some(input) = object.get("input") {
+        collect_input_images(input, &mut images);
+    }
+    let action = tool.get("action").and_then(Value::as_str).unwrap_or("auto");
+    if action == "edit" || (action == "auto" && !images.is_empty()) {
+        if images.is_empty() {
+            return Err(crate::error::AppError::BadRequest(
+                "image_generation action=edit requires an input_image".into(),
+            ));
+        }
+        output.insert("images".into(), Value::Array(images));
+    }
     for field in [
         "size",
         "quality",
@@ -255,6 +268,28 @@ fn collect_prompt_text(value: &Value, output: &mut Vec<String>) {
                 output.push(text.to_string());
             } else if let Some(content) = object.get("content") {
                 collect_prompt_text(content, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_input_images(value: &Value, output: &mut Vec<Value>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_input_images(item, output);
+            }
+        }
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("input_image") {
+                if let Some(image_url) = object.get("image_url").and_then(Value::as_str) {
+                    output.push(serde_json::json!({"image_url": image_url}));
+                } else if let Some(file_id) = object.get("file_id").and_then(Value::as_str) {
+                    output.push(serde_json::json!({"file_id": file_id}));
+                }
+            } else if let Some(content) = object.get("content") {
+                collect_input_images(content, output);
             }
         }
         _ => {}
@@ -363,7 +398,7 @@ mod tests {
                     {"type": "input_image", "image_url": "https://example.com/input.png"}
                 ]
             }],
-            "tools": [{"type": "image_generation", "model": "gpt-image-2"}]
+            "tools": [{"type": "image_generation", "model": "gpt-image-2", "action": "edit"}]
         });
         let value = image_generation_request(&request).unwrap();
 
@@ -372,6 +407,24 @@ mod tests {
             value["prompt"],
             "Use a clean editorial style.\nDraw a compact teapot."
         );
+        assert_eq!(
+            value["images"][0]["image_url"],
+            "https://example.com/input.png"
+        );
+    }
+
+    #[test]
+    fn rejects_edit_without_an_input_image() {
+        let request = serde_json::json!({
+            "input": "Cut out the dog.",
+            "tools": [{"type": "image_generation", "model": "gpt-image-2", "action": "edit"}]
+        });
+
+        let err = image_generation_request(&request).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("action=edit requires an input_image"));
     }
 
     #[test]

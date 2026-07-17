@@ -224,7 +224,9 @@ http_status() {
   local body_file="$1"
   local status
   shift
-  status="$(curl -s -o "$body_file" -w '%{http_code}' "$@")" || status="000"
+  # Public deployments may redirect HTTP to HTTPS. Follow redirects so the
+  # generated installer behaves like its own download command.
+  status="$(curl -sS -L -o "$body_file" -w '%{http_code}' "$@")" || status="000"
   printf '%s' "$status"
 }
 

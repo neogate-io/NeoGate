@@ -729,6 +729,10 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens);
     let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
     let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
+    let (uncached_input_tokens, cache_hit_pct) =
+        request_cache_metrics(input_tokens, cached_input_tokens);
+    let generation_tokens_per_second =
+        generation_tokens_per_second(output_tokens, usage.latency_ms, usage.first_response_ms);
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let responses_chat_fallback = response_mode == "openai_chat_as_openai_response";
@@ -745,6 +749,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     );
     push_field(&mut info, "user", usage.user_id);
     push_field(&mut info, "key", usage.user_key_id);
+    push_field(&mut info, "channel", usage.channel_id);
     push_field(
         &mut info,
         "model",
@@ -753,18 +758,18 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     if ctx.upstream_model != usage.model.as_deref().unwrap_or(&ctx.model) {
         push_field(&mut info, "upstream_model", &ctx.upstream_model);
     }
-    push_field(&mut info, "channel", usage.channel_id);
     push_opt(&mut info, "status", usage.status_code);
     push_field(&mut info, "latency_ms", usage.latency_ms);
     push_opt(&mut info, "first_ms", usage.first_response_ms);
     push_opt(&mut info, "in", input_tokens);
-    push_opt(&mut info, "out", output_tokens);
+    push_opt(&mut info, "uncached_in", uncached_input_tokens);
     push_opt(&mut info, "cache_read", cached_input_tokens);
     push_opt(&mut info, "cache_write", cache_creation_input_tokens);
-    // Retain the original field for existing log queries and parsers.
-    push_opt(&mut info, "cached", cached_input_tokens);
+    push_opt_f64(&mut info, "cache_hit_pct", cache_hit_pct);
+    push_opt(&mut info, "out", output_tokens);
     push_opt(&mut info, "reasoning", reasoning_output_tokens);
-    push_opt(&mut info, "cost", cost_micros);
+    push_opt_f64(&mut info, "gen_tps", generation_tokens_per_second);
+    push_opt(&mut info, "cost_micros", cost_micros);
     push_info_request_params(&mut info, &ctx.request_params);
     if usage.relay_attempt > 1 {
         push_field(&mut info, "attempt", usage.relay_attempt);
@@ -873,6 +878,35 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     }
 
     tracing::debug!("{detail}");
+}
+
+fn request_cache_metrics(
+    input_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+) -> (Option<i64>, Option<f64>) {
+    let Some((input_tokens, cached_input_tokens)) = input_tokens.zip(cached_input_tokens) else {
+        return (None, None);
+    };
+    if input_tokens <= 0 {
+        return (None, None);
+    }
+
+    let cached_input_tokens = cached_input_tokens.clamp(0, input_tokens);
+    (
+        Some(input_tokens - cached_input_tokens),
+        Some((cached_input_tokens as f64 * 100.0) / input_tokens as f64),
+    )
+}
+
+fn generation_tokens_per_second(
+    output_tokens: Option<i64>,
+    latency_ms: i64,
+    first_response_ms: Option<i64>,
+) -> Option<f64> {
+    let output_tokens = output_tokens?;
+    let generation_ms = latency_ms.saturating_sub(first_response_ms?);
+    (output_tokens > 0 && generation_ms > 0)
+        .then_some((output_tokens as f64 * 1000.0) / generation_ms as f64)
 }
 
 fn push_request_params(line: &mut String, params: &RelayRequestParams) {
@@ -1161,5 +1195,30 @@ mod tests {
         let corrupt = b"not a gzip stream at all";
         let decoded = decode_all(GzipDecoder::new(BufReader::new(&corrupt[..]))).await;
         assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn derives_cache_metrics_from_input_usage() {
+        let (uncached_input, cache_hit_pct) = request_cache_metrics(Some(327_027), Some(325_376));
+
+        assert_eq!(uncached_input, Some(1_651));
+        assert!((cache_hit_pct.unwrap() - 99.495).abs() < 0.001);
+    }
+
+    #[test]
+    fn clamps_invalid_cache_usage_and_omits_missing_values() {
+        assert_eq!(
+            request_cache_metrics(Some(10), Some(15)),
+            (Some(0), Some(100.0))
+        );
+        assert_eq!(request_cache_metrics(Some(10), None), (None, None));
+        assert_eq!(request_cache_metrics(Some(0), Some(0)), (None, None));
+    }
+
+    #[test]
+    fn calculates_generation_rate_after_first_response() {
+        let generation_rate = generation_tokens_per_second(Some(106), 7_864, Some(5_565));
+        assert!((generation_rate.unwrap() - 46.107).abs() < 0.001);
+        assert_eq!(generation_tokens_per_second(Some(106), 7_864, None), None);
     }
 }

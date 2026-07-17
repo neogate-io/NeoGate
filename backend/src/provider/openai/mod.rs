@@ -488,6 +488,8 @@ async fn relay_openai(
             relay_trace_id,
             relay_attempt: relay_attempt_counter,
             relay_final: false,
+            request_body_bytes: upstream_body.len(),
+            request_input_tokens_estimate: crate::billing::estimate_input_tokens(&upstream_body),
             request_params: meta.request_params.clone(),
             request_permit: None,
             upstream_request_path: None,

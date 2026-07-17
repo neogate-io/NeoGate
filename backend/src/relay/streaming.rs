@@ -43,6 +43,9 @@ pub(crate) struct RelayContext {
     pub(crate) relay_trace_id: Uuid,
     pub(crate) relay_attempt: i32,
     pub(crate) relay_final: bool,
+    /// Payload metrics are estimates for diagnostics only; they do not expose request content.
+    pub(crate) request_body_bytes: usize,
+    pub(crate) request_input_tokens_estimate: i64,
     pub(crate) request_params: RelayRequestParams,
     pub(crate) request_permit: Option<UserRequestPermit>,
     pub(crate) upstream_request_path: Option<String>,

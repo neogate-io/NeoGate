@@ -232,6 +232,8 @@ pub(super) async fn create_background_response(
         ));
     }
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
+    let request_body_bytes = prepared.body.len();
+    let request_input_tokens_estimate = crate::billing::estimate_input_tokens(&prepared.body);
     let response = forward_openai(
         &state,
         &upstream,
@@ -259,6 +261,8 @@ pub(super) async fn create_background_response(
         relay_trace_id: Uuid::new_v4(),
         relay_attempt: 1,
         relay_final: true,
+        request_body_bytes,
+        request_input_tokens_estimate,
         request_params,
         request_permit: request_permit.take(),
         upstream_request_path: Some("/v1/responses".to_string()),

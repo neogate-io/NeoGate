@@ -429,7 +429,7 @@ fn format_upstream_http_failure_log(
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let mut line = format!(
-        "upstream returned error | trace={} channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream_path={} response_mode={} upstream={} upstream_status={} relay_status={} latency={}ms streamed={} error_type={} retryable={} error={} client_response={}",
+        "upstream returned error | trace={} channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream_path={} response_mode={} upstream={} upstream_status={} relay_status={} latency={}ms streamed={} request_body_bytes={} request_input_tokens_estimate={} error_type={} retryable={} error={} client_response={}",
         short_trace_id(ctx.relay_trace_id),
         ctx.upstream.channel_name,
         ctx.upstream.channel_id,
@@ -447,6 +447,8 @@ fn format_upstream_http_failure_log(
         failure.relay_status.as_u16(),
         ctx.started.elapsed().as_millis(),
         ctx.streamed,
+        ctx.request_body_bytes,
+        ctx.request_input_tokens_estimate,
         failure.error_type,
         failure.retryable,
         failure.detail,

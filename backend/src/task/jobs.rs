@@ -28,7 +28,7 @@ use crate::{
     id::DbId,
     provider::adapters::adapter_for_endpoint,
     relay::{
-        describe_upstream_http_failure, forward_openai, read_upstream_error_body,
+        describe_upstream_http_failure, forward_openai_with_content_type, read_upstream_error_body,
         selector::{SelectedUpstream, UpstreamProtocol},
     },
     task::{billing as task_billing, spool, upstream},
@@ -45,6 +45,7 @@ const STATUS_CANCELLED: &str = "cancelled";
 const ASSET_URL_TTL_SECONDS: u64 = 3600;
 const IMAGE_TASK_LEASE_MARGIN: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const MAX_IMAGE_TASK_ATTEMPTS: u32 = 3;
+const MAX_IMAGE_EDIT_INPUT_BYTES: usize = 50 * 1024 * 1024;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -146,6 +147,12 @@ struct ImageRequestSummary {
     n: i64,
     #[serde(default)]
     images: Option<Vec<IgnoredAny>>,
+}
+
+struct PreparedImageUpstreamRequest {
+    body: Bytes,
+    content_type: HeaderValue,
+    path: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -1002,7 +1009,11 @@ async fn run_image_generation(
     body: Bytes,
 ) -> AppResult<NeogateResponseResult> {
     let request: ImageRequestSummary = serde_json::from_slice(&body)?;
-    let upstream_path = image_generation_upstream_path(&request);
+    let prepared = prepare_image_upstream_request(
+        body,
+        task.upstream_model.as_deref().unwrap_or(&request.model),
+    )?;
+    let upstream_path = prepared.path;
     let started = Instant::now();
     tracing::info!(
         task_id = task.id,
@@ -1021,15 +1032,17 @@ async fn run_image_generation(
         quality = %request.quality,
         output_format = %request.output_format,
         image_count = request.n,
-        request_bytes = body.len(),
+        request_bytes = prepared.body.len(),
         "sending async image task to upstream"
     );
-    let response = match forward_openai(
+    let response = match forward_openai_with_content_type(
         state,
         upstream,
         UpstreamProtocol::Openai,
-        body.clone(),
+        prepared.body,
         upstream_path,
+        prepared.content_type,
+        false,
     )
     .await
     {
@@ -1142,6 +1155,310 @@ async fn run_image_generation(
         assets,
         usage,
     })
+}
+
+fn prepare_image_upstream_request(
+    body: Bytes,
+    upstream_model: &str,
+) -> AppResult<PreparedImageUpstreamRequest> {
+    let mut request: Value = serde_json::from_slice(&body)?;
+    let object = request
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+    object.insert(
+        "model".to_string(),
+        Value::String(upstream_model.to_string()),
+    );
+    if upstream_model == "gpt-image-2" || upstream_model.starts_with("gpt-image-2-") {
+        object.remove("input_fidelity");
+    }
+    validate_image_api_request(object)?;
+
+    if !object.contains_key("images") {
+        return Ok(PreparedImageUpstreamRequest {
+            body: Bytes::from(serde_json::to_vec(&image_api_json_request(
+                &request, false,
+            )?)?),
+            content_type: HeaderValue::from_static("application/json"),
+            path: "/v1/images/generations",
+        });
+    }
+
+    if !has_only_embedded_image_data_urls(object) {
+        return Ok(PreparedImageUpstreamRequest {
+            body: Bytes::from(serde_json::to_vec(&image_api_json_request(
+                &request, true,
+            )?)?),
+            content_type: HeaderValue::from_static("application/json"),
+            path: "/v1/images/edits",
+        });
+    }
+
+    let (body, boundary) = image_edit_multipart_body(&request)?;
+    let content_type = HeaderValue::from_str(&format!("multipart/form-data; boundary={boundary}"))
+        .map_err(|err| AppError::BadRequest(format!("invalid multipart content type: {err}")))?;
+    Ok(PreparedImageUpstreamRequest {
+        body,
+        content_type,
+        path: "/v1/images/edits",
+    })
+}
+
+fn validate_image_api_request(object: &serde_json::Map<String, Value>) -> AppResult<()> {
+    for field in ["model", "prompt"] {
+        if object
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(AppError::BadRequest(format!(
+                "image API request requires a non-empty {field}"
+            )));
+        }
+    }
+
+    let Some(images) = object.get("images") else {
+        return Ok(());
+    };
+    let images = images
+        .as_array()
+        .filter(|images| !images.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("image edit requires at least one image".to_string())
+        })?;
+    if images.len() > 16 {
+        return Err(AppError::BadRequest(
+            "image edit supports at most 16 input images".to_string(),
+        ));
+    }
+    for image in images {
+        validate_image_reference(image, "image")?;
+    }
+    if let Some(mask) = object.get("mask") {
+        validate_image_reference(mask, "mask")?;
+    }
+    Ok(())
+}
+
+fn validate_image_reference(value: &Value, label: &str) -> AppResult<()> {
+    let reference = value
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest(format!("{label} reference must be an object")))?;
+    let has_image_url = reference
+        .get("image_url")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    let has_file_id = reference
+        .get("file_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    if has_image_url == has_file_id {
+        return Err(AppError::BadRequest(format!(
+            "{label} reference must provide exactly one of image_url or file_id"
+        )));
+    }
+    Ok(())
+}
+
+fn image_api_json_request(request: &Value, edit: bool) -> AppResult<Value> {
+    let object = request
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+    let mut output = serde_json::Map::new();
+    let fields: &[&str] = if edit {
+        &[
+            "model",
+            "prompt",
+            "images",
+            "mask",
+            "background",
+            "input_fidelity",
+            "moderation",
+            "n",
+            "output_compression",
+            "output_format",
+            "quality",
+            "size",
+        ]
+    } else {
+        &[
+            "model",
+            "prompt",
+            "background",
+            "moderation",
+            "n",
+            "output_compression",
+            "output_format",
+            "quality",
+            "size",
+        ]
+    };
+    for &field in fields {
+        if let Some(value) = object.get(field) {
+            output.insert(field.to_string(), value.clone());
+        }
+    }
+    Ok(Value::Object(output))
+}
+
+fn has_only_embedded_image_data_urls(object: &serde_json::Map<String, Value>) -> bool {
+    let images_are_embedded =
+        object
+            .get("images")
+            .and_then(Value::as_array)
+            .is_some_and(|images| {
+                !images.is_empty()
+                    && images.iter().all(|image| {
+                        image
+                            .get("image_url")
+                            .and_then(Value::as_str)
+                            .is_some_and(|value| value.starts_with("data:image/"))
+                    })
+            });
+    let mask_is_embedded = object.get("mask").is_none_or(|mask| {
+        mask.get("image_url")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.starts_with("data:image/"))
+    });
+    images_are_embedded && mask_is_embedded
+}
+
+fn image_edit_multipart_body(request: &Value) -> AppResult<(Bytes, String)> {
+    let object = request
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+    let images = object
+        .get("images")
+        .and_then(Value::as_array)
+        .filter(|images| !images.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("image edit requires at least one image".to_string())
+        })?;
+    let boundary = format!("----neogate-{}", Uuid::new_v4().simple());
+    let mut output = Vec::new();
+
+    for field in [
+        "model",
+        "prompt",
+        "size",
+        "quality",
+        "output_format",
+        "output_compression",
+        "background",
+        "input_fidelity",
+        "moderation",
+        "n",
+    ] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let value = match value {
+            Value::String(value) => value.clone(),
+            Value::Bool(value) => value.to_string(),
+            Value::Number(value) => value.to_string(),
+            _ => continue,
+        };
+        append_multipart_text(&mut output, &boundary, field, &value);
+    }
+
+    let field_name = if images.len() == 1 {
+        "image"
+    } else {
+        "image[]"
+    };
+    for (index, image) in images.iter().enumerate() {
+        let image_url = image
+            .get("image_url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "Responses image edits require data URL input images for multipart forwarding"
+                        .to_string(),
+                )
+            })?;
+        let (mime, extension, bytes) = decode_image_data_url(image_url)?;
+        append_multipart_file(
+            &mut output,
+            &boundary,
+            field_name,
+            &format!("image_{}.{}", index + 1, extension),
+            mime,
+            &bytes,
+        );
+    }
+    if let Some(mask_url) = object
+        .get("mask")
+        .and_then(|mask| mask.get("image_url"))
+        .and_then(Value::as_str)
+    {
+        let (mime, extension, bytes) = decode_image_data_url(mask_url)?;
+        append_multipart_file(
+            &mut output,
+            &boundary,
+            "mask",
+            &format!("mask.{extension}"),
+            mime,
+            &bytes,
+        );
+    }
+    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    Ok((Bytes::from(output), boundary))
+}
+
+fn append_multipart_text(output: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+    output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    output.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    output.extend_from_slice(value.as_bytes());
+    output.extend_from_slice(b"\r\n");
+}
+
+fn append_multipart_file(
+    output: &mut Vec<u8>,
+    boundary: &str,
+    name: &str,
+    filename: &str,
+    mime: &str,
+    bytes: &[u8],
+) {
+    output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    output.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    output.extend_from_slice(format!("Content-Type: {mime}\r\n\r\n").as_bytes());
+    output.extend_from_slice(bytes);
+    output.extend_from_slice(b"\r\n");
+}
+
+fn decode_image_data_url(value: &str) -> AppResult<(&'static str, &'static str, Vec<u8>)> {
+    let (metadata, encoded) = value
+        .split_once(',')
+        .ok_or_else(|| AppError::BadRequest("input image must be a base64 data URL".to_string()))?;
+    let mime = metadata
+        .strip_prefix("data:")
+        .and_then(|metadata| metadata.strip_suffix(";base64"))
+        .ok_or_else(|| AppError::BadRequest("input image must be a base64 data URL".to_string()))?;
+    let (mime, extension) = match mime.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => ("image/jpeg", "jpg"),
+        "image/png" => ("image/png", "png"),
+        "image/webp" => ("image/webp", "webp"),
+        _ => {
+            return Err(AppError::BadRequest(format!(
+                "unsupported input image content type: {mime}"
+            )))
+        }
+    };
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|err| AppError::BadRequest(format!("invalid input image base64: {err}")))?;
+    if bytes.len() >= MAX_IMAGE_EDIT_INPUT_BYTES {
+        return Err(AppError::BadRequest(
+            "input images and masks must each be smaller than 50MB".to_string(),
+        ));
+    }
+    Ok((mime, extension, bytes))
 }
 
 fn image_generation_upstream_path(request: &ImageRequestSummary) -> &'static str {
@@ -1752,6 +2069,185 @@ mod tests {
             image_generation_upstream_path_from_body(b"not json"),
             "unknown"
         );
+    }
+
+    #[test]
+    fn prepares_response_image_edit_as_multipart() {
+        let prepared = prepare_image_upstream_request(
+            Bytes::from_static(
+                br#"{"model":"image-alias","prompt":"Cut out the dog.","images":[{"image_url":"data:image/jpeg;base64,AAECAw=="}],"size":"1024x1536","background":"transparent","input_fidelity":"high","output_format":"png"}"#,
+            ),
+            "gpt-image-1.5",
+        )
+        .unwrap();
+
+        assert_eq!(prepared.path, "/v1/images/edits");
+        let content_type = prepared.content_type.to_str().unwrap();
+        assert!(content_type.starts_with("multipart/form-data; boundary=----neogate-"));
+        let body = prepared.body.as_ref();
+        for expected in [
+            b"name=\"model\"\r\n\r\ngpt-image-1.5\r\n".as_slice(),
+            b"name=\"prompt\"\r\n\r\nCut out the dog.\r\n".as_slice(),
+            b"name=\"size\"\r\n\r\n1024x1536\r\n".as_slice(),
+            b"name=\"background\"\r\n\r\ntransparent\r\n".as_slice(),
+            b"name=\"input_fidelity\"\r\n\r\nhigh\r\n".as_slice(),
+            b"name=\"output_format\"\r\n\r\npng\r\n".as_slice(),
+            b"name=\"image\"; filename=\"image_1.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n\x00\x01\x02\x03\r\n"
+                .as_slice(),
+        ] {
+            assert!(
+                body.windows(expected.len()).any(|window| window == expected),
+                "multipart body is missing {:?}",
+                String::from_utf8_lossy(expected)
+            );
+        }
+        assert!(!body
+            .windows(b"name=\"images\"".len())
+            .any(|window| { window == b"name=\"images\"" }));
+    }
+
+    #[test]
+    fn keeps_response_image_generation_as_json() {
+        let prepared = prepare_image_upstream_request(
+            Bytes::from_static(
+                br#"{"model":"image-alias","prompt":"Draw a teapot.","quality":"high","stream":true,"partial_images":2,"unknown":"discard"}"#,
+            ),
+            "gpt-image-2",
+        )
+        .unwrap();
+
+        assert_eq!(prepared.path, "/v1/images/generations");
+        assert_eq!(
+            prepared.content_type,
+            HeaderValue::from_static("application/json")
+        );
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(body["model"], "gpt-image-2");
+        assert_eq!(body["prompt"], "Draw a teapot.");
+        assert_eq!(body["quality"], "high");
+        assert!(body.get("unknown").is_none());
+        assert!(body.get("images").is_none());
+        assert!(body.get("stream").is_none());
+        assert!(body.get("partial_images").is_none());
+    }
+
+    #[test]
+    fn keeps_remote_and_file_edit_references_in_official_json_shape() {
+        for image in [
+            json!({"image_url": "https://example.com/input.png"}),
+            json!({"file_id": "file-input"}),
+        ] {
+            let request = json!({
+                "model": "image-alias",
+                "prompt": "Edit the image.",
+                "images": [image],
+                "input_fidelity": "high",
+                "action": "edit"
+            });
+            let prepared = prepare_image_upstream_request(
+                Bytes::from(serde_json::to_vec(&request).unwrap()),
+                "gpt-image-1.5",
+            )
+            .unwrap();
+
+            assert_eq!(prepared.path, "/v1/images/edits");
+            assert_eq!(
+                prepared.content_type,
+                HeaderValue::from_static("application/json")
+            );
+            let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+            assert_eq!(body["model"], "gpt-image-1.5");
+            assert_eq!(body["images"][0], request["images"][0]);
+            assert_eq!(body["input_fidelity"], "high");
+            assert!(body.get("action").is_none());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_image_api_requests_before_forwarding() {
+        for request in [
+            json!({"model": "gpt-image-2", "prompt": ""}),
+            json!({"model": "gpt-image-2", "prompt": "edit", "images": []}),
+            json!({
+                "model": "gpt-image-2",
+                "prompt": "edit",
+                "images": [{"image_url": "https://example.com/a.png", "file_id": "file-a"}]
+            }),
+        ] {
+            assert!(prepare_image_upstream_request(
+                Bytes::from(serde_json::to_vec(&request).unwrap()),
+                "gpt-image-2",
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn omits_configurable_input_fidelity_for_gpt_image_2() {
+        let request = json!({
+            "model": "image-alias",
+            "prompt": "Edit the image.",
+            "images": [{"file_id": "file-input"}],
+            "input_fidelity": "high"
+        });
+
+        let prepared = prepare_image_upstream_request(
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            "gpt-image-2",
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert!(body.get("input_fidelity").is_none());
+    }
+
+    #[test]
+    fn converts_embedded_response_mask_to_multipart_file() {
+        let request = json!({
+            "model": "gpt-image-2",
+            "prompt": "Edit the masked area.",
+            "images": [{"image_url": "data:image/png;base64,AA=="}],
+            "mask": {"image_url": "data:image/png;base64,AQ=="}
+        });
+
+        let prepared = prepare_image_upstream_request(
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            "gpt-image-2",
+        )
+        .unwrap();
+
+        assert!(prepared
+            .content_type
+            .to_str()
+            .unwrap()
+            .starts_with("multipart/form-data; boundary="));
+        assert!(prepared
+            .body
+            .windows(b"name=\"mask\"; filename=\"mask.png\"".len())
+            .any(|window| window == b"name=\"mask\"; filename=\"mask.png\""));
+    }
+
+    #[test]
+    fn uses_image_array_parts_for_multiple_edit_inputs() {
+        let request = json!({
+            "model": "gpt-image-2",
+            "prompt": "Combine the references.",
+            "images": [
+                {"image_url": "data:image/png;base64,AA=="},
+                {"image_url": "data:image/webp;base64,AQ=="}
+            ]
+        });
+
+        let (body, _) = image_edit_multipart_body(&request).unwrap();
+        assert_eq!(
+            body.windows(b"name=\"image[]\"".len())
+                .filter(|window| *window == b"name=\"image[]\"")
+                .count(),
+            2
+        );
+        assert!(!body
+            .windows(b"name=\"image\";".len())
+            .any(|window| window == b"name=\"image\";"));
     }
 
     #[test]

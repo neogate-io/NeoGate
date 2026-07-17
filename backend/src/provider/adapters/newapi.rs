@@ -231,13 +231,20 @@ fn image_generation_request(request: &Value) -> AppResult<Value> {
         collect_input_images(input, &mut images);
     }
     let action = tool.get("action").and_then(Value::as_str).unwrap_or("auto");
-    if action == "edit" || (action == "auto" && !images.is_empty()) {
+    let is_edit = action == "edit" || (action == "auto" && !images.is_empty());
+    if is_edit {
         if images.is_empty() {
             return Err(crate::error::AppError::BadRequest(
                 "image_generation action=edit requires an input_image".into(),
             ));
         }
         output.insert("images".into(), Value::Array(images));
+        if let Some(value) = tool.get("input_fidelity") {
+            output.insert("input_fidelity".into(), value.clone());
+        }
+        if let Some(value) = tool.get("input_image_mask") {
+            output.insert("mask".into(), value.clone());
+        }
     }
     for field in [
         "size",
@@ -398,7 +405,13 @@ mod tests {
                     {"type": "input_image", "image_url": "https://example.com/input.png"}
                 ]
             }],
-            "tools": [{"type": "image_generation", "model": "gpt-image-2", "action": "edit"}]
+            "tools": [{
+                "type": "image_generation",
+                "model": "gpt-image-2",
+                "action": "edit",
+                "input_fidelity": "high",
+                "input_image_mask": {"file_id": "file-mask"}
+            }]
         });
         let value = image_generation_request(&request).unwrap();
 
@@ -411,6 +424,9 @@ mod tests {
             value["images"][0]["image_url"],
             "https://example.com/input.png"
         );
+        assert_eq!(value["input_fidelity"], "high");
+        assert_eq!(value["mask"]["file_id"], "file-mask");
+        assert!(value.get("input_image_mask").is_none());
     }
 
     #[test]

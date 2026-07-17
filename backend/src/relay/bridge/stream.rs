@@ -104,6 +104,9 @@ where
     F: FnOnce(String) -> C,
 {
     let content_length = upstream_response.content_length();
+    let response_metadata = crate::relay::streaming::UpstreamResponseMetadata::from_headers(
+        upstream_response.headers(),
+    );
     let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
     let converter = new_converter(ctx.external_model.clone());
     let upstream_stream = upstream_response.bytes_stream();
@@ -142,6 +145,7 @@ where
             status,
             content_length,
             usage_buffer_limit_bytes,
+            response_metadata,
             stream,
         ))
         .map_err(|err| AppError::BadRequest(err.to_string()))

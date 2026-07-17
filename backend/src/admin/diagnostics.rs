@@ -2046,11 +2046,14 @@ fn key_summary(status: DiagnosticStatus) -> String {
     }
 }
 
-fn upstream_status_message(status: StatusCode) -> String {
+fn upstream_status_message(status: StatusCode, error_summary: &str) -> String {
     match status.as_u16() {
         400 => "上游拒绝测试请求，请检查模型名或请求协议".to_string(),
         401 | 403 => "认证失败，请检查上游 Key 或凭证权限".to_string(),
         404 => "接口不存在，请检查 Base URL 和协议".to_string(),
+        429 if upstream_quota_exhausted(error_summary) => {
+            "上游配额已耗尽，请充值、扩容套餐或更换 Key".to_string()
+        }
         429 => "上游限流，请稍后重试或切换 Key".to_string(),
         500..=599 => "上游服务暂时不可用".to_string(),
         _ => format!("上游返回 HTTP {}", status.as_u16()),
@@ -2058,18 +2061,26 @@ fn upstream_status_message(status: StatusCode) -> String {
 }
 
 async fn upstream_failure_message(status: StatusCode, response: reqwest::Response) -> String {
-    let base = upstream_status_message(status);
     match response.text().await {
         Ok(body) => {
             let summary = upstream_error_body_summary(&body);
+            let base = upstream_status_message(status, &summary);
             if summary.is_empty() {
                 base
             } else {
                 format!("{base}: {summary}")
             }
         }
-        Err(_) => base,
+        Err(_) => upstream_status_message(status, ""),
     }
+}
+
+fn upstream_quota_exhausted(error_summary: &str) -> bool {
+    let normalized = error_summary.to_ascii_lowercase();
+    normalized.contains("allocationquota")
+        || normalized.contains("quota has been exhausted")
+        || normalized.contains("quota exhausted")
+        || normalized.contains("insufficient_quota")
 }
 
 fn upstream_error_body_summary(body: &str) -> String {
@@ -2258,6 +2269,25 @@ mod tests {
         let body = "x".repeat(400);
 
         assert!(upstream_error_body_summary(&body).ends_with("..."));
+    }
+
+    #[test]
+    fn allocation_quota_is_reported_as_exhausted_quota() {
+        assert_eq!(
+            upstream_status_message(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Your token-plan quota has been exhausted.; code=Throttling.AllocationQuota",
+            ),
+            "上游配额已耗尽，请充值、扩容套餐或更换 Key"
+        );
+    }
+
+    #[test]
+    fn ordinary_429_is_reported_as_rate_limited() {
+        assert_eq!(
+            upstream_status_message(StatusCode::TOO_MANY_REQUESTS, "request limit exceeded"),
+            "上游限流，请稍后重试或切换 Key"
+        );
     }
 
     #[test]

@@ -194,6 +194,9 @@ fn is_quota_or_balance_error(lowered: &str) -> bool {
             "insufficient quota",
             "exceeded your current quota",
             "quota exceeded",
+            "quota has been exhausted",
+            "quota exhausted",
+            "allocationquota",
             "insufficient balance",
             "insufficient credit",
             "not enough credits",
@@ -338,6 +341,19 @@ mod tests {
         assert!(!failure.retryable);
         assert!(failure.should_failover());
         assert!(failure.summary.contains("insufficient_quota"));
+    }
+
+    #[test]
+    fn classifies_allocation_quota_as_exhausted() {
+        let failure = describe_upstream_http_failure(
+            StatusCode::TOO_MANY_REQUESTS,
+            br#"{"error":{"message":"The account quota has been exhausted.","code":"AllocationQuota"}}"#,
+        );
+
+        assert_eq!(failure.error_type, "upstream_quota_exhausted");
+        assert!(!failure.retryable);
+        assert!(failure.should_failover());
+        assert!(failure.detail.contains("AllocationQuota"));
     }
 
     #[test]

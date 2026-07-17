@@ -8,8 +8,9 @@ const { locale, t } = useLocale()
 const copyDocText = useCopyText()
 const errorExample = `{
   "error": {
-    "message": "insufficient credit",
-    "type": "invalid_request_error"
+    "type": "insufficient_quota",
+    "code": "insufficient_quota",
+    "message": "insufficient credit: available=0.831460, required=1.234000"
   }
 }`
 
@@ -27,7 +28,7 @@ const content = computed(() => {
           '请求体格式错误、缺少字段或异步参数不满足要求',
           '检查 JSON、model、messages、store 等字段。'
         ],
-        ['429', '余额或配额不足', '充值或联系管理员调整额度策略。'],
+        ['403', '余额或配额不足', '充值或联系管理员调整额度策略。'],
         [
           '404/503',
           '模型没有可用渠道或上游服务不可用',
@@ -56,7 +57,7 @@ const content = computed(() => {
         'Check JSON, model, messages, store, and related fields.'
       ],
       [
-        '429',
+        '403',
         'Insufficient balance or exhausted quota',
         'Recharge or ask an admin to adjust the credit policy.'
       ],

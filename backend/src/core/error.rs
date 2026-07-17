@@ -128,6 +128,13 @@ pub enum AppError {
     PasswordChangeRequired,
     #[error("payment required")]
     PaymentRequired,
+    #[error(
+        "insufficient credit: available_micros={available_micros}, required_micros={required_micros}"
+    )]
+    InsufficientQuota {
+        available_micros: i64,
+        required_micros: i64,
+    },
     #[error("conflict: {0}")]
     Conflict(String),
     #[error("conflict: {message}")]
@@ -204,9 +211,9 @@ impl AppError {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::PasswordChangeRequired => StatusCode::FORBIDDEN,
-            // OpenAI-compatible APIs report exhausted credits as 429. It differs from a
-            // transient rate limit through the `insufficient_quota` code and retryable flag.
-            AppError::PaymentRequired => StatusCode::TOO_MANY_REQUESTS,
+            // Local credit rejection is not a transient rate limit. Returning 403 prevents
+            // OpenAI-compatible clients from retrying it as an ordinary 429.
+            AppError::PaymentRequired | AppError::InsufficientQuota { .. } => StatusCode::FORBIDDEN,
             AppError::Conflict(_) | AppError::ConflictWithCode { .. } => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
@@ -234,7 +241,7 @@ impl AppError {
             AppError::Unauthorized => "unauthorized",
             AppError::Forbidden(_) => "forbidden",
             AppError::PasswordChangeRequired => "password_change_required",
-            AppError::PaymentRequired => "insufficient_quota",
+            AppError::PaymentRequired | AppError::InsufficientQuota { .. } => "insufficient_quota",
             AppError::Conflict(_) => "conflict",
             AppError::ConflictWithCode { code, .. } => code,
             AppError::PayloadTooLarge(_) => "payload_too_large",
@@ -268,6 +275,14 @@ impl AppError {
         }
 
         match self {
+            AppError::InsufficientQuota {
+                available_micros,
+                required_micros,
+            } => format!(
+                "insufficient credit: available={}, required={}",
+                format_credit_micros(*available_micros),
+                format_credit_micros(*required_micros)
+            ),
             AppError::Conflict(message)
             | AppError::PayloadTooLarge(message)
             | AppError::BadRequest(message)
@@ -314,13 +329,22 @@ impl AppError {
 }
 
 fn error_response(status: StatusCode, code: &'static str, message: String) -> Response {
+    let error = if code == "insufficient_quota" {
+        json!({
+            "type": code,
+            "code": code,
+            "message": message,
+        })
+    } else {
+        json!({
+            "code": code,
+            "message": message,
+        })
+    };
     let mut response = (
         status,
         Json(json!({
-            "error": {
-                "code": code,
-                "message": message,
-            }
+            "error": error
         })),
     )
         .into_response();
@@ -340,6 +364,11 @@ fn error_response(status: StatusCode, code: &'static str, message: String) -> Re
             .insert("x-neogate-retryable", HeaderValue::from_static("false"));
     }
     response
+}
+
+fn format_credit_micros(micros: i64) -> String {
+    let micros = micros.max(0);
+    format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000)
 }
 
 fn upstream_request_response(err: UpstreamRequestError) -> Response {
@@ -404,9 +433,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insufficient_credit_returns_openai_compatible_quota_error() {
+    async fn insufficient_credit_returns_non_retryable_quota_error() {
         let response = AppError::PaymentRequired.into_response();
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers()["x-neogate-error-code"],
             "insufficient_quota"
@@ -417,6 +446,24 @@ mod tests {
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"]["code"], "insufficient_quota");
+        assert_eq!(value["error"]["type"], "insufficient_quota");
+    }
+
+    #[tokio::test]
+    async fn insufficient_credit_includes_available_and_required_credit() {
+        let response = AppError::InsufficientQuota {
+            available_micros: 831_460,
+            required_micros: 1_234_000,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["error"]["message"],
+            "insufficient credit: available=0.831460, required=1.234000"
+        );
     }
 
     #[tokio::test]

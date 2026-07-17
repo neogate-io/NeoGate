@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    error::Error as StdError,
     path::{Path, PathBuf},
     time::{Instant, SystemTime},
 };
@@ -23,7 +24,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{parse_usage_from_bytes, DebitHold, TokenUsage},
-    error::{reqwest_status, AppError, AppResult},
+    error::{reqwest_status, AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     provider::adapters::adapter_for_endpoint,
     relay::{
@@ -585,6 +586,7 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
             return Ok(());
         }
     };
+    let upstream_path = image_generation_upstream_path_from_body(&body);
     let result = run_image_generation(state, &task, &upstream, &response_model, body).await;
     match result {
         Ok(result) => {
@@ -630,6 +632,7 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
             }
         }
         Err(err) => {
+            let diagnostics = image_task_error_diagnostics(&err);
             tracing::warn!(
                 task_id = task.id,
                 response_id = %task.upstream_task_id,
@@ -644,7 +647,14 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
                 model = %task.model.as_deref().unwrap_or(""),
                 upstream = %task.upstream_base_url,
                 error = %err,
-                upstream_path = "/v1/images/generations",
+                error_debug = %diagnostics.debug,
+                error_kind = diagnostics.kind,
+                retryable = diagnostics.retryable,
+                is_timeout = diagnostics.is_timeout,
+                is_connect = diagnostics.is_connect,
+                error_url = ?diagnostics.url,
+                source_chain = ?diagnostics.source_chain,
+                upstream_path,
                 "async image task failed"
             );
             let request_spool = metadata.request_spool.take();
@@ -1025,6 +1035,7 @@ async fn run_image_generation(
     {
         Ok(response) => response,
         Err(err) => {
+            let diagnostics = image_task_error_diagnostics(&err);
             tracing::warn!(
                 task_id = task.id,
                 response_id = %task.upstream_task_id,
@@ -1034,6 +1045,13 @@ async fn run_image_generation(
                 upstream_path,
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 error = %err,
+                error_debug = %diagnostics.debug,
+                error_kind = diagnostics.kind,
+                retryable = diagnostics.retryable,
+                is_timeout = diagnostics.is_timeout,
+                is_connect = diagnostics.is_connect,
+                error_url = ?diagnostics.url,
+                source_chain = ?diagnostics.source_chain,
                 "async image upstream request failed"
             );
             return Err(err);
@@ -1131,6 +1149,60 @@ fn image_generation_upstream_path(request: &ImageRequestSummary) -> &'static str
         "/v1/images/edits"
     } else {
         "/v1/images/generations"
+    }
+}
+
+fn image_generation_upstream_path_from_body(body: &[u8]) -> &'static str {
+    serde_json::from_slice::<ImageRequestSummary>(body)
+        .as_ref()
+        .map(image_generation_upstream_path)
+        .unwrap_or("unknown")
+}
+
+struct ImageTaskErrorDiagnostics {
+    debug: String,
+    kind: &'static str,
+    retryable: bool,
+    is_timeout: bool,
+    is_connect: bool,
+    url: Option<String>,
+    source_chain: Vec<String>,
+}
+
+fn image_task_error_diagnostics(err: &AppError) -> ImageTaskErrorDiagnostics {
+    let (kind, is_timeout, is_connect, url) = match err {
+        AppError::Reqwest(source) => {
+            let kind = UpstreamErrorKind::from_reqwest(source);
+            (
+                kind.type_code(),
+                source.is_timeout(),
+                source.is_connect(),
+                source.url().map(ToString::to_string),
+            )
+        }
+        AppError::UpstreamRequest(source) => (
+            source.kind.type_code(),
+            source.kind == UpstreamErrorKind::Timeout,
+            source.kind == UpstreamErrorKind::Connect,
+            None,
+        ),
+        _ => ("application_error", false, false, None),
+    };
+    let mut source_chain = Vec::new();
+    let mut source = StdError::source(err);
+    while let Some(current) = source {
+        source_chain.push(current.to_string());
+        source = current.source();
+    }
+
+    ImageTaskErrorDiagnostics {
+        debug: format!("{err:?}"),
+        kind,
+        retryable: err.retryable(),
+        is_timeout,
+        is_connect,
+        url,
+        source_chain,
     }
 }
 
@@ -1669,6 +1741,16 @@ mod tests {
         assert_eq!(
             image_generation_upstream_path(&generation),
             "/v1/images/generations"
+        );
+        assert_eq!(
+            image_generation_upstream_path_from_body(
+                br#"{"images":[{"image_url":"data:image/png;base64,AAAA"}]}"#
+            ),
+            "/v1/images/edits"
+        );
+        assert_eq!(
+            image_generation_upstream_path_from_body(b"not json"),
+            "unknown"
         );
     }
 

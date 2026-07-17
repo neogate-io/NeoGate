@@ -52,6 +52,7 @@ python -m unittest tests.smoke.test_openai_image.test_images_edit_json_stream
 python -m unittest tests.smoke.test_openai_image.test_images_variation
 python -m unittest tests.smoke.test_openai_image.test_responses_image_generation_background
 python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_extract_dog_background
+python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_three_2k_background
 ```
 
 ## OpenAI 视频冒烟测试

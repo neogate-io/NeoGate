@@ -3,9 +3,12 @@ import http.client
 import json
 import mimetypes
 import os
+import random
+import struct
 import time
 import unittest
 import uuid
+import zlib
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -380,8 +383,10 @@ def response_image_payloads(value):
     for output in value.get("output") or []:
         if not isinstance(output, dict):
             continue
-        if output.get("type") == "image_generation_call" and output.get("result"):
-            payloads.append(output["result"])
+        if output.get("type") == "image_generation_call":
+            payload = output.get("result") or output.get("url")
+            if payload:
+                payloads.append(payload)
         for item in output.get("content") or []:
             if not isinstance(item, dict):
                 continue
@@ -433,6 +438,25 @@ def test2_jpg_path():
 def test2_jpg_data_url():
     encoded = base64.b64encode(test2_jpg_path().read_bytes()).decode("ascii")
     return f"data:image/jpeg;base64,{encoded}"
+
+
+def _png_chunk(kind, data):
+    checksum = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
+
+
+def synthetic_2k_png_data_url(seed):
+    """Create a valid noisy 2048x2048 PNG without adding binary fixtures."""
+    width = height = 2048
+    row_bytes = width * 3
+    rng = random.Random(seed)
+    raw = b"".join(b"\x00" + rng.randbytes(row_bytes) for _ in range(height))
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += _png_chunk(b"IDAT", zlib.compress(raw, level=6))
+    png += _png_chunk(b"IEND", b"")
+    encoded = base64.b64encode(png).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def client():
@@ -702,6 +726,100 @@ def _test_responses_image_edit_extract_dog_background():
     save_image_payloads("test_responses_image_edit_extract_dog_background", payloads)
 
 
+def _test_responses_image_edit_three_2k_background():
+    reference_urls = [
+        synthetic_2k_png_data_url(1),
+        synthetic_2k_png_data_url(2),
+        synthetic_2k_png_data_url(3),
+    ]
+    payload = {
+        "model": RESPONSE_MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Create one image using the three references. "
+                            "Preserve the main subject from each reference and "
+                            "combine them into one coherent composition."
+                        ),
+                    },
+                    {"type": "input_text", "text": "【图1】"},
+                    {"type": "input_image", "image_url": reference_urls[0]},
+                    {"type": "input_text", "text": "【图2】"},
+                    {"type": "input_image", "image_url": reference_urls[1]},
+                    {"type": "input_text", "text": "【图3】"},
+                    {"type": "input_image", "image_url": reference_urls[2]},
+                ],
+            }
+        ],
+        "tools": [
+            {
+                "type": "image_generation",
+                "model": MODEL,
+                "action": "edit",
+                "size": "1536x1024",
+                "output_format": "png",
+            }
+        ],
+        "instructions": (
+            "You are an image generation executor. Always call image_generation "
+            "and return exactly one generated image."
+        ),
+        "background": True,
+        "store": True,
+        "image_format": "url",
+    }
+    request_bytes = len(json.dumps(payload).encode("utf-8"))
+    reference_bytes = [
+        (len(url) - len("data:image/png;base64,")) * 3 // 4
+        for url in reference_urls
+    ]
+    print(
+        "three-2k request bytes: "
+        f"{request_bytes} ({request_bytes / 1024 / 1024:.2f} MiB), "
+        "decoded reference bytes: "
+        f"{[round(size / 1024 / 1024, 2) for size in reference_bytes]} MiB"
+    )
+
+    status, _headers, body = client().post_json("/responses", payload)
+    assert_success(status, body)
+    value = parse_json_body(body)
+    response_id = value.get("id")
+    if not isinstance(response_id, str) or not response_id:
+        raise AssertionError(f"response id is missing: {value}")
+
+    terminal_statuses = {"completed", "failed", "cancelled", "canceled", "incomplete"}
+    deadline = time.monotonic() + RESPONSE_POLL_TIMEOUT_SECONDS
+    response_path = f"/responses/{response_id}"
+    seen_statuses = [value.get("status")]
+    while value.get("status") not in terminal_statuses:
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"response {response_id} did not finish before timeout; "
+                f"statuses={seen_statuses}, last={value}"
+            )
+        time.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+        status, _headers, value = client().get_json(
+            response_path,
+            record_response=False,
+        )
+        if not 200 <= status < 300:
+            raise AssertionError(f"failed to poll response {response_id}: HTTP {status} {value}")
+        seen_statuses.append(value.get("status"))
+
+    save_http_json("response", "GET", response_path, value, status=status)
+    print(f"three-2k response {response_id} statuses: {seen_statuses}")
+    if value.get("status") != "completed":
+        raise AssertionError(value)
+    payloads = response_image_payloads(value)
+    if not payloads:
+        raise AssertionError(f"completed response did not include image output: {value}")
+    save_image_payloads("test_responses_image_edit_three_2k_background", payloads)
+
+
 def make_test_case(test_func):
     return unittest.FunctionTestCase(test_func, description=test_func.__name__.removeprefix("_"))
 
@@ -738,6 +856,10 @@ def test_responses_image_edit_extract_dog_background():
     return make_test_case(_test_responses_image_edit_extract_dog_background)
 
 
+def test_responses_image_edit_three_2k_background():
+    return make_test_case(_test_responses_image_edit_three_2k_background)
+
+
 def load_tests(loader, tests, pattern):
     suite = unittest.TestSuite()
     suite.addTests(
@@ -750,6 +872,7 @@ def load_tests(loader, tests, pattern):
             test_images_variation(),
             test_responses_image_generation_background(),
             test_responses_image_edit_extract_dog_background(),
+            test_responses_image_edit_three_2k_background(),
         ]
     )
     return suite

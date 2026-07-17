@@ -13,7 +13,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::Utc;
 use hmac::{Hmac, KeyInit, Mac};
-use serde::{Deserialize, Serialize};
+use serde::{de::IgnoredAny, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
@@ -30,7 +30,7 @@ use crate::{
         describe_upstream_http_failure, forward_openai, read_upstream_error_body,
         selector::{SelectedUpstream, UpstreamProtocol},
     },
-    task::{billing as task_billing, upstream},
+    task::{billing as task_billing, spool, upstream},
     AppState,
 };
 
@@ -42,6 +42,8 @@ const STATUS_COMPLETED: &str = "completed";
 const STATUS_FAILED: &str = "failed";
 const STATUS_CANCELLED: &str = "cancelled";
 const ASSET_URL_TTL_SECONDS: u64 = 3600;
+const IMAGE_TASK_LEASE_MARGIN: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const MAX_IMAGE_TASK_ATTEMPTS: u32 = 3;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -97,6 +99,8 @@ struct NeogateResponseMetadata {
     request: Value,
     #[serde(default)]
     upstream_request: Option<Value>,
+    #[serde(default)]
+    request_spool: Option<spool::Spool>,
     response: Value,
     #[serde(default)]
     image_format: NeogateImageResponseFormat,
@@ -106,6 +110,8 @@ struct NeogateResponseMetadata {
     error: Option<Value>,
     #[serde(default)]
     cancel_requested: bool,
+    #[serde(default)]
+    attempts: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +129,39 @@ struct NeogateResponseResult {
     response: Value,
     assets: Vec<NeogateResponseAsset>,
     usage: Option<TokenUsage>,
+}
+
+#[derive(Deserialize)]
+struct ImageRequestSummary {
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    size: String,
+    #[serde(default)]
+    quality: String,
+    #[serde(default)]
+    output_format: String,
+    #[serde(default = "default_image_count")]
+    n: i64,
+    #[serde(default)]
+    images: Option<Vec<IgnoredAny>>,
+}
+
+#[derive(Deserialize)]
+struct ImageGenerationResponse {
+    #[serde(default)]
+    data: Vec<ImageGenerationOutput>,
+}
+
+#[derive(Deserialize)]
+struct ImageGenerationOutput {
+    b64_json: Option<String>,
+    result: Option<String>,
+    revised_prompt: Option<String>,
+}
+
+fn default_image_count() -> i64 {
+    1
 }
 
 pub(crate) fn has_image_generation_tool(body: &[u8]) -> bool {
@@ -182,7 +221,14 @@ pub(crate) async fn create(
         hold,
     } = task;
     let response_id = format!("resp_{}", Uuid::new_v4().simple());
-    let request: Value = serde_json::from_slice(&request_body)?;
+    let mut request: Value = serde_json::from_slice(&request_body)?;
+    compact_data_url_images(&mut request);
+    let request_spool = spool::save(
+        &state.config.response_assets.dir,
+        &response_id,
+        &upstream_request_body,
+    )
+    .await?;
     let size = image_tool_string(&request, "size")
         .unwrap_or("")
         .to_string();
@@ -192,7 +238,6 @@ pub(crate) async fn create(
     let output_format = image_tool_string(&request, "output_format")
         .unwrap_or("")
         .to_string();
-    let upstream_request: Value = serde_json::from_slice(&upstream_request_body)?;
     let response = response_json(
         &response_id,
         response_model,
@@ -203,14 +248,16 @@ pub(crate) async fn create(
     );
     let metadata = NeogateResponseMetadata {
         request,
-        upstream_request: Some(upstream_request),
+        upstream_request: None,
+        request_spool: Some(request_spool.clone()),
         response: response.clone(),
         image_format,
         assets: Vec::new(),
         error: None,
         cancel_requested: false,
+        attempts: 0,
     };
-    upstream::insert_task(
+    if let Err(err) = upstream::insert_task(
         &state.db.pool,
         NewUpstreamTask {
             task_type: UpstreamTaskType::NeogateResponse,
@@ -228,7 +275,11 @@ pub(crate) async fn create(
         super::POLL_INTERVAL,
         state.config.task.upstream_retention,
     )
-    .await?;
+    .await
+    {
+        spool::remove(&state.config.response_assets.dir, &request_spool.path).await;
+        return Err(err);
+    }
     mark_due_now(&state.db.pool, &response_id).await?;
     tracing::info!(
         response_id = %response_id,
@@ -310,17 +361,22 @@ pub(crate) async fn cancel(state: &AppState, task: UpstreamTask) -> AppResult<Va
         "async image task cancellation requested"
     );
     if task.status == STATUS_QUEUED {
+        let mut queued_metadata = metadata(&task)?;
+        let request_spool = queued_metadata.request_spool.take();
         if update_metadata(
-            &state.db.pool,
+            state,
             task.id,
             STATUS_CANCELLED,
             true,
-            metadata(&task)?,
+            queued_metadata,
             None,
             Some(STATUS_QUEUED),
         )
         .await?
         {
+            if let Some(spool) = request_spool {
+                spool::remove(&state.config.response_assets.dir, &spool.path).await;
+            }
             task_billing::release_task_hold_by_id(state, task.id, "cancelled neogate response")
                 .await?;
         } else {
@@ -335,7 +391,7 @@ pub(crate) async fn cancel(state: &AppState, task: UpstreamTask) -> AppResult<Va
                 let mut metadata = metadata(&current)?;
                 metadata.cancel_requested = true;
                 let _ = update_metadata(
-                    &state.db.pool,
+                    state,
                     current.id,
                     current.status.as_str(),
                     false,
@@ -350,7 +406,7 @@ pub(crate) async fn cancel(state: &AppState, task: UpstreamTask) -> AppResult<Va
         let mut metadata = metadata(&task)?;
         metadata.cancel_requested = true;
         let _ = update_metadata(
-            &state.db.pool,
+            state,
             task.id,
             task.status.as_str(),
             false,
@@ -388,7 +444,22 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
         return Ok(());
     }
 
-    let mut metadata = metadata(&task)?;
+    let mut metadata = match metadata(&task) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            fail_malformed_response_task(
+                state,
+                task.id,
+                &task.upstream_task_id,
+                task.model.as_deref().unwrap_or(""),
+                &task.status,
+                &task.upstream_metadata,
+                &err.to_string(),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     let response_model = metadata
         .response
         .get("model")
@@ -396,7 +467,11 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
         .unwrap_or("")
         .to_string();
     if metadata.cancel_requested || task.status == STATUS_CANCELLED {
-        if set_terminal_status(&state.db.pool, task.id, STATUS_CANCELLED, None, metadata).await? {
+        let request_spool = metadata.request_spool.take();
+        if set_terminal_status(state, task.id, STATUS_CANCELLED, None, metadata).await? {
+            if let Some(spool) = request_spool {
+                spool::remove(&state.config.response_assets.dir, &spool.path).await;
+            }
             task_billing::release_task_hold_by_id(state, task.id, "cancelled neogate response")
                 .await?;
             tracing::info!(
@@ -407,6 +482,26 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
                 status = STATUS_CANCELLED,
                 "cancelled async image task"
             );
+        }
+        return Ok(());
+    }
+
+    if metadata.attempts >= MAX_IMAGE_TASK_ATTEMPTS {
+        let request_spool = metadata.request_spool.take();
+        if fail_response_task(
+            state,
+            task.id,
+            metadata,
+            "neogate_response_attempts_exhausted",
+            "async image request exceeded the retry limit".to_string(),
+            Some(task.status.as_str()),
+            "exhausted async image request retries",
+        )
+        .await?
+        {
+            if let Some(spool) = request_spool {
+                spool::remove(&state.config.response_assets.dir, &spool.path).await;
+            }
         }
         return Ok(());
     }
@@ -430,9 +525,10 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
     );
 
     let _request_permit = state.user_request_limiter.try_acquire(task.user_id).await?;
+    metadata.attempts += 1;
 
     if !update_metadata(
-        &state.db.pool,
+        state,
         task.id,
         STATUS_IN_PROGRESS,
         false,
@@ -448,8 +544,13 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
     let upstream = task
         .selected_upstream(&state.db.pool, &state.secrets)
         .await?;
-    let body = if let Some(upstream_request) = &metadata.upstream_request {
-        Bytes::from(serde_json::to_vec(upstream_request)?)
+
+    let body_result = if let Some(upstream_request) = &metadata.upstream_request {
+        serde_json::to_vec(upstream_request)
+            .map(Bytes::from)
+            .map_err(Into::into)
+    } else if let Some(spool) = metadata.request_spool.clone() {
+        spool::read(&state.config.response_assets.dir, &spool).await
     } else {
         adapter_for_endpoint(&upstream.provider, &upstream.base_url)
             .prepare_response_image_generation_request(Bytes::from(serde_json::to_vec(
@@ -459,8 +560,30 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
                 AppError::BadRequest(
                     "provider adapter does not translate response image generation".to_string(),
                 )
-            })?
-            .body
+            })
+            .map(|request| request.body)
+    };
+    let body = match body_result {
+        Ok(body) => body,
+        Err(err) => {
+            let request_spool = metadata.request_spool.take();
+            if fail_response_task(
+                state,
+                task.id,
+                metadata,
+                "neogate_response_request_unavailable",
+                err.to_string(),
+                None,
+                "unavailable async image request",
+            )
+            .await?
+            {
+                if let Some(spool) = request_spool {
+                    spool::remove(&state.config.response_assets.dir, &spool.path).await;
+                }
+            }
+            return Ok(());
+        }
     };
     let result = run_image_generation(state, &task, &upstream, &response_model, body).await;
     match result {
@@ -472,12 +595,14 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
             } = result;
             let image_count = assets.len();
             let asset_bytes = assets.iter().map(|asset| asset.bytes).sum::<usize>();
+            let request_spool = metadata.request_spool.take();
             metadata.response = response;
             metadata.assets = assets;
             metadata.error = None;
-            if set_terminal_status(&state.db.pool, task.id, STATUS_COMPLETED, usage, metadata)
-                .await?
-            {
+            if set_terminal_status(state, task.id, STATUS_COMPLETED, usage, metadata).await? {
+                if let Some(spool) = request_spool {
+                    spool::remove(&state.config.response_assets.dir, &spool.path).await;
+                }
                 let updated = upstream::fetch_task(
                     &state.db.pool,
                     task.user_key_id,
@@ -522,25 +647,121 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
                 upstream_path = "/v1/images/generations",
                 "async image task failed"
             );
-            metadata.error = Some(json!({
-                "code": "neogate_response_failed",
-                "message": err.to_string(),
-            }));
-            metadata.response = response_json(
-                &task.upstream_task_id,
-                task.model.as_deref().unwrap_or(""),
-                STATUS_FAILED,
-                Vec::new(),
-                metadata.error.clone(),
+            let request_spool = metadata.request_spool.take();
+            if fail_response_task(
+                state,
+                task.id,
+                metadata,
+                "neogate_response_failed",
+                err.to_string(),
                 None,
-            );
-            if set_terminal_status(&state.db.pool, task.id, STATUS_FAILED, None, metadata).await? {
-                task_billing::release_task_hold_by_id(state, task.id, "failed neogate response")
-                    .await?;
+                "failed neogate response",
+            )
+            .await?
+            {
+                if let Some(spool) = request_spool {
+                    spool::remove(&state.config.response_assets.dir, &spool.path).await;
+                }
             }
         }
     }
     Ok(())
+}
+
+fn compact_data_url_images(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                compact_data_url_images(item);
+            }
+        }
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("input_image") {
+                if let Some(image_url) = object.get_mut("image_url") {
+                    if image_url
+                        .as_str()
+                        .is_some_and(|value| value.starts_with("data:"))
+                    {
+                        *image_url = Value::String("[data URL stored separately]".to_string());
+                    }
+                }
+            } else {
+                for item in object.values_mut() {
+                    compact_data_url_images(item);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) async fn fail_stale_request_spool_tasks(state: &AppState, limit: i64) -> AppResult<u64> {
+    let stale_before = Utc::now()
+        - chrono::Duration::from_std(super::REQUEST_SPOOL_TTL)
+            .unwrap_or_else(|_| chrono::Duration::hours(1));
+    let rows = sqlx::query(
+        r#"
+        SELECT id, upstream_task_id, model, status, upstream_metadata
+        FROM task_upstream
+        WHERE task_type = 'neogate_response'
+          AND status = 'queued'
+          AND terminal = FALSE
+          AND created_at <= $1
+        ORDER BY created_at ASC, id ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(stale_before)
+    .bind(limit.max(1))
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let mut failed = 0;
+    for row in rows {
+        let task_id: DbId = row.try_get("id")?;
+        let response_id: String = row.try_get("upstream_task_id")?;
+        let model: Option<String> = row.try_get("model")?;
+        let status: String = row.try_get("status")?;
+        let value: Value = row.try_get("upstream_metadata")?;
+        let mut metadata = match serde_json::from_value::<NeogateResponseMetadata>(value.clone()) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                if fail_malformed_response_task(
+                    state,
+                    task_id,
+                    &response_id,
+                    model.as_deref().unwrap_or(""),
+                    &status,
+                    &value,
+                    &err.to_string(),
+                )
+                .await?
+                {
+                    failed += 1;
+                }
+                continue;
+            }
+        };
+        let Some(spool) = metadata.request_spool.take() else {
+            continue;
+        };
+        if fail_response_task(
+            state,
+            task_id,
+            metadata,
+            "neogate_response_request_expired",
+            "async image request expired before a worker started it".to_string(),
+            Some(STATUS_QUEUED),
+            "expired async image request",
+        )
+        .await?
+        {
+            spool::remove(&state.config.response_assets.dir, &spool.path).await;
+            failed += 1;
+            tracing::warn!(task_id, response_id, "expired queued async image request");
+        }
+    }
+    Ok(failed)
 }
 
 pub(crate) async fn cleanup_expired_assets(state: &AppState, limit: i64) -> AppResult<u64> {
@@ -770,15 +991,7 @@ async fn run_image_generation(
     response_model: &str,
     body: Bytes,
 ) -> AppResult<NeogateResponseResult> {
-    let request: Value = serde_json::from_slice(&body)?;
-    let image_model = request.get("model").and_then(Value::as_str).unwrap_or("");
-    let size = request.get("size").and_then(Value::as_str).unwrap_or("");
-    let quality = request.get("quality").and_then(Value::as_str).unwrap_or("");
-    let output_format = request
-        .get("output_format")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let requested_image_count = request.get("n").and_then(Value::as_i64).unwrap_or(1);
+    let request: ImageRequestSummary = serde_json::from_slice(&body)?;
     let upstream_path = image_generation_upstream_path(&request);
     let started = Instant::now();
     tracing::info!(
@@ -792,12 +1005,12 @@ async fn run_image_generation(
         upstream = %upstream.base_url,
         upstream_path,
         response_model,
-        image_model = %task.model.as_deref().unwrap_or(image_model),
-        upstream_image_model = %task.upstream_model.as_deref().unwrap_or(image_model),
-        size,
-        quality,
-        output_format,
-        image_count = requested_image_count,
+        image_model = %task.model.as_deref().unwrap_or(&request.model),
+        upstream_image_model = %task.upstream_model.as_deref().unwrap_or(&request.model),
+        size = %request.size,
+        quality = %request.quality,
+        output_format = %request.output_format,
+        image_count = request.n,
         request_bytes = body.len(),
         "sending async image task to upstream"
     );
@@ -852,34 +1065,29 @@ async fn run_image_generation(
         .to_string();
     let response_body = response.bytes().await?;
     let usage = parse_usage_from_bytes(&response_body, false);
-    let value: Value = serde_json::from_slice(&response_body)?;
-    let images = value
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let response_bytes = response_body.len();
+    let value: ImageGenerationResponse = serde_json::from_slice(&response_body)?;
+    drop(response_body);
+    let images = value.data;
     if images.is_empty() {
         return Err(AppError::BadRequest(
             "image generation response did not include data".to_string(),
         ));
     }
 
-    let (mime, extension) = image_output_type(&request);
+    let (mime, extension) = image_output_type(&request.output_format);
     let mut assets = Vec::new();
-    for (index, image) in images.iter().enumerate() {
-        let result = image
-            .get("b64_json")
-            .or_else(|| image.get("result"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                AppError::BadRequest(
-                    "image generation response did not include base64 image data".to_string(),
-                )
-            })?;
-        let revised_prompt = image
-            .get("revised_prompt")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+    for (index, image) in images.into_iter().enumerate() {
+        let ImageGenerationOutput {
+            b64_json,
+            result,
+            revised_prompt,
+        } = image;
+        let result = b64_json.as_deref().or(result.as_deref()).ok_or_else(|| {
+            AppError::BadRequest(
+                "image generation response did not include base64 image data".to_string(),
+            )
+        })?;
         assets.push(
             save_image_asset(state, task, index, result, mime, extension, revised_prompt).await?,
         );
@@ -895,7 +1103,7 @@ async fn run_image_generation(
         upstream_status = status.as_u16(),
         content_type = %content_type,
         elapsed_ms = started.elapsed().as_millis() as u64,
-        response_bytes = response_body.len(),
+        response_bytes,
         image_count = assets.len(),
         asset_bytes = assets.iter().map(|asset| asset.bytes).sum::<usize>(),
         input_tokens = usage.map_or(0, |usage| usage.input_tokens),
@@ -918,18 +1126,18 @@ async fn run_image_generation(
     })
 }
 
-fn image_generation_upstream_path(request: &Value) -> &'static str {
-    if request.get("images").and_then(Value::as_array).is_some() {
+fn image_generation_upstream_path(request: &ImageRequestSummary) -> &'static str {
+    if request.images.is_some() {
         "/v1/images/edits"
     } else {
         "/v1/images/generations"
     }
 }
 
-fn image_output_type(request: &Value) -> (&'static str, &'static str) {
-    match request.get("output_format").and_then(Value::as_str) {
-        Some("jpeg" | "jpg") => ("image/jpeg", "jpg"),
-        Some("webp") => ("image/webp", "webp"),
+fn image_output_type(output_format: &str) -> (&'static str, &'static str) {
+    match output_format {
+        "jpeg" | "jpg" => ("image/jpeg", "jpg"),
+        "webp" => ("image/webp", "webp"),
         _ => ("image/png", "png"),
     }
 }
@@ -1160,7 +1368,7 @@ async fn mark_due_now(pool: &PgPool, response_id: &str) -> AppResult<()> {
 }
 
 async fn update_metadata(
-    pool: &PgPool,
+    state: &AppState,
     task_id: DbId,
     status: &str,
     terminal: bool,
@@ -1170,7 +1378,12 @@ async fn update_metadata(
 ) -> AppResult<bool> {
     metadata.response["status"] = Value::String(status.to_string());
     let usage_summary = UsageSummary::value_from_usage(usage)?;
-    let next_poll_at = (!terminal && status == STATUS_QUEUED).then(Utc::now);
+    let next_poll_at = next_poll_at_for_status(
+        status,
+        terminal,
+        Utc::now(),
+        state.config.http.upstream_timeout,
+    );
     let expires_at = terminal.then(|| asset_expiration(Utc::now()));
     let result = sqlx::query(
         r#"
@@ -1197,9 +1410,34 @@ async fn update_metadata(
     .bind(next_poll_at)
     .bind(expected_status)
     .bind(expires_at)
-    .execute(pool)
+    .execute(&state.db.pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+fn next_poll_at_for_status(
+    status: &str,
+    terminal: bool,
+    now: chrono::DateTime<Utc>,
+    upstream_timeout: std::time::Duration,
+) -> Option<chrono::DateTime<Utc>> {
+    if terminal {
+        return None;
+    }
+    match status {
+        STATUS_QUEUED => Some(now),
+        STATUS_IN_PROGRESS => Some(
+            now + chrono::Duration::from_std(image_task_lease(upstream_timeout))
+                .unwrap_or_else(|_| chrono::Duration::minutes(15)),
+        ),
+        _ => None,
+    }
+}
+
+fn image_task_lease(upstream_timeout: std::time::Duration) -> std::time::Duration {
+    upstream_timeout
+        .checked_add(IMAGE_TASK_LEASE_MARGIN)
+        .unwrap_or(upstream_timeout)
 }
 
 fn asset_expiration(completed_at: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
@@ -1209,13 +1447,112 @@ fn asset_expiration(completed_at: chrono::DateTime<Utc>) -> chrono::DateTime<Utc
 }
 
 async fn set_terminal_status(
-    pool: &PgPool,
+    state: &AppState,
     task_id: DbId,
     status: &str,
     usage: Option<TokenUsage>,
     metadata: NeogateResponseMetadata,
 ) -> AppResult<bool> {
-    update_metadata(pool, task_id, status, true, metadata, usage, None).await
+    update_metadata(state, task_id, status, true, metadata, usage, None).await
+}
+
+async fn fail_malformed_response_task(
+    state: &AppState,
+    task_id: DbId,
+    response_id: &str,
+    fallback_model: &str,
+    expected_status: &str,
+    value: &Value,
+    parse_error: &str,
+) -> AppResult<bool> {
+    let model = value
+        .get("response")
+        .and_then(|response| response.get("model"))
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_model);
+    let request_spool = value
+        .get("request_spool")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<spool::Spool>(value).ok());
+    let metadata = NeogateResponseMetadata {
+        request: json!({}),
+        upstream_request: None,
+        request_spool: None,
+        response: response_json(response_id, model, expected_status, Vec::new(), None, None),
+        image_format: NeogateImageResponseFormat::default(),
+        assets: Vec::new(),
+        error: None,
+        cancel_requested: false,
+        attempts: 0,
+    };
+    let updated = fail_response_task(
+        state,
+        task_id,
+        metadata,
+        "neogate_response_metadata_invalid",
+        "stored async image task metadata is invalid".to_string(),
+        Some(expected_status),
+        "invalid neogate response metadata",
+    )
+    .await?;
+    if updated {
+        if let Some(spool) = request_spool {
+            spool::remove(&state.config.response_assets.dir, &spool.path).await;
+        }
+        tracing::warn!(
+            task_id,
+            response_id,
+            error = parse_error,
+            "failed async image task with malformed response metadata"
+        );
+    }
+    Ok(updated)
+}
+
+async fn fail_response_task(
+    state: &AppState,
+    task_id: DbId,
+    mut metadata: NeogateResponseMetadata,
+    code: &str,
+    message: String,
+    expected_status: Option<&str>,
+    billing_context: &str,
+) -> AppResult<bool> {
+    let response_id = metadata
+        .response
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let model = metadata
+        .response
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    metadata.error = Some(json!({ "code": code, "message": message }));
+    metadata.response = response_json(
+        &response_id,
+        &model,
+        STATUS_FAILED,
+        Vec::new(),
+        metadata.error.clone(),
+        None,
+    );
+    let updated = update_metadata(
+        state,
+        task_id,
+        STATUS_FAILED,
+        true,
+        metadata,
+        None,
+        expected_status,
+    )
+    .await?;
+    if updated {
+        task_billing::release_task_hold_by_id(state, task_id, billing_context).await?;
+    }
+    Ok(updated)
 }
 
 async fn task_usage_summary(pool: &PgPool, task_id: DbId) -> AppResult<Option<UsageSummary>> {
@@ -1290,30 +1627,66 @@ mod tests {
     }
 
     #[test]
+    fn compacts_only_embedded_image_data_urls() {
+        let mut request = json!({
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:image/png;base64,abc"},
+                    {"type": "input_image", "image_url": "https://example.com/image.png"}
+                ]
+            }]
+        });
+
+        compact_data_url_images(&mut request);
+
+        assert_eq!(
+            request["input"][0]["content"][0]["image_url"],
+            "[data URL stored separately]"
+        );
+        assert_eq!(
+            request["input"][0]["content"][1]["image_url"],
+            "https://example.com/image.png"
+        );
+    }
+
+    #[test]
     fn detects_image_output_content_type() {
-        assert_eq!(
-            image_output_type(&json!({"output_format": "jpeg"})),
-            ("image/jpeg", "jpg")
-        );
-        assert_eq!(
-            image_output_type(&json!({"output_format": "webp"})),
-            ("image/webp", "webp")
-        );
-        assert_eq!(image_output_type(&json!({})), ("image/png", "png"));
+        assert_eq!(image_output_type("jpeg"), ("image/jpeg", "jpg"));
+        assert_eq!(image_output_type("webp"), ("image/webp", "webp"));
+        assert_eq!(image_output_type(""), ("image/png", "png"));
     }
 
     #[test]
     fn selects_image_edit_path_when_reference_images_are_present() {
+        let edit: ImageRequestSummary = serde_json::from_value(json!({
+            "images": [{"image_url": "data:image/png;base64,AAAA"}]
+        }))
+        .unwrap();
+        let generation: ImageRequestSummary =
+            serde_json::from_value(json!({"prompt": "Draw a teapot."})).unwrap();
+        assert_eq!(image_generation_upstream_path(&edit), "/v1/images/edits");
         assert_eq!(
-            image_generation_upstream_path(&json!({
-                "images": [{"image_url": "data:image/png;base64,AAAA"}]
-            })),
-            "/v1/images/edits"
-        );
-        assert_eq!(
-            image_generation_upstream_path(&json!({"prompt": "Draw a teapot."})),
+            image_generation_upstream_path(&generation),
             "/v1/images/generations"
         );
+    }
+
+    #[test]
+    fn parses_image_response_outputs_without_preserving_unknown_fields() {
+        let response: ImageGenerationResponse = serde_json::from_value(json!({
+            "data": [
+                {"b64_json": "AAAA", "revised_prompt": "first", "ignored": "large"},
+                {"result": "BBBB"}
+            ],
+            "usage": {"total_tokens": 10}
+        }))
+        .unwrap();
+
+        assert_eq!(response.data.len(), 2);
+        assert_eq!(response.data[0].b64_json.as_deref(), Some("AAAA"));
+        assert_eq!(response.data[0].revised_prompt.as_deref(), Some("first"));
+        assert_eq!(response.data[1].result.as_deref(), Some("BBBB"));
     }
 
     #[test]
@@ -1322,6 +1695,42 @@ mod tests {
         assert_eq!(
             asset_expiration(completed_at) - completed_at,
             chrono::Duration::days(3)
+        );
+    }
+
+    #[test]
+    fn task_poll_schedule_keeps_an_in_progress_lease() {
+        let now = Utc::now();
+        assert_eq!(
+            next_poll_at_for_status(
+                STATUS_QUEUED,
+                false,
+                now,
+                std::time::Duration::from_secs(600),
+            ),
+            Some(now)
+        );
+        assert_eq!(
+            next_poll_at_for_status(
+                STATUS_IN_PROGRESS,
+                false,
+                now,
+                std::time::Duration::from_secs(600),
+            ),
+            Some(now + chrono::Duration::minutes(15))
+        );
+        assert_eq!(
+            next_poll_at_for_status(
+                STATUS_COMPLETED,
+                true,
+                now,
+                std::time::Duration::from_secs(600),
+            ),
+            None
+        );
+        assert_eq!(
+            image_task_lease(std::time::Duration::from_secs(20 * 60)),
+            std::time::Duration::from_secs(25 * 60)
         );
     }
 

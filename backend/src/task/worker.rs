@@ -17,6 +17,7 @@ use crate::{
 use super::{
     billing as task_billing, jobs,
     results::AnthropicResultsUsageParser,
+    spool,
     upstream::{self, UpstreamTask, UpstreamTaskType},
 };
 
@@ -115,6 +116,8 @@ async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
 
 async fn cleanup_expired_tasks(state: &Arc<AppState>) -> AppResult<()> {
     let limit = state.config.task.upstream_poll_batch_size;
+    let expired_requests = jobs::fail_stale_request_spool_tasks(state, limit).await?;
+    let orphaned_request_files = spool::cleanup_orphans(state, limit).await?;
     let mut deleted_assets = 0;
     loop {
         let deleted = jobs::cleanup_expired_assets(state, limit).await?;
@@ -131,8 +134,15 @@ async fn cleanup_expired_tasks(state: &Arc<AppState>) -> AppResult<()> {
             break;
         }
     }
-    if deleted_assets > 0 || deleted_tasks > 0 {
-        tracing::info!(deleted_assets, deleted_tasks, "deleted expired async tasks");
+    if expired_requests > 0 || orphaned_request_files > 0 || deleted_assets > 0 || deleted_tasks > 0
+    {
+        tracing::info!(
+            expired_requests,
+            orphaned_request_files,
+            deleted_assets,
+            deleted_tasks,
+            "cleaned expired async tasks"
+        );
     }
     Ok(())
 }

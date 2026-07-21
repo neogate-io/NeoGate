@@ -52,6 +52,8 @@ const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 3] = [
     UpstreamProtocol::Openai,
     UpstreamProtocol::Anthropic,
 ];
+const OPENAI_RESPONSES_COMPACT_PROTOCOLS: [UpstreamProtocol; 2] =
+    [UpstreamProtocol::OpenAiOauth, UpstreamProtocol::Openai];
 
 fn project_model_request_context(
     body: &Bytes,
@@ -178,6 +180,23 @@ pub(crate) async fn openai_responses(
         headers,
         body,
         RelayRoute::Responses,
+        BodyKind::OpenaiResponses,
+    )
+    .await
+}
+
+pub(crate) async fn openai_responses_compact(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai(
+        state,
+        auth,
+        headers,
+        body,
+        RelayRoute::ResponsesCompact,
         BodyKind::OpenaiResponses,
     )
     .await
@@ -760,6 +779,7 @@ async fn select_upstream_excluding(
     let protocols = match path {
         "/v1/chat/completions" => &OPENAI_CHAT_PROTOCOLS[..],
         "/v1/responses" => &OPENAI_RESPONSES_PROTOCOLS[..],
+        "/v1/responses/compact" => &OPENAI_RESPONSES_COMPACT_PROTOCOLS[..],
         _ => &OPENAI_PROTOCOLS[..],
     };
     let excluded_endpoint_ids = if path == "/v1/responses" {

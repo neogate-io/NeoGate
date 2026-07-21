@@ -14,6 +14,7 @@ use crate::{
 pub(crate) enum RelayRoute {
     ChatCompletions,
     Responses,
+    ResponsesCompact,
     Embeddings,
     Moderations,
     ImageGenerations,
@@ -27,6 +28,7 @@ impl RelayRoute {
         match self {
             Self::ChatCompletions => "/v1/chat/completions",
             Self::Responses => "/v1/responses",
+            Self::ResponsesCompact => "/v1/responses/compact",
             Self::Embeddings => "/v1/embeddings",
             Self::Moderations => "/v1/moderations",
             Self::ImageGenerations => "/v1/images/generations",

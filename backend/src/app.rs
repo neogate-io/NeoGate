@@ -228,6 +228,7 @@ fn should_skip_successful_relay_access_log(
             | "/v1/embeddings"
             | "/v1/moderations"
             | "/v1/responses"
+            | "/v1/responses/compact"
             | "/v1/images/generations"
             | "/v1/images/edits"
             | "/v1/images/variations"

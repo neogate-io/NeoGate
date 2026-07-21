@@ -76,6 +76,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/embeddings", post(openai::openai_embeddings))
         .route("/v1/moderations", post(openai::openai_moderations))
         .route("/v1/responses", post(openai::openai_responses))
+        .route(
+            "/v1/responses/compact",
+            post(openai::openai_responses_compact),
+        )
         .route("/v1/responses/{response_id}", get(openai::openai_response))
         .route(
             "/v1/responses/{response_id}/assets/{index}",
@@ -358,16 +362,8 @@ pub(crate) async fn respond_upstream_http_failure(
     failure: UpstreamHttpFailure,
 ) -> AppResult<Response> {
     let client_message = upstream_http_failure_client_message(&ctx, status, &failure);
-    let payload = json!({
-        "error": {
-            "message": client_message,
-            "code": failure.error_type,
-            "upstream": ctx.upstream.provider,
-            "upstream_status": status.as_u16(),
-            "upstream_error": failure.detail,
-            "retryable": failure.retryable,
-        }
-    });
+    let payload =
+        upstream_http_failure_payload(&ctx.upstream.provider, status, &failure, client_message);
     let client_response = payload.to_string();
     log_upstream_http_failure(&ctx, status, &failure, Some(&client_response));
     ctx.release_request_permit();
@@ -390,6 +386,35 @@ pub(crate) async fn respond_upstream_http_failure(
     builder
         .body(Body::from(client_response))
         .map_err(|err| AppError::BadRequest(err.to_string()))
+}
+
+fn upstream_http_failure_payload(
+    upstream_provider: &str,
+    status: StatusCode,
+    failure: &UpstreamHttpFailure,
+    client_message: String,
+) -> Value {
+    if failure.error_type == "upstream_context_length_exceeded" {
+        return json!({
+            "error": {
+                "message": client_message,
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": "context_length_exceeded"
+            }
+        });
+    }
+
+    json!({
+        "error": {
+            "message": client_message,
+            "code": failure.error_type,
+            "upstream": upstream_provider,
+            "upstream_status": status.as_u16(),
+            "upstream_error": failure.detail,
+            "retryable": failure.retryable,
+        }
+    })
 }
 
 pub(crate) fn log_upstream_http_failure(
@@ -1154,6 +1179,26 @@ pub(crate) async fn enqueue_relay_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_length_failure_uses_openai_compatible_error_shape() {
+        let failure = describe_upstream_http_failure(
+            StatusCode::BAD_GATEWAY,
+            br#"{"error":{"message":"Your input exceeds the context window"}}"#,
+        );
+        let payload = upstream_http_failure_payload(
+            "newapi",
+            StatusCode::BAD_GATEWAY,
+            &failure,
+            "The request is too large".to_string(),
+        );
+
+        assert_eq!(payload["error"]["code"], "context_length_exceeded");
+        assert_eq!(payload["error"]["type"], "invalid_request_error");
+        assert_eq!(payload["error"]["param"], "input");
+        assert!(payload["error"].get("upstream").is_none());
+        assert!(payload["error"].get("retryable").is_none());
+    }
 
     #[test]
     fn upstream_error_body_buffer_is_bounded() {

@@ -181,19 +181,29 @@ async fn forward_openai_oauth(
     body: Bytes,
     path: &str,
 ) -> AppResult<reqwest::Response> {
-    if path != "/v1/responses" {
+    if !matches!(path, "/v1/responses" | "/v1/responses/compact") {
         return Err(AppError::BadRequest(
-            "openai_oauth only supports /v1/responses".to_string(),
+            "openai_oauth only supports /v1/responses and /v1/responses/compact".to_string(),
         ));
     }
     let account_id = upstream.account_id.as_deref().ok_or_else(|| {
         AppError::BadRequest("令牌文件缺少 ChatGPT account_id，请重新上传有效凭证".to_string())
     })?;
-    let body = codex_compatible_responses_body(body)?;
-    let url = format!("{}/responses", upstream.base_url.trim_end_matches('/'));
+    let compact = path == "/v1/responses/compact";
+    let body = if compact {
+        codex_compatible_compact_body(body)?
+    } else {
+        codex_compatible_responses_body(body)?
+    };
+    let suffix = if compact {
+        "responses/compact"
+    } else {
+        "responses"
+    };
+    let url = format!("{}/{suffix}", upstream.base_url.trim_end_matches('/'));
 
     let response =
-        send_openai_oauth_request(state, upstream, &url, account_id, body.clone()).await?;
+        send_openai_oauth_request(state, upstream, &url, account_id, body.clone(), path).await?;
     if response.status() != StatusCode::UNAUTHORIZED {
         return Ok(response);
     }
@@ -213,7 +223,15 @@ async fn forward_openai_oauth(
         account_id: Some(refreshed_account_id.to_string()),
         ..upstream.clone()
     };
-    send_openai_oauth_request(state, &refreshed_upstream, &url, refreshed_account_id, body).await
+    send_openai_oauth_request(
+        state,
+        &refreshed_upstream,
+        &url,
+        refreshed_account_id,
+        body,
+        path,
+    )
+    .await
 }
 
 pub(crate) async fn forward_openai_bound(
@@ -246,27 +264,40 @@ async fn send_openai_oauth_request(
     url: &str,
     account_id: &str,
     body: Bytes,
+    path: &str,
 ) -> AppResult<reqwest::Response> {
-    send_upstream_request(
-        state,
-        upstream,
-        UpstreamProtocol::OpenAiOauth,
-        "/responses",
-        || {
-            state
-                .http
-                .post(url)
-                .bearer_auth(&upstream.secret)
-                .header("content-type", "application/json")
-                .header("accept", "text/event-stream")
-                .header("connection", "Keep-Alive")
-                .header("originator", "codex_cli_rs")
-                .header("chatgpt-account-id", account_id)
-                .header("user-agent", "codex_cli_rs/0.118.0 (NeoGate; openai_oauth)")
-                .body(body.clone())
-        },
-    )
+    send_upstream_request(state, upstream, UpstreamProtocol::OpenAiOauth, path, || {
+        state
+            .http
+            .post(url)
+            .bearer_auth(&upstream.secret)
+            .header("content-type", "application/json")
+            .header(
+                "accept",
+                if path.ends_with("/compact") {
+                    "application/json"
+                } else {
+                    "text/event-stream"
+                },
+            )
+            .header("connection", "Keep-Alive")
+            .header("originator", "codex_cli_rs")
+            .header("chatgpt-account-id", account_id)
+            .header("user-agent", "codex_cli_rs/0.118.0 (NeoGate; openai_oauth)")
+            .body(body.clone())
+    })
     .await
+}
+
+fn codex_compatible_compact_body(body: Bytes) -> AppResult<Bytes> {
+    let mut value: Value = serde_json::from_slice(&body)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("request body must be a JSON object".to_string()))?;
+    object
+        .entry("instructions".to_string())
+        .or_insert_with(|| Value::String(String::new()));
+    Ok(Bytes::from(serde_json::to_vec(&value)?))
 }
 
 fn codex_compatible_responses_body(body: Bytes) -> AppResult<Bytes> {
@@ -635,6 +666,27 @@ mod tests {
             upstream_url("https://api.openai.com", "/v1/responses"),
             "https://api.openai.com/v1/responses"
         );
+    }
+
+    #[test]
+    fn upstream_url_supports_responses_compact() {
+        assert_eq!(
+            upstream_url("https://api.openai.com/v1", "/v1/responses/compact"),
+            "https://api.openai.com/v1/responses/compact"
+        );
+    }
+
+    #[test]
+    fn codex_compact_body_adds_instructions_without_forcing_streaming() {
+        let body = codex_compatible_compact_body(Bytes::from_static(
+            br#"{"model":"gpt-5.6-sol","input":[]}"#,
+        ))
+        .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(value["instructions"], "");
+        assert!(value.get("stream").is_none());
+        assert_eq!(value["input"], json!([]));
     }
 
     #[test]

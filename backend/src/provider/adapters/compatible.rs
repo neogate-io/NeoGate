@@ -70,6 +70,11 @@ mod tests {
             COMPATIBLE_ADAPTER.resolve_url("https://api.openai.com", RelayRoute::Responses),
             "https://api.openai.com/v1/responses"
         );
+        assert_eq!(
+            COMPATIBLE_ADAPTER
+                .resolve_url("https://api.openai.com/v1", RelayRoute::ResponsesCompact),
+            "https://api.openai.com/v1/responses/compact"
+        );
     }
 
     #[test]

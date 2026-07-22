@@ -537,6 +537,36 @@ install_node_tarball() {
     *) export PATH="$bin_dir:$PATH" ;;
   esac
   export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
+
+  persist_node_path "$bin_dir"
+}
+
+# Make the managed Node.js available in future shells so globally installed
+# CLIs (codex, claude) keep working after the installer exits.
+persist_node_path() {
+  local bin_dir="$1"
+  local marker="# NeoGate Node.js PATH"
+  local export_line="export PATH=\"$bin_dir:\$PATH\""
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "+ $(message node_path_persist_hint "$bin_dir")"
+    return 0
+  fi
+
+  local -a rc_files=("$HOME/.bashrc" "$HOME/.profile")
+  if [[ -f "$HOME/.zshrc" || "${SHELL:-}" == */zsh ]]; then
+    rc_files+=("$HOME/.zshrc")
+  fi
+
+  local rc_file
+  for rc_file in "${rc_files[@]}"; do
+    touch "$rc_file"
+    if ! grep -qF "$bin_dir" "$rc_file"; then
+      printf '\n%s\n%s\n' "$marker" "$export_line" >>"$rc_file"
+    fi
+  done
+
+  detail "$(message node_path_persisted)"
 }
 
 install_node() {

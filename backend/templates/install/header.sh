@@ -143,6 +143,8 @@ message() {
       node_path_missing) printf '%s' "Node.js 安装后未在 PATH 中找到 node" ;;
       npm_path_missing) printf '%s' "Node.js 安装后未在 PATH 中找到 npm" ;;
       node_installed) printf 'Node.js %s' "$1" ;;
+      node_path_persisted) printf '已将 Node.js 加入 PATH（重新打开终端或运行 source ~/.bashrc 后生效）' ;;
+      node_path_persist_hint) printf '会把 Node.js 的 PATH 写入 shell 配置文件：%s' "$1" ;;
       codex_found) printf 'Codex CLI %s' "$1" ;;
       codex_missing_disabled) printf '%s' "缺少 Codex CLI，且安装已禁用。" ;;
       codex_missing_prompt) printf '%s' "缺少 Codex CLI。现在用 npm 安装 @openai/codex 吗？" ;;
@@ -265,6 +267,8 @@ message() {
     node_path_missing) printf '%s' "Node.js installation did not put node on PATH" ;;
     npm_path_missing) printf '%s' "Node.js installation did not put npm on PATH" ;;
     node_installed) printf 'Node.js %s' "$1" ;;
+    node_path_persisted) printf '%s' "Added Node.js to PATH (open a new terminal or run: source ~/.bashrc)" ;;
+    node_path_persist_hint) printf 'Would persist Node.js PATH to shell profile for %s' "$1" ;;
     codex_found) printf 'Codex CLI %s' "$1" ;;
     codex_missing_disabled) printf '%s' "Codex CLI is missing and installation is disabled." ;;
     codex_missing_prompt) printf '%s' "Codex CLI is missing. Install @openai/codex with npm now?" ;;

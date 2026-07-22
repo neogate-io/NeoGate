@@ -322,7 +322,18 @@ mod tests {
         assert!(script.contains("function Get-NpmGlobalPaths"));
         assert!(script.contains("$npm.Path config get prefix"));
         assert!(script.contains("function Install-NodeSystem"));
+        assert!(script.contains("& $FilePath @Arguments 2>&1 | Out-Host"));
+        assert!(script.contains("return [int]$exitCode"));
         assert!(script.contains("OpenJS.NodeJS.LTS"));
+        assert!(script.contains("'--source', 'winget'"));
+        assert!(script.contains("$exitCode = Invoke-CommandStatus 'winget'"));
+        assert!(script.contains("'C:\\Program Files\\nodejs'"));
+        assert!(script.contains("'C:\\Program Files (x86)\\nodejs'"));
+        assert!(script.contains("node_winget_failed"));
+        assert!(script.contains("node_choco_retry_prompt"));
+        assert!(script.contains("if ((Assert-Command 'choco') -and (Confirm-DefaultYes"));
+        assert!(script.contains("if (Confirm-NodeReady) { return }"));
+        assert!(script.contains("Fail (Get-Message node_install_failed)"));
         assert!(script.contains("choco' @('install', 'nodejs-lts'"));
         assert!(script.contains("openai_base_url = `\"$(Escape-Toml $BaseUrl)`\""));
         assert!(script.contains("[model_providers.`\"$providerIdEscaped`\"]"));

@@ -202,11 +202,13 @@ function Update-SessionPath {
   $paths = @(
     [Environment]::GetEnvironmentVariable('Path', 'Machine'),
     [Environment]::GetEnvironmentVariable('Path', 'User'),
-    $env:Path
+    $env:Path,
+    'C:\Program Files\nodejs',
+    'C:\Program Files (x86)\nodejs',
     Get-NpmGlobalPaths
-  ) | Where-Object { $_ }
+  ) -join ';'
 
-  $env:Path = (($paths -join ';') -split ';' | Where-Object { $_ } | Select-Object -Unique) -join ';'
+  $env:Path = ($paths -split ';' | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) -join ';'
 }
 
 function Run-Command {
@@ -223,8 +225,9 @@ function Invoke-CommandStatus {
     Write-Host "+ $FilePath $($Arguments -join ' ')"
     return 0
   }
-  & $FilePath @Arguments
-  return $LASTEXITCODE
+  & $FilePath @Arguments 2>&1 | Out-Host
+  $exitCode = $LASTEXITCODE
+  return [int]$exitCode
 }
 
 function Verify-ApiKey {
@@ -403,8 +406,17 @@ function Confirm-NodeReady {
 function Install-NodeSystem {
   if (Assert-Command 'winget') {
     Write-Host (Get-Message node_installing_pkg 'winget')
-    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-source-agreements', '--accept-package-agreements')
-    return
+    $exitCode = Invoke-CommandStatus 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--source', 'winget', '--accept-source-agreements', '--accept-package-agreements')
+    Update-SessionPath
+    if ($exitCode -eq 0 -or (Confirm-NodeReady)) { return }
+    $hexExitCode = '0x{0:X8}' -f ($exitCode -band 0xffffffff)
+    Warn (Get-Message node_winget_failed $exitCode $hexExitCode)
+    if ((Assert-Command 'choco') -and (Confirm-DefaultYes (Get-Message node_choco_retry_prompt))) {
+      Write-Host (Get-Message node_installing_pkg 'choco')
+      Run-Command 'choco' @('install', 'nodejs-lts', '-y')
+      return
+    }
+    Fail (Get-Message node_install_failed)
   }
   if (Assert-Command 'choco') {
     Write-Host (Get-Message node_installing_pkg 'choco')

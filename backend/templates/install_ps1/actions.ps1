@@ -1,4 +1,3 @@
-$NodeMirror = 'https://registry.npmmirror.com/-/binary/node'
 $NpmRegistry = 'https://registry.npmmirror.com'
 
 function Read-JsonField([string]$Path, [string]$Field) {
@@ -399,58 +398,20 @@ function Confirm-NodeReady {
   return $false
 }
 
-function Get-NodeLtsVersion {
-  $indexUrl = "$NodeMirror/index.json"
-  try {
-    $client = [System.Net.Http.HttpClient]::new()
-    $response = $client.GetStringAsync($indexUrl).GetAwaiter().GetResult()
-    $client.Dispose()
-    $data = $response | ConvertFrom-Json
-    $lts = $data | Where-Object { $_.lts } | Select-Object -First 1
-    if (-not $lts) { Fail (Get-Message node_lts_failed) }
-    return $lts.version
-  } catch {
-    Fail (Get-Message connect_failed $indexUrl)
+# Install Node.js system-wide with winget or choco so node, npm and globally
+# installed CLIs land in Program Files on the default PATH for every session.
+function Install-NodeSystem {
+  if (Assert-Command 'winget') {
+    Write-Host (Get-Message node_installing_pkg 'winget')
+    Run-Command 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--accept-source-agreements', '--accept-package-agreements')
+    return
   }
-}
-
-function Install-NodeZip {
-  $version = Get-NodeLtsVersion
-  $zipUrl = "$NodeMirror/$version/node-$version-win-x64.zip"
-  $targetDir = if ($env:NEOGATE_NODE_HOME) { $env:NEOGATE_NODE_HOME } else { Join-Path $env:USERPROFILE '.neogate-node' }
-  $zipFile = Join-Path $env:TEMP "neogate-node-$version.zip"
-
-  Write-Host (Get-Message node_downloading $version)
-  Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
-
-  if (Test-Path $targetDir) { Remove-Item -Recurse -Force $targetDir }
-  New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-  Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
-
-  # The zip extracts into a top-level node-v*-win-x64/ directory; resolve the
-  # real directory that contains node.exe and npm.cmd.
-  $nodeExe = Get-ChildItem -Path $targetDir -Recurse -Filter 'node.exe' | Select-Object -First 1
-  if (-not $nodeExe) { Fail (Get-Message node_path_missing) }
-  $nodeBin = $nodeExe.DirectoryName
-  $npmCmd = Join-Path $nodeBin 'npm.cmd'
-  if (-not (Test-Path -LiteralPath $npmCmd -PathType Leaf)) { Fail (Get-Message npm_path_missing) }
-
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if ($userPath -notlike "*$nodeBin*") {
-    $newPath = if ($userPath) { "$nodeBin;$userPath" } else { $nodeBin }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+  if (Assert-Command 'choco') {
+    Write-Host (Get-Message node_installing_pkg 'choco')
+    Run-Command 'choco' @('install', 'nodejs-lts', '-y')
+    return
   }
-  # The registry update above is not reflected in this PowerShell process.
-  # Keep the extracted directory first so node.exe and npm.cmd are usable now.
-  $env:Path = (@(
-    $nodeBin
-    $env:Path
-    [Environment]::GetEnvironmentVariable('Path', 'User')
-    [Environment]::GetEnvironmentVariable('Path', 'Machine')
-  ) | Where-Object { $_ } | ForEach-Object { $_ -split ';' } |
-    Where-Object { $_ } | Select-Object -Unique) -join ';'
-  $env:NPM_CONFIG_REGISTRY = $NpmRegistry
-  return $nodeBin
+  Fail (Get-Message node_pkg_missing_win)
 }
 
 function Install-Node {
@@ -460,20 +421,8 @@ function Install-Node {
   if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
-  $nodeBin = Install-NodeZip
+  Install-NodeSystem
   Update-SessionPath
-
-  # Test the newly extracted executables explicitly. Get-Command can retain a
-  # stale command lookup after PATH changes in the same PowerShell session.
-  $nodeExe = Join-Path $nodeBin 'node.exe'
-  $npmCmd = Join-Path $nodeBin 'npm.cmd'
-  $nodeVersion = Get-CommandVersion $nodeExe
-  $npmVersion = Get-CommandVersion $npmCmd
-  if ($nodeVersion -and $npmVersion) {
-    Detail (Get-Message node_found $nodeVersion)
-    Detail (Get-Message npm_found $npmVersion)
-    return
-  }
 
   if (Confirm-NodeReady) { return }
   $versions = Get-NodeToolVersions

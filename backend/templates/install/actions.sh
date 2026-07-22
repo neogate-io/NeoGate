@@ -480,93 +480,45 @@ select_model() {
   success "$selected_model"
 }
 
-NODE_MIRROR="https://registry.npmmirror.com/-/binary/node"
 NPM_REGISTRY="https://registry.npmmirror.com"
 
-node_arch_suffix() {
-  local os arch
+# Install Node.js system-wide with the OS package manager so node, npm and
+# globally installed CLIs land on the default PATH for every session.
+install_node_system() {
+  local os
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) arch="x64" ;;
-    aarch64|arm64) arch="arm64" ;;
-    *) die "$(message unsupported_arch "$arch")" ;;
-  esac
+
   case "$os" in
-    linux) printf 'linux-%s' "$arch" ;;
-    darwin) printf 'darwin-%s' "$arch" ;;
-    *) die "$(message unsupported_os "$os")" ;;
+    darwin)
+      have_cmd brew || die "$(message homebrew_required)"
+      log "$(message node_installing_pkg "brew")"
+      run brew install node
+      ;;
+    linux)
+      if have_cmd apt-get; then
+        log "$(message node_installing_pkg "apt")"
+        run_as_root apt-get update
+        run_as_root apt-get install -y nodejs npm
+      elif have_cmd dnf; then
+        log "$(message node_installing_pkg "dnf")"
+        run_as_root dnf install -y nodejs npm
+      elif have_cmd yum; then
+        log "$(message node_installing_pkg "yum")"
+        run_as_root yum install -y nodejs npm
+      elif have_cmd zypper; then
+        log "$(message node_installing_pkg "zypper")"
+        run_as_root zypper --non-interactive install nodejs npm
+      elif have_cmd pacman; then
+        log "$(message node_installing_pkg "pacman")"
+        run_as_root pacman -Sy --noconfirm nodejs npm
+      else
+        die "$(message unsupported_pkg)"
+      fi
+      ;;
+    *)
+      die "$(message unsupported_os "$os")"
+      ;;
   esac
-}
-
-node_lts_version() {
-  local index_file version
-  index_file="$TMP_DIR/node-index.json"
-  run curl -fsSL "$NODE_MIRROR/index.json" -o "$index_file" || die "$(message connect_failed "$NODE_MIRROR")"
-  version="$(node -e '
-    const chunks = [];
-    process.stdin.on("data", (chunk) => chunks.push(chunk));
-    process.stdin.on("end", () => {
-      const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      const lts = data.find((entry) => entry.lts);
-      if (!lts) throw new Error("no LTS found");
-      process.stdout.write(lts.version);
-    });
-  ' <"$index_file")"
-  [[ -n "$version" ]] || die "$(message node_lts_failed)"
-  printf '%s' "$version"
-}
-
-install_node_tarball() {
-  local version suffix url tarball target_dir
-  version="$(node_lts_version)"
-  suffix="$(node_arch_suffix)"
-  url="$NODE_MIRROR/$version/node-$version-$suffix.tar.gz"
-  tarball="$TMP_DIR/node.tar.gz"
-  target_dir="${NEOGATE_NODE_HOME:-$HOME/.neogate-node}"
-
-  log "$(message node_downloading "$version")"
-  run curl -fsSL "$url" -o "$tarball" || die "$(message connect_failed "$url")"
-  rm -rf "$target_dir"
-  mkdir -p "$target_dir"
-  run tar -xzf "$tarball" -C "$target_dir" --strip-components=1
-
-  local bin_dir="$target_dir/bin"
-  case ":$PATH:" in
-    *:"$bin_dir":*) ;;
-    *) export PATH="$bin_dir:$PATH" ;;
-  esac
-  export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
-
-  persist_node_path "$bin_dir"
-}
-
-# Make the managed Node.js available in future shells so globally installed
-# CLIs (codex, claude) keep working after the installer exits.
-persist_node_path() {
-  local bin_dir="$1"
-  local marker="# NeoGate Node.js PATH"
-  local export_line="export PATH=\"$bin_dir:\$PATH\""
-
-  if [[ "$DRY_RUN" == "1" ]]; then
-    log "+ $(message node_path_persist_hint "$bin_dir")"
-    return 0
-  fi
-
-  local -a rc_files=("$HOME/.bashrc" "$HOME/.profile")
-  if [[ -f "$HOME/.zshrc" || "${SHELL:-}" == */zsh ]]; then
-    rc_files+=("$HOME/.zshrc")
-  fi
-
-  local rc_file
-  for rc_file in "${rc_files[@]}"; do
-    touch "$rc_file"
-    if ! grep -qF "$bin_dir" "$rc_file"; then
-      printf '\n%s\n%s\n' "$marker" "$export_line" >>"$rc_file"
-    fi
-  done
-
-  detail "$(message node_path_persisted)"
 }
 
 install_node() {
@@ -579,7 +531,7 @@ install_node() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message node_missing_disabled)"
   confirm_default_yes "$(message node_missing_prompt)" || die "$(message node_required)"
 
-  install_node_tarball
+  install_node_system
 
   have_cmd node || die "$(message node_path_missing)"
   have_cmd npm || die "$(message npm_path_missing)"

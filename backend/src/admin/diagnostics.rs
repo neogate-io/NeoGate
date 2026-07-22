@@ -26,6 +26,19 @@ use super::{channel::mask_channel_key, credentials::runtime_secret_from_enabled_
 
 const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
 
+async fn send_with_upstream_timeout(
+    state: &AppState,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, AppError> {
+    match tokio::time::timeout(state.config.http.upstream_timeout, request.send()).await {
+        Ok(result) => result.map_err(AppError::from),
+        Err(_) => Err(AppError::BadRequest(format!(
+            "diagnostic probe timed out after {} seconds",
+            state.config.http.upstream_timeout.as_secs()
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelDiagnosticReport {
     pub channel_id: DbId,
@@ -592,9 +605,11 @@ async fn run_models_step(
     key: &KeyTarget,
 ) -> ModelsStepResult {
     let started = Instant::now();
-    let response = upstream_request(state, endpoint, key, "GET", "/v1/models", None)
-        .send()
-        .await;
+    let response = send_with_upstream_timeout(
+        state,
+        upstream_request(state, endpoint, key, "GET", "/v1/models", None),
+    )
+    .await;
     match response {
         Ok(response) => {
             let status = response.status();
@@ -678,16 +693,18 @@ async fn run_probe_step(
         url = %request.url,
         "diagnostic probe request started"
     );
-    let response = upstream_request_url(
+    let response = send_with_upstream_timeout(
         state,
-        endpoint,
-        key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
+        upstream_request_url(
+            state,
+            endpoint,
+            key,
+            "POST",
+            &request.url,
+            request.extra_headers,
+            Some(request.body),
+        ),
     )
-    .send()
     .await;
     match response {
         Ok(response) => {
@@ -784,16 +801,18 @@ async fn run_video_probe_step(
         url = %request.url,
         "diagnostic video probe request started"
     );
-    let response = upstream_request_url(
+    let response = send_with_upstream_timeout(
         state,
-        endpoint,
-        key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
+        upstream_request_url(
+            state,
+            endpoint,
+            key,
+            "POST",
+            &request.url,
+            request.extra_headers,
+            Some(request.body),
+        ),
     )
-    .send()
     .await;
     match response {
         Ok(response) => {
@@ -879,16 +898,18 @@ async fn run_image_probe_step(
         url = %request.url,
         "diagnostic image probe request started"
     );
-    let response = upstream_request_url(
+    let response = send_with_upstream_timeout(
         state,
-        endpoint,
-        key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
+        upstream_request_url(
+            state,
+            endpoint,
+            key,
+            "POST",
+            &request.url,
+            request.extra_headers,
+            Some(request.body),
+        ),
     )
-    .send()
     .await;
     match response {
         Ok(response) => {
@@ -2113,14 +2134,17 @@ fn truncate_error_summary(value: &str) -> String {
     output
 }
 
-fn transport_error_message(err: &reqwest::Error) -> String {
-    match UpstreamErrorKind::from_reqwest(err) {
-        UpstreamErrorKind::Timeout => "连接上游超时，请检查网络或上游状态".to_string(),
-        UpstreamErrorKind::Tls => "TLS 握手失败，请检查 Base URL 证书".to_string(),
-        UpstreamErrorKind::Dns => "DNS 解析失败，请检查 Base URL 域名".to_string(),
-        UpstreamErrorKind::Connect => "无法连接上游，请检查网络、防火墙或 Base URL".to_string(),
-        UpstreamErrorKind::Request => "上游请求失败，请检查网络和配置".to_string(),
+fn transport_error_message(err: &AppError) -> String {
+    if let AppError::Reqwest(err) = err {
+        return match UpstreamErrorKind::from_reqwest(err) {
+            UpstreamErrorKind::Timeout => "连接上游超时，请检查网络或上游状态".to_string(),
+            UpstreamErrorKind::Tls => "TLS 握手失败，请检查 Base URL 证书".to_string(),
+            UpstreamErrorKind::Dns => "DNS 解析失败，请检查 Base URL 域名".to_string(),
+            UpstreamErrorKind::Connect => "无法连接上游，请检查网络、防火墙或 Base URL".to_string(),
+            UpstreamErrorKind::Request => "上游请求失败，请检查网络和配置".to_string(),
+        };
     }
+    err.to_string()
 }
 
 fn extract_model_ids(value: &Value) -> Vec<String> {

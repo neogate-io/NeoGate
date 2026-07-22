@@ -1,5 +1,6 @@
 use std::{
     fmt::{self, Write as _},
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -128,9 +129,12 @@ async fn run_api_listener(
     let app = api_router(config, Arc::clone(&state))?;
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
+    .await?;
     flush_shutdown_work(&state).await;
     Ok(())
 }
@@ -700,7 +704,6 @@ pub(crate) async fn build_state(
 
 fn build_http_client(config: &Config) -> anyhow::Result<Client> {
     Ok(Client::builder()
-        .read_timeout(config.http.upstream_timeout)
         .connect_timeout(config.http.upstream_connect_timeout)
         .pool_max_idle_per_host(config.http.pool_max_idle_per_host)
         .pool_idle_timeout(config.http.pool_idle_timeout)
@@ -987,6 +990,7 @@ pub(crate) mod tests {
                     acquire_timeout: Duration::from_secs(5),
                 },
                 cors_allowed_origins: vec!["*".to_string()],
+                trust_proxy_headers: false,
             },
             usage: UsageRecorder::disabled(),
             usage_daily: UsageDailyRecorder::disabled(),

@@ -41,6 +41,7 @@ pub struct Config {
     pub response_assets: ResponseAssetConfig,
     pub db_pool: DbPoolConfig,
     pub cors_allowed_origins: Vec<String>,
+    pub trust_proxy_headers: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +363,7 @@ impl Config {
             },
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", ""),
+            trust_proxy_headers: parse_bool("TRUST_PROXY_HEADERS", false)?,
         };
         config.validate()?;
         Ok(config)

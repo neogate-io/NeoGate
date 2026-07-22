@@ -270,7 +270,14 @@ async fn send_text(
     let token_url = format!(
         "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={secret}"
     );
-    let token_value: Value = state.http.get(token_url).send().await?.json().await?;
+    let token_value: Value = tokio::time::timeout(
+        state.config.http.upstream_timeout,
+        state.http.get(token_url).send(),
+    )
+    .await
+    .map_err(|_| AppError::BadRequest("timed out fetching wecom access token".to_string()))??
+    .json()
+    .await?;
     let access_token = token_value
         .get("access_token")
         .and_then(Value::as_str)

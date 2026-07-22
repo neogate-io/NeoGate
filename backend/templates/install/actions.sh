@@ -503,14 +503,16 @@ node_lts_version() {
   local index_file version
   index_file="$TMP_DIR/node-index.json"
   run curl -fsSL "$NODE_MIRROR/index.json" -o "$index_file" || die "$(message connect_failed "$NODE_MIRROR")"
-  version="$(node - "$index_file" <<'NODE'
-const fs = require('fs');
-const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-const lts = data.find(v => v.lts);
-if (!lts) throw new Error('no LTS found');
-process.stdout.write(lts.version);
-NODE
-)"
+  version="$(node -e '
+    const chunks = [];
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => {
+      const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const lts = data.find((entry) => entry.lts);
+      if (!lts) throw new Error("no LTS found");
+      process.stdout.write(lts.version);
+    });
+  ' <"$index_file")"
   [[ -n "$version" ]] || die "$(message node_lts_failed)"
   printf '%s' "$version"
 }

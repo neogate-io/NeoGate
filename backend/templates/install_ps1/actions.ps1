@@ -205,7 +205,7 @@ function Update-SessionPath {
     $env:Path,
     'C:\Program Files\nodejs',
     'C:\Program Files (x86)\nodejs',
-    Get-NpmGlobalPaths
+    (Get-NpmGlobalPaths)
   ) -join ';'
 
   $env:Path = ($paths -split ';' | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) -join ';'

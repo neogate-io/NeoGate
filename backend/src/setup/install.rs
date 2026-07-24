@@ -329,6 +329,7 @@ mod tests {
         assert!(script.contains("$exitCode = Invoke-CommandStatus 'winget'"));
         assert!(script.contains("'C:\\Program Files\\nodejs'"));
         assert!(script.contains("'C:\\Program Files (x86)\\nodejs'"));
+        assert!(script.contains("(Get-NpmGlobalPaths)"));
         assert!(script.contains("node_winget_failed"));
         assert!(script.contains("node_choco_retry_prompt"));
         assert!(script.contains("if ((Assert-Command 'choco') -and (Confirm-DefaultYes"));

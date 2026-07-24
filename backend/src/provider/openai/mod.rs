@@ -197,7 +197,7 @@ pub(crate) async fn openai_responses_compact(
         headers,
         body,
         RelayRoute::ResponsesCompact,
-        BodyKind::OpenaiResponses,
+        BodyKind::OpenaiResponsesCompact,
     )
     .await
 }

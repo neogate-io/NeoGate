@@ -12,6 +12,7 @@ pub(crate) enum BodyKind {
     OpenaiChat,
     OpenaiJson,
     OpenaiResponses,
+    OpenaiResponsesCompact,
     Anthropic,
 }
 
@@ -85,16 +86,16 @@ pub(crate) fn prepare_relay_body(
     let mut value: Value = serde_json::from_slice(&body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let meta = request_meta_from_value(&value, kind)?;
-    let needs_output_limit = needs_output_limit(kind);
+    let inserts_output_limit = inserts_output_limit(kind);
     let (output_tokens, has_output_limit) = match output_limit_from_value(&value, kind) {
         Some(tokens) => (tokens, true),
-        None if needs_output_limit => (default_output_tokens, false),
+        None if reserves_default_output_tokens(kind) => (default_output_tokens, false),
         None => (0, true),
     };
     let needs_stream_usage = meta.stream
         && matches!(kind, BodyKind::OpenaiChat)
         && !openai_stream_usage_included_value(&value);
-    let changed = (needs_output_limit && !has_output_limit) || needs_stream_usage;
+    let changed = (inserts_output_limit && !has_output_limit) || needs_stream_usage;
     if !changed {
         return Ok(PreparedRelayBody {
             body,
@@ -103,7 +104,7 @@ pub(crate) fn prepare_relay_body(
         });
     }
 
-    if needs_output_limit && !has_output_limit {
+    if inserts_output_limit && !has_output_limit {
         ensure_output_limit(&mut value, kind, default_output_tokens)?;
     }
     if needs_stream_usage {
@@ -131,7 +132,10 @@ pub(crate) fn rewrite_relay_body_model(
         return Err(AppError::BadRequest("model is required".to_string()));
     }
     object.insert("model".to_string(), Value::String(target_model.to_string()));
-    if matches!(kind, BodyKind::OpenaiResponses) {
+    if matches!(
+        kind,
+        BodyKind::OpenaiResponses | BodyKind::OpenaiResponsesCompact
+    ) {
         // Affinity keys include the requested model. The relay now routes on the target model,
         // so downstream affinity must follow the body sent upstream.
     }
@@ -147,7 +151,9 @@ fn request_meta_from_value(value: &Value, kind: BodyKind) -> AppResult<RelayRequ
         return Err(AppError::BadRequest("model is required".to_string()));
     }
     let channel_affinity_key = match kind {
-        BodyKind::OpenaiResponses => openai_responses_affinity_key_from_value(model, value),
+        BodyKind::OpenaiResponses | BodyKind::OpenaiResponsesCompact => {
+            openai_responses_affinity_key_from_value(model, value)
+        }
         BodyKind::Anthropic => anthropic_messages_affinity_key_from_value(model, value),
         BodyKind::OpenaiChat | BodyKind::OpenaiJson => None,
     };
@@ -297,8 +303,15 @@ fn output_limit_from_value(value: &Value, kind: BodyKind) -> Option<i64> {
         .find(|tokens| *tokens > 0)
 }
 
-fn needs_output_limit(kind: BodyKind) -> bool {
-    !matches!(kind, BodyKind::OpenaiJson)
+fn reserves_default_output_tokens(kind: BodyKind) -> bool {
+    matches!(
+        kind,
+        BodyKind::OpenaiChat | BodyKind::OpenaiResponses | BodyKind::Anthropic
+    )
+}
+
+fn inserts_output_limit(kind: BodyKind) -> bool {
+    matches!(kind, BodyKind::OpenaiChat | BodyKind::Anthropic)
 }
 
 fn openai_stream_usage_included_value(value: &Value) -> bool {
@@ -338,6 +351,7 @@ fn output_limit_keys(kind: BodyKind) -> &'static [&'static str] {
         BodyKind::OpenaiChat => &["max_completion_tokens", "max_tokens"],
         BodyKind::OpenaiJson => &[],
         BodyKind::OpenaiResponses => &["max_output_tokens"],
+        BodyKind::OpenaiResponsesCompact => &[],
         BodyKind::Anthropic => &["max_tokens"],
     }
 }
@@ -406,12 +420,28 @@ mod tests {
     fn does_not_add_stream_usage_for_openai_responses() {
         let body = Bytes::from_static(br#"{"model":"gpt-5","stream":true}"#);
 
-        let prepared = prepare_relay_body(body, BodyKind::OpenaiResponses, 4096).unwrap();
+        let prepared = prepare_relay_body(body.clone(), BodyKind::OpenaiResponses, 4096).unwrap();
         let value: Value = serde_json::from_slice(&prepared.body).unwrap();
 
         assert!(value.get("stream_options").is_none());
-        assert_eq!(value["max_output_tokens"], 4096);
+        assert!(value.get("max_output_tokens").is_none());
+        assert_eq!(prepared.body, body);
+        assert_eq!(prepared.output_tokens, 4096);
         assert!(prepared.meta.stream);
+    }
+
+    #[test]
+    fn keeps_openai_responses_compact_body_without_output_limit_rewrite() {
+        let body =
+            Bytes::from_static(br#"{"model":"gpt-5","input":[{"role":"user","content":"hello"}]}"#);
+
+        let prepared =
+            prepare_relay_body(body.clone(), BodyKind::OpenaiResponsesCompact, 4096).unwrap();
+
+        assert_eq!(prepared.body, body);
+        assert_eq!(prepared.meta.model, "gpt-5");
+        assert_eq!(prepared.output_tokens, 0);
+        assert!(prepared.meta.request_params.max_tokens.is_none());
     }
 
     #[test]

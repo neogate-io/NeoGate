@@ -31,8 +31,7 @@ use crate::relay::{
     release_empty_hold, reserve_credit, respond_upstream_http_failure, response_from_bytes,
     rewrite_relay_body_model,
     selector::{AttemptedUpstream, SelectedUpstream, SelectionConstraints, UpstreamProtocol},
-    should_failover_retryable_upstream_failure, BodyKind, PreparedRelayBody, RelayBody,
-    RelayContext,
+    should_failover_upstream_failure, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
 };
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
@@ -208,10 +207,10 @@ pub(crate) async fn anthropic_messages(
 
                 let body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &body);
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.should_failover(),
+                    failure.failoverable(),
                     retryable_failovers,
                 )
                 .await
@@ -232,7 +231,7 @@ pub(crate) async fn anthropic_messages(
                         upstream_status = status.as_u16(),
                         failover_attempt = retryable_failovers,
                         max_failovers = ctx.state.config.relay.max_upstream_failovers,
-                        "retryable upstream http failure; retrying another upstream"
+                        "failoverable upstream http failure; trying another upstream"
                     );
                     continue;
                 }
@@ -242,7 +241,7 @@ pub(crate) async fn anthropic_messages(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
                     retryable,

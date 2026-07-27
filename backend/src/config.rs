@@ -179,6 +179,7 @@ pub struct HttpClientConfig {
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub key_cooldown: Duration,
+    pub quota_exhausted_cooldown: Duration,
     pub max_upstream_failovers: usize,
     pub body_limit_bytes: usize,
     pub usage_buffer_limit_bytes: usize,
@@ -282,6 +283,10 @@ impl Config {
             },
             relay: RelayConfig {
                 key_cooldown: Duration::from_secs(60),
+                quota_exhausted_cooldown: Duration::from_secs(parse_u64(
+                    "QUOTA_COOLDOWN_SECONDS",
+                    10 * 60,
+                )?),
                 max_upstream_failovers: 5,
                 body_limit_bytes: parse_usize(
                     "RELAY_BODY_LIMIT_BYTES",

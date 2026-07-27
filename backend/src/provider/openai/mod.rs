@@ -37,8 +37,8 @@ use crate::relay::{
     selector::{
         AttemptedUpstream, ModelCooldown, SelectedUpstream, SelectionConstraints, UpstreamProtocol,
     },
-    should_failover_retryable_upstream_failure, BodyKind, ChannelAffinityKey, PreparedRelayBody,
-    RelayBody, RelayContext,
+    should_failover_upstream_failure, BodyKind, ChannelAffinityKey, PreparedRelayBody, RelayBody,
+    RelayContext, UpstreamFailureKind,
 };
 use crate::task::upstream::UpstreamTaskType;
 
@@ -570,7 +570,7 @@ async fn relay_openai(
                         ctx.protocol,
                         UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
                     )
-                    && failure.error_type == "upstream_model_unavailable"
+                    && failure.kind == UpstreamFailureKind::ModelUnavailable
                     && !responses_downgraded
                     && !ctx
                         .state
@@ -669,10 +669,10 @@ async fn relay_openai(
                     continue;
                 }
 
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.should_failover(),
+                    failure.failoverable(),
                     retryable_failovers,
                 )
                 .await
@@ -693,7 +693,7 @@ async fn relay_openai(
                         upstream_status = status.as_u16(),
                         failover_attempt = retryable_failovers,
                         max_failovers = ctx.state.config.relay.max_upstream_failovers,
-                        "retryable upstream http failure; retrying another upstream"
+                        "failoverable upstream http failure; trying another upstream"
                     );
                     continue;
                 }
@@ -703,7 +703,7 @@ async fn relay_openai(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
                     retryable,
@@ -942,7 +942,7 @@ fn should_retry_after_model_unavailable(
     matches!(
         ctx.protocol,
         UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
-    ) && failure.error_type == "upstream_model_unavailable"
+    ) && failure.kind == UpstreamFailureKind::ModelUnavailable
 }
 
 #[cfg(test)]

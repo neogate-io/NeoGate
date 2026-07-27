@@ -24,7 +24,7 @@ use crate::{
         record_upstream_http_failure, record_upstream_transport_failure_for_failover,
         release_empty_hold, reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
         response_from_bytes, rewrite_relay_body_model, selector::AttemptedUpstream,
-        should_failover_retryable_upstream_failure, BodyKind, RelayContext, RelayRequestParams,
+        should_failover_upstream_failure, BodyKind, RelayContext, RelayRequestParams,
     },
     AppState,
 };
@@ -234,12 +234,12 @@ pub(super) async fn relay_openai_image(
                 if adapter.classify_http_error(route, status, &error_body)
                     == AdapterErrorDisposition::Retryable
                 {
-                    failure.retryable = true;
+                    failure.mark_retryable();
                 }
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.should_failover(),
+                    failure.failoverable(),
                     retryable_failovers,
                 )
                 .await
@@ -261,7 +261,7 @@ pub(super) async fn relay_openai_image(
                         upstream_status = status.as_u16(),
                         failover_attempt = retryable_failovers,
                         max_failovers = ctx.state.config.relay.max_upstream_failovers,
-                        "retryable upstream image http failure; retrying another upstream"
+                        "failoverable upstream image http failure; trying another upstream"
                     );
                     continue;
                 }
@@ -271,7 +271,7 @@ pub(super) async fn relay_openai_image(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
                     retryable,

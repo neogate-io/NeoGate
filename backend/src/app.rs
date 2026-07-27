@@ -942,6 +942,7 @@ pub(crate) mod tests {
                 },
                 relay: config::RelayConfig {
                     key_cooldown: Duration::from_secs(60),
+                    quota_exhausted_cooldown: Duration::from_secs(10 * 60),
                     max_upstream_failovers: 5,
                     body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
                     usage_buffer_limit_bytes: config::RELAY_USAGE_BUFFER_LIMIT_BYTES,

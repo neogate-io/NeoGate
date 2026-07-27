@@ -25,7 +25,7 @@ use axum::{
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::io::{AsyncReadExt, BufReader};
 use uuid::Uuid;
 
@@ -48,7 +48,10 @@ use crate::usage::{KeyFailure, UsageInsert};
 pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
-pub(crate) use error::{describe_upstream_http_failure, is_model_error_text, UpstreamHttpFailure};
+pub(crate) use error::{
+    describe_upstream_http_failure, is_model_error_text, FailureCooldown, UpstreamFailureKind,
+    UpstreamHttpFailure,
+};
 pub(crate) use limit::UserRequestLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{
@@ -362,20 +365,23 @@ pub(crate) async fn respond_upstream_http_failure(
     failure: UpstreamHttpFailure,
 ) -> AppResult<Response> {
     let client_message = upstream_http_failure_client_message(&ctx, status, &failure);
-    let payload =
-        upstream_http_failure_payload(&ctx.upstream.provider, status, &failure, client_message);
+    let payload = failure.client_payload(ctx.path, &ctx.upstream.provider, status, client_message);
     let client_response = payload.to_string();
     log_upstream_http_failure(&ctx, status, &failure, Some(&client_response));
     ctx.release_request_permit();
     record_upstream_http_failure(&ctx, status, &failure, "upstream error").await;
 
     let mut builder = Response::builder()
-        .status(failure.relay_status)
+        .status(failure.relay_status())
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-neogate-error-code", failure.error_type)
+        .header("x-neogate-error-code", failure.error_code())
         .header(
             "x-neogate-retryable",
-            if failure.retryable { "true" } else { "false" },
+            if failure.client_retryable() {
+                "true"
+            } else {
+                "false"
+            },
         );
     if let Ok(value) = HeaderValue::from_str(&ctx.upstream.provider) {
         builder = builder.header("x-neogate-upstream-provider", value);
@@ -388,35 +394,6 @@ pub(crate) async fn respond_upstream_http_failure(
         .map_err(|err| AppError::BadRequest(err.to_string()))
 }
 
-fn upstream_http_failure_payload(
-    upstream_provider: &str,
-    status: StatusCode,
-    failure: &UpstreamHttpFailure,
-    client_message: String,
-) -> Value {
-    if failure.error_type == "upstream_context_length_exceeded" {
-        return json!({
-            "error": {
-                "message": client_message,
-                "type": "invalid_request_error",
-                "param": "input",
-                "code": "context_length_exceeded"
-            }
-        });
-    }
-
-    json!({
-        "error": {
-            "message": client_message,
-            "code": failure.error_type,
-            "upstream": upstream_provider,
-            "upstream_status": status.as_u16(),
-            "upstream_error": failure.detail,
-            "retryable": failure.retryable,
-        }
-    })
-}
-
 pub(crate) fn log_upstream_http_failure(
     ctx: &RelayContext,
     status: StatusCode,
@@ -424,7 +401,7 @@ pub(crate) fn log_upstream_http_failure(
     client_response: Option<&str>,
 ) {
     let line = format_upstream_http_failure_log(ctx, status, failure, client_response);
-    if client_response.is_some() && failure.relay_status.is_server_error() {
+    if client_response.is_some() && failure.relay_status().is_server_error() {
         tracing::error!("{line}");
     } else {
         tracing::warn!("{line}");
@@ -438,7 +415,7 @@ fn upstream_http_failure_client_message(
 ) -> String {
     format!(
         "{} Upstream {} returned {}: {}",
-        failure.user_message,
+        failure.kind.user_message(),
         ctx.upstream.provider,
         status.as_u16(),
         failure.detail
@@ -469,13 +446,13 @@ fn format_upstream_http_failure_log(
         response_mode,
         ctx.upstream.base_url,
         status.as_u16(),
-        failure.relay_status.as_u16(),
+        failure.relay_status().as_u16(),
         ctx.started.elapsed().as_millis(),
         ctx.streamed,
         ctx.request_body_bytes,
         ctx.request_input_tokens_estimate,
-        failure.error_type,
-        failure.retryable,
+        failure.error_code(),
+        failure.client_retryable(),
         failure.detail,
         client_response.unwrap_or("not_returned_attempting_reroute")
     );
@@ -497,18 +474,20 @@ pub(crate) async fn record_upstream_http_failure(
         None,
         None,
     );
-    let key_failure = key_failure_from_context(ctx, failure.summary.clone()).await;
+    let key_failure =
+        key_failure_from_context_with_cooldown(ctx, failure.summary.clone(), failure.cooldown())
+            .await;
     release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
     enqueue_relay_usage(&ctx.state, usage, key_failure).await;
 }
 
-pub(crate) async fn should_failover_retryable_upstream_failure(
+pub(crate) async fn should_failover_upstream_failure(
     ctx: &RelayContext,
     attempted: &[AttemptedUpstream],
-    retryable: bool,
+    failoverable: bool,
     failovers: usize,
 ) -> bool {
-    if !retryable || failovers >= ctx.state.config.relay.max_upstream_failovers {
+    if !failoverable || failovers >= ctx.state.config.relay.max_upstream_failovers {
         return false;
     }
     match ctx
@@ -1015,6 +994,17 @@ pub(crate) async fn key_failure_from_context(
     ctx: &RelayContext,
     error: String,
 ) -> Option<KeyFailure> {
+    key_failure_from_context_with_cooldown(ctx, error, FailureCooldown::Default).await
+}
+
+async fn key_failure_from_context_with_cooldown(
+    ctx: &RelayContext,
+    error: String,
+    cooldown: FailureCooldown,
+) -> Option<KeyFailure> {
+    if cooldown == FailureCooldown::None {
+        return None;
+    }
     let channel_key_id = ctx.upstream.channel_key_id?;
     let attempted = [AttemptedUpstream::from(&ctx.upstream)];
     match ctx
@@ -1025,7 +1015,7 @@ pub(crate) async fn key_failure_from_context(
     {
         Ok(true) => Some(KeyFailure {
             channel_key_id,
-            cooldown_until: key_cooldown_until(&ctx.state),
+            cooldown_until: key_cooldown_until(&ctx.state, cooldown),
             error,
         }),
         Ok(false) => {
@@ -1046,7 +1036,7 @@ pub(crate) async fn key_failure_from_context(
             );
             Some(KeyFailure {
                 channel_key_id,
-                cooldown_until: key_cooldown_until(&ctx.state),
+                cooldown_until: key_cooldown_until(&ctx.state, cooldown),
                 error,
             })
         }
@@ -1144,9 +1134,14 @@ pub(crate) async fn reserve_billable_credit(
         .await
 }
 
-fn key_cooldown_until(state: &AppState) -> chrono::DateTime<Utc> {
-    let cooldown = ChronoDuration::from_std(state.config.relay.key_cooldown)
-        .unwrap_or_else(|_| ChronoDuration::seconds(60));
+fn key_cooldown_until(state: &AppState, policy: FailureCooldown) -> chrono::DateTime<Utc> {
+    let duration = match policy {
+        FailureCooldown::None => return Utc::now(),
+        FailureCooldown::Default => state.config.relay.key_cooldown,
+        FailureCooldown::QuotaExhausted => state.config.relay.quota_exhausted_cooldown,
+    };
+    let cooldown =
+        ChronoDuration::from_std(duration).unwrap_or_else(|_| ChronoDuration::seconds(60));
     Utc::now() + cooldown
 }
 
@@ -1186,10 +1181,10 @@ mod tests {
             StatusCode::BAD_GATEWAY,
             br#"{"error":{"message":"Your input exceeds the context window"}}"#,
         );
-        let payload = upstream_http_failure_payload(
+        let payload = failure.client_payload(
+            "/v1/responses",
             "newapi",
             StatusCode::BAD_GATEWAY,
-            &failure,
             "The request is too large".to_string(),
         );
 
@@ -1197,6 +1192,29 @@ mod tests {
         assert_eq!(payload["error"]["type"], "invalid_request_error");
         assert_eq!(payload["error"]["param"], "input");
         assert!(payload["error"].get("upstream").is_none());
+        assert!(payload["error"].get("retryable").is_none());
+    }
+
+    #[test]
+    fn anthropic_failure_uses_anthropic_error_shape() {
+        let failure = describe_upstream_http_failure(
+            StatusCode::FORBIDDEN,
+            br#"{"error":{"message":"quota exhausted","type":"insufficient_quota"}}"#,
+        );
+        let payload = failure.client_payload(
+            "/v1/messages",
+            "moonshot",
+            StatusCode::FORBIDDEN,
+            "The upstream quota is exhausted".to_string(),
+        );
+
+        assert_eq!(payload["type"], "error");
+        assert_eq!(payload["error"]["type"], "invalid_request_error");
+        assert_eq!(
+            payload["error"]["message"],
+            "The upstream quota is exhausted"
+        );
+        assert!(payload["error"].get("code").is_none());
         assert!(payload["error"].get("retryable").is_none());
     }
 

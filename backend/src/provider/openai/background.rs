@@ -202,7 +202,7 @@ pub(super) async fn create_background_response(
             }
         };
         if let Some(key) = channel_affinity_key.clone() {
-            state.channel_affinity.insert(key, (&upstream).into());
+            state.channel_affinity.insert(key, (&upstream).into()).await;
         }
         return jobs::response(response).await;
     }

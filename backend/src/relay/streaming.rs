@@ -513,7 +513,7 @@ impl StreamingRelay {
             }
         }
         let billing = if self.status.is_success() && !stream_failed {
-            record_channel_affinity(&ctx);
+            record_channel_affinity(&ctx).await;
             settle_successful_hold(&ctx, token_usage, "streamed relay").await
         } else {
             let release_context = if stream_failed {
@@ -871,13 +871,14 @@ impl Drop for StreamingRelay {
     }
 }
 
-fn record_channel_affinity(ctx: &RelayContext) {
+async fn record_channel_affinity(ctx: &RelayContext) {
     let Some(key) = ctx.channel_affinity_key.clone() else {
         return;
     };
     ctx.state
         .channel_affinity
-        .insert(key, (&ctx.upstream).into());
+        .insert(key, (&ctx.upstream).into())
+        .await;
 }
 
 enum ResponseUsageParser {

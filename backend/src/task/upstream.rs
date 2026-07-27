@@ -360,6 +360,7 @@ impl UpstreamTask {
             responses_chat_fallback: false,
             secret: secrets.plaintext(channel_key_id, &secret_ciphertext)?,
             account_id: None,
+            affinity: None,
         })
     }
 }

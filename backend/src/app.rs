@@ -611,11 +611,25 @@ pub(crate) async fn build_state(
     let http = build_http_client(&config)?;
     let redis = build_redis_client(&config)?;
     let selector = Selector::with_cache_ttl(config.cache.routing_ttl);
-    let channel_affinity = ChannelAffinityCache::new(
-        config.relay.channel_affinity_enabled,
-        config.relay.channel_affinity_ttl,
-        config.relay.channel_affinity_max_entries,
-    );
+    let channel_affinity = if config.runtime_mode.is_distributed() {
+        let client = redis
+            .as_ref()
+            .expect("distributed runtime has validated redis config");
+        ChannelAffinityCache::with_redis(
+            config.relay.channel_affinity_enabled,
+            config.relay.channel_affinity_ttl,
+            config.relay.channel_affinity_max_entries,
+            client,
+            &config.redis_key_prefix,
+        )
+        .await
+    } else {
+        ChannelAffinityCache::new(
+            config.relay.channel_affinity_enabled,
+            config.relay.channel_affinity_ttl,
+            config.relay.channel_affinity_max_entries,
+        )
+    };
     let billing = build_billing(&config).await?;
     let (cache_invalidator, invalidation_listener) = build_cache_invalidator(&config).await?;
     let usage_daily = UsageDailyRecorder::spawn(

@@ -105,6 +105,87 @@ async fn refreshed_credential_invalidation_is_targeted_and_stales_routing_cache(
     assert!(selector.routing_cache.read().await.loaded_at.is_none());
 }
 
+#[tokio::test]
+async fn selector_reports_affinity_miss_and_local_hit() {
+    let selector = Selector::with_cache_ttl(Duration::from_secs(30));
+    let channel = candidate("primary", 1, 1, vec!["gpt-5.6"]);
+    let (route_index, wildcard_index) = build_route_indexes(std::slice::from_ref(&channel));
+    {
+        let mut cache = selector.routing_cache.write().await;
+        *cache = Arc::new(RoutingCache {
+            loaded_at: Some(Instant::now()),
+            channels: vec![channel],
+            keys: HashMap::from([(
+                1,
+                vec![KeyCandidate {
+                    id: 101,
+                    channel_id: 1,
+                    credential_id: None,
+                    secret_ciphertext: "secret".to_string(),
+                    cooldown_until: None,
+                    plan_type: None,
+                    plan_models: Vec::new(),
+                }],
+            )]),
+            model_blocks: HashMap::new(),
+            route_index,
+            wildcard_index,
+        });
+    }
+    let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
+    let secrets = SecretStore::new("test-key", 10);
+    let affinity_cache =
+        super::super::affinity::ChannelAffinityCache::new(true, Duration::from_secs(60), 10);
+    let value: serde_json::Value =
+        serde_json::from_str(r#"{"prompt_cache_key":"session-1"}"#).unwrap();
+    let affinity_key =
+        super::super::affinity::openai_responses_affinity_key_from_value("gpt-5.6", &value)
+            .unwrap();
+
+    let first = selector
+        .select_with_affinity(
+            &pool,
+            &secrets,
+            &affinity_cache,
+            UpstreamProtocol::Openai,
+            "gpt-5.6",
+            SelectionConstraints {
+                affinity_key: Some(&affinity_key),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first.affinity.as_ref().map(|value| value.status),
+        Some(ChannelAffinityStatus::Miss)
+    );
+
+    affinity_cache
+        .insert(affinity_key.clone(), (&first).into())
+        .await;
+    let second = selector
+        .select_with_affinity(
+            &pool,
+            &secrets,
+            &affinity_cache,
+            UpstreamProtocol::Openai,
+            "gpt-5.6",
+            SelectionConstraints {
+                affinity_key: Some(&affinity_key),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        second.affinity.as_ref().map(|value| value.status),
+        Some(ChannelAffinityStatus::Local)
+    );
+    assert_eq!(second.channel_id, first.channel_id);
+    assert_eq!(second.channel_endpoint_id, first.channel_endpoint_id);
+}
+
 #[test]
 fn choose_channel_uses_highest_priority() {
     let low = candidate("low", 0, 100, vec![]);
@@ -562,6 +643,7 @@ fn affinity_target_preserves_selected_upstream_identity() {
         responses_chat_fallback: false,
         secret: "secret".to_string(),
         account_id: None,
+        affinity: None,
     };
 
     let target = UpstreamAffinityTarget::from(&upstream);

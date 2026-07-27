@@ -1016,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_cache_key_stays_stable_when_cache_control_blocks_match() {
+    fn prompt_cache_key_changes_when_the_prefix_before_a_breakpoint_changes() {
         let first = Bytes::from_static(
             br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Volatile prefix A"},{"type":"text","text":"Stable block","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Fresh question"}],"max_tokens":16}"#,
         );
@@ -1029,10 +1029,95 @@ mod tests {
         let first_value: Value = serde_json::from_slice(&first).unwrap();
         let second_value: Value = serde_json::from_slice(&second).unwrap();
 
-        assert_eq!(
+        assert_ne!(
             first_value["prompt_cache_key"],
             second_value["prompt_cache_key"]
         );
+    }
+
+    #[test]
+    fn prompt_cache_key_is_partitioned_by_anthropic_session() {
+        let first = Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Stable","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Question"}],"metadata":{"user_id":"session-a"},"max_tokens":16}"#,
+        );
+        let second = Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Stable","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Question"}],"metadata":{"user_id":"session-b"},"max_tokens":16}"#,
+        );
+
+        let first: Value =
+            serde_json::from_slice(&messages_to_openai_chat(first).unwrap()).unwrap();
+        let second: Value =
+            serde_json::from_slice(&messages_to_openai_chat(second).unwrap()).unwrap();
+
+        assert_ne!(first["prompt_cache_key"], second["prompt_cache_key"]);
+        assert!(!first["prompt_cache_key"]
+            .as_str()
+            .unwrap()
+            .contains("session-a"));
+    }
+
+    #[test]
+    fn prompt_cache_key_stays_stable_as_anthropic_session_prefix_grows() {
+        let first = Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Stable","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Question one"}],"metadata":{"user_id":"session-a"},"max_tokens":16}"#,
+        );
+        let second = Bytes::from_static(
+            br#"{"model":"GLM-5.1","system":[{"type":"text","text":"Stable"}],"messages":[{"role":"user","content":"Question one"},{"role":"assistant","content":"Answer one"},{"role":"user","content":[{"type":"text","text":"Question two","cache_control":{"type":"ephemeral"}}]}],"metadata":{"user_id":"session-a"},"max_tokens":16}"#,
+        );
+
+        let first: Value =
+            serde_json::from_slice(&messages_to_openai_chat(first).unwrap()).unwrap();
+        let second: Value =
+            serde_json::from_slice(&messages_to_openai_chat(second).unwrap()).unwrap();
+
+        assert_eq!(first["prompt_cache_key"], second["prompt_cache_key"]);
+    }
+
+    #[test]
+    fn maps_anthropic_cache_control_to_openai_breakpoints_for_gpt_5_6() {
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-5.6","system":[{"type":"text","text":"Stable system","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"Fresh question"}]}],"max_tokens":16}"#,
+        );
+
+        let converted = messages_to_openai_chat(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(
+            value["messages"][0]["content"][0]["prompt_cache_breakpoint"]["mode"],
+            "explicit"
+        );
+        assert!(value["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none());
+    }
+
+    #[test]
+    fn removes_anthropic_cache_control_for_older_openai_models() {
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-5.5","system":[{"type":"text","text":"Stable system","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"Fresh question"}],"max_tokens":16}"#,
+        );
+
+        let converted = messages_to_openai_chat(body).unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert!(value["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none());
+        assert!(value["prompt_cache_key"].is_string());
+        assert!(value.get("prompt_cache_options").is_none());
+    }
+
+    #[test]
+    fn maps_breakpoints_for_later_gpt_model_families() {
+        for model in ["gpt-5.6-pro", "gpt-6"] {
+            let body = Bytes::from(format!(
+                r#"{{"model":"{model}","system":[{{"type":"text","text":"Stable","cache_control":{{"type":"ephemeral"}}}}],"messages":[{{"role":"user","content":"Question"}}],"max_tokens":16}}"#
+            ));
+            let value: Value =
+                serde_json::from_slice(&messages_to_openai_chat(body).unwrap()).unwrap();
+            assert_eq!(value["prompt_cache_options"]["mode"], "explicit");
+        }
     }
 
     #[test]

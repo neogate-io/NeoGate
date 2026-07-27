@@ -754,6 +754,14 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_field(&mut info, "user", usage.user_id);
     push_field(&mut info, "key", usage.user_key_id);
     push_field(&mut info, "channel", usage.channel_id);
+    push_opt(
+        &mut info,
+        "affinity",
+        ctx.upstream
+            .affinity
+            .as_ref()
+            .map(|affinity| affinity.status.as_str()),
+    );
     push_field(
         &mut info,
         "model",
@@ -818,6 +826,22 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_field(&mut detail, "upstream_model", &ctx.upstream_model);
     push_field(&mut detail, "channel_id", usage.channel_id);
     push_field(&mut detail, "channel_name", &ctx.upstream.channel_name);
+    push_opt(
+        &mut detail,
+        "affinity_status",
+        ctx.upstream
+            .affinity
+            .as_ref()
+            .map(|affinity| affinity.status.as_str()),
+    );
+    push_opt(
+        &mut detail,
+        "affinity_key_fp",
+        ctx.upstream
+            .affinity
+            .as_ref()
+            .map(|affinity| affinity.key_fingerprint.as_str()),
+    );
     push_field(
         &mut detail,
         "channel_endpoint_id",

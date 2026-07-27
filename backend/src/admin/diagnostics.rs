@@ -1129,6 +1129,7 @@ fn video_probe_request(
             responses_chat_fallback: false,
             secret: key.secret.clone(),
             account_id: None,
+            affinity: None,
         },
         upstream_protocol_from_str(&endpoint.protocol)?,
         route,

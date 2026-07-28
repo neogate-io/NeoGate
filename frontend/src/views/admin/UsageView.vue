@@ -33,7 +33,7 @@ import {
 } from '../../utils/format'
 
 const { locale, t } = useLocale()
-const { formatMoney } = useBillingCurrency()
+const { formatMoney, formatPricePerMillion } = useBillingCurrency()
 const route = useRoute()
 
 const DEFAULT_PAGE_SIZE = 20
@@ -341,13 +341,41 @@ function usageBillingUnitsDisplay(row: UsageRecord) {
   return `${value} ${t('usageDetailBillingUnits')}`
 }
 
+function videoBillingDetailsAvailable(row: UsageRecord) {
+  return (
+    row.billing_meter === 'video' &&
+    !usageIsFailed(row) &&
+    (row.billing_status === 'billed' || row.billing_status === 'undercharged') &&
+    row.video_billing != null &&
+    row.cost_micros != null
+  )
+}
+
+function videoBillingRuleDisplay(row: UsageRecord) {
+  const details = row.video_billing
+  if (!details) return '-'
+  if (details.mode === 'per_second') {
+    return `${t('videoBillingPerSecond')} · ${formatMoney(details.price_micros, locale.value)} / ${t('perSecond')}`
+  }
+  return `${t('videoBillingByToken')} · ${formatPricePerMillion(details.price_micros, locale.value)} / ${t('perMillionTokens')}`
+}
+
+function videoBillingFormulaDisplay(row: UsageRecord) {
+  const details = row.video_billing
+  if (!details || row.cost_micros == null) return '-'
+  if (details.mode === 'per_second') {
+    return `${formatNumber(row.billable_units, locale.value)} ${t('usageDetailSeconds')} × ${formatMoney(details.price_micros, locale.value)} = ${formatMoney(row.cost_micros, locale.value)}`
+  }
+  return `${formatNumber(row.billable_units, locale.value)} ${t('usageDetailTokens')} × ${formatPricePerMillion(details.price_micros, locale.value)} / ${t('perMillionTokens')} = ${formatMoney(row.cost_micros, locale.value)}`
+}
+
 function usageDetailRows(row: UsageRecord) {
   const rows = [{ label: t('usageDetailsColumn'), value: usageDetailSummary(row) }]
   if (row.error_summary) rows.push({ label: t('errorSummary'), value: row.error_summary })
   if (row.status_code != null) rows.push({ label: t('status'), value: `HTTP ${row.status_code}` })
   rows.push({ label: t('model'), value: usageModelDisplay(row) })
   if (
-    row.billing_meter === 'token' &&
+    (row.billing_meter === 'token' || row.billing_meter === 'image') &&
     ((row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0)
   ) {
     rows.push({
@@ -355,10 +383,41 @@ function usageDetailRows(row: UsageRecord) {
       value: `${formatNumber(row.input_tokens, locale.value)} / ${formatNumber(row.output_tokens, locale.value)}`
     })
   }
+  if ((row.total_tokens ?? 0) > 0) {
+    rows.push({
+      label: t('totalTokensDetail'),
+      value: formatNumber(row.total_tokens, locale.value)
+    })
+  }
   if (row.billing_meter !== 'token' && row.billable_units > 0) {
     rows.push({ label: t('billingUnits'), value: usageBillingUnitsDisplay(row) })
   }
-  rows.push({ label: t('relayTipLatency'), value: formatDurationMs(row.latency_ms) })
+  if (row.cost_micros != null) {
+    rows.push({ label: t('cost'), value: formatMoney(row.cost_micros, locale.value, 6) })
+  }
+  if (videoBillingDetailsAvailable(row)) {
+    const details = row.video_billing!
+    rows.push({ label: t('videoResolution'), value: details.resolution })
+    rows.push({
+      label: t('videoInput'),
+      value: details.has_video_input ? t('videoInputWithVideo') : t('videoInputWithoutVideo')
+    })
+    rows.push({ label: t('videoBillingRule'), value: videoBillingRuleDisplay(row) })
+    rows.push({ label: t('videoBillingFormula'), value: videoBillingFormulaDisplay(row) })
+    if (details.mode === 'per_second' && (row.total_tokens ?? 0) > 0) {
+      rows.push({
+        label: t('upstreamUsage'),
+        value: `${formatNumber(row.total_tokens, locale.value)} ${t('usageDetailTokens')} · ${t('upstreamUsageNotBilled')}`
+      })
+    }
+  }
+  if (row.first_response_ms != null) {
+    rows.push({
+      label: t('firstResponseLatencyDetail'),
+      value: formatDurationMs(row.first_response_ms)
+    })
+  }
+  rows.push({ label: t('totalLatencyDetail'), value: formatDurationMs(row.latency_ms) })
   if (row.channel_name || row.channel_id != null) {
     rows.push({
       label: t('relayTipPath'),
@@ -534,11 +593,23 @@ async function exportUsage() {
         </el-table-column>
         <el-table-column :label="t('tokensColumnHint')" min-width="150">
           <template #default="{ row }">
-            <div v-if="row.billing_meter === 'image'" class="usage-stack">
-              <span class="usage-mono">
-                {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
+            <div v-if="usageIsFailed(row)" class="usage-stack">
+              <span class="usage-mono">-</span>
+            </div>
+            <div v-else-if="row.billing_meter === 'image'" class="usage-stack">
+              <span
+                v-if="(row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0"
+                class="usage-mono"
+              >
+                {{ formatNumber(row.input_tokens, locale) }} /
+                {{ formatNumber(row.output_tokens, locale) }}
               </span>
-              <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+              <template v-else>
+                <span class="usage-mono">
+                  {{ formatNumber(row.billable_units, locale) }} {{ t('perImage') }}
+                </span>
+                <span class="usage-muted">{{ t('billingMeterImageGeneration') }}</span>
+              </template>
             </div>
             <div
               v-else-if="row.billing_meter === 'video' && (row.total_tokens ?? 0) === 0"

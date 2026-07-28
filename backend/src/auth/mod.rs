@@ -1,6 +1,14 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
-use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::HeaderMap,
+    routing::post,
+    Json, Router,
+};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
@@ -100,11 +108,12 @@ async fn login(
 
 async fn request_login_verification_code(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<LoginVerificationCodeRequest>,
 ) -> AppResult<Json<OkResponse>> {
     let email = normalize_email(&req.email)?;
-    let client_key = client_rate_key(&headers);
+    let client_key = client_rate_key(&headers, Some(addr.ip()), state.config.trust_proxy_headers);
     state
         .auth_rate_limiter
         .check_login_verification_request(&email, &client_key)
@@ -151,11 +160,12 @@ async fn request_login_verification_code(
 
 async fn request_password_reset(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<PasswordResetRequest>,
 ) -> AppResult<Json<OkResponse>> {
     let email = normalize_email(&req.email)?;
-    let client_key = client_rate_key(&headers);
+    let client_key = client_rate_key(&headers, Some(addr.ip()), state.config.trust_proxy_headers);
     state
         .auth_rate_limiter
         .check_password_reset_request(&email, &client_key)
@@ -186,10 +196,11 @@ async fn request_password_reset(
 
 async fn reset_password(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<ResetPasswordRequest>,
 ) -> AppResult<Json<OkResponse>> {
-    let client_key = client_rate_key(&headers);
+    let client_key = client_rate_key(&headers, Some(addr.ip()), state.config.trust_proxy_headers);
     state
         .auth_rate_limiter
         .check_password_reset_attempt(&req.token, &client_key)
@@ -551,8 +562,17 @@ pub(crate) fn validate_user_password_input(password: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn client_rate_key(headers: &HeaderMap) -> String {
-    forwarded_client_ip(headers).map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
+fn client_rate_key(
+    headers: &HeaderMap,
+    peer_ip: Option<IpAddr>,
+    trust_proxy_headers: bool,
+) -> String {
+    if trust_proxy_headers {
+        if let Some(ip) = forwarded_client_ip(headers) {
+            return ip.to_string();
+        }
+    }
+    peer_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
 }
 
 fn email_error(err: anyhow::Error) -> AppError {
@@ -620,7 +640,7 @@ mod tests {
             "198.51.100.20, 203.0.113.30".parse().unwrap(),
         );
 
-        assert_eq!(client_rate_key(&headers), "198.51.100.20");
+        assert_eq!(client_rate_key(&headers, None, true), "198.51.100.20");
     }
 
     #[test]
@@ -628,11 +648,38 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-real-ip", "192.0.2.10".parse().unwrap());
 
-        assert_eq!(client_rate_key(&headers), "192.0.2.10");
+        assert_eq!(client_rate_key(&headers, None, true), "192.0.2.10");
     }
 
     #[test]
     fn client_rate_key_uses_unknown_without_proxy_headers() {
-        assert_eq!(client_rate_key(&HeaderMap::new()), "unknown");
+        assert_eq!(client_rate_key(&HeaderMap::new(), None, true), "unknown");
+    }
+
+    #[test]
+    fn client_rate_key_ignores_proxy_headers_when_not_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "198.51.100.20, 203.0.113.30".parse().unwrap(),
+        );
+
+        assert_eq!(
+            client_rate_key(&headers, Some("203.0.113.99".parse().unwrap()), false),
+            "203.0.113.99"
+        );
+        assert_eq!(client_rate_key(&headers, None, false), "unknown");
+    }
+
+    #[test]
+    fn client_rate_key_prefers_peer_ip_when_headers_missing() {
+        assert_eq!(
+            client_rate_key(
+                &HeaderMap::new(),
+                Some("203.0.113.99".parse().unwrap()),
+                true
+            ),
+            "203.0.113.99"
+        );
     }
 }

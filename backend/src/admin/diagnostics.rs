@@ -13,7 +13,7 @@ use crate::{
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     input::trimmed_non_empty,
-    provider::adapters::{adapter_for_provider, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{
         selector::{SelectedUpstream, UpstreamProtocol},
         upstream_url,
@@ -25,6 +25,19 @@ use super::provider::OPENAI_OAUTH_PROTOCOL;
 use super::{channel::mask_channel_key, credentials::runtime_secret_from_enabled_credential};
 
 const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
+
+async fn send_with_upstream_timeout(
+    state: &AppState,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, AppError> {
+    match tokio::time::timeout(state.config.http.upstream_timeout, request.send()).await {
+        Ok(result) => result.map_err(AppError::from),
+        Err(_) => Err(AppError::BadRequest(format!(
+            "diagnostic probe timed out after {} seconds",
+            state.config.http.upstream_timeout.as_secs()
+        ))),
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelDiagnosticReport {
@@ -592,9 +605,11 @@ async fn run_models_step(
     key: &KeyTarget,
 ) -> ModelsStepResult {
     let started = Instant::now();
-    let response = upstream_request(state, endpoint, key, "GET", "/v1/models", None)
-        .send()
-        .await;
+    let response = send_with_upstream_timeout(
+        state,
+        upstream_request(state, endpoint, key, "GET", "/v1/models", None),
+    )
+    .await;
     match response {
         Ok(response) => {
             let status = response.status();
@@ -678,16 +693,18 @@ async fn run_probe_step(
         url = %request.url,
         "diagnostic probe request started"
     );
-    let response = upstream_request_url(
+    let response = send_with_upstream_timeout(
         state,
-        endpoint,
-        key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
+        upstream_request_url(
+            state,
+            endpoint,
+            key,
+            "POST",
+            &request.url,
+            request.extra_headers,
+            Some(request.body),
+        ),
     )
-    .send()
     .await;
     match response {
         Ok(response) => {
@@ -784,16 +801,18 @@ async fn run_video_probe_step(
         url = %request.url,
         "diagnostic video probe request started"
     );
-    let response = upstream_request_url(
+    let response = send_with_upstream_timeout(
         state,
-        endpoint,
-        key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
+        upstream_request_url(
+            state,
+            endpoint,
+            key,
+            "POST",
+            &request.url,
+            request.extra_headers,
+            Some(request.body),
+        ),
     )
-    .send()
     .await;
     match response {
         Ok(response) => {
@@ -879,16 +898,18 @@ async fn run_image_probe_step(
         url = %request.url,
         "diagnostic image probe request started"
     );
-    let response = upstream_request_url(
+    let response = send_with_upstream_timeout(
         state,
-        endpoint,
-        key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
+        upstream_request_url(
+            state,
+            endpoint,
+            key,
+            "POST",
+            &request.url,
+            request.extra_headers,
+            Some(request.body),
+        ),
     )
-    .send()
     .await;
     match response {
         Ok(response) => {
@@ -1065,7 +1086,7 @@ fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeReque
         };
     }
 
-    let adapter = adapter_for_provider(&endpoint.provider);
+    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
     let route = RelayRoute::ChatCompletions;
     let mut extra_headers = reqwest::header::HeaderMap::new();
     if endpoint.provider.eq_ignore_ascii_case("qwen") {
@@ -1088,7 +1109,7 @@ fn video_probe_request(
     key: &KeyTarget,
     model: &str,
 ) -> AppResult<DiagnosticProbeRequest> {
-    let adapter = adapter_for_provider(&endpoint.provider);
+    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
     let route = RelayRoute::Videos;
     let body = serde_json::to_vec(&json!({
         "model": model,
@@ -1108,6 +1129,7 @@ fn video_probe_request(
             responses_chat_fallback: false,
             secret: key.secret.clone(),
             account_id: None,
+            affinity: None,
         },
         upstream_protocol_from_str(&endpoint.protocol)?,
         route,
@@ -1125,7 +1147,7 @@ fn video_probe_request(
 }
 
 fn image_probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeRequest {
-    let adapter = adapter_for_provider(&endpoint.provider);
+    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
     let route = RelayRoute::ImageGenerations;
     DiagnosticProbeRequest {
         log_path: route.path().to_string(),
@@ -2046,11 +2068,14 @@ fn key_summary(status: DiagnosticStatus) -> String {
     }
 }
 
-fn upstream_status_message(status: StatusCode) -> String {
+fn upstream_status_message(status: StatusCode, error_summary: &str) -> String {
     match status.as_u16() {
         400 => "上游拒绝测试请求，请检查模型名或请求协议".to_string(),
         401 | 403 => "认证失败，请检查上游 Key 或凭证权限".to_string(),
         404 => "接口不存在，请检查 Base URL 和协议".to_string(),
+        429 if upstream_quota_exhausted(error_summary) => {
+            "上游配额已耗尽，请充值、扩容套餐或更换 Key".to_string()
+        }
         429 => "上游限流，请稍后重试或切换 Key".to_string(),
         500..=599 => "上游服务暂时不可用".to_string(),
         _ => format!("上游返回 HTTP {}", status.as_u16()),
@@ -2058,18 +2083,26 @@ fn upstream_status_message(status: StatusCode) -> String {
 }
 
 async fn upstream_failure_message(status: StatusCode, response: reqwest::Response) -> String {
-    let base = upstream_status_message(status);
     match response.text().await {
         Ok(body) => {
             let summary = upstream_error_body_summary(&body);
+            let base = upstream_status_message(status, &summary);
             if summary.is_empty() {
                 base
             } else {
                 format!("{base}: {summary}")
             }
         }
-        Err(_) => base,
+        Err(_) => upstream_status_message(status, ""),
     }
+}
+
+fn upstream_quota_exhausted(error_summary: &str) -> bool {
+    let normalized = error_summary.to_ascii_lowercase();
+    normalized.contains("allocationquota")
+        || normalized.contains("quota has been exhausted")
+        || normalized.contains("quota exhausted")
+        || normalized.contains("insufficient_quota")
 }
 
 fn upstream_error_body_summary(body: &str) -> String {
@@ -2102,14 +2135,17 @@ fn truncate_error_summary(value: &str) -> String {
     output
 }
 
-fn transport_error_message(err: &reqwest::Error) -> String {
-    match UpstreamErrorKind::from_reqwest(err) {
-        UpstreamErrorKind::Timeout => "连接上游超时，请检查网络或上游状态".to_string(),
-        UpstreamErrorKind::Tls => "TLS 握手失败，请检查 Base URL 证书".to_string(),
-        UpstreamErrorKind::Dns => "DNS 解析失败，请检查 Base URL 域名".to_string(),
-        UpstreamErrorKind::Connect => "无法连接上游，请检查网络、防火墙或 Base URL".to_string(),
-        UpstreamErrorKind::Request => "上游请求失败，请检查网络和配置".to_string(),
+fn transport_error_message(err: &AppError) -> String {
+    if let AppError::Reqwest(err) = err {
+        return match UpstreamErrorKind::from_reqwest(err) {
+            UpstreamErrorKind::Timeout => "连接上游超时，请检查网络或上游状态".to_string(),
+            UpstreamErrorKind::Tls => "TLS 握手失败，请检查 Base URL 证书".to_string(),
+            UpstreamErrorKind::Dns => "DNS 解析失败，请检查 Base URL 域名".to_string(),
+            UpstreamErrorKind::Connect => "无法连接上游，请检查网络、防火墙或 Base URL".to_string(),
+            UpstreamErrorKind::Request => "上游请求失败，请检查网络和配置".to_string(),
+        };
     }
+    err.to_string()
 }
 
 fn extract_model_ids(value: &Value) -> Vec<String> {
@@ -2258,6 +2294,25 @@ mod tests {
         let body = "x".repeat(400);
 
         assert!(upstream_error_body_summary(&body).ends_with("..."));
+    }
+
+    #[test]
+    fn allocation_quota_is_reported_as_exhausted_quota() {
+        assert_eq!(
+            upstream_status_message(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Your token-plan quota has been exhausted.; code=Throttling.AllocationQuota",
+            ),
+            "上游配额已耗尽，请充值、扩容套餐或更换 Key"
+        );
+    }
+
+    #[test]
+    fn ordinary_429_is_reported_as_rate_limited() {
+        assert_eq!(
+            upstream_status_message(StatusCode::TOO_MANY_REQUESTS, "request limit exceeded"),
+            "上游限流，请稍后重试或切换 Key"
+        );
     }
 
     #[test]

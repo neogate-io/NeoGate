@@ -1,6 +1,9 @@
 use std::{sync::Arc, time::Instant};
 
-use axum::{body::Body, http::StatusCode};
+use axum::{
+    body::Body,
+    http::{HeaderMap, StatusCode},
+};
 use bytes::Bytes;
 use futures_util::StreamExt;
 
@@ -43,6 +46,9 @@ pub(crate) struct RelayContext {
     pub(crate) relay_trace_id: Uuid,
     pub(crate) relay_attempt: i32,
     pub(crate) relay_final: bool,
+    /// Payload metrics are estimates for diagnostics only; they do not expose request content.
+    pub(crate) request_body_bytes: usize,
+    pub(crate) request_input_tokens_estimate: i64,
     pub(crate) request_params: RelayRequestParams,
     pub(crate) request_permit: Option<UserRequestPermit>,
     pub(crate) upstream_request_path: Option<String>,
@@ -63,18 +69,54 @@ impl RelayContext {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct UpstreamResponseMetadata {
+    request_id: Option<String>,
+    trace_id: Option<String>,
+    cf_ray: Option<String>,
+    server_timing: Option<String>,
+}
+
+impl UpstreamResponseMetadata {
+    pub(crate) fn from_headers(headers: &HeaderMap) -> Self {
+        Self {
+            request_id: first_header_value(
+                headers,
+                &["x-request-id", "request-id", "openai-request-id"],
+                256,
+            ),
+            trace_id: first_header_value(headers, &["x-trace-id", "trace-id"], 256),
+            cf_ray: first_header_value(headers, &["cf-ray"], 256),
+            server_timing: first_header_value(headers, &["server-timing"], 500),
+        }
+    }
+}
+
+fn first_header_value(headers: &HeaderMap, names: &[&str], limit: usize) -> Option<String> {
+    names.iter().find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| truncate_for_log(value, limit))
+    })
+}
+
 pub(crate) fn body(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
 ) -> Body {
     let content_length = upstream_response.content_length();
+    let response_metadata = UpstreamResponseMetadata::from_headers(upstream_response.headers());
     let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
     body_from_stream(
         ctx,
         status,
         content_length,
         usage_buffer_limit_bytes,
+        response_metadata,
         upstream_response
             .bytes_stream()
             .map(|chunk| chunk.map_err(|err| err.to_string()))
@@ -90,6 +132,7 @@ pub(crate) fn body_from_bytes(mut ctx: RelayContext, status: StatusCode, bytes: 
         status,
         Some(bytes.len() as u64),
         usage_buffer_limit_bytes,
+        UpstreamResponseMetadata::default(),
         futures_util::stream::once(async move { Ok(bytes) }).boxed(),
     )
 }
@@ -99,12 +142,15 @@ pub(crate) fn body_from_stream(
     status: StatusCode,
     content_length: Option<u64>,
     usage_buffer_limit_bytes: usize,
+    response_metadata: UpstreamResponseMetadata,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
 ) -> Body {
     let streamed = ctx.streamed;
     let path = ctx.path;
     let model_rewriter = (ctx.streamed && ctx.external_model != ctx.model)
         .then(|| SseModelRewriter::new(ctx.external_model.clone()));
+    let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+    let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     tracing::debug!(
         relay_trace_id = %ctx.relay_trace_id,
         relay_attempt = ctx.relay_attempt,
@@ -117,9 +163,12 @@ pub(crate) fn body_from_stream(
         credential_id = ?ctx.upstream.credential_id,
         protocol = ctx.protocol.as_str(),
         model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
+        external_model = %ctx.external_model,
+        upstream_model = %ctx.upstream_model,
         path = ctx.path,
+        upstream_path,
+        response_mode,
+        responses_chat_fallback = response_mode == "openai_chat_as_openai_response",
         base_url = %ctx.upstream.base_url,
         status = status.as_u16(),
         streamed = ctx.streamed,
@@ -139,6 +188,7 @@ pub(crate) fn body_from_stream(
             usage_buffer_limit_bytes,
         ),
         model_rewriter,
+        response_metadata,
         first_response_ms: None,
         last_chunk_ms: None,
         chunks_sent: 0,
@@ -189,6 +239,7 @@ struct StreamingRelay {
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
     usage: ResponseUsageParser,
     model_rewriter: Option<SseModelRewriter>,
+    response_metadata: UpstreamResponseMetadata,
     first_response_ms: Option<i64>,
     last_chunk_ms: Option<i64>,
     chunks_sent: u64,
@@ -309,6 +360,8 @@ impl StreamingRelay {
             .map(StreamErrorSummary::to_error_summary)
             .unwrap_or_else(|| "upstream stream ended with SSE error event".to_string());
         ctx.release_request_permit();
+        let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+        let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
         tracing::debug!(
             relay_trace_id = %ctx.relay_trace_id,
             relay_attempt = ctx.relay_attempt,
@@ -363,6 +416,9 @@ impl StreamingRelay {
         }
         if stream_failed {
             tracing::warn!(
+                relay_trace_id = %ctx.relay_trace_id,
+                relay_attempt = ctx.relay_attempt,
+                relay_final = ctx.relay_final,
                 provider = %ctx.upstream.provider,
                 channel_id = ctx.upstream.channel_id,
                 channel_name = %ctx.upstream.channel_name,
@@ -374,8 +430,17 @@ impl StreamingRelay {
                 external_model = %ctx.external_model,
                 upstream_model = %ctx.upstream_model,
                 path = ctx.path,
+                upstream_path,
+                response_mode,
+                responses_chat_fallback = response_mode == "openai_chat_as_openai_response",
                 base_url = %ctx.upstream.base_url,
                 status = self.status.as_u16(),
+                request_body_bytes = ctx.request_body_bytes,
+                request_input_tokens_estimate = ctx.request_input_tokens_estimate,
+                request_max_tokens = ?ctx.request_params.max_tokens,
+                request_reasoning_effort = ?ctx.request_params.reasoning_effort,
+                request_tool_count = ?ctx.request_params.tool_count,
+                request_tool_choice = ?ctx.request_params.tool_choice,
                 first_response_ms = self.first_response_ms,
                 last_chunk_ms = self.last_chunk_ms,
                 chunks_sent = self.chunks_sent,
@@ -383,6 +448,16 @@ impl StreamingRelay {
                 largest_chunk_bytes = self.largest_chunk_bytes,
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
                 last_signal = ?self.usage.last_signal_summary(),
+                previous_signal = ?self.usage.previous_signal_summary(),
+                upstream_request_id = ?self.response_metadata.request_id,
+                upstream_trace_id = ?self.response_metadata.trace_id,
+                upstream_cf_ray = ?self.response_metadata.cf_ray,
+                upstream_server_timing = ?self.response_metadata.server_timing,
+                observed_input_tokens = ?token_usage.map(|usage| usage.input_tokens),
+                observed_output_tokens = ?token_usage.map(|usage| usage.output_tokens),
+                observed_reasoning_output_tokens = ?token_usage.and_then(|usage| usage.reasoning_output_tokens),
+                sse_response_id = ?stream_error.as_ref().and_then(|error| error.response_id.as_deref()),
+                sse_request_id = ?stream_error.as_ref().and_then(|error| error.request_id.as_deref()),
                 sse_error_type = ?stream_error.as_ref().and_then(|error| error.error_type.as_deref()),
                 sse_error_code = ?stream_error.as_ref().and_then(|error| error.error_code.as_deref()),
                 sse_error_message = ?stream_error.as_ref().and_then(|error| error.error_message.as_deref()),
@@ -438,7 +513,7 @@ impl StreamingRelay {
             }
         }
         let billing = if self.status.is_success() && !stream_failed {
-            record_channel_affinity(&ctx);
+            record_channel_affinity(&ctx).await;
             settle_successful_hold(&ctx, token_usage, "streamed relay").await
         } else {
             let release_context = if stream_failed {
@@ -796,13 +871,14 @@ impl Drop for StreamingRelay {
     }
 }
 
-fn record_channel_affinity(ctx: &RelayContext) {
+async fn record_channel_affinity(ctx: &RelayContext) {
     let Some(key) = ctx.channel_affinity_key.clone() else {
         return;
     };
     ctx.state
         .channel_affinity
-        .insert(key, (&ctx.upstream).into());
+        .insert(key, (&ctx.upstream).into())
+        .await;
 }
 
 enum ResponseUsageParser {
@@ -896,16 +972,7 @@ impl ResponseUsageParser {
                 if parser.saw_done {
                     return Some("data:[DONE]".to_string());
                 }
-                let event = parser.last_event.as_deref();
-                let data_type = parser.last_type.as_deref();
-                match (event, data_type) {
-                    (Some(event), Some(data_type)) => {
-                        Some(format!("event:{event} data_type:{data_type}"))
-                    }
-                    (Some(event), None) => Some(format!("event:{event}")),
-                    (None, Some(data_type)) => Some(format!("data_type:{data_type}")),
-                    (None, None) => None,
-                }
+                signal_summary(parser.last_event.as_deref(), parser.last_type.as_deref())
             }
             Self::Json {
                 buffer: Some(bytes),
@@ -916,6 +983,25 @@ impl ResponseUsageParser {
             Self::Json { buffer: None, .. } => Some("json-buffer-overflow".to_string()),
             Self::Disabled => None,
         }
+    }
+
+    fn previous_signal_summary(&self) -> Option<String> {
+        match self {
+            Self::Sse(parser) => signal_summary(
+                parser.previous_event.as_deref(),
+                parser.previous_type.as_deref(),
+            ),
+            Self::Json { .. } | Self::Disabled => None,
+        }
+    }
+}
+
+fn signal_summary(event: Option<&str>, data_type: Option<&str>) -> Option<String> {
+    match (event, data_type) {
+        (Some(event), Some(data_type)) => Some(format!("event:{event} data_type:{data_type}")),
+        (Some(event), None) => Some(format!("event:{event}")),
+        (None, Some(data_type)) => Some(format!("data_type:{data_type}")),
+        (None, None) => None,
     }
 }
 
@@ -940,7 +1026,7 @@ struct ParsedLine {
     done: bool,
 }
 
-struct StreamUsageParser {
+pub(crate) struct StreamUsageParser {
     buffered: Vec<u8>,
     latest: Option<TokenUsage>,
     completed: bool,
@@ -948,13 +1034,15 @@ struct StreamUsageParser {
     limit_bytes: usize,
     last_event: Option<String>,
     last_type: Option<String>,
+    previous_event: Option<String>,
+    previous_type: Option<String>,
     saw_done: bool,
     failed: bool,
     last_error: Option<StreamErrorSummary>,
 }
 
 impl StreamUsageParser {
-    fn new(limit_bytes: usize) -> Self {
+    pub(crate) fn new(limit_bytes: usize) -> Self {
         Self {
             buffered: Vec::new(),
             latest: None,
@@ -963,13 +1051,15 @@ impl StreamUsageParser {
             limit_bytes,
             last_event: None,
             last_type: None,
+            previous_event: None,
+            previous_type: None,
             saw_done: false,
             failed: false,
             last_error: None,
         }
     }
 
-    fn observe(&mut self, chunk: &[u8]) {
+    pub(crate) fn observe(&mut self, chunk: &[u8]) {
         if self.skipping_oversized_line {
             if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
                 self.skipping_oversized_line = false;
@@ -1020,7 +1110,14 @@ impl StreamUsageParser {
 
     fn observe_parsed_line(&mut self, parsed: ParsedLine) {
         if let Some(usage) = parsed.usage {
-            self.latest = Some(usage);
+            match &mut self.latest {
+                Some(latest) => merge_token_usage(latest, usage),
+                None => self.latest = Some(usage),
+            }
+        }
+        if parsed.failed && !self.failed {
+            self.previous_event.clone_from(&self.last_event);
+            self.previous_type.clone_from(&self.last_type);
         }
         if let Some(event) = parsed.event {
             self.last_event = Some(event);
@@ -1080,7 +1177,7 @@ impl StreamUsageParser {
         }
     }
 
-    fn finish(&mut self) -> Option<TokenUsage> {
+    pub(crate) fn finish(&mut self) -> Option<TokenUsage> {
         if self.skipping_oversized_line {
             return self.latest;
         }
@@ -1090,6 +1187,28 @@ impl StreamUsageParser {
         }
         self.latest
     }
+}
+
+fn merge_token_usage(current: &mut TokenUsage, incoming: TokenUsage) {
+    // SSE providers may put cache details in an early event and final output usage later.
+    // Merge fields so the later partial update cannot discard previously reported usage.
+    current.input_tokens = current.input_tokens.max(incoming.input_tokens);
+    current.output_tokens = current.output_tokens.max(incoming.output_tokens);
+    current.cached_input_tokens = incoming.cached_input_tokens.or(current.cached_input_tokens);
+    current.cache_creation_input_tokens = incoming
+        .cache_creation_input_tokens
+        .or(current.cache_creation_input_tokens);
+    current.cache_creation_input_tokens_5m = incoming
+        .cache_creation_input_tokens_5m
+        .or(current.cache_creation_input_tokens_5m);
+    current.cache_creation_input_tokens_1h = incoming
+        .cache_creation_input_tokens_1h
+        .or(current.cache_creation_input_tokens_1h);
+    current.reasoning_output_tokens = incoming
+        .reasoning_output_tokens
+        .or(current.reasoning_output_tokens);
+    current.audio_input_tokens = incoming.audio_input_tokens.or(current.audio_input_tokens);
+    current.audio_output_tokens = incoming.audio_output_tokens.or(current.audio_output_tokens);
 }
 
 fn stream_event_is_terminal(event: &str) -> bool {
@@ -1136,6 +1255,8 @@ fn sse_data_type_is(data: &str, expected: &str) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StreamErrorSummary {
+    response_id: Option<String>,
+    request_id: Option<String>,
     error_type: Option<String>,
     error_code: Option<String>,
     error_message: Option<String>,
@@ -1147,6 +1268,8 @@ impl StreamErrorSummary {
         let raw = Some(truncate_for_log(data, 1000));
         let Ok(value) = serde_json::from_str::<Value>(data) else {
             return Self {
+                response_id: None,
+                request_id: None,
                 error_type: None,
                 error_code: None,
                 error_message: Some(truncate_for_log(data, 500)),
@@ -1156,6 +1279,14 @@ impl StreamErrorSummary {
         let response_error = value
             .get("response")
             .and_then(|response| response.get("error"));
+        let response_id = value
+            .get("response")
+            .and_then(|response| string_field(response, "id"))
+            .or_else(|| string_field(&value, "response_id"))
+            .map(|value| truncate_for_log(&value, 256));
+        let request_id = string_field(&value, "request_id")
+            .or_else(|| string_field(&value, "request-id"))
+            .map(|value| truncate_for_log(&value, 256));
         let error = response_error
             .or_else(|| value.get("error"))
             .unwrap_or(&value);
@@ -1172,6 +1303,8 @@ impl StreamErrorSummary {
             .map(|value| truncate_for_log(&value, 500));
 
         Self {
+            response_id,
+            request_id,
             error_type,
             error_code,
             error_message,
@@ -1368,6 +1501,24 @@ data: [DONE]
     }
 
     #[test]
+    fn stream_usage_parser_preserves_cache_details_from_earlier_events() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"message":{"usage":{"input_tokens":100,"output_tokens":0,"cache_read_input_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":12}}}}
+data: {"usage":{"input_tokens":0,"output_tokens":20}}
+"#,
+        );
+
+        let usage = parser.finish().expect("merged usage should be retained");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cached_input_tokens, Some(80));
+        assert_eq!(usage.cache_creation_input_tokens, Some(12));
+        assert_eq!(usage.cache_creation_input_tokens_5m, Some(12));
+    }
+
+    #[test]
     fn stream_usage_parser_recovers_after_oversized_line() {
         let mut parser = StreamUsageParser::new(128);
 
@@ -1472,9 +1623,11 @@ data: {"error":{"code":"InvalidParameter","message":"model does not support resp
     #[test]
     fn stream_error_summary_reads_openai_response_failed_nested_error() {
         let error = StreamErrorSummary::from_sse_data(
-            r#"{"type":"response.failed","response":{"id":"resp_123","status":"failed","error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for user, please retry later"}}}"#,
+            r#"{"type":"response.failed","request_id":"req_456","response":{"id":"resp_123","status":"failed","error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for user, please retry later"}}}"#,
         );
 
+        assert_eq!(error.response_id.as_deref(), Some("resp_123"));
+        assert_eq!(error.request_id.as_deref(), Some("req_456"));
         assert_eq!(error.error_code.as_deref(), Some("rate_limit_exceeded"));
         assert_eq!(
             error.error_message.as_deref(),
@@ -1548,6 +1701,49 @@ data: {"type":"response.output_text.delta","delta":"hi"}
             Some("response.output_text.delta")
         );
         assert!(!parser.saw_done);
+    }
+
+    #[test]
+    fn stream_usage_parser_preserves_signal_before_failure() {
+        let mut parser = StreamUsageParser::new(2048);
+
+        parser.observe(
+            br#"event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"hi"}
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_123","error":{"code":"upstream_error","message":"failed"}}}
+"#,
+        );
+
+        assert!(parser.failed);
+        assert_eq!(
+            signal_summary(
+                parser.previous_event.as_deref(),
+                parser.previous_type.as_deref()
+            )
+            .as_deref(),
+            Some("event:response.output_text.delta data_type:response.output_text.delta")
+        );
+    }
+
+    #[test]
+    fn upstream_response_metadata_reads_only_diagnostic_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", "req_123".parse().expect("request id"));
+        headers.insert("x-trace-id", "trace_456".parse().expect("trace id"));
+        headers.insert("cf-ray", "ray_789".parse().expect("cf ray"));
+        headers.insert(
+            "server-timing",
+            "upstream;dur=123".parse().expect("server timing"),
+        );
+        headers.insert("set-cookie", "secret=value".parse().expect("cookie"));
+
+        let metadata = UpstreamResponseMetadata::from_headers(&headers);
+
+        assert_eq!(metadata.request_id.as_deref(), Some("req_123"));
+        assert_eq!(metadata.trace_id.as_deref(), Some("trace_456"));
+        assert_eq!(metadata.cf_ray.as_deref(), Some("ray_789"));
+        assert_eq!(metadata.server_timing.as_deref(), Some("upstream;dur=123"));
     }
 
     #[test]

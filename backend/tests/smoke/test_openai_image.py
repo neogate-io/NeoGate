@@ -3,9 +3,12 @@ import http.client
 import json
 import mimetypes
 import os
+import random
+import struct
 import time
 import unittest
 import uuid
+import zlib
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -23,6 +26,7 @@ RESPONSE_POLL_TIMEOUT_SECONDS = 900
 RESPONSE_POLL_INTERVAL_SECONDS = 5
 OUTPUT_DIR = TESTS_DIR / "output" / "openai_image"
 TEST_IMAGE_PATH = TESTS_DIR / "fixtures" / "test.png"
+TEST2_IMAGE_PATH = TESTS_DIR / "fixtures" / "test2.jpg"
 
 
 def load_env_file(path):
@@ -104,6 +108,7 @@ class NeoGateClient:
         self.api_key = api_key
 
     def post_json(self, path, payload):
+        save_http_json("request", "POST", path, payload)
         body = json.dumps(payload).encode("utf-8")
         return self.request(
             "POST",
@@ -116,6 +121,7 @@ class NeoGateClient:
         )
 
     def post_multipart(self, path, fields, files):
+        save_http_json("request", "POST", path, multipart_request_record(fields, files))
         body, content_type = encode_multipart_form(fields, files)
         return self.request(
             "POST",
@@ -127,16 +133,17 @@ class NeoGateClient:
             },
         )
 
-    def get_json(self, path):
+    def get_json(self, path, record_response=True):
         status, headers, body = self.request(
             "GET",
             path,
             None,
             {"Authorization": f"Bearer {self.api_key}"},
+            record_response=record_response,
         )
         return status, headers, parse_json_body(body)
 
-    def request(self, method, path, body, headers):
+    def request(self, method, path, body, headers, record_response=True):
         conn = make_connection(self.parsed)
         request_path = f"{self.base_path}{path}"
         try:
@@ -144,11 +151,20 @@ class NeoGateClient:
             response = conn.getresponse()
             response_body = response.read()
             response_headers = {key.lower(): value for key, value in response.getheaders()}
+            if record_response:
+                record_json_response(
+                    method,
+                    path,
+                    response.status,
+                    response_headers,
+                    response_body,
+                )
             return response.status, response_headers, response_body
         finally:
             conn.close()
 
     def stream_json(self, path, payload):
+        save_http_json("request", "POST", path, payload)
         body = json.dumps(payload).encode("utf-8")
         conn = make_connection(self.parsed)
         request_path = f"{self.base_path}{path}"
@@ -199,12 +215,70 @@ def encode_multipart_form(fields, files):
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
+def multipart_request_record(fields, files):
+    file_records = {}
+    for name, file_path in files.items():
+        path = Path(file_path)
+        file_records[name] = {
+            "filename": path.name,
+            "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            "bytes": path.stat().st_size,
+        }
+    return {
+        "content_type": "multipart/form-data",
+        "fields": {name: str(value) for name, value in fields.items()},
+        "files": file_records,
+    }
+
+
 def parse_json_body(body):
     try:
         return json.loads(body.decode("utf-8"))
     except json.JSONDecodeError as exc:
         preview = body[:500].decode("utf-8", errors="replace")
         raise AssertionError(f"response body is not JSON: {preview}") from exc
+
+
+def record_json_response(method, path, status, headers, body):
+    content_type = headers.get("content-type", "").lower()
+    stripped = body.lstrip()
+    if "json" not in content_type and not stripped.startswith((b"{", b"[")):
+        return
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return
+    save_http_json("response", method, path, value, status=status)
+
+
+def save_http_json(direction, method, path, value, status=None):
+    record = {
+        "direction": direction,
+        "method": method,
+        "path": path,
+        "json": value,
+    }
+    if status is not None:
+        record["status"] = status
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    path_name = "_".join(
+        part
+        for part in "".join(
+            char if char.isalnum() else "_" for char in path
+        ).split("_")
+        if part
+    )
+    status_name = f"_{status}" if status is not None else ""
+    output_path = unique_output_path(
+        f"{direction}_{method.lower()}_{path_name}{status_name}",
+        ".json",
+    )
+    output_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"saved json: {output_path}")
+    return output_path
 
 
 def assert_success(status, body):
@@ -309,8 +383,10 @@ def response_image_payloads(value):
     for output in value.get("output") or []:
         if not isinstance(output, dict):
             continue
-        if output.get("type") == "image_generation_call" and output.get("result"):
-            payloads.append(output["result"])
+        if output.get("type") == "image_generation_call":
+            payload = output.get("result") or output.get("url")
+            if payload:
+                payloads.append(payload)
         for item in output.get("content") or []:
             if not isinstance(item, dict):
                 continue
@@ -353,6 +429,36 @@ def test_png_data_url():
     return f"data:image/png;base64,{encoded}"
 
 
+def test2_jpg_path():
+    if not TEST2_IMAGE_PATH.exists():
+        raise AssertionError(f"test image is missing: {TEST2_IMAGE_PATH}")
+    return TEST2_IMAGE_PATH
+
+
+def test2_jpg_data_url():
+    encoded = base64.b64encode(test2_jpg_path().read_bytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def _png_chunk(kind, data):
+    checksum = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
+
+
+def synthetic_2k_png_data_url(seed):
+    """Create a valid noisy 2048x2048 PNG without adding binary fixtures."""
+    width = height = 2048
+    row_bytes = width * 3
+    rng = random.Random(seed)
+    raw = b"".join(b"\x00" + rng.randbytes(row_bytes) for _ in range(height))
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += _png_chunk(b"IDAT", zlib.compress(raw, level=6))
+    png += _png_chunk(b"IEND", b"")
+    encoded = base64.b64encode(png).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 def client():
     require_api_key()
     return NeoGateClient(BASE_URL, API_KEY)
@@ -388,6 +494,27 @@ def _test_images_edit_multipart():
     save_image_payloads("test_images_edit_multipart", image_payloads_from_images_response(value))
 
 
+def _test_images_edit_extract_dog():
+    status, _headers, body = client().post_multipart(
+        "/images/edits",
+        {
+            "model": MODEL,
+            "prompt": "Cut out the dog from this image.",
+            "size": "1024x1536",
+            "background": "transparent",
+            "output_format": "png",
+        },
+        {"image": test2_jpg_path()},
+    )
+
+    assert_success(status, body)
+    value = parse_json_body(body)
+    save_image_payloads(
+        "test_images_edit_extract_dog",
+        image_payloads_from_images_response(value),
+    )
+
+
 def _test_images_generation_stream():
     conn, response = client().stream_json(
         "/images/generations",
@@ -404,8 +531,22 @@ def _test_images_generation_stream():
     finally:
         conn.close()
 
+    record_json_response(
+        "POST",
+        "/images/generations",
+        response.status,
+        {"content-type": response.getheader("content-type", "")},
+        body,
+    )
     assert_success(response.status, body)
     events = parse_sse_events(body)
+    save_http_json(
+        "response",
+        "POST",
+        "/images/generations",
+        events,
+        status=response.status,
+    )
     if not events:
         raise AssertionError("stream response did not contain SSE events")
     event_types = {event.get("type") or event.get("event") for event in events}
@@ -441,10 +582,25 @@ def _test_images_edit_json_stream():
     finally:
         conn.close()
 
+    response_headers = {"content-type": response.getheader("content-type", "")}
+    record_json_response(
+        "POST",
+        "/images/edits",
+        response.status,
+        response_headers,
+        body,
+    )
     assert_success(response.status, body)
-    content_type = response.getheader("content-type", "")
+    content_type = response_headers["content-type"]
     if "text/event-stream" in content_type:
         events = parse_sse_events(body)
+        save_http_json(
+            "response",
+            "POST",
+            "/images/edits",
+            events,
+            status=response.status,
+        )
         if not events:
             raise AssertionError("stream response did not contain SSE events")
         payloads = collect_image_payloads(events)
@@ -479,7 +635,7 @@ def _test_responses_image_generation_background():
         {
             "model": RESPONSE_MODEL,
             "input": "Generate an image of a compact glass teapot on a walnut table.",
-            "tools": [{"type": "image_generation"}],
+            "tools": [{"type": "image_generation", "model": MODEL}],
             "background": True,
             "store": True,
         },
@@ -492,20 +648,176 @@ def _test_responses_image_generation_background():
 
     terminal_statuses = {"completed", "failed", "cancelled", "canceled", "incomplete"}
     deadline = time.monotonic() + RESPONSE_POLL_TIMEOUT_SECONDS
+    response_path = f"/responses/{response_id}"
     while value.get("status") not in terminal_statuses:
         if time.monotonic() >= deadline:
             raise AssertionError(f"response {response_id} did not finish before timeout: {value}")
         time.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
-        status, _headers, value = client().get_json(f"/responses/{response_id}")
+        status, _headers, value = client().get_json(
+            response_path,
+            record_response=False,
+        )
         if not 200 <= status < 300:
             raise AssertionError(f"failed to poll response {response_id}: HTTP {status} {value}")
 
     if value.get("status") != "completed":
         raise AssertionError(value)
+    save_http_json("response", "GET", response_path, value, status=status)
     payloads = response_image_payloads(value)
     if not payloads:
         raise AssertionError(f"completed response did not include image output: {value}")
     save_image_payloads("test_responses_image_generation_background", payloads)
+
+
+def _test_responses_image_edit_extract_dog_background():
+    status, _headers, body = client().post_json(
+        "/responses",
+        {
+            "model": RESPONSE_MODEL,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Cut out the dog from this image."},
+                        {"type": "input_image", "image_url": test2_jpg_data_url()},
+                    ],
+                }
+            ],
+            "tools": [
+                {
+                    "type": "image_generation",
+                    "model": MODEL,
+                    "action": "edit",
+                    "size": "1024x1536",
+                    "background": "transparent",
+                    "output_format": "png",
+                }
+            ],
+            "background": True,
+            "store": True,
+        },
+    )
+    assert_success(status, body)
+    value = parse_json_body(body)
+    response_id = value.get("id")
+    if not isinstance(response_id, str) or not response_id:
+        raise AssertionError(f"response id is missing: {value}")
+
+    terminal_statuses = {"completed", "failed", "cancelled", "canceled", "incomplete"}
+    deadline = time.monotonic() + RESPONSE_POLL_TIMEOUT_SECONDS
+    response_path = f"/responses/{response_id}"
+    while value.get("status") not in terminal_statuses:
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"response {response_id} did not finish before timeout: {value}")
+        time.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+        status, _headers, value = client().get_json(
+            response_path,
+            record_response=False,
+        )
+        if not 200 <= status < 300:
+            raise AssertionError(f"failed to poll response {response_id}: HTTP {status} {value}")
+
+    if value.get("status") != "completed":
+        raise AssertionError(value)
+    save_http_json("response", "GET", response_path, value, status=status)
+    payloads = response_image_payloads(value)
+    if not payloads:
+        raise AssertionError(f"completed response did not include image output: {value}")
+    save_image_payloads("test_responses_image_edit_extract_dog_background", payloads)
+
+
+def _test_responses_image_edit_three_2k_background():
+    reference_urls = [
+        synthetic_2k_png_data_url(1),
+        synthetic_2k_png_data_url(2),
+        synthetic_2k_png_data_url(3),
+    ]
+    payload = {
+        "model": RESPONSE_MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Create one image using the three references. "
+                            "Preserve the main subject from each reference and "
+                            "combine them into one coherent composition."
+                        ),
+                    },
+                    {"type": "input_text", "text": "【图1】"},
+                    {"type": "input_image", "image_url": reference_urls[0]},
+                    {"type": "input_text", "text": "【图2】"},
+                    {"type": "input_image", "image_url": reference_urls[1]},
+                    {"type": "input_text", "text": "【图3】"},
+                    {"type": "input_image", "image_url": reference_urls[2]},
+                ],
+            }
+        ],
+        "tools": [
+            {
+                "type": "image_generation",
+                "model": MODEL,
+                "action": "edit",
+                "size": "1536x1024",
+                "output_format": "png",
+            }
+        ],
+        "instructions": (
+            "You are an image generation executor. Always call image_generation "
+            "and return exactly one generated image."
+        ),
+        "background": True,
+        "store": True,
+        "image_format": "url",
+    }
+    request_bytes = len(json.dumps(payload).encode("utf-8"))
+    reference_bytes = [
+        (len(url) - len("data:image/png;base64,")) * 3 // 4
+        for url in reference_urls
+    ]
+    print(
+        "three-2k request bytes: "
+        f"{request_bytes} ({request_bytes / 1024 / 1024:.2f} MiB), "
+        "decoded reference bytes: "
+        f"{[round(size / 1024 / 1024, 2) for size in reference_bytes]} MiB"
+    )
+
+    status, _headers, body = client().post_json("/responses", payload)
+    assert_success(status, body)
+    value = parse_json_body(body)
+    response_id = value.get("id")
+    if not isinstance(response_id, str) or not response_id:
+        raise AssertionError(f"response id is missing: {value}")
+
+    terminal_statuses = {"completed", "failed", "cancelled", "canceled", "incomplete"}
+    deadline = time.monotonic() + RESPONSE_POLL_TIMEOUT_SECONDS
+    response_path = f"/responses/{response_id}"
+    seen_statuses = [value.get("status")]
+    while value.get("status") not in terminal_statuses:
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"response {response_id} did not finish before timeout; "
+                f"statuses={seen_statuses}, last={value}"
+            )
+        time.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+        status, _headers, value = client().get_json(
+            response_path,
+            record_response=False,
+        )
+        if not 200 <= status < 300:
+            raise AssertionError(f"failed to poll response {response_id}: HTTP {status} {value}")
+        seen_statuses.append(value.get("status"))
+
+    save_http_json("response", "GET", response_path, value, status=status)
+    print(f"three-2k response {response_id} statuses: {seen_statuses}")
+    if value.get("status") != "completed":
+        raise AssertionError(value)
+    payloads = response_image_payloads(value)
+    if not payloads:
+        raise AssertionError(f"completed response did not include image output: {value}")
+    save_image_payloads("test_responses_image_edit_three_2k_background", payloads)
 
 
 def make_test_case(test_func):
@@ -518,6 +830,10 @@ def test_images_generation_json():
 
 def test_images_edit_multipart():
     return make_test_case(_test_images_edit_multipart)
+
+
+def test_images_edit_extract_dog():
+    return make_test_case(_test_images_edit_extract_dog)
 
 
 def test_images_generation_stream():
@@ -536,16 +852,27 @@ def test_responses_image_generation_background():
     return make_test_case(_test_responses_image_generation_background)
 
 
+def test_responses_image_edit_extract_dog_background():
+    return make_test_case(_test_responses_image_edit_extract_dog_background)
+
+
+def test_responses_image_edit_three_2k_background():
+    return make_test_case(_test_responses_image_edit_three_2k_background)
+
+
 def load_tests(loader, tests, pattern):
     suite = unittest.TestSuite()
     suite.addTests(
         [
             test_images_generation_json(),
             test_images_edit_multipart(),
+            test_images_edit_extract_dog(),
             test_images_generation_stream(),
             test_images_edit_json_stream(),
             test_images_variation(),
             test_responses_image_generation_background(),
+            test_responses_image_edit_extract_dog_background(),
+            test_responses_image_edit_three_2k_background(),
         ]
     )
     return suite

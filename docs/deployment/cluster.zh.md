@@ -39,7 +39,6 @@ cp deploy/env/cluster.env.example .env.cluster
 | --- | --- |
 | `DATABASE_URL` | 外部 PostgreSQL 连接地址。 |
 | `REDIS_URL` | 外部 Redis 连接地址。 |
-| `REDIS_KEY_PREFIX` | Redis key 前缀，同一 Redis 被多个环境共用时应保持唯一。 |
 | `PUBLIC_BASE_URL` | 对外访问地址，例如 `https://neogate.example.com`。 |
 | `CORS_ALLOWED_ORIGINS` | 允许访问后端的前端来源，通常与 `PUBLIC_BASE_URL` 一致。 |
 | `ADMIN_TOKEN_SECRET` | 管理员登录令牌签名密钥，必须是长随机字符串。 |

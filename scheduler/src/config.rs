@@ -22,10 +22,7 @@ impl Config {
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             redis_url: optional("REDIS_URL"),
-            redis_key_prefix: env::var("REDIS_KEY_PREFIX")
-                .unwrap_or_else(|_| "neogate".to_string())
-                .trim()
-                .to_string(),
+            redis_key_prefix: "neogate".to_string(),
             upstream_secret_key: required_secret("UPSTREAM_SECRET_KEY")?,
             tick_interval: duration_ms("SCHEDULER_TICK_INTERVAL_MS", 1_000)?,
             channel_probe_interval: duration_secs_with_alias(
@@ -37,7 +34,7 @@ impl Config {
                 "UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS",
                 86_400,
             )?,
-            upstream_connect_timeout: duration_secs("UPSTREAM_CONNECT_TIMEOUT_SECONDS", 10)?,
+            upstream_connect_timeout: Duration::from_secs(10),
             upstream_timeout: duration_secs("UPSTREAM_TIMEOUT_SECONDS", 60)?,
         })
     }

@@ -12,13 +12,14 @@ use uuid::Uuid;
 
 use crate::{
     auth::UserAuth,
-    billing::parse_usage_from_bytes,
+    billing::{parse_usage_from_bytes, BillingMeter},
     error::{reqwest_status, AppError, AppResult},
     project::models::UsageRoutingSnapshot,
-    provider::newapi,
+    provider::adapters::adapter_for_endpoint,
     relay::{
         ensure_key_backed_async_upstream, finish_relay, forward_openai, forward_openai_bound,
-        handle_upstream_http_error, release_empty_hold, reserve_credit, response_from_bytes,
+        handle_upstream_http_error, release_empty_hold, reserve_billable_credit, reserve_credit,
+        response_from_bytes,
         selector::{SelectedUpstream, SelectionConstraints, UpstreamProtocol},
         task_status_from_value, ChannelAffinityKey, RelayContext, RelayRequestParams,
     },
@@ -89,6 +90,122 @@ pub(super) async fn create_background_response(
             .await?
     };
     ensure_key_backed_async_upstream(&upstream)?;
+    let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
+    let translates_image_generation = adapter.capabilities().translates_response_image_generation
+        && prepared.has_image_generation_tool;
+    if translates_image_generation {
+        let image_request = adapter
+            .prepare_response_image_generation_request(prepared.body.clone())?
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "provider adapter did not prepare image generation request".to_string(),
+                )
+            })?;
+        let image_resolved = crate::project::models::resolve_project_model(
+            &state.db.pool,
+            auth.project_id,
+            &image_request.model,
+        )
+        .await?;
+        let image_upstream = if let Some(channel_id) = image_resolved.target_channel_id {
+            state
+                .selector
+                .select_bound_channel_protocols(
+                    &state.db.pool,
+                    &state.secrets,
+                    &[UpstreamProtocol::Openai],
+                    &image_resolved.target_model,
+                    channel_id,
+                    SelectionConstraints::default(),
+                )
+                .await?
+                .1
+        } else {
+            state
+                .selector
+                .select_with_affinity(
+                    &state.db.pool,
+                    &state.secrets,
+                    &state.channel_affinity,
+                    UpstreamProtocol::Openai,
+                    &image_resolved.target_model,
+                    SelectionConstraints::default(),
+                )
+                .await?
+        };
+        ensure_key_backed_async_upstream(&image_upstream)?;
+        let image_price = state
+            .billing
+            .price_for(
+                &state.db.pool,
+                image_upstream.channel_id,
+                &image_resolved.target_model,
+                &auth.user_group,
+            )
+            .await?;
+        let image_credit_account = auth
+            .model_credit_account(&image_resolved.external_model)
+            .cloned();
+        let image_count = serde_json::from_slice::<Value>(&image_request.body)
+            .ok()
+            .and_then(|value| value.get("n").and_then(Value::as_i64))
+            .filter(|count| *count > 0)
+            .unwrap_or(1);
+        let hold = if image_price.billing_meter == BillingMeter::Image {
+            reserve_billable_credit(
+                &state,
+                &auth,
+                image_credit_account.as_ref(),
+                image_count.saturating_mul(
+                    image_price
+                        .unit_price_micros
+                        .ok_or_else(|| {
+                            AppError::BadRequest(
+                                "unit price is required for image billing".to_string(),
+                            )
+                        })?
+                        .max(0),
+                ),
+            )
+            .await?
+        } else {
+            reserve_credit(
+                &state,
+                &auth,
+                image_credit_account.as_ref(),
+                &image_request.body,
+                state.billing.default_output_tokens(),
+                &image_price,
+            )
+            .await?
+        };
+        let response = match jobs::create(
+            &state,
+            &auth,
+            jobs::CreateNeogateResponse {
+                upstream: &image_upstream,
+                response_model: &target_model,
+                image_model: &image_resolved.external_model,
+                upstream_image_model: &image_resolved.target_model,
+                request_body: prepared.body.clone(),
+                upstream_request_body: image_request.body,
+                image_format: prepared.image_format,
+                hold: &hold,
+            },
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                release_empty_hold(&state, hold, "neogate response create error").await;
+                return Err(err);
+            }
+        };
+        if let Some(key) = channel_affinity_key.clone() {
+            state.channel_affinity.insert(key, (&upstream).into()).await;
+        }
+        return jobs::response(response).await;
+    }
     let price = state
         .billing
         .price_for(
@@ -108,29 +225,6 @@ pub(super) async fn create_background_response(
         &price,
     )
     .await?;
-    if newapi::is_newapi_provider(&upstream.provider) && prepared.has_image_generation_tool {
-        let response = match jobs::create(
-            &state,
-            &auth,
-            &upstream,
-            &target_model,
-            prepared.body.clone(),
-            prepared.image_format,
-            &hold,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                release_empty_hold(&state, hold, "neogate response create error").await;
-                return Err(err);
-            }
-        };
-        if let Some(key) = channel_affinity_key.clone() {
-            state.channel_affinity.insert(key, (&upstream).into());
-        }
-        return jobs::response(response).await;
-    }
     if prepared.image_format.requires_neogate_asset_url() {
         release_empty_hold(&state, hold, "unsupported neogate image_format").await;
         return Err(AppError::BadRequest(
@@ -138,6 +232,8 @@ pub(super) async fn create_background_response(
         ));
     }
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
+    let request_body_bytes = prepared.body.len();
+    let request_input_tokens_estimate = crate::billing::estimate_input_tokens(&prepared.body);
     let response = forward_openai(
         &state,
         &upstream,
@@ -165,6 +261,8 @@ pub(super) async fn create_background_response(
         relay_trace_id: Uuid::new_v4(),
         relay_attempt: 1,
         relay_final: true,
+        request_body_bytes,
+        request_input_tokens_estimate,
         request_params,
         request_permit: request_permit.take(),
         upstream_request_path: Some("/v1/responses".to_string()),
@@ -234,7 +332,7 @@ pub(super) async fn create_background_response(
             hold: &hold,
             upstream_metadata: value.clone(),
         },
-        state.config.task.upstream_poll_interval,
+        crate::task::POLL_INTERVAL,
         state.config.task.upstream_retention,
     )
     .await
@@ -360,7 +458,7 @@ async fn refresh_task_after_stream(
             terminal,
             metadata: value,
             usage,
-            poll_interval: state.config.task.upstream_poll_interval,
+            poll_interval: crate::task::POLL_INTERVAL,
         },
     )
     .await?;

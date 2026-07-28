@@ -25,10 +25,11 @@ use axum::{
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::io::{AsyncReadExt, BufReader};
 use uuid::Uuid;
 
+use crate::provider::adapters::{adapter_for_endpoint, RelayRoute};
 use crate::provider::{anthropic, openai};
 use crate::{
     auth::UserAuth,
@@ -47,14 +48,17 @@ use crate::usage::{KeyFailure, UsageInsert};
 pub(crate) use affinity::{ChannelAffinityCache, ChannelAffinityKey};
 pub(crate) use body::RelayBody;
 pub use credential::CredentialModelRecorder;
-pub(crate) use error::{describe_upstream_http_failure, is_model_error_text, UpstreamHttpFailure};
+pub(crate) use error::{
+    describe_upstream_http_failure, is_model_error_text, FailureCooldown, UpstreamFailureKind,
+    UpstreamHttpFailure,
+};
 pub(crate) use limit::UserRequestLimiter;
 use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
 pub(crate) use request::{
     prepare_relay_body, rewrite_relay_body_model, safe_log_label, BodyKind, PreparedRelayBody,
     RelayRequestParams,
 };
-pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext};
+pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext, StreamUsageParser};
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
     log_relay_upstream_failure, relay_upstream_error, upstream_url,
@@ -75,6 +79,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/embeddings", post(openai::openai_embeddings))
         .route("/v1/moderations", post(openai::openai_moderations))
         .route("/v1/responses", post(openai::openai_responses))
+        .route(
+            "/v1/responses/compact",
+            post(openai::openai_responses_compact),
+        )
         .route("/v1/responses/{response_id}", get(openai::openai_response))
         .route(
             "/v1/responses/{response_id}/assets/{index}",
@@ -150,6 +158,8 @@ pub(crate) async fn finish_task_json_response(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
+    let body = adapter_for_endpoint(&task.provider, &task.upstream_base_url)
+        .normalize_response_body(RelayRoute::Videos, body)?;
     tracing::info!(
         task_id = task.id,
         ?task.task_type,
@@ -175,7 +185,7 @@ pub(crate) async fn finish_task_json_response(
                     terminal,
                     metadata: value,
                     usage,
-                    poll_interval: state.config.task.upstream_poll_interval,
+                    poll_interval: crate::task::POLL_INTERVAL,
                 },
             )
             .await?;
@@ -355,28 +365,23 @@ pub(crate) async fn respond_upstream_http_failure(
     failure: UpstreamHttpFailure,
 ) -> AppResult<Response> {
     let client_message = upstream_http_failure_client_message(&ctx, status, &failure);
-    let payload = json!({
-        "error": {
-            "message": client_message,
-            "code": failure.error_type,
-            "upstream": ctx.upstream.provider,
-            "upstream_status": status.as_u16(),
-            "upstream_error": failure.detail,
-            "retryable": failure.retryable,
-        }
-    });
+    let payload = failure.client_payload(ctx.path, &ctx.upstream.provider, status, client_message);
     let client_response = payload.to_string();
     log_upstream_http_failure(&ctx, status, &failure, Some(&client_response));
     ctx.release_request_permit();
     record_upstream_http_failure(&ctx, status, &failure, "upstream error").await;
 
     let mut builder = Response::builder()
-        .status(failure.relay_status)
+        .status(failure.relay_status())
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-neogate-error-code", failure.error_type)
+        .header("x-neogate-error-code", failure.error_code())
         .header(
             "x-neogate-retryable",
-            if failure.retryable { "true" } else { "false" },
+            if failure.client_retryable() {
+                "true"
+            } else {
+                "false"
+            },
         );
     if let Ok(value) = HeaderValue::from_str(&ctx.upstream.provider) {
         builder = builder.header("x-neogate-upstream-provider", value);
@@ -396,7 +401,7 @@ pub(crate) fn log_upstream_http_failure(
     client_response: Option<&str>,
 ) {
     let line = format_upstream_http_failure_log(ctx, status, failure, client_response);
-    if client_response.is_some() && failure.relay_status.is_server_error() {
+    if client_response.is_some() && failure.relay_status().is_server_error() {
         tracing::error!("{line}");
     } else {
         tracing::warn!("{line}");
@@ -410,7 +415,7 @@ fn upstream_http_failure_client_message(
 ) -> String {
     format!(
         "{} Upstream {} returned {}: {}",
-        failure.user_message,
+        failure.kind.user_message(),
         ctx.upstream.provider,
         status.as_u16(),
         failure.detail
@@ -426,7 +431,7 @@ fn format_upstream_http_failure_log(
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let mut line = format!(
-        "upstream returned error | trace={} channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream_path={} response_mode={} upstream={} upstream_status={} relay_status={} latency={}ms streamed={} error_type={} retryable={} error={} client_response={}",
+        "upstream returned error | trace={} channel={}({}) endpoint={} key={} credential={} provider={} protocol={} model={} path={} upstream_path={} response_mode={} upstream={} upstream_status={} relay_status={} latency={}ms streamed={} request_body_bytes={} request_input_tokens_estimate={} error_type={} retryable={} error={} client_response={}",
         short_trace_id(ctx.relay_trace_id),
         ctx.upstream.channel_name,
         ctx.upstream.channel_id,
@@ -441,11 +446,13 @@ fn format_upstream_http_failure_log(
         response_mode,
         ctx.upstream.base_url,
         status.as_u16(),
-        failure.relay_status.as_u16(),
+        failure.relay_status().as_u16(),
         ctx.started.elapsed().as_millis(),
         ctx.streamed,
-        failure.error_type,
-        failure.retryable,
+        ctx.request_body_bytes,
+        ctx.request_input_tokens_estimate,
+        failure.error_code(),
+        failure.client_retryable(),
         failure.detail,
         client_response.unwrap_or("not_returned_attempting_reroute")
     );
@@ -467,18 +474,20 @@ pub(crate) async fn record_upstream_http_failure(
         None,
         None,
     );
-    let key_failure = key_failure_from_context(ctx, failure.summary.clone()).await;
+    let key_failure =
+        key_failure_from_context_with_cooldown(ctx, failure.summary.clone(), failure.cooldown())
+            .await;
     release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
     enqueue_relay_usage(&ctx.state, usage, key_failure).await;
 }
 
-pub(crate) async fn should_failover_retryable_upstream_failure(
+pub(crate) async fn should_failover_upstream_failure(
     ctx: &RelayContext,
     attempted: &[AttemptedUpstream],
-    retryable: bool,
+    failoverable: bool,
     failovers: usize,
 ) -> bool {
-    if !retryable || failovers >= ctx.state.config.relay.max_upstream_failovers {
+    if !failoverable || failovers >= ctx.state.config.relay.max_upstream_failovers {
         return false;
     }
     match ctx
@@ -724,12 +733,35 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens);
     let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
     let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
+    let (uncached_input_tokens, cache_hit_pct) =
+        request_cache_metrics(input_tokens, cached_input_tokens);
+    let generation_tokens_per_second =
+        generation_tokens_per_second(output_tokens, usage.latency_ms, usage.first_response_ms);
+    let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
+    let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
+    let responses_chat_fallback = response_mode == "openai_chat_as_openai_response";
 
     let mut info = String::from("relay request");
     push_field(&mut info, "trace", short_trace_id(ctx.relay_trace_id));
     push_field(&mut info, "path", ctx.path);
+    push_field(&mut info, "upstream_path", upstream_path);
+    push_field(&mut info, "response_mode", response_mode);
+    push_field(
+        &mut info,
+        "responses_chat_fallback",
+        responses_chat_fallback,
+    );
     push_field(&mut info, "user", usage.user_id);
     push_field(&mut info, "key", usage.user_key_id);
+    push_field(&mut info, "channel", usage.channel_id);
+    push_opt(
+        &mut info,
+        "affinity",
+        ctx.upstream
+            .affinity
+            .as_ref()
+            .map(|affinity| affinity.status.as_str()),
+    );
     push_field(
         &mut info,
         "model",
@@ -738,15 +770,18 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     if ctx.upstream_model != usage.model.as_deref().unwrap_or(&ctx.model) {
         push_field(&mut info, "upstream_model", &ctx.upstream_model);
     }
-    push_field(&mut info, "channel", usage.channel_id);
     push_opt(&mut info, "status", usage.status_code);
     push_field(&mut info, "latency_ms", usage.latency_ms);
     push_opt(&mut info, "first_ms", usage.first_response_ms);
     push_opt(&mut info, "in", input_tokens);
+    push_opt(&mut info, "uncached_in", uncached_input_tokens);
+    push_opt(&mut info, "cache_read", cached_input_tokens);
+    push_opt(&mut info, "cache_write", cache_creation_input_tokens);
+    push_opt_f64(&mut info, "cache_hit_pct", cache_hit_pct);
     push_opt(&mut info, "out", output_tokens);
-    push_opt(&mut info, "cached", cached_input_tokens);
     push_opt(&mut info, "reasoning", reasoning_output_tokens);
-    push_opt(&mut info, "cost", cost_micros);
+    push_opt_f64(&mut info, "gen_tps", generation_tokens_per_second);
+    push_opt(&mut info, "cost_micros", cost_micros);
     push_info_request_params(&mut info, &ctx.request_params);
     if usage.relay_attempt > 1 {
         push_field(&mut info, "attempt", usage.relay_attempt);
@@ -770,6 +805,13 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let mut detail = String::from("relay request detail");
     push_field(&mut detail, "relay_trace_id", ctx.relay_trace_id);
     push_field(&mut detail, "path", ctx.path);
+    push_field(&mut detail, "upstream_path", upstream_path);
+    push_field(&mut detail, "response_mode", response_mode);
+    push_field(
+        &mut detail,
+        "responses_chat_fallback",
+        responses_chat_fallback,
+    );
     push_field(&mut detail, "user_id", usage.user_id);
     push_field(&mut detail, "project_id", usage.project_id);
     push_field(&mut detail, "user_key_id", usage.user_key_id);
@@ -784,6 +826,22 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_field(&mut detail, "upstream_model", &ctx.upstream_model);
     push_field(&mut detail, "channel_id", usage.channel_id);
     push_field(&mut detail, "channel_name", &ctx.upstream.channel_name);
+    push_opt(
+        &mut detail,
+        "affinity_status",
+        ctx.upstream
+            .affinity
+            .as_ref()
+            .map(|affinity| affinity.status.as_str()),
+    );
+    push_opt(
+        &mut detail,
+        "affinity_key_fp",
+        ctx.upstream
+            .affinity
+            .as_ref()
+            .map(|affinity| affinity.key_fingerprint.as_str()),
+    );
     push_field(
         &mut detail,
         "channel_endpoint_id",
@@ -848,6 +906,35 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     }
 
     tracing::debug!("{detail}");
+}
+
+fn request_cache_metrics(
+    input_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+) -> (Option<i64>, Option<f64>) {
+    let Some((input_tokens, cached_input_tokens)) = input_tokens.zip(cached_input_tokens) else {
+        return (None, None);
+    };
+    if input_tokens <= 0 {
+        return (None, None);
+    }
+
+    let cached_input_tokens = cached_input_tokens.clamp(0, input_tokens);
+    (
+        Some(input_tokens - cached_input_tokens),
+        Some((cached_input_tokens as f64 * 100.0) / input_tokens as f64),
+    )
+}
+
+fn generation_tokens_per_second(
+    output_tokens: Option<i64>,
+    latency_ms: i64,
+    first_response_ms: Option<i64>,
+) -> Option<f64> {
+    let output_tokens = output_tokens?;
+    let generation_ms = latency_ms.saturating_sub(first_response_ms?);
+    (output_tokens > 0 && generation_ms > 0)
+        .then_some((output_tokens as f64 * 1000.0) / generation_ms as f64)
 }
 
 fn push_request_params(line: &mut String, params: &RelayRequestParams) {
@@ -931,6 +1018,17 @@ pub(crate) async fn key_failure_from_context(
     ctx: &RelayContext,
     error: String,
 ) -> Option<KeyFailure> {
+    key_failure_from_context_with_cooldown(ctx, error, FailureCooldown::Default).await
+}
+
+async fn key_failure_from_context_with_cooldown(
+    ctx: &RelayContext,
+    error: String,
+    cooldown: FailureCooldown,
+) -> Option<KeyFailure> {
+    if cooldown == FailureCooldown::None {
+        return None;
+    }
     let channel_key_id = ctx.upstream.channel_key_id?;
     let attempted = [AttemptedUpstream::from(&ctx.upstream)];
     match ctx
@@ -941,7 +1039,7 @@ pub(crate) async fn key_failure_from_context(
     {
         Ok(true) => Some(KeyFailure {
             channel_key_id,
-            cooldown_until: key_cooldown_until(&ctx.state),
+            cooldown_until: key_cooldown_until(&ctx.state, cooldown),
             error,
         }),
         Ok(false) => {
@@ -962,7 +1060,7 @@ pub(crate) async fn key_failure_from_context(
             );
             Some(KeyFailure {
                 channel_key_id,
-                cooldown_until: key_cooldown_until(&ctx.state),
+                cooldown_until: key_cooldown_until(&ctx.state, cooldown),
                 error,
             })
         }
@@ -1060,9 +1158,14 @@ pub(crate) async fn reserve_billable_credit(
         .await
 }
 
-fn key_cooldown_until(state: &AppState) -> chrono::DateTime<Utc> {
-    let cooldown = ChronoDuration::from_std(state.config.relay.key_cooldown)
-        .unwrap_or_else(|_| ChronoDuration::seconds(60));
+fn key_cooldown_until(state: &AppState, policy: FailureCooldown) -> chrono::DateTime<Utc> {
+    let duration = match policy {
+        FailureCooldown::None => return Utc::now(),
+        FailureCooldown::Default => state.config.relay.key_cooldown,
+        FailureCooldown::QuotaExhausted => state.config.relay.quota_exhausted_cooldown,
+    };
+    let cooldown =
+        ChronoDuration::from_std(duration).unwrap_or_else(|_| ChronoDuration::seconds(60));
     Utc::now() + cooldown
 }
 
@@ -1095,6 +1198,49 @@ pub(crate) async fn enqueue_relay_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_length_failure_uses_openai_compatible_error_shape() {
+        let failure = describe_upstream_http_failure(
+            StatusCode::BAD_GATEWAY,
+            br#"{"error":{"message":"Your input exceeds the context window"}}"#,
+        );
+        let payload = failure.client_payload(
+            "/v1/responses",
+            "newapi",
+            StatusCode::BAD_GATEWAY,
+            "The request is too large".to_string(),
+        );
+
+        assert_eq!(payload["error"]["code"], "context_length_exceeded");
+        assert_eq!(payload["error"]["type"], "invalid_request_error");
+        assert_eq!(payload["error"]["param"], "input");
+        assert!(payload["error"].get("upstream").is_none());
+        assert!(payload["error"].get("retryable").is_none());
+    }
+
+    #[test]
+    fn anthropic_failure_uses_anthropic_error_shape() {
+        let failure = describe_upstream_http_failure(
+            StatusCode::FORBIDDEN,
+            br#"{"error":{"message":"quota exhausted","type":"insufficient_quota"}}"#,
+        );
+        let payload = failure.client_payload(
+            "/v1/messages",
+            "moonshot",
+            StatusCode::FORBIDDEN,
+            "The upstream quota is exhausted".to_string(),
+        );
+
+        assert_eq!(payload["type"], "error");
+        assert_eq!(payload["error"]["type"], "invalid_request_error");
+        assert_eq!(
+            payload["error"]["message"],
+            "The upstream quota is exhausted"
+        );
+        assert!(payload["error"].get("code").is_none());
+        assert!(payload["error"].get("retryable").is_none());
+    }
 
     #[test]
     fn upstream_error_body_buffer_is_bounded() {
@@ -1136,5 +1282,30 @@ mod tests {
         let corrupt = b"not a gzip stream at all";
         let decoded = decode_all(GzipDecoder::new(BufReader::new(&corrupt[..]))).await;
         assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn derives_cache_metrics_from_input_usage() {
+        let (uncached_input, cache_hit_pct) = request_cache_metrics(Some(327_027), Some(325_376));
+
+        assert_eq!(uncached_input, Some(1_651));
+        assert!((cache_hit_pct.unwrap() - 99.495).abs() < 0.001);
+    }
+
+    #[test]
+    fn clamps_invalid_cache_usage_and_omits_missing_values() {
+        assert_eq!(
+            request_cache_metrics(Some(10), Some(15)),
+            (Some(0), Some(100.0))
+        );
+        assert_eq!(request_cache_metrics(Some(10), None), (None, None));
+        assert_eq!(request_cache_metrics(Some(0), Some(0)), (None, None));
+    }
+
+    #[test]
+    fn calculates_generation_rate_after_first_response() {
+        let generation_rate = generation_tokens_per_second(Some(106), 7_864, Some(5_565));
+        assert!((generation_rate.unwrap() - 46.107).abs() < 0.001);
+        assert_eq!(generation_tokens_per_second(Some(106), 7_864, None), None);
     }
 }

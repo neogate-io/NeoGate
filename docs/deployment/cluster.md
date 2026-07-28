@@ -39,7 +39,6 @@ Review and update at least these variables:
 | --- | --- |
 | `DATABASE_URL` | External PostgreSQL connection URL. |
 | `REDIS_URL` | External Redis connection URL. |
-| `REDIS_KEY_PREFIX` | Redis key prefix. Keep it unique if multiple environments share one Redis instance. |
 | `PUBLIC_BASE_URL` | Public site URL, such as `https://neogate.example.com`. |
 | `CORS_ALLOWED_ORIGINS` | Allowed frontend origins, usually the same as `PUBLIC_BASE_URL`. |
 | `ADMIN_TOKEN_SECRET` | Admin token signing secret. Use a long random value. |

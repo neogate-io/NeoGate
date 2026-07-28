@@ -19,12 +19,15 @@ pub(crate) async fn finish_openai_chat_as_openai_response(
     status: StatusCode,
     upstream_response: reqwest::Response,
 ) -> AppResult<Response> {
+    let warning_context = ReasoningMarkupWarningContext::from(&ctx);
     if ctx.streamed {
         return finish_bridge_stream(
             ctx,
             status,
             upstream_response,
-            OpenAiChatSseToOpenAiResponse::new,
+            move |model| {
+                OpenAiChatSseToOpenAiResponse::new_with_warning_context(model, warning_context)
+            },
             "ignored trailing upstream body read error after completed OpenAI chat response fallback stream",
         );
     }
@@ -32,10 +35,219 @@ pub(crate) async fn finish_openai_chat_as_openai_response(
         ctx,
         status,
         upstream_response,
-        openai_chat_response_to_openai_response,
+        move |body, fallback_model| {
+            warn_if_nonstream_reasoning_markup(body, &warning_context);
+            openai_chat_response_to_openai_response(body, fallback_model)
+        },
         "ignored trailing upstream body read error after parsing complete OpenAI chat response fallback",
     )
     .await
+}
+
+#[derive(Clone)]
+struct ReasoningMarkupWarningContext {
+    relay_trace_id: uuid::Uuid,
+    provider: String,
+    channel_id: crate::id::DbId,
+    channel_name: String,
+    channel_endpoint_id: crate::id::DbId,
+    protocol: &'static str,
+    model: String,
+    path: &'static str,
+    upstream_path: String,
+    response_mode: &'static str,
+}
+
+impl From<&RelayContext> for ReasoningMarkupWarningContext {
+    fn from(ctx: &RelayContext) -> Self {
+        Self {
+            relay_trace_id: ctx.relay_trace_id,
+            provider: ctx.upstream.provider.clone(),
+            channel_id: ctx.upstream.channel_id,
+            channel_name: ctx.upstream.channel_name.clone(),
+            channel_endpoint_id: ctx.upstream.channel_endpoint_id,
+            protocol: ctx.protocol.as_str(),
+            model: ctx.model.clone(),
+            path: ctx.path,
+            upstream_path: ctx
+                .upstream_request_path
+                .clone()
+                .unwrap_or_else(|| ctx.path.to_string()),
+            response_mode: ctx.upstream_response_mode.unwrap_or("passthrough"),
+        }
+    }
+}
+
+impl ReasoningMarkupWarningContext {
+    fn warn(&self) {
+        tracing::warn!(
+            relay_trace_id = %self.relay_trace_id,
+            provider = %self.provider,
+            channel_id = self.channel_id,
+            channel_name = %self.channel_name,
+            channel_endpoint_id = self.channel_endpoint_id,
+            protocol = self.protocol,
+            model = %self.model,
+            path = self.path,
+            upstream_path = %self.upstream_path,
+            response_mode = self.response_mode,
+            "reasoning markup detected in assistant content during chat-to-responses fallback"
+        );
+    }
+}
+
+const THINKING_OPEN_TAG: &str = "<thinking>";
+const THINKING_CLOSE_TAG: &str = "</thinking>";
+const MAX_BUFFERED_THINKING_MARKUP_BYTES: usize = 64 * 1024;
+
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+fn strip_one_leading_line_break(value: &str) -> &str {
+    value
+        .strip_prefix("\r\n")
+        .or_else(|| value.strip_prefix('\n'))
+        .unwrap_or(value)
+}
+
+fn split_leading_thinking_markup(content: &str) -> Option<(String, String)> {
+    if content.len() < THINKING_OPEN_TAG.len()
+        || !content.as_bytes()[..THINKING_OPEN_TAG.len()]
+            .eq_ignore_ascii_case(THINKING_OPEN_TAG.as_bytes())
+    {
+        return None;
+    }
+    let after_open = &content[THINKING_OPEN_TAG.len()..];
+    let close = find_ascii_case_insensitive(after_open, THINKING_CLOSE_TAG)?;
+    let after_close = &after_open[close + THINKING_CLOSE_TAG.len()..];
+    Some((
+        after_open[..close].trim().to_string(),
+        strip_one_leading_line_break(after_close).to_string(),
+    ))
+}
+
+#[derive(Default)]
+enum LeadingThinkingMarkup {
+    #[default]
+    Undecided,
+    Thinking,
+    Content,
+}
+
+#[derive(Default)]
+struct LeadingThinkingMarkupParser {
+    state: LeadingThinkingMarkup,
+    buffered: String,
+}
+
+struct ParsedContent {
+    reasoning: Option<String>,
+    content: Option<String>,
+    detected: bool,
+}
+
+impl ParsedContent {
+    fn empty() -> Self {
+        Self {
+            reasoning: None,
+            content: None,
+            detected: false,
+        }
+    }
+}
+
+impl LeadingThinkingMarkupParser {
+    fn push(&mut self, fragment: &str) -> ParsedContent {
+        match self.state {
+            LeadingThinkingMarkup::Content => ParsedContent {
+                reasoning: None,
+                content: Some(fragment.to_string()),
+                detected: false,
+            },
+            LeadingThinkingMarkup::Undecided => {
+                self.buffered.push_str(fragment);
+                let prefix_len = self.buffered.len().min(THINKING_OPEN_TAG.len());
+                if !self.buffered.as_bytes()[..prefix_len]
+                    .eq_ignore_ascii_case(&THINKING_OPEN_TAG.as_bytes()[..prefix_len])
+                {
+                    self.state = LeadingThinkingMarkup::Content;
+                    return ParsedContent {
+                        reasoning: None,
+                        content: Some(std::mem::take(&mut self.buffered)),
+                        detected: false,
+                    };
+                }
+                if self.buffered.len() < THINKING_OPEN_TAG.len() {
+                    return ParsedContent::empty();
+                }
+                self.buffered.drain(..THINKING_OPEN_TAG.len());
+                self.state = LeadingThinkingMarkup::Thinking;
+                self.finish_thinking_if_ready()
+            }
+            LeadingThinkingMarkup::Thinking => {
+                self.buffered.push_str(fragment);
+                self.finish_thinking_if_ready()
+            }
+        }
+    }
+
+    fn finish_thinking_if_ready(&mut self) -> ParsedContent {
+        if let Some(close) = find_ascii_case_insensitive(&self.buffered, THINKING_CLOSE_TAG) {
+            let reasoning = self.buffered[..close].trim().to_string();
+            let content =
+                strip_one_leading_line_break(&self.buffered[close + THINKING_CLOSE_TAG.len()..])
+                    .to_string();
+            self.buffered.clear();
+            self.state = LeadingThinkingMarkup::Content;
+            return ParsedContent {
+                reasoning: (!reasoning.is_empty()).then_some(reasoning),
+                content: (!content.is_empty()).then_some(content),
+                detected: true,
+            };
+        }
+        if self.buffered.len() > MAX_BUFFERED_THINKING_MARKUP_BYTES {
+            self.state = LeadingThinkingMarkup::Content;
+            return ParsedContent {
+                reasoning: None,
+                content: Some(format!(
+                    "{THINKING_OPEN_TAG}{}",
+                    std::mem::take(&mut self.buffered)
+                )),
+                detected: false,
+            };
+        }
+        ParsedContent::empty()
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        let buffered = std::mem::take(&mut self.buffered);
+        match std::mem::take(&mut self.state) {
+            LeadingThinkingMarkup::Undecided if !buffered.is_empty() => Some(buffered),
+            LeadingThinkingMarkup::Thinking => Some(format!("{THINKING_OPEN_TAG}{buffered}")),
+            _ => None,
+        }
+    }
+}
+
+fn warn_if_nonstream_reasoning_markup(body: &[u8], context: &ReasoningMarkupWarningContext) {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return;
+    };
+    let content = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .map(text_field_content_to_text)
+        .unwrap_or_default();
+    if split_leading_thinking_markup(&content).is_some() {
+        context.warn();
+    }
 }
 
 pub(super) fn openai_chat_response_to_openai_response(
@@ -91,11 +303,11 @@ fn openai_chat_message_to_response_output(
         )];
     };
     let mut output = Vec::new();
-    if let Some(reasoning) = message
+    let structured_reasoning = message
         .get("reasoning_content")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
+        .filter(|value| !value.is_empty());
+    if let Some(reasoning) = structured_reasoning {
         output.push(openai_response_reasoning_item(
             format!("rs_{response_id}"),
             reasoning.to_string(),
@@ -109,10 +321,23 @@ fn openai_chat_message_to_response_output(
             }
         }
     }
-    let content = message
+    let mut content = message
         .get("content")
         .map(text_field_content_to_text)
         .unwrap_or_default();
+    if let Some((tagged_reasoning, remaining_content)) = split_leading_thinking_markup(&content) {
+        if structured_reasoning.is_none() && !tagged_reasoning.is_empty() {
+            output.insert(
+                0,
+                openai_response_reasoning_item(
+                    format!("rs_{response_id}"),
+                    tagged_reasoning,
+                    "completed",
+                ),
+            );
+        }
+        content = remaining_content;
+    }
     if !content.is_empty() || output.is_empty() {
         output.push(openai_response_message_item(
             format!("msg_{response_id}_{}", output.len()),
@@ -168,6 +393,8 @@ pub(super) struct OpenAiChatSseToOpenAiResponse {
     message_finished: bool,
     text: String,
     reasoning_text: String,
+    leading_thinking_markup: LeadingThinkingMarkupParser,
+    warning_context: Option<ReasoningMarkupWarningContext>,
     input_tokens: i64,
     output_tokens: i64,
     cached_input_tokens: i64,
@@ -175,7 +402,19 @@ pub(super) struct OpenAiChatSseToOpenAiResponse {
 }
 
 impl OpenAiChatSseToOpenAiResponse {
+    #[cfg(test)]
     pub(super) fn new(model: String) -> Self {
+        Self::new_inner(model, None)
+    }
+
+    fn new_with_warning_context(
+        model: String,
+        warning_context: ReasoningMarkupWarningContext,
+    ) -> Self {
+        Self::new_inner(model, Some(warning_context))
+    }
+
+    fn new_inner(model: String, warning_context: Option<ReasoningMarkupWarningContext>) -> Self {
         Self {
             buffer: Vec::new(),
             model,
@@ -193,6 +432,8 @@ impl OpenAiChatSseToOpenAiResponse {
             message_finished: false,
             text: String::new(),
             reasoning_text: String::new(),
+            leading_thinking_markup: LeadingThinkingMarkupParser::default(),
+            warning_context,
             input_tokens: 0,
             output_tokens: 0,
             cached_input_tokens: 0,
@@ -270,9 +511,21 @@ impl OpenAiChatSseToOpenAiResponse {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
         {
-            self.push_content_delta(content, out);
+            let parsed = self.leading_thinking_markup.push(content);
+            if parsed.detected {
+                self.warn_reasoning_markup();
+            }
+            if let Some(reasoning) = parsed.reasoning {
+                if !self.reasoning_started {
+                    self.push_reasoning_delta(&reasoning, out);
+                }
+            }
+            if let Some(content) = parsed.content {
+                self.push_content_delta(&content, out);
+            }
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            self.flush_pending_content(out);
             for tool_call in tool_calls {
                 self.push_tool_call_delta(tool_call, out);
             }
@@ -307,6 +560,18 @@ impl OpenAiChatSseToOpenAiResponse {
             .and_then(Value::as_i64)
             .or_else(|| choice_usage_cached_tokens(value))
             .unwrap_or(self.cached_input_tokens);
+    }
+
+    fn warn_reasoning_markup(&self) {
+        if let Some(context) = &self.warning_context {
+            context.warn();
+        }
+    }
+
+    fn flush_pending_content(&mut self, out: &mut Vec<u8>) {
+        if let Some(content) = self.leading_thinking_markup.finish() {
+            self.push_content_delta(&content, out);
+        }
     }
 
     fn push_reasoning_delta(&mut self, reasoning: &str, out: &mut Vec<u8>) {
@@ -677,6 +942,7 @@ impl OpenAiChatSseToOpenAiResponse {
         if self.stopped {
             return;
         }
+        self.flush_pending_content(out);
         if self.current_tool_calls.iter().any(Option::is_some) {
             self.finish_tool_calls(out);
         }
@@ -835,5 +1101,87 @@ mod tests {
         assert!(output.contains(r#""status":"completed""#));
         assert!(!output.contains(r#""reason":"max_output_tokens""#));
         assert!(converter.stopped());
+    }
+
+    #[test]
+    fn leading_thinking_markup_parser_handles_case_and_stream_boundaries() {
+        let mut parser = LeadingThinkingMarkupParser::default();
+
+        let first = parser.push("<THINK");
+        assert!(first.reasoning.is_none());
+        assert!(first.content.is_none());
+
+        let second = parser.push("ING>internal");
+        assert!(second.reasoning.is_none());
+        assert!(second.content.is_none());
+
+        let third = parser.push(" note</thinking>\nanswer");
+        assert_eq!(third.reasoning.as_deref(), Some("internal note"));
+        assert_eq!(third.content.as_deref(), Some("answer"));
+        assert!(third.detected);
+    }
+
+    #[test]
+    fn leading_thinking_markup_parser_preserves_normal_and_unclosed_content() {
+        let mut normal = LeadingThinkingMarkupParser::default();
+        let parsed = normal.push("ordinary <thinking>example</thinking>");
+        assert_eq!(
+            parsed.content.as_deref(),
+            Some("ordinary <thinking>example</thinking>")
+        );
+        assert!(parsed.reasoning.is_none());
+
+        let mut unclosed = LeadingThinkingMarkupParser::default();
+        assert!(unclosed.push("<thinking>unfinished").content.is_none());
+        assert_eq!(unclosed.finish().as_deref(), Some("<thinking>unfinished"));
+    }
+
+    #[test]
+    fn nonstream_leading_thinking_markup_becomes_reasoning() {
+        let body = br#"{"id":"chatcmpl-1","model":"gpt-test","choices":[{"message":{"role":"assistant","content":"<thinking>**Inspecting**</thinking>\nVisible update"},"finish_reason":"stop"}]}"#;
+        let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["output"][0]["type"], "reasoning");
+        assert_eq!(value["output"][0]["summary"][0]["text"], "**Inspecting**");
+        assert_eq!(value["output"][1]["content"][0]["text"], "Visible update");
+    }
+
+    #[test]
+    fn nonstream_structured_reasoning_deduplicates_thinking_markup() {
+        let body = br#"{"id":"chatcmpl-1","choices":[{"message":{"reasoning_content":"Structured reasoning","content":"<thinking>Duplicate reasoning</thinking>\nAnswer"}}]}"#;
+        let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["output"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            value["output"][0]["summary"][0]["text"],
+            "Structured reasoning"
+        );
+        assert_eq!(value["output"][1]["content"][0]["text"], "Answer");
+    }
+
+    #[test]
+    fn streaming_leading_thinking_markup_uses_reasoning_events() {
+        let mut converter = OpenAiChatSseToOpenAiResponse::new("gpt-test".to_string());
+        let mut output = Vec::new();
+        output.extend_from_slice(&converter.push(
+            br#"data: {"choices":[{"delta":{"content":"<think"}}]}
+
+"#,
+        ));
+        output.extend_from_slice(&converter.push(
+            br#"data: {"choices":[{"delta":{"content":"ing>Private</thinking>\nPublic"}}]}
+
+"#,
+        ));
+        <OpenAiChatSseToOpenAiResponse as BridgeSseConverter>::finish(&mut converter, &mut output);
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains("response.reasoning_summary_text.delta"));
+        assert!(output.contains(r#""delta":"Private""#));
+        assert!(output.contains(r#""delta":"Public""#));
+        assert!(!output.contains("<thinking>"));
+        assert!(!output.contains("</thinking>"));
     }
 }

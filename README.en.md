@@ -455,7 +455,7 @@ Check by scenario:
     </tr>
     <tr>
       <td>🧾 Billing usage parsing</td>
-      <td><code>RELAY_USAGE_BUFFER_LIMIT_BYTES</code> defaults to 16 MiB for non-streaming JSON and SSE usage parsing; keep the default in billing mode unless load tests prove a different limit still preserves usage extraction.</td>
+      <td>Non-streaming JSON and SSE usage parsing uses a fixed 16 MiB buffer; usage cannot be extracted from upstream responses larger than that.</td>
     </tr>
     <tr>
       <td>⏱️ Long-running requests</td>
@@ -463,11 +463,11 @@ Check by scenario:
     </tr>
     <tr>
       <td>🚦 User concurrency</td>
-      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 10 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
+      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 100 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
     </tr>
     <tr>
       <td>🔀 Upstream failover</td>
-      <td>When an upstream returns 429, 5xx, 529, or a timeout/connection error occurs, NeoGate retries another selectable upstream up to 5 times by default; tune <code>MAX_UPSTREAM_FAILOVERS</code>, or set it to 0 to disable failover.</td>
+      <td>When an upstream returns 429, 5xx, 529, or a timeout/connection error occurs, NeoGate automatically retries another selectable upstream up to 5 times.</td>
     </tr>
     <tr>
       <td>🩺 Upstream monitoring</td>

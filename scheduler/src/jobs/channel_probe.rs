@@ -401,7 +401,7 @@ async fn run_probe_step(
                 message: if status.is_success() {
                     format!("模型 {model} 轻量调用成功")
                 } else {
-                    upstream_status_message(status)
+                    upstream_failure_message(status, response).await
                 },
                 duration_ms,
                 status_code: Some(status.as_u16()),
@@ -1045,15 +1045,71 @@ async fn cleanup_probe_samples(context: &AppContext) -> Result<()> {
     Ok(())
 }
 
-fn upstream_status_message(status: StatusCode) -> String {
+fn upstream_status_message(status: StatusCode, error_summary: &str) -> String {
     match status.as_u16() {
         400 => "上游拒绝测试请求，请检查模型名或请求协议".to_string(),
         401 | 403 => "认证失败，请检查上游 Key 或凭证权限".to_string(),
         404 => "接口不存在，请检查 Base URL 和协议".to_string(),
+        429 if upstream_quota_exhausted(error_summary) => {
+            "上游配额已耗尽，请充值、扩容套餐或更换 Key".to_string()
+        }
         429 => "上游限流，请稍后重试或切换 Key".to_string(),
         500..=599 => "上游服务暂时不可用".to_string(),
         _ => format!("上游返回 HTTP {}", status.as_u16()),
     }
+}
+
+async fn upstream_failure_message(status: StatusCode, response: reqwest::Response) -> String {
+    match response.text().await {
+        Ok(body) => {
+            let summary = upstream_error_body_summary(&body);
+            let base = upstream_status_message(status, &summary);
+            if summary.is_empty() {
+                base
+            } else {
+                format!("{base}: {summary}")
+            }
+        }
+        Err(_) => upstream_status_message(status, ""),
+    }
+}
+
+fn upstream_quota_exhausted(error_summary: &str) -> bool {
+    let normalized = error_summary.to_ascii_lowercase();
+    normalized.contains("allocationquota")
+        || normalized.contains("quota has been exhausted")
+        || normalized.contains("quota exhausted")
+        || normalized.contains("insufficient_quota")
+}
+
+fn upstream_error_body_summary(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(message) = value
+            .get("error")
+            .and_then(|error| error.get("message").or_else(|| error.get("detail")))
+            .and_then(Value::as_str)
+            .or_else(|| value.get("message").and_then(Value::as_str))
+            .or_else(|| value.get("detail").and_then(Value::as_str))
+        {
+            return truncate_error_summary(message);
+        }
+    }
+    truncate_error_summary(trimmed)
+}
+
+fn truncate_error_summary(value: &str) -> String {
+    const MAX_CHARS: usize = 300;
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if value.chars().count() <= MAX_CHARS {
+        return value;
+    }
+    let mut output: String = value.chars().take(MAX_CHARS).collect();
+    output.push_str("...");
+    output
 }
 
 fn transport_error_message(err: &reqwest::Error) -> String {
@@ -1091,5 +1147,16 @@ mod tests {
             assert!(!should_cooldown_on_failure(code));
             assert!(!should_cooldown_key_on_failure(code));
         }
+    }
+
+    #[test]
+    fn allocation_quota_is_reported_as_exhausted_quota() {
+        assert_eq!(
+            upstream_status_message(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Your token-plan quota has been exhausted.; code=Throttling.AllocationQuota",
+            ),
+            "上游配额已耗尽，请充值、扩容套餐或更换 Key"
+        );
     }
 }

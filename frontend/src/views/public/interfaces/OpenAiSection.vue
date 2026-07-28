@@ -202,7 +202,7 @@ const openAiResponseImageGeneration = computed(
 )
 
 const openAiResponseImageEdit = computed(
-  () => `IMG_B64="$(base64 < input.png | tr -d '\\n')"
+  () => `IMG_B64="$(base64 < input.jpg | tr -d '\\n')"
 
 curl ${openAiBaseUrl.value}/responses \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -212,13 +212,14 @@ curl ${openAiBaseUrl.value}/responses \\
   "model": "gpt-5.5",
   "background": true,
   "store": true,
-  "image_format": "both",
   "tools": [
     {
       "type": "image_generation",
       "model": "gpt-image-2",
       "action": "edit",
-      "size": "1024x1024"
+      "size": "1024x1536",
+      "background": "transparent",
+      "output_format": "png"
     }
   ],
   "input": [
@@ -227,11 +228,11 @@ curl ${openAiBaseUrl.value}/responses \\
       "content": [
         {
           "type": "input_text",
-          "text": "基于这张图重新生成：保持主体姿态，改成赛博朋克夜景风格。"
+          "text": "Cut out the dog from this image."
         },
         {
           "type": "input_image",
-          "image_url": "data:image/png;base64,$IMG_B64"
+          "image_url": "data:image/jpeg;base64,$IMG_B64"
         }
       ]
     }
@@ -268,7 +269,7 @@ const openAiImageEdit = computed(
   () => `curl ${openAiBaseUrl.value}/images/edits \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
   -F "model=gpt-image-2" \\
-  -F "image=@input.png" \\
+  -F "image[]=@input.png" \\
   -F "prompt=Add a soft morning light through the window" \\
   -F "size=1024x1024"`
 )
@@ -277,7 +278,7 @@ const openAiImageEditStream = computed(
   () => `curl -N ${openAiBaseUrl.value}/images/edits \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
   -F "model=gpt-image-2" \\
-  -F "image=@input.png" \\
+  -F "image[]=@input.png" \\
   -F "prompt=Add a soft morning light through the window" \\
   -F "size=1024x1024" \\
   -F "stream=true" \\
@@ -287,7 +288,7 @@ const openAiImageEditStream = computed(
 const openAiImageVariation = computed(
   () => `curl ${openAiBaseUrl.value}/images/variations \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
-  -F "model=gpt-image-2" \\
+  -F "model=dall-e-2" \\
   -F "image=@input.png" \\
   -F "size=1024x1024"`
 )
@@ -534,19 +535,43 @@ const content = computed(() => {
           ]
         },
         {
-          title: 'Images Edits / Variations',
+          title: 'Images Edits',
           method: 'POST',
           path: `${openAiBaseUrl.value}/images/edits`,
-          description: '上传图片进行编辑，或使用 variations 路径生成变体。',
+          description:
+            '编辑或扩展图片。multipart 使用 image 或 image[] 上传文件；JSON 使用 images 数组传入 image_url 或 file_id。',
           requestParams: [
-            ['model', 'string，必填', '图片模型。'],
-            ['image', 'file | array，必填', '输入图片。'],
-            ['prompt', 'string', '编辑提示词，变体接口可省略。'],
+            ['model', 'string，必填', 'GPT Image 模型。'],
+            ['image / image[]', 'file | file[]', 'multipart/form-data 的输入图片。'],
+            ['images', 'array', 'JSON 请求的输入图片；元素使用 image_url 或 file_id。'],
+            ['prompt', 'string，必填', '编辑提示词。'],
+            [
+              'mask',
+              'file | object',
+              '可选编辑蒙版；multipart 使用文件，JSON 使用 image_url 或 file_id。'
+            ],
             ['size', 'string', '输出尺寸。']
           ],
           responseFields: [
             ['created', 'integer', '创建时间。'],
-            ['data[]', 'array', '编辑或变体图片结果。'],
+            ['data[]', 'array', '编辑图片结果。'],
+            ['data[].b64_json / url', 'string', '图片内容或 URL。']
+          ]
+        },
+        {
+          title: 'Images Variations',
+          method: 'POST',
+          path: `${openAiBaseUrl.value}/images/variations`,
+          description: '基于输入图片生成变体；官方接口仅支持 dall-e-2。',
+          requestParams: [
+            ['model', '"dall-e-2"，必填', '变体接口仅支持 dall-e-2。'],
+            ['image', 'file，必填', '输入图片。'],
+            ['n', 'integer', '生成的变体数量。'],
+            ['size', 'string', '输出尺寸。']
+          ],
+          responseFields: [
+            ['created', 'integer', '创建时间。'],
+            ['data[]', 'array', '变体图片结果。'],
             ['data[].b64_json / url', 'string', '图片内容或 URL。']
           ]
         }
@@ -556,11 +581,12 @@ const content = computed(() => {
           title: 'Responses Image Task',
           method: 'POST',
           path: `${openAiBaseUrl.value}/responses`,
-          description: '通过 Responses 的 image_generation 工具创建图片后台任务。',
+          description: '通过 Responses 的 image_generation 工具创建图片后台任务；编辑时传入 input_image 并设置 action=edit。',
           requestParams: [
             ['model', 'string，必填', 'Responses 主模型。'],
             ['input', 'string | array，必填', '文生图或图生图输入。'],
             ['tools[].type', '"image_generation"', '启用图片生成工具。'],
+            ['tools[].action', 'generate | edit | auto', '编辑输入图片时设置为 edit。'],
             ['background', 'boolean，必填 true', '创建后台任务。'],
             ['image_format', 'base64 | url | both', 'NeoGate 扩展，控制图片结果格式。']
           ],
@@ -730,10 +756,10 @@ const content = computed(() => {
           'Images',
           'POST',
           '/v1/images/edits',
-          'model, image, prompt, mask, size, n, stream, partial_images',
+          'model, image/image[] or images, prompt, mask, size, n, stream, partial_images',
           '已支持（含流式）'
         ],
-        ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', '已支持'],
+        ['Images', 'POST', '/v1/images/variations', 'model=dall-e-2, image, size, n', '已支持'],
         ['Videos', 'POST', '/v1/videos', 'model, prompt, input_reference, size, seconds', '已支持'],
         ['Videos', 'GET', '/v1/videos', 'limit, after, order', '暂未支持'],
         ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', '已支持'],
@@ -1035,7 +1061,7 @@ const content = computed(() => {
         ['usage', 'object | null', `终态返回的 Token 用量，${siteName.value} 会用于记录和结算。`]
       ],
       openAiImage:
-        'Images 支持文生图、图生图/局部编辑和图片变体。生成接口使用 JSON 请求体，编辑接口支持 JSON images 数组或 multipart/form-data 上传图片，变体接口使用 multipart/form-data；流式输出会以 text/event-stream 返回生成过程中的 partial image，适合展示预览进度。',
+        'Images 支持文生图、图生图/局部编辑和图片变体。生成接口使用 JSON 请求体；编辑接口支持 JSON images 数组或 multipart/form-data 上传图片，且 prompt 为必填；变体接口使用 multipart/form-data，且官方仅支持 dall-e-2。流式输出会以 text/event-stream 返回生成过程中的 partial image，适合展示预览进度。',
       imageRequestParams: [
         [
           'model',
@@ -1086,6 +1112,7 @@ const content = computed(() => {
         ['tools[].action', 'generate | edit | auto', '控制生成、编辑或由模型自动决定动作。'],
         ['tools[].size', 'string', '图片尺寸，例如 1024x1024、1536x1024、1024x1536 或 auto。'],
         ['tools[].quality', 'string', '图片质量，例如 auto、low、medium、high。'],
+        ['tools[].background', 'string', '背景模式，例如 transparent 或 opaque；取决于所选模型和上游能力。'],
         ['tools[].output_format', 'string', '图片输出格式，例如 png、jpeg 或 webp。'],
         [
           'background',
@@ -1303,19 +1330,43 @@ const content = computed(() => {
         ]
       },
       {
-        title: 'Images Edits / Variations',
+        title: 'Images Edits',
         method: 'POST',
         path: `${openAiBaseUrl.value}/images/edits`,
-        description: 'Upload an image for editing, or use the variations path for variations.',
+        description:
+          'Edit or extend images. Multipart requests upload image or image[]; JSON requests use an images array with image_url or file_id references.',
         requestParams: [
-          ['model', 'string, required', 'Image model.'],
-          ['image', 'file | array, required', 'Input image.'],
-          ['prompt', 'string', 'Edit prompt; optional for variations.'],
+          ['model', 'string, required', 'GPT Image model.'],
+          ['image / image[]', 'file | file[]', 'Input images for multipart/form-data requests.'],
+          ['images', 'array', 'Input images for JSON requests, using image_url or file_id.'],
+          ['prompt', 'string, required', 'Edit prompt.'],
+          [
+            'mask',
+            'file | object',
+            'Optional edit mask; upload a file for multipart or use image_url/file_id for JSON.'
+          ],
           ['size', 'string', 'Output size.']
         ],
         responseFields: [
           ['created', 'integer', 'Creation timestamp.'],
-          ['data[]', 'array', 'Edited or variation image results.'],
+          ['data[]', 'array', 'Edited image results.'],
+          ['data[].b64_json / url', 'string', 'Image content or URL.']
+        ]
+      },
+      {
+        title: 'Images Variations',
+        method: 'POST',
+        path: `${openAiBaseUrl.value}/images/variations`,
+        description: 'Create image variations. The official endpoint only supports dall-e-2.',
+        requestParams: [
+          ['model', '"dall-e-2", required', 'The variations endpoint only supports dall-e-2.'],
+          ['image', 'file, required', 'Input image.'],
+          ['n', 'integer', 'Number of variations to generate.'],
+          ['size', 'string', 'Output size.']
+        ],
+        responseFields: [
+          ['created', 'integer', 'Creation timestamp.'],
+          ['data[]', 'array', 'Variation image results.'],
           ['data[].b64_json / url', 'string', 'Image content or URL.']
         ]
       }
@@ -1325,11 +1376,12 @@ const content = computed(() => {
         title: 'Responses Image Task',
         method: 'POST',
         path: `${openAiBaseUrl.value}/responses`,
-        description: 'Create an image background task through the Responses image_generation tool.',
+        description: 'Create an image background task through the Responses image_generation tool. For edits, provide input_image and set action=edit.',
         requestParams: [
           ['model', 'string, required', 'Responses model.'],
           ['input', 'string | array, required', 'Text-to-image or image-to-image input.'],
           ['tools[].type', '"image_generation"', 'Enables the image generation tool.'],
+          ['tools[].action', 'generate | edit | auto', 'Set edit when editing an input image.'],
           ['background', 'boolean, required true', 'Creates a background task.'],
           [
             'image_format',
@@ -1512,10 +1564,10 @@ const content = computed(() => {
         'Images',
         'POST',
         '/v1/images/edits',
-        'model, image, prompt, mask, size, n, stream, partial_images',
+        'model, image/image[] or images, prompt, mask, size, n, stream, partial_images',
         'Supported (streaming)'
       ],
-      ['Images', 'POST', '/v1/images/variations', 'model, image, size, n', 'Supported'],
+      ['Images', 'POST', '/v1/images/variations', 'model=dall-e-2, image, size, n', 'Supported'],
       [
         'Videos',
         'POST',
@@ -1901,7 +1953,7 @@ const content = computed(() => {
       ]
     ],
     openAiImage:
-      'Images supports text-to-image, image edits, and image variations. Generations use a JSON body; edits support a JSON images array or multipart/form-data image uploads, while variations use multipart/form-data. Streaming returns partial images over text/event-stream, which is useful for showing generation progress.',
+      'Images supports text-to-image, image edits, and image variations. Generations use a JSON body; edits require a prompt and support either a JSON images array or multipart/form-data image uploads. Variations use multipart/form-data and the official endpoint only supports dall-e-2. Streaming returns partial images over text/event-stream, which is useful for showing generation progress.',
     imageRequestParams: [
       [
         'model',
@@ -1972,6 +2024,7 @@ const content = computed(() => {
       ],
       ['tools[].size', 'string', 'Image size, such as 1024x1024, 1536x1024, 1024x1536, or auto.'],
       ['tools[].quality', 'string', 'Image quality, such as auto, low, medium, or high.'],
+      ['tools[].background', 'string', 'Background mode, such as transparent or opaque, subject to model and upstream support.'],
       ['tools[].output_format', 'string', 'Output image format, such as png, jpeg, or webp.'],
       [
         'image_format',

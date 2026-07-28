@@ -26,6 +26,7 @@ const OPENAI_CHAT_REQUEST_FIELDS: &[&str] = &[
     "parallel_tool_calls",
     "presence_penalty",
     "prompt_cache_key",
+    "prompt_cache_options",
     "reasoning",
     "reasoning_effort",
     "response_format",
@@ -89,18 +90,53 @@ pub(crate) fn messages_to_openai_chat(body: Bytes) -> AppResult<Bytes> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let prompt_cache_key = explicit_prompt_cache_key
-        .or_else(|| derive_anthropic_cache_key(&messages, object.get("tools")));
+    let prompt_cache_key = explicit_prompt_cache_key.or_else(|| {
+        derive_anthropic_cache_key(
+            object
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            &messages,
+            object.get("tools"),
+            object
+                .get("metadata")
+                .and_then(|metadata| metadata.get("user_id"))
+                .and_then(Value::as_str),
+        )
+    });
     if let Some(prompt_cache_key) = prompt_cache_key {
         object.insert(
             "prompt_cache_key".to_string(),
             Value::String(prompt_cache_key),
         );
     }
+    let target_model = object
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let uses_openai_gpt_model = is_openai_gpt_model(target_model);
+    let uses_openai_explicit_cache = supports_openai_explicit_prompt_cache(target_model);
+    if uses_openai_explicit_cache {
+        if replace_anthropic_cache_controls(&mut messages) > 0 {
+            object.insert(
+                "prompt_cache_options".to_string(),
+                json!({ "mode": "explicit" }),
+            );
+        }
+    } else if uses_openai_gpt_model {
+        remove_cache_control_from_content(&mut messages);
+    }
     object.insert("messages".to_string(), Value::Array(messages));
     rename_field(object, "stop_sequences", "stop");
-    let has_tools = if let Some(tools) = object.remove("tools").and_then(anthropic_tools_to_openai)
-    {
+    let has_tools = if let Some(tools) = object
+        .remove("tools")
+        .and_then(anthropic_tools_to_openai)
+        .map(|mut tools| {
+            if uses_openai_gpt_model {
+                remove_anthropic_cache_control_from_tools(&mut tools);
+            }
+            tools
+        }) {
         object.insert("tools".to_string(), tools);
         true
     } else {
@@ -129,55 +165,152 @@ fn retain_openai_chat_request_fields(object: &mut Map<String, Value>) {
     object.retain(|key, _| OPENAI_CHAT_REQUEST_FIELDS.contains(&key.as_str()));
 }
 
-fn derive_anthropic_cache_key(messages: &[Value], tools: Option<&Value>) -> Option<String> {
-    let mut blocks = Vec::new();
-    collect_cache_controlled_content(messages, &mut blocks);
-    collect_cache_controlled_tools(tools, &mut blocks);
-    (!blocks.is_empty()).then(|| {
-        serde_json::to_vec(&blocks).ok().map(|encoded| {
-            let digest = Sha256::digest(encoded);
-            format!("anthropic-cache-{}", &hex::encode(digest)[..32])
+fn derive_anthropic_cache_key(
+    model: &str,
+    messages: &[Value],
+    tools: Option<&Value>,
+    session_id: Option<&str>,
+) -> Option<String> {
+    let has_message_marker = messages.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| {
+                content
+                    .iter()
+                    .any(|item| item.get("cache_control").is_some())
+            })
+    });
+    let has_tool_marker = tools
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(|tool| tool.get("cache_control").is_some()));
+    if !has_message_marker && !has_tool_marker {
+        return None;
+    }
+
+    // prompt_cache_key is a stable routing bucket; OpenAI combines it with the
+    // actual prefix hash. Keep Claude sessions on one bucket as their prefix grows.
+    let session_id = session_id.map(str::trim).filter(|value| !value.is_empty());
+    let key_material = if let Some(session_id) = session_id {
+        json!({ "version": 2, "model": model, "session": session_id })
+    } else {
+        let message_prefix = first_cache_controlled_message_prefix(messages);
+        let tool_prefix = cache_controlled_tool_prefix(tools, message_prefix.is_some());
+        json!({
+            "version": 2,
+            "model": model,
+            "messages": message_prefix,
+            "tools": tool_prefix,
         })
-    })?
+    };
+    let encoded = serde_json::to_vec(&key_material).ok()?;
+    let digest = Sha256::digest(encoded);
+    Some(format!("anthropic-cache-{}", &hex::encode(digest)[..32]))
 }
 
-fn collect_cache_controlled_content(messages: &[Value], blocks: &mut Vec<Value>) {
+fn first_cache_controlled_message_prefix(messages: &[Value]) -> Option<Vec<Value>> {
+    let (message_index, content_index) =
+        messages
+            .iter()
+            .enumerate()
+            .find_map(|(message_index, message)| {
+                message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|content| {
+                        content
+                            .iter()
+                            .enumerate()
+                            .find(|(_, item)| item.get("cache_control").is_some())
+                            .map(|(content_index, _)| (message_index, content_index))
+                    })
+            })?;
+
+    let mut prefix = messages[..=message_index].to_vec();
+    let content = prefix[message_index]
+        .get_mut("content")
+        .and_then(Value::as_array_mut)?;
+    content.truncate(content_index + 1);
+    remove_cache_control_from_content(&mut prefix);
+    Some(prefix)
+}
+
+fn cache_controlled_tool_prefix(tools: Option<&Value>, include_all: bool) -> Option<Vec<Value>> {
+    let tools = tools.and_then(Value::as_array)?;
+    let last_marker = tools
+        .iter()
+        .enumerate()
+        .filter(|(_, tool)| tool.get("cache_control").is_some())
+        .map(|(index, _)| index)
+        .next_back();
+    let end = last_marker.or_else(|| include_all.then_some(tools.len().checked_sub(1)?))?;
+    let mut prefix = tools[..=end].to_vec();
+    for tool in &mut prefix {
+        if let Some(object) = tool.as_object_mut() {
+            object.remove("cache_control");
+        }
+    }
+    Some(prefix)
+}
+
+fn remove_cache_control_from_content(messages: &mut [Value]) {
     for message in messages {
-        let Some(content) = message.get("content") else {
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
             continue;
         };
-        let Value::Array(items) = content else {
+        for item in content {
+            if let Some(object) = item.as_object_mut() {
+                object.remove("cache_control");
+            }
+        }
+    }
+}
+
+fn supports_openai_explicit_prompt_cache(model: &str) -> bool {
+    let Some(version) = model.strip_prefix("gpt-") else {
+        return false;
+    };
+    let mut parts =
+        version.split(|character: char| !character.is_ascii_digit() && character != '.');
+    let mut numbers = parts.next().unwrap_or_default().split('.');
+    let major = numbers.next().and_then(|value| value.parse::<u32>().ok());
+    let minor = numbers.next().and_then(|value| value.parse::<u32>().ok());
+    match (major, minor) {
+        (Some(major), _) if major > 5 => true,
+        (Some(5), Some(minor)) => minor >= 6,
+        _ => false,
+    }
+}
+
+fn is_openai_gpt_model(model: &str) -> bool {
+    model.strip_prefix("gpt-").is_some_and(|version| {
+        version
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+    })
+}
+
+fn replace_anthropic_cache_controls(messages: &mut [Value]) -> usize {
+    let mut replaced = 0;
+    for message in messages {
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
             continue;
         };
-        for item in items {
-            let Some(object) = item.as_object() else {
+        for item in content {
+            let Some(object) = item.as_object_mut() else {
                 continue;
             };
-            if !object.contains_key("cache_control") {
-                continue;
+            if object.remove("cache_control").is_some() {
+                object.insert(
+                    "prompt_cache_breakpoint".to_string(),
+                    json!({ "mode": "explicit" }),
+                );
+                replaced += 1;
             }
-            let mut normalized = object.clone();
-            normalized.remove("cache_control");
-            blocks.push(Value::Object(normalized));
         }
     }
-}
-
-fn collect_cache_controlled_tools(tools: Option<&Value>, blocks: &mut Vec<Value>) {
-    let Some(tools) = tools.and_then(Value::as_array) else {
-        return;
-    };
-    for tool in tools {
-        let Some(object) = tool.as_object() else {
-            continue;
-        };
-        if !object.contains_key("cache_control") {
-            continue;
-        }
-        let mut normalized = object.clone();
-        normalized.remove("cache_control");
-        blocks.push(Value::Object(normalized));
-    }
+    replaced
 }
 
 fn anthropic_tools_to_openai(value: Value) -> Option<Value> {
@@ -187,6 +320,17 @@ fn anthropic_tools_to_openai(value: Value) -> Option<Value> {
         .filter_map(anthropic_tool_to_openai)
         .collect::<Vec<_>>();
     (!converted.is_empty()).then_some(Value::Array(converted))
+}
+
+fn remove_anthropic_cache_control_from_tools(tools: &mut Value) {
+    let Some(tools) = tools.as_array_mut() else {
+        return;
+    };
+    for tool in tools {
+        if let Some(object) = tool.as_object_mut() {
+            object.remove("cache_control");
+        }
+    }
 }
 
 fn anthropic_tool_to_openai(tool: &Value) -> Option<Value> {

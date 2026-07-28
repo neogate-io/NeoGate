@@ -224,7 +224,9 @@ http_status() {
   local body_file="$1"
   local status
   shift
-  status="$(curl -s -o "$body_file" -w '%{http_code}' "$@")" || status="000"
+  # Public deployments may redirect HTTP to HTTPS. Follow redirects so the
+  # generated installer behaves like its own download command.
+  status="$(curl -sS -L -o "$body_file" -w '%{http_code}' "$@")" || status="000"
   printf '%s' "$status"
 }
 
@@ -478,61 +480,45 @@ select_model() {
   success "$selected_model"
 }
 
-NODE_MIRROR="https://registry.npmmirror.com/-/binary/node"
 NPM_REGISTRY="https://registry.npmmirror.com"
 
-node_arch_suffix() {
-  local os arch
+# Install Node.js system-wide with the OS package manager so node, npm and
+# globally installed CLIs land on the default PATH for every session.
+install_node_system() {
+  local os
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) arch="x64" ;;
-    aarch64|arm64) arch="arm64" ;;
-    *) die "$(message unsupported_arch "$arch")" ;;
-  esac
+
   case "$os" in
-    linux) printf 'linux-%s' "$arch" ;;
-    darwin) printf 'darwin-%s' "$arch" ;;
-    *) die "$(message unsupported_os "$os")" ;;
+    darwin)
+      have_cmd brew || die "$(message homebrew_required)"
+      log "$(message node_installing_pkg "brew")"
+      run brew install node
+      ;;
+    linux)
+      if have_cmd apt-get; then
+        log "$(message node_installing_pkg "apt")"
+        run_as_root apt-get update
+        run_as_root apt-get install -y nodejs npm
+      elif have_cmd dnf; then
+        log "$(message node_installing_pkg "dnf")"
+        run_as_root dnf install -y nodejs npm
+      elif have_cmd yum; then
+        log "$(message node_installing_pkg "yum")"
+        run_as_root yum install -y nodejs npm
+      elif have_cmd zypper; then
+        log "$(message node_installing_pkg "zypper")"
+        run_as_root zypper --non-interactive install nodejs npm
+      elif have_cmd pacman; then
+        log "$(message node_installing_pkg "pacman")"
+        run_as_root pacman -Sy --noconfirm nodejs npm
+      else
+        die "$(message unsupported_pkg)"
+      fi
+      ;;
+    *)
+      die "$(message unsupported_os "$os")"
+      ;;
   esac
-}
-
-node_lts_version() {
-  local index_file version
-  index_file="$TMP_DIR/node-index.json"
-  run curl -fsSL "$NODE_MIRROR/index.json" -o "$index_file" || die "$(message connect_failed "$NODE_MIRROR")"
-  version="$(node - "$index_file" <<'NODE'
-const fs = require('fs');
-const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-const lts = data.find(v => v.lts);
-if (!lts) throw new Error('no LTS found');
-process.stdout.write(lts.version);
-NODE
-)"
-  [[ -n "$version" ]] || die "$(message node_lts_failed)"
-  printf '%s' "$version"
-}
-
-install_node_tarball() {
-  local version suffix url tarball target_dir
-  version="$(node_lts_version)"
-  suffix="$(node_arch_suffix)"
-  url="$NODE_MIRROR/$version/node-$version-$suffix.tar.gz"
-  tarball="$TMP_DIR/node.tar.gz"
-  target_dir="${NEOGATE_NODE_HOME:-$HOME/.neogate-node}"
-
-  log "$(message node_downloading "$version")"
-  run curl -fsSL "$url" -o "$tarball" || die "$(message connect_failed "$url")"
-  rm -rf "$target_dir"
-  mkdir -p "$target_dir"
-  run tar -xzf "$tarball" -C "$target_dir" --strip-components=1
-
-  local bin_dir="$target_dir/bin"
-  case ":$PATH:" in
-    *:"$bin_dir":*) ;;
-    *) export PATH="$bin_dir:$PATH" ;;
-  esac
-  export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
 }
 
 install_node() {
@@ -545,7 +531,7 @@ install_node() {
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message node_missing_disabled)"
   confirm_default_yes "$(message node_missing_prompt)" || die "$(message node_required)"
 
-  install_node_tarball
+  install_node_system
 
   have_cmd node || die "$(message node_path_missing)"
   have_cmd npm || die "$(message npm_path_missing)"

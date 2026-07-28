@@ -457,7 +457,7 @@ sudo systemctl reload nginx
     </tr>
     <tr>
       <td>🧾 计费用量解析</td>
-      <td><code>RELAY_USAGE_BUFFER_LIMIT_BYTES</code> 默认 16 MiB，用于非流式 JSON 和 SSE 用量解析；计费模式建议保持默认或按最大响应体压测后再调整，避免影响计费用量提取。</td>
+      <td>非流式 JSON 和 SSE 的用量解析缓冲区固定为 16 MiB；上游响应超过该大小时无法提取计费用量。</td>
     </tr>
     <tr>
       <td>⏱️ 长耗时请求</td>
@@ -465,11 +465,11 @@ sudo systemctl reload nginx
     </tr>
     <tr>
       <td>🚦 用户并发</td>
-      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 10 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
+      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 100 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
     </tr>
     <tr>
       <td>🔀 上游故障切换</td>
-      <td>上游返回 429、5xx、529 或发生超时/连接类错误时，NeoGate 默认最多切换其他可用上游 5 次；可通过 <code>MAX_UPSTREAM_FAILOVERS</code> 调整，设为 0 可关闭。</td>
+      <td>上游返回 429、5xx、529 或发生超时/连接类错误时，NeoGate 最多自动切换其他可用上游 5 次。</td>
     </tr>
     <tr>
       <td>🩺 上游监控</td>

@@ -14,7 +14,7 @@ use crate::{
     auth::UserAuth,
     billing::video::{self, VideoBillingInput, VideoBillingMetadata},
     error::{reqwest_status, AppError, AppResult},
-    provider::adapters::{adapter_for_provider, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_task_json_response, forward_openai_bound,
         forward_openai_with_content_type, forward_prepared_openai, raw_upstream_response,
@@ -22,8 +22,7 @@ use crate::{
         record_upstream_transport_failure_for_failover, release_empty_hold,
         reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
         response_from_bytes, rewrite_relay_body_model, selector::AttemptedUpstream,
-        should_failover_retryable_upstream_failure, BodyKind, RelayBody, RelayContext,
-        RelayRequestParams,
+        should_failover_upstream_failure, BodyKind, RelayBody, RelayContext, RelayRequestParams,
     },
     task::{
         billing as task_billing,
@@ -180,13 +179,15 @@ async fn relay_openai_video_create(
             relay_trace_id,
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
+            request_body_bytes: upstream_body.len(),
+            request_input_tokens_estimate: crate::billing::estimate_input_tokens(&upstream_body),
             request_params: meta.request_params.clone(),
             request_permit: None,
             upstream_request_path: Some(RelayRoute::Videos.path().to_string()),
             upstream_response_mode: None,
         };
-        let adapter = adapter_for_provider(&ctx.upstream.provider);
-        let response = if meta.is_json || adapter.name() == "doubao" {
+        let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+        let response = if meta.is_json || matches!(adapter.name(), "doubao" | "haxicloud") {
             let prepared = adapter.prepare_openai_request(
                 &ctx.upstream,
                 protocol,
@@ -226,10 +227,10 @@ async fn relay_openai_video_create(
 
                 let error_body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &error_body);
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.retryable,
+                    failure.failoverable(),
                     retryable_failovers,
                 )
                 .await
@@ -250,7 +251,7 @@ async fn relay_openai_video_create(
                         upstream_status = status.as_u16(),
                         failover_attempt = retryable_failovers,
                         max_failovers = ctx.state.config.relay.max_upstream_failovers,
-                        "retryable upstream video http failure; retrying another upstream"
+                        "failoverable upstream video http failure; trying another upstream"
                     );
                     continue;
                 }
@@ -260,7 +261,7 @@ async fn relay_openai_video_create(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
                     retryable,
@@ -294,7 +295,8 @@ async fn finish_video_create_success(
     let body = match upstream_response.bytes().await {
         Ok(body) => {
             ctx.release_request_permit();
-            body
+            adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url)
+                .normalize_response_body(RelayRoute::Videos, body)?
         }
         Err(err) => {
             ctx.release_request_permit();
@@ -350,7 +352,7 @@ async fn finish_video_create_success(
             hold: &ctx.hold,
             upstream_metadata: task_metadata,
         },
-        ctx.state.config.task.upstream_poll_interval,
+        crate::task::POLL_INTERVAL,
         ctx.state.config.task.upstream_retention,
     )
     .await

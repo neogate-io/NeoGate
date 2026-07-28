@@ -1,5 +1,6 @@
 use std::{
     fmt::{self, Write as _},
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -15,7 +16,7 @@ use axum::{
 use chrono::{SecondsFormat, Utc};
 use reqwest::Client;
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{
     field::{Field, Visit},
@@ -68,6 +69,7 @@ pub struct AppState {
     pub(crate) user_request_limiter: relay::UserRequestLimiter,
     pub service_policy_cache: policy::ServicePolicyCache,
     pub cache_invalidator: cache::CacheInvalidator,
+    pub(crate) task_wakeup: Arc<Notify>,
     pub runtime_restart_tx: watch::Sender<bool>,
 }
 
@@ -127,9 +129,12 @@ async fn run_api_listener(
     let app = api_router(config, Arc::clone(&state))?;
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("neogate listening on {}", config.bind_addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(runtime_shutdown_signal(runtime_restart_rx))
+    .await?;
     flush_shutdown_work(&state).await;
     Ok(())
 }
@@ -227,6 +232,7 @@ fn should_skip_successful_relay_access_log(
             | "/v1/embeddings"
             | "/v1/moderations"
             | "/v1/responses"
+            | "/v1/responses/compact"
             | "/v1/images/generations"
             | "/v1/images/edits"
             | "/v1/images/variations"
@@ -605,11 +611,25 @@ pub(crate) async fn build_state(
     let http = build_http_client(&config)?;
     let redis = build_redis_client(&config)?;
     let selector = Selector::with_cache_ttl(config.cache.routing_ttl);
-    let channel_affinity = ChannelAffinityCache::new(
-        config.relay.channel_affinity_enabled,
-        config.relay.channel_affinity_ttl,
-        config.relay.channel_affinity_max_entries,
-    );
+    let channel_affinity = if config.runtime_mode.is_distributed() {
+        let client = redis
+            .as_ref()
+            .expect("distributed runtime has validated redis config");
+        ChannelAffinityCache::with_redis(
+            config.relay.channel_affinity_enabled,
+            config.relay.channel_affinity_ttl,
+            config.relay.channel_affinity_max_entries,
+            client,
+            &config.redis_key_prefix,
+        )
+        .await
+    } else {
+        ChannelAffinityCache::new(
+            config.relay.channel_affinity_enabled,
+            config.relay.channel_affinity_ttl,
+            config.relay.channel_affinity_max_entries,
+        )
+    };
     let billing = build_billing(&config).await?;
     let (cache_invalidator, invalidation_listener) = build_cache_invalidator(&config).await?;
     let usage_daily = UsageDailyRecorder::spawn(
@@ -683,6 +703,7 @@ pub(crate) async fn build_state(
         ),
         service_policy_cache: policy::ServicePolicyCache::default(),
         cache_invalidator,
+        task_wakeup: Arc::new(Notify::new()),
         runtime_restart_tx,
     });
     if config.process_role.runs_api() {
@@ -697,7 +718,6 @@ pub(crate) async fn build_state(
 
 fn build_http_client(config: &Config) -> anyhow::Result<Client> {
     Ok(Client::builder()
-        .read_timeout(config.http.upstream_timeout)
         .connect_timeout(config.http.upstream_connect_timeout)
         .pool_max_idle_per_host(config.http.pool_max_idle_per_host)
         .pool_idle_timeout(config.http.pool_idle_timeout)
@@ -936,11 +956,12 @@ pub(crate) mod tests {
                 },
                 relay: config::RelayConfig {
                     key_cooldown: Duration::from_secs(60),
+                    quota_exhausted_cooldown: Duration::from_secs(10 * 60),
                     max_upstream_failovers: 5,
                     body_limit_bytes: config::DEFAULT_RELAY_BODY_LIMIT_BYTES,
-                    usage_buffer_limit_bytes: config::DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
-                    credential_upload_limit_bytes: config::DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
-                    user_concurrent_request_limit: 10,
+                    usage_buffer_limit_bytes: config::RELAY_USAGE_BUFFER_LIMIT_BYTES,
+                    credential_upload_limit_bytes: config::CREDENTIAL_UPLOAD_LIMIT_BYTES,
+                    user_concurrent_request_limit: 100,
                     global_concurrent_request_limit: 0,
                     channel_affinity_enabled: true,
                     channel_affinity_ttl: Duration::from_secs(3600),
@@ -961,7 +982,7 @@ pub(crate) mod tests {
                     credit_prefetch_micros: 100_000,
                     credit_allocation_recovery_after: Duration::from_secs(3600),
                     credit_allocation_recovery_interval: Duration::from_secs(60),
-                    default_output_tokens: 4096,
+                    default_output_tokens: 16_384,
                 },
                 usage_queue: config::UsageQueueConfig {
                     flush_interval: Duration::from_secs(1),
@@ -972,13 +993,11 @@ pub(crate) mod tests {
                     billing_outbox_max_age: Duration::from_secs(300),
                 },
                 task: config::TaskConfig {
-                    upstream_poll_interval: Duration::from_secs(30),
                     upstream_poll_batch_size: 100,
                     upstream_retention: Duration::from_secs(2_592_000),
                 },
                 response_assets: config::ResponseAssetConfig {
                     dir: std::env::temp_dir().join("neogate-test-assets"),
-                    retention: Duration::from_secs(604_800),
                 },
                 db_pool: config::DbPoolConfig {
                     min_connections: 0,
@@ -986,6 +1005,7 @@ pub(crate) mod tests {
                     acquire_timeout: Duration::from_secs(5),
                 },
                 cors_allowed_origins: vec!["*".to_string()],
+                trust_proxy_headers: false,
             },
             usage: UsageRecorder::disabled(),
             usage_daily: UsageDailyRecorder::disabled(),
@@ -1005,9 +1025,10 @@ pub(crate) mod tests {
             ),
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
-            user_request_limiter: relay::UserRequestLimiter::new(10, 0),
+            user_request_limiter: relay::UserRequestLimiter::new(100, 0),
             service_policy_cache: policy::ServicePolicyCache::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
+            task_wakeup: Arc::new(Notify::new()),
             runtime_restart_tx,
         })
     }

@@ -16,7 +16,7 @@ use crate::{
     auth::UserAuth,
     error::{reqwest_status, AppError, AppResult},
     input::bounded_limit,
-    provider::adapters::{adapter_for_provider, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, RelayRoute},
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -31,8 +31,7 @@ use crate::relay::{
     release_empty_hold, reserve_credit, respond_upstream_http_failure, response_from_bytes,
     rewrite_relay_body_model,
     selector::{AttemptedUpstream, SelectedUpstream, SelectionConstraints, UpstreamProtocol},
-    should_failover_retryable_upstream_failure, BodyKind, PreparedRelayBody, RelayBody,
-    RelayContext,
+    should_failover_upstream_failure, BodyKind, PreparedRelayBody, RelayBody, RelayContext,
 };
 use crate::task::upstream::{NewUpstreamTask, UpstreamTask, UpstreamTaskType};
 
@@ -162,6 +161,8 @@ pub(crate) async fn anthropic_messages(
             relay_trace_id,
             relay_attempt: attempted_upstreams.len() as i32,
             relay_final: false,
+            request_body_bytes: upstream_body.len(),
+            request_input_tokens_estimate: crate::billing::estimate_input_tokens(&upstream_body),
             request_params: meta.request_params.clone(),
             request_permit: None,
             upstream_request_path: None,
@@ -174,7 +175,7 @@ pub(crate) async fn anthropic_messages(
             UpstreamProtocol::Openai => {
                 let body = bridge::messages_to_openai_chat(upstream_body.clone())?;
                 let route = RelayRoute::ChatCompletions;
-                let adapter = adapter_for_provider(&ctx.upstream.provider);
+                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,
@@ -206,10 +207,10 @@ pub(crate) async fn anthropic_messages(
 
                 let body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &body);
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.retryable,
+                    failure.failoverable(),
                     retryable_failovers,
                 )
                 .await
@@ -230,7 +231,7 @@ pub(crate) async fn anthropic_messages(
                         upstream_status = status.as_u16(),
                         failover_attempt = retryable_failovers,
                         max_failovers = ctx.state.config.relay.max_upstream_failovers,
-                        "retryable upstream http failure; retrying another upstream"
+                        "failoverable upstream http failure; trying another upstream"
                     );
                     continue;
                 }
@@ -240,7 +241,7 @@ pub(crate) async fn anthropic_messages(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
                     retryable,
@@ -571,7 +572,7 @@ async fn finish_batch_create(
             hold: &hold,
             upstream_metadata: value,
         },
-        state.config.task.upstream_poll_interval,
+        crate::task::POLL_INTERVAL,
         state.config.task.upstream_retention,
     )
     .await

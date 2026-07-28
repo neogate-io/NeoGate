@@ -1,15 +1,33 @@
 use axum::http::StatusCode;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const UPSTREAM_ERROR_BODY_LOG_LIMIT: usize = 1000;
 
 pub(crate) struct UpstreamHttpFailure {
-    pub(crate) error_type: &'static str,
-    pub(crate) user_message: &'static str,
+    pub(crate) kind: UpstreamFailureKind,
     pub(crate) summary: String,
     pub(crate) detail: String,
-    pub(crate) relay_status: StatusCode,
-    pub(crate) retryable: bool,
+    retryable_override: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpstreamFailureKind {
+    QuotaExhausted,
+    RateLimited,
+    AuthenticationFailed,
+    ModelUnavailable,
+    ContextLengthExceeded,
+    ContentRejected,
+    ServerError,
+    BadRequest,
+    HttpError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FailureCooldown {
+    None,
+    Default,
+    QuotaExhausted,
 }
 
 pub(crate) fn describe_upstream_http_failure(
@@ -18,129 +36,204 @@ pub(crate) fn describe_upstream_http_failure(
 ) -> UpstreamHttpFailure {
     let detail = upstream_error_detail(body);
     let lowered = detail.to_ascii_lowercase();
-    if is_quota_or_balance_error(&lowered) {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_quota_exhausted",
-            "upstream quota exhausted",
-            "The upstream provider account has insufficient balance or quota. Please switch to another channel or contact the service administrator.",
-            StatusCode::BAD_GATEWAY,
-            false,
-        );
-    }
+    let kind = if is_quota_or_balance_error(&lowered) {
+        UpstreamFailureKind::QuotaExhausted
+    } else if is_rate_limit_error(status, &lowered) {
+        UpstreamFailureKind::RateLimited
+    } else if is_auth_error(status, &lowered) {
+        UpstreamFailureKind::AuthenticationFailed
+    } else if is_model_error(status, &lowered) {
+        UpstreamFailureKind::ModelUnavailable
+    } else if is_context_length_error(status, &lowered) {
+        UpstreamFailureKind::ContextLengthExceeded
+    } else if is_safety_error(&lowered) {
+        UpstreamFailureKind::ContentRejected
+    } else if status.is_server_error() || status.as_u16() == 529 {
+        UpstreamFailureKind::ServerError
+    } else if status == StatusCode::BAD_REQUEST {
+        UpstreamFailureKind::BadRequest
+    } else {
+        UpstreamFailureKind::HttpError
+    };
 
-    if is_rate_limit_error(status, &lowered) {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_rate_limited",
-            "upstream rate limited",
-            "The upstream provider is rate limited. Please retry later or switch to another channel.",
-            StatusCode::BAD_GATEWAY,
-            true,
-        );
-    }
-
-    if is_auth_error(status, &lowered) {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_authentication_failed",
-            "upstream authentication failed",
-            "The upstream provider rejected the channel credentials. Please switch to another channel or contact the service administrator.",
-            StatusCode::BAD_GATEWAY,
-            false,
-        );
-    }
-
-    if is_model_error(status, &lowered) {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_model_unavailable",
-            "upstream model unavailable",
-            "The upstream provider does not have the requested model available on this channel. Please use another model or switch channels.",
-            StatusCode::BAD_GATEWAY,
-            false,
-        );
-    }
-
-    if is_context_length_error(status, &lowered) {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_context_length_exceeded",
-            "upstream context length exceeded",
-            "The request is too large for the upstream model context window. Please shorten the input and retry.",
-            StatusCode::BAD_REQUEST,
-            false,
-        );
-    }
-
-    if is_safety_error(&lowered) {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_content_rejected",
-            "upstream content rejected",
-            "The upstream provider rejected the request content. Please revise the request and retry.",
-            StatusCode::BAD_REQUEST,
-            false,
-        );
-    }
-
-    if status.is_server_error() || status.as_u16() == 529 {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_server_error",
-            "upstream server error",
-            "The upstream provider is temporarily unavailable. Please retry later or switch to another channel.",
-            StatusCode::BAD_GATEWAY,
-            true,
-        );
-    }
-
-    if status == StatusCode::BAD_REQUEST {
-        return upstream_http_failure(
-            status,
-            detail,
-            "upstream_bad_request",
-            "upstream bad request",
-            "The upstream provider rejected the request format or parameters. Please check the request and retry.",
-            StatusCode::BAD_REQUEST,
-            false,
-        );
-    }
-
-    upstream_http_failure(
-        status,
-        detail,
-        "upstream_http_error",
-        "upstream http error",
-        "The upstream provider rejected the request. Please retry later or switch to another channel.",
-        StatusCode::BAD_GATEWAY,
-        false,
-    )
+    UpstreamHttpFailure::new(status, detail, kind)
 }
 
-fn upstream_http_failure(
-    status: StatusCode,
-    detail: String,
-    error_type: &'static str,
-    summary_prefix: &'static str,
-    user_message: &'static str,
-    relay_status: StatusCode,
-    retryable: bool,
-) -> UpstreamHttpFailure {
-    UpstreamHttpFailure {
-        error_type,
-        user_message,
-        summary: format!("{summary_prefix}: status {}; {detail}", status.as_u16()),
-        detail,
-        relay_status,
-        retryable,
+impl UpstreamHttpFailure {
+    fn new(status: StatusCode, detail: String, kind: UpstreamFailureKind) -> Self {
+        Self {
+            kind,
+            summary: format!(
+                "{}: status {}; {detail}",
+                kind.summary_prefix(),
+                status.as_u16()
+            ),
+            detail,
+            retryable_override: false,
+        }
+    }
+
+    pub(crate) fn mark_retryable(&mut self) {
+        self.retryable_override = true;
+    }
+
+    pub(crate) fn error_code(&self) -> &'static str {
+        self.kind.error_code()
+    }
+
+    pub(crate) fn relay_status(&self) -> StatusCode {
+        self.kind.relay_status()
+    }
+
+    pub(crate) fn client_retryable(&self) -> bool {
+        self.retryable_override || self.kind.client_retryable()
+    }
+
+    pub(crate) fn failoverable(&self) -> bool {
+        self.retryable_override || self.kind.failoverable()
+    }
+
+    pub(crate) fn cooldown(&self) -> FailureCooldown {
+        self.kind.cooldown()
+    }
+
+    pub(crate) fn client_payload(
+        &self,
+        request_path: &str,
+        upstream_provider: &str,
+        upstream_status: StatusCode,
+        message: String,
+    ) -> Value {
+        if is_anthropic_path(request_path) {
+            return json!({
+                "type": "error",
+                "error": {
+                    "type": self.kind.anthropic_error_type(),
+                    "message": message
+                }
+            });
+        }
+
+        if self.kind == UpstreamFailureKind::ContextLengthExceeded {
+            return json!({
+                "error": {
+                    "message": message,
+                    "type": "invalid_request_error",
+                    "param": "input",
+                    "code": "context_length_exceeded"
+                }
+            });
+        }
+
+        json!({
+            "error": {
+                "message": message,
+                "code": self.error_code(),
+                "upstream": upstream_provider,
+                "upstream_status": upstream_status.as_u16(),
+                "upstream_error": self.detail,
+                "retryable": self.client_retryable(),
+            }
+        })
+    }
+}
+
+fn is_anthropic_path(path: &str) -> bool {
+    path.starts_with("/v1/messages") || path.starts_with("/anthropic/v1/messages")
+}
+
+impl UpstreamFailureKind {
+    pub(crate) fn error_code(self) -> &'static str {
+        match self {
+            Self::QuotaExhausted => "upstream_quota_exhausted",
+            Self::RateLimited => "upstream_rate_limited",
+            Self::AuthenticationFailed => "upstream_authentication_failed",
+            Self::ModelUnavailable => "upstream_model_unavailable",
+            Self::ContextLengthExceeded => "upstream_context_length_exceeded",
+            Self::ContentRejected => "upstream_content_rejected",
+            Self::ServerError => "upstream_server_error",
+            Self::BadRequest => "upstream_bad_request",
+            Self::HttpError => "upstream_http_error",
+        }
+    }
+
+    fn summary_prefix(self) -> &'static str {
+        match self {
+            Self::QuotaExhausted => "upstream quota exhausted",
+            Self::RateLimited => "upstream rate limited",
+            Self::AuthenticationFailed => "upstream authentication failed",
+            Self::ModelUnavailable => "upstream model unavailable",
+            Self::ContextLengthExceeded => "upstream context length exceeded",
+            Self::ContentRejected => "upstream content rejected",
+            Self::ServerError => "upstream server error",
+            Self::BadRequest => "upstream bad request",
+            Self::HttpError => "upstream http error",
+        }
+    }
+
+    pub(crate) fn user_message(self) -> &'static str {
+        match self {
+            Self::QuotaExhausted => "The upstream provider account has insufficient balance or quota. Please switch to another channel or contact the service administrator.",
+            Self::RateLimited => "The upstream provider is rate limited. Please retry later or switch to another channel.",
+            Self::AuthenticationFailed => "The upstream provider rejected the channel credentials. Please switch to another channel or contact the service administrator.",
+            Self::ModelUnavailable => "The upstream provider does not have the requested model available on this channel. Please use another model or switch channels.",
+            Self::ContextLengthExceeded => "The request is too large for the upstream model context window. Please shorten the input and retry.",
+            Self::ContentRejected => "The upstream provider rejected the request content. Please revise the request and retry.",
+            Self::ServerError => "The upstream provider is temporarily unavailable. Please retry later or switch to another channel.",
+            Self::BadRequest => "The upstream provider rejected the request format or parameters. Please check the request and retry.",
+            Self::HttpError => "The upstream provider rejected the request. Please retry later or switch to another channel.",
+        }
+    }
+
+    pub(crate) fn relay_status(self) -> StatusCode {
+        match self {
+            Self::QuotaExhausted => StatusCode::PAYMENT_REQUIRED,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::AuthenticationFailed | Self::ModelUnavailable | Self::HttpError => {
+                StatusCode::FAILED_DEPENDENCY
+            }
+            Self::ContextLengthExceeded | Self::ContentRejected | Self::BadRequest => {
+                StatusCode::BAD_REQUEST
+            }
+            Self::ServerError => StatusCode::BAD_GATEWAY,
+        }
+    }
+
+    pub(crate) fn client_retryable(self) -> bool {
+        matches!(self, Self::RateLimited | Self::ServerError)
+    }
+
+    pub(crate) fn failoverable(self) -> bool {
+        matches!(
+            self,
+            Self::QuotaExhausted
+                | Self::RateLimited
+                | Self::AuthenticationFailed
+                | Self::ModelUnavailable
+                | Self::ServerError
+        )
+    }
+
+    pub(crate) fn cooldown(self) -> FailureCooldown {
+        match self {
+            Self::QuotaExhausted => FailureCooldown::QuotaExhausted,
+            Self::RateLimited
+            | Self::AuthenticationFailed
+            | Self::ModelUnavailable
+            | Self::ServerError => FailureCooldown::Default,
+            _ => FailureCooldown::None,
+        }
+    }
+
+    pub(crate) fn anthropic_error_type(self) -> &'static str {
+        match self {
+            Self::RateLimited => "rate_limit_error",
+            Self::QuotaExhausted
+            | Self::ContextLengthExceeded
+            | Self::ContentRejected
+            | Self::BadRequest => "invalid_request_error",
+            _ => "api_error",
+        }
     }
 }
 
@@ -186,6 +279,9 @@ fn is_quota_or_balance_error(lowered: &str) -> bool {
             "insufficient quota",
             "exceeded your current quota",
             "quota exceeded",
+            "quota has been exhausted",
+            "quota exhausted",
+            "allocationquota",
             "insufficient balance",
             "insufficient credit",
             "not enough credits",
@@ -325,10 +421,26 @@ mod tests {
             br#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#,
         );
 
-        assert_eq!(failure.error_type, "upstream_quota_exhausted");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::QuotaExhausted);
+        assert_eq!(failure.relay_status(), StatusCode::PAYMENT_REQUIRED);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
+        assert_eq!(failure.cooldown(), FailureCooldown::QuotaExhausted);
         assert!(failure.summary.contains("insufficient_quota"));
+    }
+
+    #[test]
+    fn classifies_allocation_quota_as_exhausted() {
+        let failure = describe_upstream_http_failure(
+            StatusCode::TOO_MANY_REQUESTS,
+            br#"{"error":{"message":"The account quota has been exhausted.","code":"AllocationQuota"}}"#,
+        );
+
+        assert_eq!(failure.kind, UpstreamFailureKind::QuotaExhausted);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
+        assert_eq!(failure.cooldown(), FailureCooldown::QuotaExhausted);
+        assert!(failure.detail.contains("AllocationQuota"));
     }
 
     #[test]
@@ -336,8 +448,9 @@ mod tests {
         let failure =
             describe_upstream_http_failure(StatusCode::FORBIDDEN, "账户余额不足".as_bytes());
 
-        assert_eq!(failure.error_type, "upstream_quota_exhausted");
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::QuotaExhausted);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
     }
 
     #[test]
@@ -347,9 +460,10 @@ mod tests {
             br#"{"error":{"message":"Rate limit reached"}}"#,
         );
 
-        assert_eq!(failure.error_type, "upstream_rate_limited");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::RateLimited);
+        assert_eq!(failure.relay_status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(failure.client_retryable());
+        assert!(failure.failoverable());
     }
 
     #[test]
@@ -359,9 +473,10 @@ mod tests {
             br#"{"error":{"message":"maximum context length exceeded"}}"#,
         );
 
-        assert_eq!(failure.error_type, "upstream_context_length_exceeded");
-        assert_eq!(failure.relay_status, StatusCode::BAD_REQUEST);
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::ContextLengthExceeded);
+        assert_eq!(failure.relay_status(), StatusCode::BAD_REQUEST);
+        assert!(!failure.client_retryable());
+        assert!(!failure.failoverable());
     }
 
     #[test]
@@ -371,9 +486,10 @@ mod tests {
 
         let failure = describe_upstream_http_failure(StatusCode::UNAUTHORIZED, body);
 
-        assert_eq!(failure.error_type, "upstream_authentication_failed");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::AuthenticationFailed);
+        assert_eq!(failure.relay_status(), StatusCode::FAILED_DEPENDENCY);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
     }
 
     #[test]
@@ -386,9 +502,10 @@ mod tests {
 
         let failure = describe_upstream_http_failure(StatusCode::NOT_ACCEPTABLE, body);
 
-        assert_eq!(failure.error_type, "upstream_authentication_failed");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::AuthenticationFailed);
+        assert_eq!(failure.relay_status(), StatusCode::FAILED_DEPENDENCY);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
         assert!(failure.detail.contains("账号未登录"));
     }
 
@@ -399,9 +516,10 @@ mod tests {
 
         let failure = describe_upstream_http_failure(StatusCode::NOT_FOUND, body);
 
-        assert_eq!(failure.error_type, "upstream_model_unavailable");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::ModelUnavailable);
+        assert_eq!(failure.relay_status(), StatusCode::FAILED_DEPENDENCY);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
     }
 
     #[test]
@@ -427,9 +545,10 @@ mod tests {
 
         let failure = describe_upstream_http_failure(StatusCode::BAD_GATEWAY, body);
 
-        assert_eq!(failure.error_type, "upstream_model_unavailable");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(!failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::ModelUnavailable);
+        assert_eq!(failure.relay_status(), StatusCode::FAILED_DEPENDENCY);
+        assert!(!failure.client_retryable());
+        assert!(failure.failoverable());
         assert!(failure
             .detail
             .contains("unknown provider for model gpt-5.2"));
@@ -440,8 +559,26 @@ mod tests {
         let failure =
             describe_upstream_http_failure(StatusCode::INTERNAL_SERVER_ERROR, b"backend failed");
 
-        assert_eq!(failure.error_type, "upstream_server_error");
-        assert_eq!(failure.relay_status, StatusCode::BAD_GATEWAY);
-        assert!(failure.retryable);
+        assert_eq!(failure.kind, UpstreamFailureKind::ServerError);
+        assert_eq!(failure.relay_status(), StatusCode::BAD_GATEWAY);
+        assert!(failure.client_retryable());
+        assert!(failure.failoverable());
+    }
+
+    #[test]
+    fn retryable_override_preserves_error_identity() {
+        let mut failure = describe_upstream_http_failure(
+            StatusCode::BAD_REQUEST,
+            br#"{"error":{"message":"invalid image option"}}"#,
+        );
+
+        failure.mark_retryable();
+
+        assert_eq!(failure.kind, UpstreamFailureKind::BadRequest);
+        assert_eq!(failure.error_code(), "upstream_bad_request");
+        assert_eq!(failure.relay_status(), StatusCode::BAD_REQUEST);
+        assert!(failure.client_retryable());
+        assert!(failure.failoverable());
+        assert_eq!(failure.cooldown(), FailureCooldown::None);
     }
 }

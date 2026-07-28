@@ -10,13 +10,16 @@ use crate::{
     relay::{body_from_bytes, body_from_stream, finish_relay, RelayContext},
 };
 
-pub(super) async fn finish_bridge_json(
+pub(super) async fn finish_bridge_json<F>(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
-    convert: fn(&[u8], &str) -> AppResult<Bytes>,
+    convert: F,
     trailing_error_message: &'static str,
-) -> AppResult<Response> {
+) -> AppResult<Response>
+where
+    F: FnOnce(&[u8], &str) -> AppResult<Bytes>,
+{
     let (body, trailing_error) =
         read_body_until_error(upstream_response, ctx.state.config.relay.body_limit_bytes).await?;
     let converted = match convert(&body, &ctx.external_model) {
@@ -89,14 +92,21 @@ pub(super) trait BridgeSseConverter {
     fn stopped(&self) -> bool;
 }
 
-pub(super) fn finish_bridge_stream<C: BridgeSseConverter + Send + 'static>(
+pub(super) fn finish_bridge_stream<C, F>(
     ctx: RelayContext,
     status: StatusCode,
     upstream_response: reqwest::Response,
-    new_converter: fn(String) -> C,
+    new_converter: F,
     trailing_error_message: &'static str,
-) -> AppResult<Response> {
+) -> AppResult<Response>
+where
+    C: BridgeSseConverter + Send + 'static,
+    F: FnOnce(String) -> C,
+{
     let content_length = upstream_response.content_length();
+    let response_metadata = crate::relay::streaming::UpstreamResponseMetadata::from_headers(
+        upstream_response.headers(),
+    );
     let usage_buffer_limit_bytes = ctx.state.config.relay.usage_buffer_limit_bytes;
     let converter = new_converter(ctx.external_model.clone());
     let upstream_stream = upstream_response.bytes_stream();
@@ -135,6 +145,7 @@ pub(super) fn finish_bridge_stream<C: BridgeSseConverter + Send + 'static>(
             status,
             content_length,
             usage_buffer_limit_bytes,
+            response_metadata,
             stream,
         ))
         .map_err(|err| AppError::BadRequest(err.to_string()))

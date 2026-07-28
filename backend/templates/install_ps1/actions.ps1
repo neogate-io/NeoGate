@@ -1,4 +1,3 @@
-$NodeMirror = 'https://registry.npmmirror.com/-/binary/node'
 $NpmRegistry = 'https://registry.npmmirror.com'
 
 function Read-JsonField([string]$Path, [string]$Field) {
@@ -138,16 +137,22 @@ function Invoke-NeoGateRequest {
   }
 }
 
+function Find-ApplicationCommand([string]$Name) {
+  # Prefer .exe/.cmd shims over PowerShell wrapper scripts. Node's npm.ps1 can
+  # be blocked by a restrictive execution policy even when npm.cmd is usable.
+  return Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+
 function Assert-Command([string]$Name) {
-  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+  return $null -ne (Find-ApplicationCommand $Name)
 }
 
 function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')) {
-  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  $cmd = Find-ApplicationCommand $Name
   if (-not $cmd) { return $null }
 
   try {
-    $output = & $Name @Arguments 2>$null
+    $output = & $cmd.Path @Arguments 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     return (@($output) | Where-Object { $_ } | Select-Object -First 1)
   } catch {
@@ -158,7 +163,9 @@ function Get-CommandVersion([string]$Name, [string[]]$Arguments = @('--version')
 function Get-NpmGlobalPaths {
   $paths = @()
   try {
-    $prefixOutput = & npm config get prefix 2>$null
+    $npm = Find-ApplicationCommand 'npm'
+    if (-not $npm) { return @() }
+    $prefixOutput = & $npm.Path config get prefix 2>$null
     if ($LASTEXITCODE -eq 0) {
       foreach ($prefix in @($prefixOutput)) {
         if ($prefix -and $prefix -ne 'undefined') {
@@ -195,11 +202,13 @@ function Update-SessionPath {
   $paths = @(
     [Environment]::GetEnvironmentVariable('Path', 'Machine'),
     [Environment]::GetEnvironmentVariable('Path', 'User'),
-    $env:Path
-    Get-NpmGlobalPaths
-  ) | Where-Object { $_ }
+    $env:Path,
+    'C:\Program Files\nodejs',
+    'C:\Program Files (x86)\nodejs',
+    (Get-NpmGlobalPaths)
+  ) -join ';'
 
-  $env:Path = (($paths -join ';') -split ';' | Where-Object { $_ } | Select-Object -Unique) -join ';'
+  $env:Path = ($paths -split ';' | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) -join ';'
 }
 
 function Run-Command {
@@ -216,8 +225,9 @@ function Invoke-CommandStatus {
     Write-Host "+ $FilePath $($Arguments -join ' ')"
     return 0
   }
-  & $FilePath @Arguments
-  return $LASTEXITCODE
+  & $FilePath @Arguments 2>&1 | Out-Host
+  $exitCode = $LASTEXITCODE
+  return [int]$exitCode
 }
 
 function Verify-ApiKey {
@@ -391,47 +401,29 @@ function Confirm-NodeReady {
   return $false
 }
 
-function Get-NodeLtsVersion {
-  $indexUrl = "$NodeMirror/index.json"
-  try {
-    $client = [System.Net.Http.HttpClient]::new()
-    $response = $client.GetStringAsync($indexUrl).GetAwaiter().GetResult()
-    $client.Dispose()
-    $data = $response | ConvertFrom-Json
-    $lts = $data | Where-Object { $_.lts } | Select-Object -First 1
-    if (-not $lts) { Fail (Get-Message node_lts_failed) }
-    return $lts.version
-  } catch {
-    Fail (Get-Message connect_failed $indexUrl)
+# Install Node.js system-wide with winget or choco so node, npm and globally
+# installed CLIs land in Program Files on the default PATH for every session.
+function Install-NodeSystem {
+  if (Assert-Command 'winget') {
+    Write-Host (Get-Message node_installing_pkg 'winget')
+    $exitCode = Invoke-CommandStatus 'winget' @('install', '-e', '--id', 'OpenJS.NodeJS.LTS', '--source', 'winget', '--accept-source-agreements', '--accept-package-agreements')
+    Update-SessionPath
+    if ($exitCode -eq 0 -or (Confirm-NodeReady)) { return }
+    $hexExitCode = '0x{0:X8}' -f ($exitCode -band 0xffffffff)
+    Warn (Get-Message node_winget_failed $exitCode $hexExitCode)
+    if ((Assert-Command 'choco') -and (Confirm-DefaultYes (Get-Message node_choco_retry_prompt))) {
+      Write-Host (Get-Message node_installing_pkg 'choco')
+      Run-Command 'choco' @('install', 'nodejs-lts', '-y')
+      return
+    }
+    Fail (Get-Message node_install_failed)
   }
-}
-
-function Install-NodeZip {
-  $version = Get-NodeLtsVersion
-  $zipUrl = "$NodeMirror/$version/node-$version-win-x64.zip"
-  $targetDir = if ($env:NEOGATE_NODE_HOME) { $env:NEOGATE_NODE_HOME } else { Join-Path $env:USERPROFILE '.neogate-node' }
-  $zipFile = Join-Path $env:TEMP "neogate-node-$version.zip"
-
-  Write-Host (Get-Message node_downloading $version)
-  Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
-
-  if (Test-Path $targetDir) { Remove-Item -Recurse -Force $targetDir }
-  New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-  Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
-
-  # The zip extracts into a top-level node-v*-win-x64/ directory; resolve the
-  # real directory that contains node.exe and npm.cmd.
-  $nodeExe = Get-ChildItem -Path $targetDir -Recurse -Filter 'node.exe' | Select-Object -First 1
-  if (-not $nodeExe) { Fail (Get-Message node_path_missing) }
-  $nodeBin = $nodeExe.DirectoryName
-
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if ($userPath -notlike "*$nodeBin*") {
-    $newPath = if ($userPath) { "$nodeBin;$userPath" } else { $nodeBin }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+  if (Assert-Command 'choco') {
+    Write-Host (Get-Message node_installing_pkg 'choco')
+    Run-Command 'choco' @('install', 'nodejs-lts', '-y')
+    return
   }
-  $env:Path = "$nodeBin;$env:Path"
-  $env:NPM_CONFIG_REGISTRY = $NpmRegistry
+  Fail (Get-Message node_pkg_missing_win)
 }
 
 function Install-Node {
@@ -441,7 +433,7 @@ function Install-Node {
   if ($SkipInstall) { Fail (Get-Message node_missing_disabled) }
   if (-not (Confirm-DefaultYes (Get-Message node_missing_prompt))) { Fail (Get-Message node_required) }
 
-  Install-NodeZip
+  Install-NodeSystem
   Update-SessionPath
 
   if (Confirm-NodeReady) { return }

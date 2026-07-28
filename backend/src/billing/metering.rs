@@ -77,11 +77,14 @@ fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
 }
 
 fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
-    let usage = value.get("usage").or_else(|| {
-        value
-            .get("response")
-            .and_then(|response| response.get("usage"))
-    })?;
+    let usage = value
+        .get("usage")
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("usage"))
+        })
+        .or_else(|| choice_usage(value))?;
     let output_tokens = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
@@ -152,17 +155,18 @@ fn cached_input_tokens(value: &Value, usage: &Value, input_details: Option<&Valu
 }
 
 fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
+    choice_usage(value)
+        .and_then(|usage| usage.get("cached_tokens"))
+        .and_then(Value::as_i64)
+        .filter(|tokens| *tokens > 0)
+}
+
+fn choice_usage(value: &Value) -> Option<&Value> {
     value
         .get("choices")
         .and_then(Value::as_array)?
         .iter()
-        .filter_map(|choice| {
-            choice
-                .get("usage")
-                .and_then(|usage| usage.get("cached_tokens"))
-                .and_then(Value::as_i64)
-        })
-        .find(|tokens| *tokens > 0)
+        .find_map(|choice| choice.get("usage"))
 }
 
 pub fn parse_usage_from_bytes(bytes: &[u8], streamed: bool) -> Option<TokenUsage> {

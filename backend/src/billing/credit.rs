@@ -31,6 +31,7 @@ pub(super) trait HotCreditStore: Send + Sync {
         credit_accounts: &[CreditAccountId],
         amount_micros: i64,
     ) -> AppResult<Option<Vec<DebitPart>>>;
+    async fn available_micros(&self, credit_accounts: &[CreditAccountId]) -> AppResult<i64>;
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()>;
 }
 
@@ -153,6 +154,32 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
           end
         end
         return output
+        "#,
+    )
+});
+
+static REDIS_AVAILABLE_CREDIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        local account_count = tonumber(ARGV[1])
+        local available = 0
+        for i = 1, account_count do
+          local list_key = KEYS[i]
+          local total_key = KEYS[account_count + i]
+          local total = redis.call('GET', total_key)
+          if not total then
+            local rebuilt = 0
+            local items = redis.call('LRANGE', list_key, 0, -1)
+            for _, item in ipairs(items) do
+              local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+              rebuilt = rebuilt + tonumber(segment_amount)
+            end
+            redis.call('SET', total_key, rebuilt)
+            total = tostring(rebuilt)
+          end
+          available = available + tonumber(total)
+        end
+        return available
         "#,
     )
 });
@@ -314,6 +341,31 @@ impl HotCreditStore for MemoryHotCreditStore {
             return Ok(None);
         }
         Ok(Some(parts))
+    }
+
+    async fn available_micros(&self, credit_accounts: &[CreditAccountId]) -> AppResult<i64> {
+        let mut shard_ids = credit_accounts
+            .iter()
+            .map(Self::shard_index)
+            .collect::<Vec<_>>();
+        shard_ids.sort_unstable();
+        shard_ids.dedup();
+        let mut shards = Vec::with_capacity(shard_ids.len());
+        for id in shard_ids {
+            shards.push((id, self.shards[id].lock().await));
+        }
+
+        Ok(credit_accounts
+            .iter()
+            .filter_map(|credit_account| {
+                let shard_id = Self::shard_index(credit_account);
+                shards
+                    .iter()
+                    .find(|(id, _)| *id == shard_id)
+                    .and_then(|(_, balances)| balances.get(credit_account))
+            })
+            .map(|account_hot| account_hot.total_available_micros)
+            .sum())
     }
 
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()> {
@@ -494,6 +546,30 @@ impl HotCreditStore for RedisHotCreditStore {
         Ok(Some(parts))
     }
 
+    async fn available_micros(&self, credit_accounts: &[CreditAccountId]) -> AppResult<i64> {
+        if credit_accounts.is_empty() {
+            return Ok(0);
+        }
+        let credit_account_keys = credit_accounts
+            .iter()
+            .map(|credit_account| self.credit_account_key(credit_account))
+            .collect::<Vec<_>>();
+        let total_keys = credit_accounts
+            .iter()
+            .map(|credit_account| self.total_key(credit_account))
+            .collect::<Vec<_>>();
+        let mut conn = self.manager.clone();
+        let mut invocation = REDIS_AVAILABLE_CREDIT_SCRIPT.prepare_invoke();
+        for key in &credit_account_keys {
+            invocation.key(key);
+        }
+        for key in &total_keys {
+            invocation.key(key);
+        }
+        invocation.arg(credit_accounts.len());
+        Ok(invocation.invoke_async(&mut conn).await?)
+    }
+
     async fn remove_allocations(&self, allocations: &[HotAllocation]) -> AppResult<()> {
         if allocations.is_empty() {
             return Ok(());
@@ -628,5 +704,23 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].allocation_id, 102);
         assert_eq!(drained[0].amount_micros, 20);
+    }
+
+    #[tokio::test]
+    async fn hot_credit_store_reports_available_credit_across_accounts() {
+        let store = MemoryHotCreditStore::default();
+        let first = CreditAccountId::new(7);
+        let second = CreditAccountId::new(8);
+
+        store
+            .credit_allocation(first.clone(), 101, 30)
+            .await
+            .unwrap();
+        store
+            .credit_allocation(second.clone(), 102, 20)
+            .await
+            .unwrap();
+
+        assert_eq!(store.available_micros(&[first, second]).await.unwrap(), 50);
     }
 }

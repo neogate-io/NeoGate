@@ -84,15 +84,27 @@ def fetch_fx_rate() -> tuple[float, str, str]:
         raise ScrapeError(f"all FX sources unavailable: {exc}") from exc
 
 
+def convert_cost_value(value: Any, fx_rate: float) -> Any:
+    """Convert nested models.dev cost values while preserving their shape."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                round(item * fx_rate, ROUND_DIGITS)
+                if key in COST_FIELDS
+                and isinstance(item, (int, float))
+                and not isinstance(item, bool)
+                else convert_cost_value(item, fx_rate)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [convert_cost_value(item, fx_rate) for item in value]
+    return value
+
+
 def convert_cost(cost: dict[str, Any], fx_rate: float) -> dict[str, Any]:
-    """Convert USD cost fields to CNY, preserving non-price fields (e.g. basis)."""
-    converted: dict[str, Any] = {}
-    for key, value in cost.items():
-        if key in COST_FIELDS and isinstance(value, (int, float)):
-            converted[key] = round(value * fx_rate, ROUND_DIGITS)
-        else:
-            converted[key] = value
-    return converted
+    """Convert USD cost fields to CNY, including nested pricing tiers."""
+    return convert_cost_value(cost, fx_rate)
 
 
 def convert_provider(
@@ -109,7 +121,8 @@ def convert_provider(
         model = dict(model)  # shallow copy so we don't mutate upstream data
         cost = model.get("cost")
         if not isinstance(cost, dict) or not any(
-            isinstance(cost.get(f), (int, float)) for f in COST_FIELDS
+            isinstance(cost.get(f), (int, float)) and not isinstance(cost.get(f), bool)
+            for f in COST_FIELDS
         ):
             skipped += 1
             continue

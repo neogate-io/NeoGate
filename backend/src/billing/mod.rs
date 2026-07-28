@@ -309,7 +309,11 @@ impl Billing {
             .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         else {
-            return Err(AppError::PaymentRequired);
+            let available_micros = self.hot.available_micros(&credit_accounts).await?;
+            return Err(AppError::InsufficientQuota {
+                available_micros,
+                required_micros: estimated_micros,
+            });
         };
 
         Ok(DebitHold {

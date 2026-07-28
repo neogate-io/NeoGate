@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     error::{reqwest_status, AppError, AppResult},
-    provider::adapters::{adapter_for_provider, AdapterResponseMode, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, AdapterResponseMode, RelayRoute},
     task::{jobs, upstream as upstream_task},
     AppState,
 };
@@ -37,8 +37,8 @@ use crate::relay::{
     selector::{
         AttemptedUpstream, ModelCooldown, SelectedUpstream, SelectionConstraints, UpstreamProtocol,
     },
-    should_failover_retryable_upstream_failure, BodyKind, ChannelAffinityKey, PreparedRelayBody,
-    RelayBody, RelayContext,
+    should_failover_upstream_failure, BodyKind, ChannelAffinityKey, PreparedRelayBody, RelayBody,
+    RelayContext, UpstreamFailureKind,
 };
 use crate::task::upstream::UpstreamTaskType;
 
@@ -52,6 +52,8 @@ const OPENAI_RESPONSES_PROTOCOLS: [UpstreamProtocol; 3] = [
     UpstreamProtocol::Openai,
     UpstreamProtocol::Anthropic,
 ];
+const OPENAI_RESPONSES_COMPACT_PROTOCOLS: [UpstreamProtocol; 2] =
+    [UpstreamProtocol::OpenAiOauth, UpstreamProtocol::Openai];
 
 fn project_model_request_context(
     body: &Bytes,
@@ -179,6 +181,23 @@ pub(crate) async fn openai_responses(
         body,
         RelayRoute::Responses,
         BodyKind::OpenaiResponses,
+    )
+    .await
+}
+
+pub(crate) async fn openai_responses_compact(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    relay_openai(
+        state,
+        auth,
+        headers,
+        body,
+        RelayRoute::ResponsesCompact,
+        BodyKind::OpenaiResponsesCompact,
     )
     .await
 }
@@ -488,6 +507,8 @@ async fn relay_openai(
             relay_trace_id,
             relay_attempt: relay_attempt_counter,
             relay_final: false,
+            request_body_bytes: upstream_body.len(),
+            request_input_tokens_estimate: crate::billing::estimate_input_tokens(&upstream_body),
             request_params: meta.request_params.clone(),
             request_permit: None,
             upstream_request_path: None,
@@ -507,7 +528,7 @@ async fn relay_openai(
                 "Anthropic fallback is not supported for {path}"
             ))),
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
-                let adapter = adapter_for_provider(&ctx.upstream.provider);
+                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,
@@ -549,7 +570,7 @@ async fn relay_openai(
                         ctx.protocol,
                         UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
                     )
-                    && failure.error_type == "upstream_model_unavailable"
+                    && failure.kind == UpstreamFailureKind::ModelUnavailable
                     && !responses_downgraded
                     && !ctx
                         .state
@@ -648,10 +669,10 @@ async fn relay_openai(
                     continue;
                 }
 
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
-                    failure.retryable,
+                    failure.failoverable(),
                     retryable_failovers,
                 )
                 .await
@@ -672,7 +693,7 @@ async fn relay_openai(
                         upstream_status = status.as_u16(),
                         failover_attempt = retryable_failovers,
                         max_failovers = ctx.state.config.relay.max_upstream_failovers,
-                        "retryable upstream http failure; retrying another upstream"
+                        "failoverable upstream http failure; trying another upstream"
                     );
                     continue;
                 }
@@ -682,7 +703,7 @@ async fn relay_openai(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_retryable_upstream_failure(
+                if should_failover_upstream_failure(
                     &ctx,
                     &attempted_upstreams,
                     retryable,
@@ -758,6 +779,7 @@ async fn select_upstream_excluding(
     let protocols = match path {
         "/v1/chat/completions" => &OPENAI_CHAT_PROTOCOLS[..],
         "/v1/responses" => &OPENAI_RESPONSES_PROTOCOLS[..],
+        "/v1/responses/compact" => &OPENAI_RESPONSES_COMPACT_PROTOCOLS[..],
         _ => &OPENAI_PROTOCOLS[..],
     };
     let excluded_endpoint_ids = if path == "/v1/responses" {
@@ -920,7 +942,7 @@ fn should_retry_after_model_unavailable(
     matches!(
         ctx.protocol,
         UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth
-    ) && failure.error_type == "upstream_model_unavailable"
+    ) && failure.kind == UpstreamFailureKind::ModelUnavailable
 }
 
 #[cfg(test)]

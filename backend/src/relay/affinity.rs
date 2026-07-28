@@ -4,7 +4,10 @@ use std::{
 };
 
 use dashmap::DashMap;
+use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::selector::UpstreamProtocol;
 use crate::id::DbId;
@@ -17,12 +20,37 @@ pub(crate) struct ChannelAffinityKey {
     pub(crate) value: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+const REDIS_KEY_VERSION: &str = "channel_affinity:v1";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct UpstreamAffinityTarget {
     pub(crate) channel_id: DbId,
     pub(crate) channel_endpoint_id: DbId,
     pub(crate) channel_key_id: Option<DbId>,
     pub(crate) credential_id: Option<DbId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChannelAffinityStatus {
+    Miss,
+    Local,
+    Redis,
+}
+
+impl ChannelAffinityStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Miss => "miss",
+            Self::Local => "local",
+            Self::Redis => "redis",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ChannelAffinityObservation {
+    pub(crate) status: ChannelAffinityStatus,
+    pub(crate) key_fingerprint: String,
 }
 
 #[derive(Clone)]
@@ -31,6 +59,13 @@ pub(crate) struct ChannelAffinityCache {
     ttl: Duration,
     max_entries: usize,
     entries: Arc<DashMap<ChannelAffinityKey, ChannelAffinityEntry>>,
+    redis: Option<RedisAffinityStore>,
+}
+
+#[derive(Clone)]
+struct RedisAffinityStore {
+    manager: redis::aio::ConnectionManager,
+    key_prefix: String,
 }
 
 #[derive(Clone)]
@@ -46,29 +81,122 @@ impl ChannelAffinityCache {
             ttl,
             max_entries: max_entries.max(1),
             entries: Arc::new(DashMap::new()),
+            redis: None,
         }
     }
 
-    pub(crate) fn get(&self, key: &ChannelAffinityKey) -> Option<UpstreamAffinityTarget> {
+    pub(crate) async fn with_redis(
+        enabled: bool,
+        ttl: Duration,
+        max_entries: usize,
+        client: &redis::Client,
+        key_prefix: &str,
+    ) -> Self {
+        let mut cache = Self::new(enabled, ttl, max_entries);
+        if !enabled {
+            return cache;
+        }
+        match client.get_connection_manager().await {
+            Ok(manager) => {
+                cache.redis = Some(RedisAffinityStore {
+                    manager,
+                    key_prefix: format!("{key_prefix}:{REDIS_KEY_VERSION}"),
+                });
+            }
+            Err(err) => {
+                tracing::warn!("failed to initialize redis channel affinity cache: {err}");
+            }
+        }
+        cache
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub(crate) async fn get(
+        &self,
+        key: &ChannelAffinityKey,
+    ) -> Option<(UpstreamAffinityTarget, ChannelAffinityStatus)> {
         if !self.enabled {
             return None;
         }
         let now = Instant::now();
         if let Some(entry) = self.entries.get(key) {
             if entry.expires_at > now {
-                return Some(entry.target.clone());
+                return Some((entry.target.clone(), ChannelAffinityStatus::Local));
             }
             drop(entry);
             self.entries.remove(key);
         }
-        None
+
+        let redis = self.redis.as_ref()?;
+        let redis_key = redis.key(key);
+        let mut conn = redis.manager.clone();
+        let payload = match conn.get::<_, Option<String>>(&redis_key).await {
+            Ok(payload) => payload?,
+            Err(err) => {
+                tracing::warn!("failed to read channel affinity from redis: {err}");
+                return None;
+            }
+        };
+        let target = match serde_json::from_str::<UpstreamAffinityTarget>(&payload) {
+            Ok(target) => target,
+            Err(err) => {
+                tracing::warn!("invalid channel affinity payload in redis: {err}");
+                let _: Result<usize, _> = conn.del(redis_key).await;
+                return None;
+            }
+        };
+        match conn.pttl::<_, i64>(&redis_key).await {
+            Ok(ttl_ms) if ttl_ms > 0 => self.insert_local(
+                key.clone(),
+                target.clone(),
+                now,
+                Duration::from_millis(ttl_ms as u64),
+            ),
+            Ok(-2) => return None,
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!("failed to read channel affinity ttl from redis: {err}");
+            }
+        }
+        Some((target, ChannelAffinityStatus::Redis))
     }
 
-    pub(crate) fn insert(&self, key: ChannelAffinityKey, target: UpstreamAffinityTarget) {
+    pub(crate) async fn insert(&self, key: ChannelAffinityKey, target: UpstreamAffinityTarget) {
         if !self.enabled {
             return;
         }
         let now = Instant::now();
+        self.insert_local(key.clone(), target.clone(), now, self.ttl);
+
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let payload = match serde_json::to_string(&target) {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::warn!("failed to encode channel affinity for redis: {err}");
+                return;
+            }
+        };
+        let mut conn = redis.manager.clone();
+        if let Err(err) = conn
+            .set_ex::<_, _, ()>(redis.key(&key), payload, self.ttl.as_secs().max(1))
+            .await
+        {
+            tracing::warn!("failed to write channel affinity to redis: {err}");
+        }
+    }
+
+    fn insert_local(
+        &self,
+        key: ChannelAffinityKey,
+        target: UpstreamAffinityTarget,
+        now: Instant,
+        ttl: Duration,
+    ) {
         if self.entries.len() >= self.max_entries {
             self.entries.retain(|_, entry| entry.expires_at > now);
             while self.entries.len() >= self.max_entries && !self.entries.contains_key(&key) {
@@ -83,9 +211,37 @@ impl ChannelAffinityCache {
             key,
             ChannelAffinityEntry {
                 target,
-                expires_at: now + self.ttl,
+                expires_at: now + ttl,
             },
         );
+    }
+}
+
+impl RedisAffinityStore {
+    fn key(&self, key: &ChannelAffinityKey) -> String {
+        format!("{}:{}", self.key_prefix, key.storage_fingerprint())
+    }
+}
+
+impl ChannelAffinityKey {
+    fn digest(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(self.rule.as_bytes());
+        digest.update([0]);
+        digest.update(self.protocol.as_str().as_bytes());
+        digest.update([0]);
+        digest.update(self.model.as_bytes());
+        digest.update([0]);
+        digest.update(self.value.as_bytes());
+        digest.finalize().into()
+    }
+
+    fn storage_fingerprint(&self) -> String {
+        hex::encode(self.digest())
+    }
+
+    pub(crate) fn fingerprint(&self) -> String {
+        hex::encode(&self.digest()[..8])
     }
 }
 
@@ -193,8 +349,8 @@ mod tests {
         assert_eq!(sonnet, haiku);
     }
 
-    #[test]
-    fn cache_returns_inserted_target_until_ttl_expires() {
+    #[tokio::test]
+    async fn cache_returns_inserted_target_until_ttl_expires() {
         let cache = ChannelAffinityCache::new(true, Duration::from_millis(20), 10);
         let value: Value = serde_json::from_str(r#"{"prompt_cache_key":"trace-1"}"#).unwrap();
         let key = openai_responses_affinity_key_from_value("gpt-5", &value).unwrap();
@@ -205,28 +361,79 @@ mod tests {
             credential_id: None,
         };
 
-        cache.insert(key.clone(), target.clone());
-        assert_eq!(cache.get(&key), Some(target));
+        cache.insert(key.clone(), target.clone()).await;
+        assert_eq!(
+            cache.get(&key).await,
+            Some((target, ChannelAffinityStatus::Local))
+        );
 
-        std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(cache.get(&key), None);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(cache.get(&key).await, None);
     }
 
-    #[test]
-    fn disabled_cache_ignores_entries() {
+    #[tokio::test]
+    async fn disabled_cache_ignores_entries() {
         let cache = ChannelAffinityCache::new(false, Duration::from_secs(60), 10);
         let value: Value = serde_json::from_str(r#"{"prompt_cache_key":"trace-1"}"#).unwrap();
         let key = openai_responses_affinity_key_from_value("gpt-5", &value).unwrap();
-        cache.insert(
-            key.clone(),
-            UpstreamAffinityTarget {
-                channel_id: 1,
-                channel_endpoint_id: 2,
-                channel_key_id: Some(3),
-                credential_id: None,
-            },
+        cache
+            .insert(
+                key.clone(),
+                UpstreamAffinityTarget {
+                    channel_id: 1,
+                    channel_endpoint_id: 2,
+                    channel_key_id: Some(3),
+                    credential_id: None,
+                },
+            )
+            .await;
+
+        assert_eq!(cache.get(&key).await, None);
+    }
+
+    #[test]
+    fn affinity_fingerprint_is_stable_and_hides_the_source_value() {
+        let value: Value =
+            serde_json::from_str(r#"{"metadata":{"user_id":"sensitive-session-value"}}"#).unwrap();
+        let key = anthropic_messages_affinity_key_from_value("claude-sonnet-4", &value).unwrap();
+
+        assert_eq!(key.fingerprint(), key.fingerprint());
+        assert_eq!(key.fingerprint().len(), 16);
+        assert_eq!(key.storage_fingerprint().len(), 64);
+        assert!(!key.fingerprint().contains("sensitive"));
+        assert!(!key.storage_fingerprint().contains("sensitive"));
+    }
+
+    #[tokio::test]
+    async fn redis_cache_supports_cross_instance_hits_without_extending_ttl() {
+        let Ok(redis_url) = std::env::var("NEOGATE_TEST_REDIS_URL") else {
+            return;
+        };
+        let client = redis::Client::open(redis_url).unwrap();
+        let prefix = format!("neogate-test-{}", uuid::Uuid::new_v4());
+        let first =
+            ChannelAffinityCache::with_redis(true, Duration::from_secs(2), 10, &client, &prefix)
+                .await;
+        let second =
+            ChannelAffinityCache::with_redis(true, Duration::from_secs(2), 10, &client, &prefix)
+                .await;
+        let value: Value = serde_json::from_str(r#"{"prompt_cache_key":"trace-redis"}"#).unwrap();
+        let key = openai_responses_affinity_key_from_value("gpt-5", &value).unwrap();
+        let target = UpstreamAffinityTarget {
+            channel_id: 1,
+            channel_endpoint_id: 2,
+            channel_key_id: Some(3),
+            credential_id: None,
+        };
+
+        first.insert(key.clone(), target.clone()).await;
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert_eq!(
+            second.get(&key).await,
+            Some((target, ChannelAffinityStatus::Redis))
         );
 
-        assert_eq!(cache.get(&key), None);
+        tokio::time::sleep(Duration::from_millis(950)).await;
+        assert_eq!(second.get(&key).await, None);
     }
 }

@@ -1,4 +1,8 @@
-use std::{collections::HashSet, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Instant,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -322,11 +326,17 @@ pub async fn list_project_models(
     .fetch_all(pool)
     .await?;
 
-    let mut records = Vec::with_capacity(rows.len());
-    for row in rows {
-        records.push(project_model_from_row(pool, &row).await?);
-    }
-    Ok(records)
+    let ids = rows
+        .iter()
+        .map(|row| row.try_get("id"))
+        .collect::<Result<Vec<DbId>, sqlx::Error>>()?;
+    let mut candidates = list_project_model_candidates_for_models(pool, &ids).await?;
+    rows.iter()
+        .map(|row| {
+            let id = row.try_get("id")?;
+            project_model_from_row(row, candidates.remove(&id).unwrap_or_default())
+        })
+        .collect()
 }
 
 pub async fn project_has_models(pool: &PgPool, project_id: DbId) -> AppResult<bool> {
@@ -1114,13 +1124,29 @@ async fn get_project_model(
     .fetch_optional(pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    project_model_from_row(pool, &row).await
+    let candidates = list_project_model_candidates(pool, id).await?;
+    project_model_from_row(&row, candidates)
 }
 
 async fn list_project_model_candidates(
     pool: &PgPool,
     project_model_id: DbId,
 ) -> AppResult<Vec<ProjectModelCandidateRecord>> {
+    Ok(
+        list_project_model_candidates_for_models(pool, &[project_model_id])
+            .await?
+            .remove(&project_model_id)
+            .unwrap_or_default(),
+    )
+}
+
+async fn list_project_model_candidates_for_models(
+    pool: &PgPool,
+    project_model_ids: &[DbId],
+) -> AppResult<HashMap<DbId, Vec<ProjectModelCandidateRecord>>> {
+    if project_model_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
     let rows = sqlx::query(
         r#"
         SELECT pmc.id, pmc.project_model_id, pmc.target_model, pmc.target_channel_id,
@@ -1129,14 +1155,22 @@ async fn list_project_model_candidates(
                pmc.created_at, pmc.updated_at
         FROM project_model_candidate pmc
         LEFT JOIN channel c ON c.id = pmc.target_channel_id
-        WHERE pmc.project_model_id = $1
-        ORDER BY pmc.tier ASC, pmc.priority DESC, pmc.id ASC
+        WHERE pmc.project_model_id = ANY($1)
+        ORDER BY pmc.project_model_id ASC, pmc.tier ASC, pmc.priority DESC, pmc.id ASC
         "#,
     )
-    .bind(project_model_id)
+    .bind(project_model_ids)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(project_model_candidate_from_row).collect()
+    let mut grouped = HashMap::new();
+    for row in &rows {
+        let candidate = project_model_candidate_from_row(row)?;
+        grouped
+            .entry(candidate.project_model_id)
+            .or_insert_with(Vec::new)
+            .push(candidate);
+    }
+    Ok(grouped)
 }
 
 async fn replace_project_model_candidates(
@@ -1291,9 +1325,9 @@ async fn validate_target(
     Ok(())
 }
 
-async fn project_model_from_row(
-    pool: &PgPool,
+fn project_model_from_row(
     row: &sqlx::postgres::PgRow,
+    candidates: Vec<ProjectModelCandidateRecord>,
 ) -> AppResult<ProjectModelRecord> {
     let id = row.try_get("id")?;
     Ok(ProjectModelRecord {
@@ -1305,7 +1339,7 @@ async fn project_model_from_row(
         target_channel_name: row.try_get("target_channel_name")?,
         route_mode: row.try_get("route_mode")?,
         routing_config: routing_config_from_value(row.try_get("routing_config")?)?,
-        candidates: list_project_model_candidates(pool, id).await?,
+        candidates,
         enabled: row.try_get("enabled")?,
         description: row.try_get("description")?,
         created_at: row.try_get("created_at")?,

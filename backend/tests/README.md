@@ -29,7 +29,14 @@ NEOGATE_IMAGE_SIZE=1536x1024
 ```
 
 The image model is fixed to `gpt-image-2`, and generated images are saved under
-`tests/output/openai_image/`.
+`tests/output/openai_image/`. Request and response JSON snapshots are saved in
+the same directory. Multipart request snapshots include form fields plus the
+uploaded file name, content type, and byte size.
+
+`fixtures/test2.jpg` is used by the dog cutout tests. The synchronous test
+calls `/images/edits`; the asynchronous test uses a background Responses task
+with the `image_generation` tool set to `action: "edit"`. Both request a
+transparent PNG result at `1024x1536`.
 
 Run all image smoke tests from `backend/`:
 
@@ -42,10 +49,13 @@ Run one test from `backend/`:
 ```bash
 python -m unittest tests.smoke.test_openai_image.test_images_generation_json
 python -m unittest tests.smoke.test_openai_image.test_images_edit_multipart
+python -m unittest tests.smoke.test_openai_image.test_images_edit_extract_dog
 python -m unittest tests.smoke.test_openai_image.test_images_generation_stream
 python -m unittest tests.smoke.test_openai_image.test_images_edit_json_stream
 python -m unittest tests.smoke.test_openai_image.test_images_variation
 python -m unittest tests.smoke.test_openai_image.test_responses_image_generation_background
+python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_extract_dog_background
+python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_three_2k_background
 ```
 
 ## OpenAI Video Smoke Test

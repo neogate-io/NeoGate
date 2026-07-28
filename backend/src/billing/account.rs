@@ -214,7 +214,8 @@ pub(crate) async fn mark_allocation_consumed(
 /// Whether the allocation was already recovered by the stale-allocation job.
 ///
 /// The recovery job returns the held credit to the account when a hold outlives
-/// `CREDIT_RELEASE_AFTER_SECONDS` (which can happen for long-running requests,
+/// the configured credit allocation recovery window (which can happen for
+/// long-running requests,
 /// since the billing row is only written at settle time, after the upstream
 /// call completes). When the outbox later tries to consume such an allocation,
 /// the credit has already been refunded, so consuming would either double-charge

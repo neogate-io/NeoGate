@@ -216,6 +216,14 @@ impl BillableUsage {
         }
     }
 
+    pub fn image_with_usage(image_count: i64, token_usage: Option<TokenUsage>) -> Self {
+        Self {
+            meter: BillingMeter::Image,
+            token_usage,
+            billable_units: image_count.max(0),
+        }
+    }
+
     pub fn video_tokens(usage: TokenUsage) -> Self {
         Self {
             meter: BillingMeter::Video,

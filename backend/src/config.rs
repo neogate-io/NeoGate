@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RELAY_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
-pub const DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES: usize = 16 * 1024 * 1024;
-pub const DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+pub const RELAY_USAGE_BUFFER_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+pub const CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-production";
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -41,6 +41,7 @@ pub struct Config {
     pub response_assets: ResponseAssetConfig,
     pub db_pool: DbPoolConfig,
     pub cors_allowed_origins: Vec<String>,
+    pub trust_proxy_headers: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +179,7 @@ pub struct HttpClientConfig {
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub key_cooldown: Duration,
+    pub quota_exhausted_cooldown: Duration,
     pub max_upstream_failovers: usize,
     pub body_limit_bytes: usize,
     pub usage_buffer_limit_bytes: usize,
@@ -224,7 +226,6 @@ pub struct HealthConfig {
 
 #[derive(Clone, Debug)]
 pub struct TaskConfig {
-    pub upstream_poll_interval: Duration,
     pub upstream_poll_batch_size: i64,
     pub upstream_retention: Duration,
 }
@@ -232,7 +233,6 @@ pub struct TaskConfig {
 #[derive(Clone, Debug)]
 pub struct ResponseAssetConfig {
     pub dir: PathBuf,
-    pub retention: Duration,
 }
 
 impl Config {
@@ -272,106 +272,72 @@ impl Config {
             process_role,
             admin_token_secret: env::var("ADMIN_TOKEN_SECRET")
                 .unwrap_or_else(|_| DEFAULT_ADMIN_TOKEN_SECRET.to_string()),
-            admin_session_ttl: Duration::from_secs(parse_u64("ADMIN_SESSION_TTL_SECONDS", 86400)?),
+            admin_session_ttl: Duration::from_secs(86_400),
             upstream_secret_key: env::var("UPSTREAM_SECRET_KEY")
                 .unwrap_or_else(|_| DEFAULT_UPSTREAM_SECRET_KEY.to_string()),
             http: HttpClientConfig {
-                upstream_connect_timeout: Duration::from_secs(parse_u64(
-                    "UPSTREAM_CONNECT_TIMEOUT_SECONDS",
-                    10,
-                )?),
+                upstream_connect_timeout: Duration::from_secs(10),
                 upstream_timeout,
-                pool_max_idle_per_host: parse_usize("HTTP_POOL_MAX_IDLE_PER_HOST", 100)?,
-                pool_idle_timeout: Duration::from_secs(parse_u64(
-                    "HTTP_POOL_IDLE_TIMEOUT_SECONDS",
-                    90,
-                )?),
+                pool_max_idle_per_host: 100,
+                pool_idle_timeout: Duration::from_secs(90),
             },
             relay: RelayConfig {
-                key_cooldown: Duration::from_secs(parse_u64("KEY_COOLDOWN_SECONDS", 60)?),
-                max_upstream_failovers: parse_usize("MAX_UPSTREAM_FAILOVERS", 5)?,
+                key_cooldown: Duration::from_secs(60),
+                quota_exhausted_cooldown: Duration::from_secs(parse_u64(
+                    "QUOTA_COOLDOWN_SECONDS",
+                    10 * 60,
+                )?),
+                max_upstream_failovers: 5,
                 body_limit_bytes: parse_usize(
                     "RELAY_BODY_LIMIT_BYTES",
                     DEFAULT_RELAY_BODY_LIMIT_BYTES,
                 )?,
-                usage_buffer_limit_bytes: parse_usize(
-                    "RELAY_USAGE_BUFFER_LIMIT_BYTES",
-                    DEFAULT_RELAY_USAGE_BUFFER_LIMIT_BYTES,
-                )?,
-                credential_upload_limit_bytes: parse_usize(
-                    "CREDENTIAL_UPLOAD_LIMIT_BYTES",
-                    DEFAULT_CREDENTIAL_UPLOAD_LIMIT_BYTES,
-                )?,
-                user_concurrent_request_limit: parse_usize("USER_CONCURRENT_REQUEST_LIMIT", 10)?,
+                usage_buffer_limit_bytes: RELAY_USAGE_BUFFER_LIMIT_BYTES,
+                credential_upload_limit_bytes: CREDENTIAL_UPLOAD_LIMIT_BYTES,
+                user_concurrent_request_limit: parse_usize("USER_CONCURRENT_REQUEST_LIMIT", 100)?,
                 global_concurrent_request_limit: parse_usize("GLOBAL_CONCURRENT_REQUEST_LIMIT", 0)?,
-                channel_affinity_enabled: parse_bool("CHANNEL_AFFINITY_ENABLED", true)?,
-                channel_affinity_ttl: Duration::from_secs(parse_u64(
-                    "CHANNEL_AFFINITY_TTL_SECONDS",
-                    3600,
-                )?),
-                channel_affinity_max_entries: parse_usize("CHANNEL_AFFINITY_MAX_ENTRIES", 100_000)?,
-                responses_support_block_seconds: parse_i64(
-                    "RESPONSES_SUPPORT_BLOCK_SECONDS",
-                    12 * 3600,
-                )?,
+                channel_affinity_enabled: true,
+                channel_affinity_ttl: Duration::from_secs(3600),
+                channel_affinity_max_entries: 100_000,
+                responses_support_block_seconds: 12 * 3600,
             },
             cache: CacheConfig {
-                user_auth_ttl: Duration::from_secs(parse_u64("USER_AUTH_CACHE_TTL_SECONDS", 60)?),
-                user_auth_max_entries: parse_usize("USER_AUTH_CACHE_MAX_ENTRIES", 100_000)?,
-                routing_ttl: Duration::from_secs(parse_u64("ROUTING_CACHE_TTL_SECONDS", 30)?),
-                price_ttl: Duration::from_secs(parse_u64("PRICE_CACHE_TTL_SECONDS", 300)?),
-                price_max_entries: parse_usize("PRICE_CACHE_MAX_ENTRIES", 10_000)?,
-                secret_max_entries: parse_usize("SECRET_CACHE_MAX_ENTRIES", 4096)?,
+                user_auth_ttl: Duration::from_secs(60),
+                user_auth_max_entries: 100_000,
+                routing_ttl: Duration::from_secs(30),
+                price_ttl: Duration::from_secs(300),
+                price_max_entries: 10_000,
+                secret_max_entries: 4096,
             },
             redis_url: optional("REDIS_URL"),
-            redis_key_prefix: env::var("REDIS_KEY_PREFIX")
-                .unwrap_or_else(|_| "neogate".to_string()),
+            redis_key_prefix: "neogate".to_string(),
             billing: BillingConfig {
-                credit_prefetch_micros: parse_i64("CREDIT_PREFETCH_MICROS", 100_000)?,
-                credit_allocation_recovery_after: Duration::from_secs(parse_u64(
-                    "CREDIT_RELEASE_AFTER_SECONDS",
-                    900,
-                )?),
-                credit_allocation_recovery_interval: Duration::from_secs(parse_u64(
-                    "CREDIT_RELEASE_INTERVAL_SECONDS",
-                    60,
-                )?),
-                default_output_tokens: parse_i64("DEFAULT_OUTPUT_TOKENS", 8192)?,
+                credit_prefetch_micros: 100_000,
+                credit_allocation_recovery_after: Duration::from_secs(300),
+                credit_allocation_recovery_interval: Duration::from_secs(30),
+                default_output_tokens: 16_384,
             },
             usage_queue: UsageQueueConfig {
                 flush_interval: Duration::from_millis(parse_u64("USAGE_FLUSH_INTERVAL_MS", 1000)?),
                 size: parse_usize("USAGE_QUEUE_SIZE", 8192)?,
             },
             health: HealthConfig {
-                billing_outbox_max_pending: parse_i64("BILLING_OUTBOX_MAX_PENDING", 10_000)?,
-                billing_outbox_max_age: Duration::from_secs(parse_u64(
-                    "BILLING_OUTBOX_MAX_AGE_SECONDS",
-                    300,
-                )?),
+                billing_outbox_max_pending: 10_000,
+                billing_outbox_max_age: Duration::from_secs(300),
             },
             task: TaskConfig {
-                upstream_poll_interval: Duration::from_secs(parse_u64(
-                    "TASK_UPSTREAM_POLL_INTERVAL_SECONDS",
-                    30,
-                )?),
-                upstream_poll_batch_size: parse_i64("TASK_UPSTREAM_POLL_BATCH_SIZE", 100)?,
-                upstream_retention: Duration::from_secs(parse_u64(
-                    "TASK_UPSTREAM_RETENTION_SECONDS",
-                    2_592_000,
-                )?),
+                upstream_poll_batch_size: 100,
+                upstream_retention: Duration::from_secs(2_592_000),
             },
             response_assets: ResponseAssetConfig {
                 dir: env::var("NEOGATE_ASSET_DIR")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
-                    .map_or_else(|| PathBuf::from("data/assets"), PathBuf::from),
-                retention: Duration::from_secs(parse_u64(
-                    "NEOGATE_RESPONSE_RETENTION_SECONDS",
-                    604_800,
-                )?),
+                    .map_or_else(default_response_asset_dir, PathBuf::from),
             },
             db_pool: DbPoolConfig::from_env()?,
             cors_allowed_origins: parse_csv("CORS_ALLOWED_ORIGINS", ""),
+            trust_proxy_headers: parse_bool("TRUST_PROXY_HEADERS", true)?,
         };
         config.validate()?;
         Ok(config)
@@ -379,25 +345,10 @@ impl Config {
 
     fn validate(&self) -> Result<()> {
         if self.db_pool.min_connections > self.db_pool.max_connections {
-            anyhow::bail!("DB_POOL_MIN_CONNECTIONS must be <= DB_POOL_MAX_CONNECTIONS");
+            anyhow::bail!("DB_POOL_MAX_CONNECTIONS must be positive");
         }
         if self.runtime_mode.is_distributed() && self.redis_url.is_none() {
             anyhow::bail!("REDIS_URL is required when RUNTIME_MODE=distributed");
-        }
-        if self.billing.credit_prefetch_micros <= 0 {
-            anyhow::bail!("CREDIT_PREFETCH_MICROS must be positive");
-        }
-        if self.billing.credit_allocation_recovery_after.is_zero() {
-            anyhow::bail!("CREDIT_RELEASE_AFTER_SECONDS must be positive");
-        }
-        if self.billing.credit_allocation_recovery_interval.is_zero() {
-            anyhow::bail!("CREDIT_RELEASE_INTERVAL_SECONDS must be positive");
-        }
-        if self.billing.default_output_tokens <= 0 {
-            anyhow::bail!("DEFAULT_OUTPUT_TOKENS must be positive");
-        }
-        if self.http.upstream_connect_timeout.is_zero() {
-            anyhow::bail!("UPSTREAM_CONNECT_TIMEOUT_SECONDS must be positive");
         }
         if self.http.upstream_timeout.is_zero() {
             anyhow::bail!("UPSTREAM_TIMEOUT_SECONDS must be positive");
@@ -405,47 +356,8 @@ impl Config {
         if self.relay.body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");
         }
-        if self.relay.max_upstream_failovers > 10 {
-            anyhow::bail!("MAX_UPSTREAM_FAILOVERS must be <= 10");
-        }
-        if self.relay.usage_buffer_limit_bytes == 0 {
-            anyhow::bail!("RELAY_USAGE_BUFFER_LIMIT_BYTES must be positive");
-        }
-        if self.relay.credential_upload_limit_bytes == 0 {
-            anyhow::bail!("CREDENTIAL_UPLOAD_LIMIT_BYTES must be positive");
-        }
-        if self.health.billing_outbox_max_pending < 0 {
-            anyhow::bail!("BILLING_OUTBOX_MAX_PENDING must be non-negative");
-        }
-        if self.task.upstream_poll_interval.is_zero() {
-            anyhow::bail!("TASK_UPSTREAM_POLL_INTERVAL_SECONDS must be positive");
-        }
-        if self.task.upstream_poll_batch_size <= 0 {
-            anyhow::bail!("TASK_UPSTREAM_POLL_BATCH_SIZE must be positive");
-        }
-        if self.task.upstream_retention.is_zero() {
-            anyhow::bail!("TASK_UPSTREAM_RETENTION_SECONDS must be positive");
-        }
-        if self.response_assets.retention.is_zero() {
-            anyhow::bail!("NEOGATE_RESPONSE_RETENTION_SECONDS must be positive");
-        }
         if self.relay.user_concurrent_request_limit == 0 {
             anyhow::bail!("USER_CONCURRENT_REQUEST_LIMIT must be positive");
-        }
-        if self.relay.channel_affinity_ttl.is_zero() {
-            anyhow::bail!("CHANNEL_AFFINITY_TTL_SECONDS must be positive");
-        }
-        if self.relay.channel_affinity_max_entries == 0 {
-            anyhow::bail!("CHANNEL_AFFINITY_MAX_ENTRIES must be positive");
-        }
-        if self.cache.user_auth_max_entries == 0 {
-            anyhow::bail!("USER_AUTH_CACHE_MAX_ENTRIES must be positive");
-        }
-        if self.cache.price_max_entries == 0 {
-            anyhow::bail!("PRICE_CACHE_MAX_ENTRIES must be positive");
-        }
-        if self.cache.secret_max_entries == 0 {
-            anyhow::bail!("SECRET_CACHE_MAX_ENTRIES must be positive");
         }
         if self.usage_queue.size > 1_000_000 {
             anyhow::bail!("USAGE_QUEUE_SIZE must be <= 1000000");
@@ -458,6 +370,10 @@ impl Config {
 
         Ok(())
     }
+}
+
+fn default_response_asset_dir() -> PathBuf {
+    env::temp_dir().join("neogate/assets")
 }
 
 impl RuntimeProbe {
@@ -597,9 +513,9 @@ impl PaymentProvider {
 impl DbPoolConfig {
     fn from_env() -> Result<Self> {
         Ok(Self {
-            min_connections: parse_u32("DB_POOL_MIN_CONNECTIONS", 1)?,
+            min_connections: 1,
             max_connections: parse_u32("DB_POOL_MAX_CONNECTIONS", 10)?,
-            acquire_timeout: Duration::from_secs(parse_u64("DB_POOL_ACQUIRE_TIMEOUT_SECONDS", 5)?),
+            acquire_timeout: Duration::from_secs(5),
         })
     }
 }
@@ -637,10 +553,6 @@ fn parse_u64_with_alias(name: &str, alias: &str, default: u64) -> Result<u64> {
 }
 
 fn parse_u32(name: &str, default: u32) -> Result<u32> {
-    parse_env(name, default)
-}
-
-fn parse_i64(name: &str, default: i64) -> Result<i64> {
     parse_env(name, default)
 }
 

@@ -15,7 +15,9 @@ use crate::{
     secrets::SecretStore,
 };
 
-use super::affinity::{ChannelAffinityKey, UpstreamAffinityTarget};
+use super::affinity::{
+    ChannelAffinityKey, ChannelAffinityObservation, ChannelAffinityStatus, UpstreamAffinityTarget,
+};
 
 mod cache;
 mod choose;
@@ -133,6 +135,7 @@ pub struct SelectedUpstream {
     pub responses_chat_fallback: bool,
     pub secret: String,
     pub account_id: Option<String>,
+    pub(crate) affinity: Option<ChannelAffinityObservation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,8 +356,12 @@ impl Selector {
             excluded_endpoint_ids: constraints.excluded_endpoint_ids,
         };
         if let Some(affinity_key) = constraints.affinity_key {
-            if let Some(target) = affinity_cache.get(affinity_key) {
-                if let Some(upstream) = self.selected_affinity_upstream(&scope, &target)? {
+            if let Some((target, status)) = affinity_cache.get(affinity_key).await {
+                if let Some(mut upstream) = self.selected_affinity_upstream(&scope, &target)? {
+                    upstream.affinity = Some(ChannelAffinityObservation {
+                        status,
+                        key_fingerprint: affinity_key.fingerprint(),
+                    });
                     tracing::debug!(
                         rule = affinity_key.rule,
                         protocol = protocol.as_str(),
@@ -370,7 +377,16 @@ impl Selector {
             }
         }
 
-        self.select_from_snapshot(&scope)
+        let mut upstream = self.select_from_snapshot(&scope)?;
+        if affinity_cache.enabled() && constraints.affinity_key.is_some() {
+            upstream.affinity = constraints
+                .affinity_key
+                .map(|key| ChannelAffinityObservation {
+                    status: ChannelAffinityStatus::Miss,
+                    key_fingerprint: key.fingerprint(),
+                });
+        }
+        Ok(upstream)
     }
 
     pub(crate) async fn select_with_affinity_excluding_protocols(
@@ -399,8 +415,12 @@ impl Selector {
             };
 
             if let Some(affinity_key) = constraints.affinity_key {
-                if let Some(target) = affinity_cache.get(affinity_key) {
-                    if let Some(upstream) = self.selected_affinity_upstream(&scope, &target)? {
+                if let Some((target, status)) = affinity_cache.get(affinity_key).await {
+                    if let Some(mut upstream) = self.selected_affinity_upstream(&scope, &target)? {
+                        upstream.affinity = Some(ChannelAffinityObservation {
+                            status,
+                            key_fingerprint: affinity_key.fingerprint(),
+                        });
                         tracing::debug!(
                             rule = affinity_key.rule,
                             protocol = protocol.as_str(),
@@ -417,7 +437,18 @@ impl Selector {
             }
 
             match self.select_from_snapshot(&scope) {
-                Ok(upstream) => return Ok((protocol, upstream)),
+                Ok(mut upstream) => {
+                    if affinity_cache.enabled() && constraints.affinity_key.is_some() {
+                        upstream.affinity =
+                            constraints
+                                .affinity_key
+                                .map(|key| ChannelAffinityObservation {
+                                    status: ChannelAffinityStatus::Miss,
+                                    key_fingerprint: key.fingerprint(),
+                                });
+                    }
+                    return Ok((protocol, upstream));
+                }
                 Err(AppError::UpstreamUnavailable(message)) => {
                     last_unavailable = Some(message);
                 }
@@ -599,6 +630,7 @@ impl Selector {
             responses_chat_fallback: false,
             secret: runtime.secret,
             account_id: runtime.account_id,
+            affinity: None,
         })
     }
 

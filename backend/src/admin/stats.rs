@@ -347,16 +347,17 @@ async fn summary(
 ) -> AppResult<Json<UsageStatsSummary>> {
     let filter = UsageStatsFilter::from_params(&params)?;
     let granularity = SummaryGranularity::from_param(params.granularity.as_deref())?;
-    let totals = aggregate_totals(&state.db.pool, &filter).await?;
-    let daily = daily_stats(&state.db.pool, &filter, granularity).await?;
-    let top_users = user_stats(
-        &state.db.pool,
-        &filter,
-        UsageStatsPageParams::new(1, 10),
-        SortMode::Cost,
-    )
-    .await?;
-    let top_models = model_stats(&state.db.pool, &filter, 10, SortMode::Cost).await?;
+    let (totals, daily, top_users, top_models) = tokio::try_join!(
+        aggregate_totals(&state.db.pool, &filter),
+        daily_stats(&state.db.pool, &filter, granularity),
+        user_stats(
+            &state.db.pool,
+            &filter,
+            UsageStatsPageParams::new(1, 10),
+            SortMode::Cost,
+        ),
+        model_stats(&state.db.pool, &filter, 10, SortMode::Cost),
+    )?;
 
     Ok(Json(UsageStatsSummary {
         start: filter.start.to_string(),
@@ -376,9 +377,10 @@ async fn timeseries(
     let filter = UsageStatsFilter::from_params(&params)?;
     let granularity = TimeGranularity::from_params(&filter, params.granularity.as_deref())?;
     let series_limit = bounded_limit(params.series_limit, 8, 20);
-    let points = usage_timeseries(&state.db.pool, &filter, granularity).await?;
-    let model_points =
-        model_usage_timeseries(&state.db.pool, &filter, granularity, series_limit).await?;
+    let (points, model_points) = tokio::try_join!(
+        usage_timeseries(&state.db.pool, &filter, granularity),
+        model_usage_timeseries(&state.db.pool, &filter, granularity, series_limit),
+    )?;
 
     Ok(Json(UsageStatsTimeSeries {
         start: filter.start.to_string(),
@@ -463,8 +465,10 @@ async fn options(
     Query(params): Query<UsageStatsParams>,
 ) -> AppResult<Json<UsageStatsOptions>> {
     let filter = UsageStatsFilter::from_params(&params)?;
-    let models = option_models(&state.db.pool, &filter).await?;
-    let users = option_users(&state.db.pool, &filter).await?;
+    let (models, users) = tokio::try_join!(
+        option_models(&state.db.pool, &filter),
+        option_users(&state.db.pool, &filter),
+    )?;
     Ok(Json(UsageStatsOptions { models, users }))
 }
 
@@ -710,7 +714,13 @@ async fn aggregate_totals(
           COALESCE(SUM(ud.output_tokens), 0)::BIGINT AS output_tokens,
           COALESCE(SUM(ud.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(ud.cache_in_tokens), 0)::BIGINT AS cache_in_tokens,
-          COALESCE(SUM(ud.cache_create_in_tokens + ud.cache_create_5m_in_tokens + ud.cache_create_1h_in_tokens), 0)::BIGINT AS cache_write_tokens,
+          COALESCE(SUM(
+            CASE
+              WHEN ud.cache_create_5m_in_tokens + ud.cache_create_1h_in_tokens > 0
+                THEN ud.cache_create_5m_in_tokens + ud.cache_create_1h_in_tokens
+              ELSE ud.cache_create_in_tokens
+            END
+          ), 0)::BIGINT AS cache_write_tokens,
           COALESCE(SUM(ud.reason_out_tokens), 0)::BIGINT AS reason_out_tokens,
           COALESCE(SUM(ud.audio_in_tokens), 0)::BIGINT AS audio_in_tokens,
           COALESCE(SUM(ud.audio_out_tokens), 0)::BIGINT AS audio_out_tokens,

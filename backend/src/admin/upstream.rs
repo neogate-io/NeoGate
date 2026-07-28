@@ -314,9 +314,18 @@ pub(crate) async fn fetch_upstream_models(
         request = request.bearer_auth(secret);
     }
 
-    let response = request
-        .send()
+    let response = tokio::time::timeout(state.config.http.upstream_timeout, request.send())
         .await
+        .map_err(|_| {
+            AppError::UpstreamRequest(UpstreamRequestError::new(
+                crate::error::UpstreamErrorKind::Timeout,
+                upstream_models_error_provider(base_url),
+                format!(
+                    "upstream models request timed out after {} seconds",
+                    state.config.http.upstream_timeout.as_secs()
+                ),
+            ))
+        })?
         .map_err(|err| upstream_models_request_error(base_url, err))?;
     let status = response.status();
     if !status.is_success() {

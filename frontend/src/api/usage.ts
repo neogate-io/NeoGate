@@ -163,6 +163,7 @@ export type UserModelUsageStatistics = {
 export type UsageCostBreakdown = {
   chat_cost_micros: number
   image_cost_micros: number
+  audio_cost_micros: number
   coding_cost_micros: number
   other_cost_micros: number
 }

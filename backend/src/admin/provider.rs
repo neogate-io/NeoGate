@@ -187,6 +187,14 @@ pub async fn record_provider_models(
         if model.is_empty() || !seen.insert(model.to_string()) {
             continue;
         }
+        let billing_meter = if matches!(
+            model.to_ascii_lowercase().as_str(),
+            "fun-asr" | "paraformer-v2"
+        ) {
+            BillingMeter::Audio
+        } else {
+            BillingMeter::Token
+        };
         sqlx::query(
             "INSERT INTO provider_model
              (provider, model, display_name, source, billing_meter, capabilities, enabled)
@@ -198,6 +206,10 @@ pub async fn record_provider_models(
                      ELSE provider_model.display_name
                  END,
                  source = EXCLUDED.source,
+                 billing_meter = CASE
+                     WHEN EXCLUDED.billing_meter = 'audio' THEN EXCLUDED.billing_meter
+                     ELSE provider_model.billing_meter
+                 END,
                  enabled = provider_model.enabled OR EXCLUDED.enabled,
                  discovered_at = CASE
                      WHEN EXCLUDED.source = 'upstream' THEN now()
@@ -208,7 +220,7 @@ pub async fn record_provider_models(
         .bind(provider)
         .bind(model)
         .bind(source)
-        .bind(BillingMeter::Token.as_str())
+        .bind(billing_meter.as_str())
         .bind(enabled)
         .execute(&state.db.pool)
         .await?;

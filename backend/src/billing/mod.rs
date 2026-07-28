@@ -42,6 +42,8 @@ pub const BILLABLE_PRICE_CONDITION: &str = r#"
         AND output_price_micros >= 0)
     OR (billing_meter = 'image'
         AND unit_price_micros > 0)
+    OR (billing_meter = 'audio'
+        AND unit_price_micros > 0)
     OR (billing_meter = 'video'
         AND video_billing_mode IS NOT NULL
         AND CASE
@@ -57,6 +59,8 @@ pub const BILLABLE_PRICE_CONDITION_CP: &str = r#"
         AND cp.input_price_micros >= 0
         AND cp.output_price_micros >= 0)
     OR (cp.billing_meter = 'image'
+        AND cp.unit_price_micros > 0)
+    OR (cp.billing_meter = 'audio'
         AND cp.unit_price_micros > 0)
     OR (cp.billing_meter = 'video'
         AND cp.video_billing_mode IS NOT NULL

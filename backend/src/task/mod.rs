@@ -10,6 +10,7 @@ pub(crate) mod worker;
 
 pub(crate) const WORKER_TICK_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const AUDIO_TASK_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const ASSET_RETENTION: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 pub(crate) const REQUEST_SPOOL_TTL: Duration = Duration::from_secs(60 * 60);
 pub(crate) const CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);

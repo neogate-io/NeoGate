@@ -237,7 +237,9 @@ function numberQueryValue(key: string) {
 
 function billingMeterQueryValue() {
   const value = stringQueryValue('billing_meter')
-  return value === 'token' || value === 'image' || value === 'video' ? value : undefined
+  return value === 'token' || value === 'image' || value === 'video' || value === 'audio'
+    ? value
+    : undefined
 }
 
 function routingRulesText(row: UsageRecord) {
@@ -286,6 +288,10 @@ function usageSuccessSummary(row: UsageRecord) {
       parts.push(`${formatNumber(row.billable_units, locale.value)} ${t('usageDetailSeconds')}`)
     }
     return parts.join(' · ')
+  }
+
+  if (row.billing_meter === 'audio') {
+    return `${t('usageDetailAudioTranscription')} · ${formatNumber(row.billable_units, locale.value)} ${t('usageDetailSeconds')}`
   }
 
   if ((row.total_tokens ?? 0) > 0) {
@@ -338,6 +344,7 @@ function usageBillingUnitsDisplay(row: UsageRecord) {
     return `${value} ${isPerSecondBilling ? t('usageDetailSeconds') : t('usageDetailTokens')}`
   }
   if (row.billing_meter === 'image') return `${value} ${t('usageDetailImages')}`
+  if (row.billing_meter === 'audio') return `${value} ${t('usageDetailSeconds')}`
   return `${value} ${t('usageDetailBillingUnits')}`
 }
 
@@ -619,6 +626,12 @@ async function exportUsage() {
                 {{ formatNumber(row.billable_units, locale) }} {{ t('perSecond') }}
               </span>
               <span class="usage-muted">{{ t('billingMeterVideo') }}</span>
+            </div>
+            <div v-else-if="row.billing_meter === 'audio'" class="usage-stack">
+              <span class="usage-mono">
+                {{ formatNumber(row.billable_units, locale) }} {{ t('usageDetailSeconds') }}
+              </span>
+              <span class="usage-muted">{{ t('billingMeterAudio') }}</span>
             </div>
             <div v-else class="usage-stack">
               <span class="usage-mono">

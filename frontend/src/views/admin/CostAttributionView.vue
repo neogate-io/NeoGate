@@ -44,7 +44,7 @@ type DrilldownContext = {
   model?: string
   channel_id?: number
   channel_name?: string
-  billing_meter?: 'token' | 'image' | 'video'
+  billing_meter?: 'token' | 'image' | 'video' | 'audio'
 }
 
 const DEFAULT_PAGE_SIZE = 20
@@ -592,6 +592,7 @@ function currentPrimaryPage() {
 function billingMeterLabel(value?: string | null) {
   if (value === 'image') return t('billingMeterImageGeneration')
   if (value === 'video') return t('billingMeterVideo')
+  if (value === 'audio') return t('billingMeterAudio')
   if (value === 'token') return t('billingMeterToken')
   return t('billingMeterAll')
 }

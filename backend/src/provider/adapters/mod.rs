@@ -1,4 +1,5 @@
-mod bailian;
+pub(crate) mod bailian;
+pub(crate) mod bailian_asr;
 mod compatible;
 mod doubao;
 mod haxicloud;

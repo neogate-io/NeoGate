@@ -496,7 +496,9 @@ function channelPriceRows(row: Channel) {
       cacheWritePrice,
       imagePriceGroups: imageGroups,
       cachePrice:
-        displayBillingMeter === 'image' || displayBillingMeter === 'video'
+        displayBillingMeter === 'image' ||
+        displayBillingMeter === 'video' ||
+        displayBillingMeter === 'audio'
           ? '-'
           : price && displayBillingMeter === 'token'
             ? `${cacheReadPrice} / ${cacheWritePrice}`
@@ -507,11 +509,13 @@ function channelPriceRows(row: Channel) {
       price:
         displayBillingMeter === 'image'
           ? `${unitPrice} / ${t('perImage')}`
-          : displayBillingMeter === 'video'
-            ? videoTierSpecsLabel(price?.video_price_tiers)
-            : price && displayBillingMeter === 'token'
-              ? `${inputPrice} / ${outputPrice}`
-              : t('priceMissing')
+          : displayBillingMeter === 'audio'
+            ? `${unitPrice} / ${t('perSecond')}`
+            : displayBillingMeter === 'video'
+              ? videoTierSpecsLabel(price?.video_price_tiers)
+              : price && displayBillingMeter === 'token'
+                ? `${inputPrice} / ${outputPrice}`
+                : t('priceMissing')
     }
   })
 }
@@ -540,7 +544,7 @@ function compactPriceGroup(items: ChannelExpandPriceGroup[]) {
 }
 
 function imagePriceGroups(
-  modelCategory: 'text' | 'image' | 'video',
+  modelCategory: 'text' | 'image' | 'video' | 'audio',
   displayBillingMeter: BillingMeter,
   configured: boolean,
   prices: {
@@ -551,6 +555,9 @@ function imagePriceGroups(
     unit: string
   }
 ) {
+  if (modelCategory === 'audio') {
+    return [inlinePriceGroup(t('perSecond'), configured ? prices.unit : t('priceMissing'))]
+  }
   if (modelCategory !== 'image') return []
   if (displayBillingMeter === 'token') {
     return [
@@ -806,7 +813,16 @@ function canUseVideoBilling(provider: string, model: string) {
   return output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0
 }
 
-function modelCategoryForModel(provider: string, model: string): 'text' | 'image' | 'video' {
+function canUseAudioBilling(model: string) {
+  const normalized = model.trim().toLowerCase()
+  return normalized === 'fun-asr' || normalized === 'paraformer-v2'
+}
+
+function modelCategoryForModel(
+  provider: string,
+  model: string
+): 'text' | 'image' | 'video' | 'audio' {
+  if (canUseAudioBilling(model)) return 'audio'
   const output = modelOutputModalities(provider, model)
   if (output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0) {
     return 'video'
@@ -816,6 +832,7 @@ function modelCategoryForModel(provider: string, model: string): 'text' | 'image
 }
 
 function defaultBillingMeterForModel(provider: string, model: string) {
+  if (canUseAudioBilling(model)) return 'audio'
   if (canUseVideoBilling(provider, model)) {
     const template = findPricingTemplate(templates.value, provider, model)
     if (referenceVideoTiersForModel(provider, model).length === 0 && template?.billing_meter) {
@@ -843,6 +860,7 @@ function billingMeterDisplayLabel(provider: string, model: string, billingMeter:
     return t('billingMeterPerCall')
   if (billingMeter === 'image') return t('billingMeterImageGeneration')
   if (billingMeter === 'video') return t('billingMeterVideo')
+  if (billingMeter === 'audio') return t('billingMeterAudio')
   return t('billingMeterToken')
 }
 
@@ -855,7 +873,11 @@ function videoBillingModeDisplayLabel(price: ChannelPrice | undefined, billingMe
 }
 
 function isBillingMeterLocked(provider: string, model: string) {
-  return canUseVideoBilling(provider, model) || !canUseImageBilling(provider, model)
+  return (
+    canUseAudioBilling(model) ||
+    canUseVideoBilling(provider, model) ||
+    !canUseImageBilling(provider, model)
+  )
 }
 
 function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm) {
@@ -886,7 +908,7 @@ function hasManualPriceInput(form: ChannelPriceForm) {
       return tier.inputWithVideoUnit > 0 || tier.inputWithoutVideoUnit > 0
     })
   }
-  if (form.billingMeter === 'image') return form.unitPrice > 0
+  if (form.billingMeter === 'image' || form.billingMeter === 'audio') return form.unitPrice > 0
   return (
     form.inputPerMillion > 0 ||
     form.outputPerMillion > 0 ||
@@ -901,7 +923,9 @@ function hasEnabledBillablePrice(price?: ChannelPrice, billingMeter?: BillingMet
   if (price.video_billing_mode) {
     return (price.video_price_tiers ?? []).length > 0
   }
-  if (price.billing_meter === 'image') return (price.unit_price_micros ?? 0) > 0
+  if (price.billing_meter === 'image' || price.billing_meter === 'audio') {
+    return (price.unit_price_micros ?? 0) > 0
+  }
   if (price.billing_meter === 'video') return (price.video_price_tiers ?? []).length > 0
   return price.input_price_micros > 0 || price.output_price_micros > 0
 }
@@ -1330,9 +1354,11 @@ function openPriceDialog(row: Channel) {
         ? 'image'
         : price?.billing_meter === 'video' && supportsVideoBilling
           ? 'video'
-          : price?.billing_meter === 'token' && defaultBillingMeter === 'token'
-            ? 'token'
-            : null
+          : price?.billing_meter === 'audio' && defaultBillingMeter === 'audio'
+            ? 'audio'
+            : price?.billing_meter === 'token' && defaultBillingMeter === 'token'
+              ? 'token'
+              : null
     const billingMeter =
       supportsVideoBilling && referenceVideoTiers.length > 0
         ? 'video'
@@ -1425,6 +1451,12 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
       : t('priceMissing')
     return `${t('billingMeterImageGeneration')} ${unit} / ${t('perImage')}`
   }
+  if (template.billing_meter === 'audio') {
+    const unit = template.unit_price_micros
+      ? formatPricePerMillion(template.unit_price_micros, locale.value)
+      : t('priceMissing')
+    return `${t('billingMeterAudio')} ${unit} / ${t('perSecond')}`
+  }
   const input = formatPricePerMillion(template.input_price_micros, locale.value)
   const output = formatPricePerMillion(template.output_price_micros, locale.value)
   const cachePrices = [template.cache_read_price_micros, template.cache_write_price_micros]
@@ -1498,9 +1530,11 @@ function requireBillingMeter(form: (typeof priceForms)[string]) {
   return form.billingMeter
 }
 
-function requireImageUnitPrice(form: (typeof priceForms)[string]) {
+function requireUnitPrice(form: (typeof priceForms)[string]) {
   if (form.unitPrice <= 0) {
-    throw new Error(t('imageUnitPriceRequired'))
+    throw new Error(
+      form.billingMeter === 'audio' ? t('audioUnitPriceRequired') : t('imageUnitPriceRequired')
+    )
   }
 }
 
@@ -1553,8 +1587,8 @@ async function saveChannelPrices() {
           form.canUseVideoBilling && form.videoBillingMode ? videoPriceTiersPayload(form) : []
         const billingMeter =
           form.canUseVideoBilling && form.videoBillingMode ? 'video' : requireBillingMeter(form)
-        if (billingMeter === 'image') {
-          requireImageUnitPrice(form)
+        if (billingMeter === 'image' || billingMeter === 'audio') {
+          requireUnitPrice(form)
         }
         const representativeWithoutVideo = representativeVideoPriceMicros(
           videoTiers,
@@ -1584,7 +1618,7 @@ async function saveChannelPrices() {
             form.canUseVideoBilling && form.videoBillingMode ? 0 : cacheWritePricePayload(form),
           billing_meter: billingMeter,
           unit_price_micros:
-            billingMeter === 'image'
+            billingMeter === 'image' || billingMeter === 'audio'
               ? majorToMicroAmount(form.unitPrice)
               : billingMeter === 'video'
                 ? representativeWithoutVideo

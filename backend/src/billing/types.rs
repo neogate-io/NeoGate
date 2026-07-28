@@ -9,6 +9,7 @@ pub enum BillingMeter {
     Token,
     Image,
     Video,
+    Audio,
 }
 
 impl BillingMeter {
@@ -17,6 +18,7 @@ impl BillingMeter {
             Self::Token => "token",
             Self::Image => "image",
             Self::Video => "video",
+            Self::Audio => "audio",
         }
     }
 
@@ -25,6 +27,7 @@ impl BillingMeter {
             "token" => Ok(Self::Token),
             "image" => Ok(Self::Image),
             "video" => Ok(Self::Video),
+            "audio" => Ok(Self::Audio),
             _ => Err(format!("invalid billing meter: {value}")),
         }
     }
@@ -235,6 +238,14 @@ impl BillableUsage {
     pub fn video_seconds(seconds: i64) -> Self {
         Self {
             meter: BillingMeter::Video,
+            token_usage: None,
+            billable_units: seconds.max(0),
+        }
+    }
+
+    pub fn audio_seconds(seconds: i64) -> Self {
+        Self {
+            meter: BillingMeter::Audio,
             token_usage: None,
             billable_units: seconds.max(0),
         }

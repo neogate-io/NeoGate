@@ -22,7 +22,7 @@ export type ChannelPriceForm = {
   channelId: number
   provider: string
   model: string
-  modelCategory: 'text' | 'image' | 'video'
+  modelCategory: 'text' | 'image' | 'video' | 'audio'
   billingMeter: BillingMeter | null
   videoBillingMode: VideoBillingMode | null
   videoPriceTiers: ChannelVideoPriceTierForm[]
@@ -73,6 +73,10 @@ const imagePriceForms = computed(() =>
   priceFormList.value.filter((form) => form.modelCategory === 'image')
 )
 
+const audioPriceForms = computed(() =>
+  priceFormList.value.filter((form) => form.modelCategory === 'audio')
+)
+
 const videoPriceForms = computed(() =>
   priceFormList.value.filter((form) => form.modelCategory === 'video')
 )
@@ -80,7 +84,8 @@ const videoPriceForms = computed(() =>
 const standardPriceSections = computed(() =>
   [
     { key: 'text', title: t('textModelPrices'), forms: textPriceForms.value },
-    { key: 'image', title: t('imageModelPrices'), forms: imagePriceForms.value }
+    { key: 'image', title: t('imageModelPrices'), forms: imagePriceForms.value },
+    { key: 'audio', title: t('audioModelPrices'), forms: audioPriceForms.value }
   ].filter((section) => section.forms.length > 0)
 )
 
@@ -115,6 +120,7 @@ function billingMeterOptionLabel(row: ChannelPriceForm, billingMeter: BillingMet
   if (row.canUseImageBilling && billingMeter === 'image') return t('billingMeterPerCall')
   if (billingMeter === 'image') return t('billingMeterImageGeneration')
   if (billingMeter === 'video') return t('billingMeterVideo')
+  if (billingMeter === 'audio') return t('billingMeterAudio')
   return t('billingMeterToken')
 }
 
@@ -256,11 +262,14 @@ function updateVideoTierSecondaryPrice(
               <span>{{ section.forms.length }}</span>
             </span>
           </template>
-          <div class="price-editor" :class="{ 'is-image-editor': section.key === 'image' }">
+          <div
+            class="price-editor"
+            :class="{ 'is-image-editor': section.key === 'image' || section.key === 'audio' }"
+          >
             <div class="price-editor-head">
               <span>{{ t('model') }}</span>
               <span>{{ t('billingMeter') }}</span>
-              <template v-if="section.key === 'image'">
+              <template v-if="section.key === 'image' || section.key === 'audio'">
                 <span>{{ t('prices') }}</span>
               </template>
               <template v-else>
@@ -298,7 +307,10 @@ function updateVideoTierSecondaryPrice(
                     />
                   </el-select>
                 </div>
-                <div v-if="section.key === 'image'" class="image-price-cell">
+                <div
+                  v-if="section.key === 'image' || section.key === 'audio'"
+                  class="image-price-cell"
+                >
                   <template v-if="row.billingMeter === 'token'">
                     <div class="image-price-group">
                       <span class="image-price-group-label">{{ t('inputOutputPairShort') }}</span>
@@ -362,6 +374,20 @@ function updateVideoTierSecondaryPrice(
                         :parser="parseCurrencyInput"
                         :step="0.01"
                       />
+                    </div>
+                  </div>
+                  <div v-else-if="row.billingMeter === 'audio'" class="image-price-group">
+                    <div class="video-price-pair-input is-single">
+                      <el-input-number
+                        v-model="row.unitPrice"
+                        class="video-tier-pair-number"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.0001"
+                      />
+                      <span class="price-unit-label">{{ t('perSecond') }}</span>
                     </div>
                   </div>
                   <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>

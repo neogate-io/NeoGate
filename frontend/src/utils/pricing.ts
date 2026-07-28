@@ -48,7 +48,7 @@ export function resolvedVideoTokensPerSecondEstimate(
 
 export function isChannelPriceConfigured(price?: ChannelPrice) {
   if (!price) return false
-  if (price.billing_meter === 'image') {
+  if (price.billing_meter === 'image' || price.billing_meter === 'audio') {
     return price.unit_price_micros !== undefined && price.unit_price_micros !== null
   }
   if (price.billing_meter === 'video') {

@@ -703,8 +703,12 @@ fn pricing_template_from_models_dev_model<'a>(
     if model.is_empty() {
         return None;
     }
-    let billing_meter = billing_meter_from_models_dev_model(model_data);
-    let prices = pricing_micros_from_models_dev_model(model_data);
+    let billing_meter = if is_audio_transcription_model(model) {
+        BillingMeter::Audio
+    } else {
+        billing_meter_from_models_dev_model(model_data)
+    };
+    let prices = audio_pricing_for_model(model, pricing_micros_from_models_dev_model(model_data));
     Some(PricingTemplateUpsert {
         provider,
         model,
@@ -723,8 +727,13 @@ fn pricing_template_from_local_cny_model<'a>(
     if model.is_empty() {
         return None;
     }
-    let billing_meter = billing_meter_from_models_dev_model(model_data);
-    let prices = pricing_micros_from_local_pricing_model(model_data);
+    let billing_meter = if is_audio_transcription_model(model) {
+        BillingMeter::Audio
+    } else {
+        billing_meter_from_models_dev_model(model_data)
+    };
+    let prices =
+        audio_pricing_for_model(model, pricing_micros_from_local_pricing_model(model_data));
     Some(PricingTemplateUpsert {
         provider,
         model,
@@ -740,6 +749,15 @@ fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<Pricin
 
 fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<PricingMicros> {
     pricing_micros_from_cost(model.cost.as_ref()?)
+}
+
+fn audio_pricing_for_model(model: &str, prices: Option<PricingMicros>) -> Option<PricingMicros> {
+    prices.map(|mut prices| {
+        if is_audio_transcription_model(model) && prices.pricing_basis == PricingBasis::Second {
+            prices.billing_meter = BillingMeter::Audio;
+        }
+        prices
+    })
 }
 
 /// 按 `cost.basis` 口径分流构造参考价微单位。
@@ -870,6 +888,13 @@ fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
     } else {
         BillingMeter::Token
     }
+}
+
+fn is_audio_transcription_model(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "fun-asr" | "paraformer-v2"
+    )
 }
 
 fn modality_contains(values: &[String], target: &str) -> bool {
@@ -1102,6 +1127,7 @@ fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
         pricing_basis: match req.billing_meter {
             BillingMeter::Image => PricingBasis::Image,
             BillingMeter::Video => PricingBasis::MultiTierVideo,
+            BillingMeter::Audio => PricingBasis::Second,
             BillingMeter::Token => PricingBasis::Token,
         },
     };
@@ -1118,6 +1144,17 @@ fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
                 return Err(AppError::BadRequestWithCode {
                     code: "image_unit_price_required",
                     message: "unit price is required for image billing",
+                });
+            }
+        }
+    }
+    if prices.billing_meter == BillingMeter::Audio {
+        match prices.unit_price_micros {
+            Some(price) if price > 0 => {}
+            _ => {
+                return Err(AppError::BadRequestWithCode {
+                    code: "audio_unit_price_required",
+                    message: "a positive per-second price is required for audio billing",
                 });
             }
         }

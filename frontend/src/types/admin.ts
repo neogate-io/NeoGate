@@ -3,7 +3,7 @@ export type EndpointProtocol = 'openai' | 'openai_oauth' | 'anthropic'
 export type UserStatus = 'enabled' | 'disabled' | 'pending'
 export type UserKeyStatus = 'enabled' | 'disabled'
 export type ProjectStatus = 'enabled' | 'disabled'
-export type BillingMeter = 'token' | 'image' | 'video'
+export type BillingMeter = 'token' | 'image' | 'video' | 'audio'
 export type VideoBillingMode = 'official_token' | 'per_second'
 export type VideoPriceTier = {
   resolutions: string[]

@@ -25,7 +25,7 @@ export type ChannelExpandVideoTierRow = {
 
 export type ChannelExpandPriceRow = {
   model: string
-  category: 'text' | 'image' | 'video'
+  category: 'text' | 'image' | 'video' | 'audio'
   billingMeterLabel: string
   price: string
   cachePrice: string
@@ -71,6 +71,11 @@ const modelSections = computed(() =>
       key: 'video',
       title: t('videoModelPrices'),
       rows: props.rows.filter((row) => row.category === 'video')
+    },
+    {
+      key: 'audio',
+      title: t('audioModelPrices'),
+      rows: props.rows.filter((row) => row.category === 'audio')
     }
   ].filter((section) => section.rows.length > 0)
 )
@@ -226,12 +231,16 @@ async function copyModelName(model: string) {
         <div
           v-else
           class="channel-expand-price-table"
-          :class="{ 'is-image-table': section.key === 'image' }"
+          :class="{ 'is-image-table': section.key === 'image' || section.key === 'audio' }"
         >
           <div class="channel-expand-price-row is-head">
             <span>{{ t('modelName') }}</span>
-            <span v-if="section.key === 'image'">{{ t('billingMeter') }}</span>
-            <span v-if="section.key === 'image'">{{ t('modelPrice') }}</span>
+            <span v-if="section.key === 'image' || section.key === 'audio'">{{
+              t('billingMeter')
+            }}</span>
+            <span v-if="section.key === 'image' || section.key === 'audio'">{{
+              t('modelPrice')
+            }}</span>
             <template v-else>
               <span class="channel-head-label">{{ t('inputOutputPriceShort') }}</span>
               <span class="channel-head-label">{{ t('cacheReadWritePriceShort') }}</span>
@@ -263,10 +272,16 @@ async function copyModelName(model: string) {
                 </el-button>
               </el-tooltip>
             </span>
-            <span v-if="section.key === 'image'" class="channel-detail-meter">
+            <span
+              v-if="section.key === 'image' || section.key === 'audio'"
+              class="channel-detail-meter"
+            >
               <span class="channel-detail-meter-badge">{{ item.billingMeterLabel }}</span>
             </span>
-            <div v-if="section.key === 'image'" class="channel-image-price-cell">
+            <div
+              v-if="section.key === 'image' || section.key === 'audio'"
+              class="channel-image-price-cell"
+            >
               <div
                 v-for="group in item.imagePriceGroups"
                 :key="group.label"

@@ -530,6 +530,7 @@ function modelDisplay(channelName: string, model: string) {
 function billingMeterLabel(value?: string | null) {
   if (value === 'image') return t('billingMeterImageGeneration')
   if (value === 'video') return t('billingMeterVideo')
+  if (value === 'audio') return t('billingMeterAudio')
   if (value === 'token') return t('billingMeterToken')
   return t('billingMeterAll')
 }

@@ -4,12 +4,12 @@ use axum::http::{HeaderMap, Method};
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::{stream, StreamExt};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{
     billing::{parse_usage_from_bytes, TokenUsage},
     error::{reqwest_status, AppResult},
-    provider::adapters::{adapter_for_endpoint, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, bailian_asr, RelayRoute},
     relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
     AppState,
 };
@@ -154,6 +154,9 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     let upstream = task
         .selected_upstream(&state.db.pool, &state.secrets)
         .await?;
+    if task.task_type == UpstreamTaskType::AudioTranscription {
+        return poll_audio_transcription(state, task, upstream).await;
+    }
     let response = match task.task_type {
         UpstreamTaskType::OpenAiResponse => {
             let path = format!("/v1/responses/{}", task.upstream_task_id);
@@ -174,6 +177,9 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
                 task.task_type,
             )
             .await?
+        }
+        UpstreamTaskType::AudioTranscription => {
+            unreachable!("handled before generic upstream polling")
         }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {
@@ -258,6 +264,115 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             task
         };
         task_billing::finalize_polled(state, task, upstream, usage).await?;
+    }
+    Ok(())
+}
+
+async fn poll_audio_transcription(
+    state: &Arc<AppState>,
+    task: UpstreamTask,
+    upstream: SelectedUpstream,
+) -> AppResult<()> {
+    let local_duration_seconds = task
+        .upstream_metadata
+        .pointer("/neogate/local_duration_seconds")
+        .and_then(Value::as_f64)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "audio transcription task is missing local duration".to_string(),
+            )
+        })?;
+    let model = task.upstream_model.as_deref().ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "audio transcription task is missing upstream model".to_string(),
+        )
+    })?;
+    let poll = bailian_asr::poll(
+        state,
+        &upstream,
+        model,
+        &task.upstream_task_id,
+        local_duration_seconds,
+    )
+    .await?;
+    let neogate = task
+        .upstream_metadata
+        .get("neogate")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let (status, terminal, result) = match poll {
+        bailian_asr::PollResult::Pending { status, request_id } => {
+            (status, false, json!({ "request_id": request_id }))
+        }
+        bailian_asr::PollResult::Completed {
+            text,
+            duration_seconds,
+            duration_source,
+            request_id,
+        } => {
+            if duration_source == "local_fallback" {
+                tracing::warn!(
+                    task_id = task.id,
+                    upstream_task_id = %task.upstream_task_id,
+                    model,
+                    channel_id = upstream.channel_id,
+                    "Alibaba ASR omitted a valid duration; using local audio duration for billing"
+                );
+            }
+            (
+                "completed".to_string(),
+                true,
+                json!({
+                    "text": text,
+                    "duration_seconds": duration_seconds,
+                    "duration_source": duration_source,
+                    "request_id": request_id,
+                }),
+            )
+        }
+        bailian_asr::PollResult::Failed {
+            status,
+            message,
+            request_id,
+        } => (
+            "failed".to_string(),
+            true,
+            json!({
+                "upstream_status": status,
+                "error": message,
+                "request_id": request_id,
+            }),
+        ),
+    };
+    let metadata = json!({ "neogate": neogate, "result": result });
+    upstream::update_task_from_upstream_value(
+        &state.db.pool,
+        upstream::UpstreamTaskUpdate {
+            task_id: task.id,
+            task_type: task.task_type,
+            upstream_task_id: task.upstream_task_id.clone(),
+            status: status.clone(),
+            terminal,
+            metadata: metadata.clone(),
+            usage: None,
+            poll_interval: super::POLL_INTERVAL,
+        },
+    )
+    .await?;
+    if terminal {
+        task_billing::finalize_polled(
+            state,
+            UpstreamTask {
+                status,
+                terminal,
+                upstream_metadata: metadata,
+                ..task
+            },
+            upstream,
+            None,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -363,6 +478,9 @@ fn task_status_from_value(value: &Value, task: &UpstreamTask) -> (String, bool) 
             let status = crate::provider::openai::video_status_text(value, &task.status);
             let terminal = crate::provider::openai::video_terminal(&status);
             (status, terminal)
+        }
+        UpstreamTaskType::AudioTranscription => {
+            unreachable!("handled by the Alibaba ASR poller")
         }
         UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
         UpstreamTaskType::AnthropicMessageBatch => {

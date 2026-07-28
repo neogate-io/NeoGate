@@ -51,6 +51,12 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
                 .expect("unit billing requires unit_price_micros")
                 .max(0),
         ),
+        BillingMeter::Audio => usage.billable_units.max(0).saturating_mul(
+            price
+                .unit_price_micros
+                .expect("audio unit billing requires unit_price_micros")
+                .max(0),
+        ),
         BillingMeter::Video => {
             if let Some(token_usage) = usage.token_usage {
                 cost_for_usage(token_usage, price)

@@ -13,6 +13,7 @@ use crate::{
 pub(crate) enum UpstreamTaskType {
     OpenAiResponse,
     OpenAiVideo,
+    AudioTranscription,
     NeogateResponse,
     AnthropicMessageBatch,
 }
@@ -22,6 +23,7 @@ impl UpstreamTaskType {
         match self {
             Self::OpenAiResponse => "openai_response",
             Self::OpenAiVideo => "openai_video",
+            Self::AudioTranscription => "audio_transcription",
             Self::NeogateResponse => "neogate_response",
             Self::AnthropicMessageBatch => "anthropic_message_batch",
         }

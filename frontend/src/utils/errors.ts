@@ -62,6 +62,7 @@ const generalApiErrorMessageKeys = {
   price_model_required: 'priceModelRequired',
   price_must_be_non_negative: 'priceMustBeNonNegative',
   image_unit_price_required: 'imageUnitPriceRequired',
+  audio_unit_price_required: 'audioUnitPriceRequired',
   video_billing_mode_required: 'videoBillingModeRequired',
   video_billing_meter_required: 'videoBillingMeterRequired',
   video_price_tiers_required: 'videoPriceTiersRequired',

@@ -220,6 +220,7 @@ struct UserModelUsageStats {
 struct UsageCostBreakdown {
     chat_cost_micros: i64,
     image_cost_micros: i64,
+    audio_cost_micros: i64,
     coding_cost_micros: i64,
     other_cost_micros: i64,
 }
@@ -517,7 +518,7 @@ impl UsageStatsFilter {
 
         let billing_meter = trimmed_non_empty(params.billing_meter.as_deref()).map(str::to_string);
         if let Some(value) = billing_meter.as_deref() {
-            if value != "token" && value != "image" && value != "video" {
+            if value != "token" && value != "image" && value != "video" && value != "audio" {
                 return Err(AppError::BadRequest("invalid billing_meter".to_string()));
             }
         }
@@ -1292,6 +1293,7 @@ async fn project_stats(
             COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
             COALESCE(SUM(CASE WHEN ud.billing_meter = 'token' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS chat_cost_micros,
             COALESCE(SUM(CASE WHEN ud.billing_meter = 'image' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS image_cost_micros,
+            COALESCE(SUM(CASE WHEN ud.billing_meter = 'audio' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS audio_cost_micros,
             0::BIGINT AS coding_cost_micros,
             0::BIGINT AS other_cost_micros,
             SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
@@ -1368,6 +1370,7 @@ async fn project_member_stats(
             COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
             COALESCE(SUM(CASE WHEN ud.billing_meter = 'token' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS chat_cost_micros,
             COALESCE(SUM(CASE WHEN ud.billing_meter = 'image' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS image_cost_micros,
+            COALESCE(SUM(CASE WHEN ud.billing_meter = 'audio' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS audio_cost_micros,
             0::BIGINT AS coding_cost_micros,
             0::BIGINT AS other_cost_micros,
             SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
@@ -1450,6 +1453,7 @@ async fn key_stats(
             COALESCE(SUM(ud.cost_micros), 0)::BIGINT AS cost_micros,
             COALESCE(SUM(CASE WHEN ud.billing_meter = 'token' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS chat_cost_micros,
             COALESCE(SUM(CASE WHEN ud.billing_meter = 'image' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS image_cost_micros,
+            COALESCE(SUM(CASE WHEN ud.billing_meter = 'audio' THEN ud.cost_micros ELSE 0 END), 0)::BIGINT AS audio_cost_micros,
             0::BIGINT AS coding_cost_micros,
             0::BIGINT AS other_cost_micros,
             SUM(ud.latency_ms_total)::DOUBLE PRECISION / NULLIF(SUM(ud.request_count), 0)::DOUBLE PRECISION AS avg_latency_ms
@@ -1615,6 +1619,7 @@ async fn export_projects(
             "cost_micros",
             "chat_cost_micros",
             "image_cost_micros",
+            "audio_cost_micros",
             "coding_cost_micros",
             "other_cost_micros",
             "avg_latency_ms",
@@ -1636,6 +1641,7 @@ async fn export_projects(
                 item.cost_micros.to_string(),
                 item.cost_breakdown.chat_cost_micros.to_string(),
                 item.cost_breakdown.image_cost_micros.to_string(),
+                item.cost_breakdown.audio_cost_micros.to_string(),
                 item.cost_breakdown.coding_cost_micros.to_string(),
                 item.cost_breakdown.other_cost_micros.to_string(),
                 optional_f64(item.avg_latency_ms),
@@ -1672,6 +1678,7 @@ async fn export_project_members(
             "cost_micros",
             "chat_cost_micros",
             "image_cost_micros",
+            "audio_cost_micros",
             "coding_cost_micros",
             "other_cost_micros",
             "avg_latency_ms",
@@ -1695,6 +1702,7 @@ async fn export_project_members(
                 item.cost_micros.to_string(),
                 item.cost_breakdown.chat_cost_micros.to_string(),
                 item.cost_breakdown.image_cost_micros.to_string(),
+                item.cost_breakdown.audio_cost_micros.to_string(),
                 item.cost_breakdown.coding_cost_micros.to_string(),
                 item.cost_breakdown.other_cost_micros.to_string(),
                 optional_f64(item.avg_latency_ms),
@@ -1733,6 +1741,7 @@ async fn export_keys(
             "cost_micros",
             "chat_cost_micros",
             "image_cost_micros",
+            "audio_cost_micros",
             "coding_cost_micros",
             "other_cost_micros",
             "avg_latency_ms",
@@ -1758,6 +1767,7 @@ async fn export_keys(
                 item.cost_micros.to_string(),
                 item.cost_breakdown.chat_cost_micros.to_string(),
                 item.cost_breakdown.image_cost_micros.to_string(),
+                item.cost_breakdown.audio_cost_micros.to_string(),
                 item.cost_breakdown.coding_cost_micros.to_string(),
                 item.cost_breakdown.other_cost_micros.to_string(),
                 optional_f64(item.avg_latency_ms),
@@ -2155,6 +2165,7 @@ fn cost_breakdown_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageCostBreak
     Ok(UsageCostBreakdown {
         chat_cost_micros: row.try_get("chat_cost_micros")?,
         image_cost_micros: row.try_get("image_cost_micros")?,
+        audio_cost_micros: row.try_get("audio_cost_micros")?,
         coding_cost_micros: row.try_get("coding_cost_micros")?,
         other_cost_micros: row.try_get("other_cost_micros")?,
     })

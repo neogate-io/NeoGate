@@ -78,6 +78,10 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/v1/embeddings", post(openai::openai_embeddings))
         .route("/v1/moderations", post(openai::openai_moderations))
+        .route(
+            "/v1/audio/transcriptions",
+            post(openai::openai_audio_transcriptions),
+        )
         .route("/v1/responses", post(openai::openai_responses))
         .route(
             "/v1/responses/compact",
@@ -248,6 +252,15 @@ pub(crate) fn task_status_from_value(
         UpstreamTaskType::OpenAiVideo => {
             let status = openai::video_status_text(value, &task.status);
             let terminal = openai::video_terminal(&status);
+            (status, terminal)
+        }
+        UpstreamTaskType::AudioTranscription => {
+            let status = value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.status)
+                .to_string();
+            let terminal = matches!(status.as_str(), "completed" | "failed");
             (status, terminal)
         }
         UpstreamTaskType::AnthropicMessageBatch => {

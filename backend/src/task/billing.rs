@@ -134,6 +134,7 @@ async fn finalize_loaded(
         && video_billing_metadata.is_none())
     .then(|| video::provider_video_duration_seconds(&task.upstream_metadata))
     .flatten();
+    let audio_seconds = completed_audio_seconds(task);
     let usage = if task.task_type == UpstreamTaskType::OpenAiVideo && !video_success {
         None
     } else {
@@ -147,6 +148,7 @@ async fn finalize_loaded(
     let should_settle = video_settlement.is_some()
         || usage.is_some()
         || provider_video_seconds.is_some()
+        || audio_seconds.is_some()
         || image_count.is_some()
         || settle_without_usage;
     let target = if should_settle { "settled" } else { "released" };
@@ -199,6 +201,10 @@ async fn finalize_loaded(
                     Some(VideoBillingMode::OfficialToken) => usage.map(BillableUsage::token),
                     None => usage.map(BillableUsage::token),
                 }
+            } else if task.task_type == UpstreamTaskType::AudioTranscription
+                && price.billing_meter == BillingMeter::Audio
+            {
+                audio_seconds.map(BillableUsage::audio_seconds)
             } else {
                 usage.map(BillableUsage::token)
             };
@@ -262,8 +268,52 @@ async fn finalize_loaded(
         });
     } else {
         release_empty_hold(state, hold, "async task terminal without usage").await;
+        if task.task_type == UpstreamTaskType::AudioTranscription {
+            let model = task.model.clone();
+            let upstream_model = task.upstream_model.clone().or_else(|| model.clone());
+            state.billing_outbox.enqueue_or_retry(UsageInsert {
+                user_id: billing_context.user_id,
+                project_id: billing_context.project_id,
+                user_key_id: billing_context.user_key_id,
+                channel_id: upstream.channel_id,
+                channel_key_id: upstream.channel_key_id,
+                credential_id: upstream.credential_id,
+                relay_trace_id: async_task_relay_trace_id(&task.upstream_metadata),
+                relay_attempt: 1,
+                relay_final: true,
+                model,
+                upstream_model,
+                routing_phase: "relay".to_string(),
+                routing: None,
+                status_code: Some(502),
+                streamed: false,
+                latency_ms: async_task_latency_ms(task),
+                first_response_ms: None,
+                output_tokens_per_second: None,
+                error_summary: task
+                    .upstream_metadata
+                    .pointer("/result/error")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                token_usage: None,
+                billing_meter: BillingMeter::Audio,
+                billable_units: 0,
+                billing: None,
+            });
+        }
     }
     Ok(())
+}
+
+fn completed_audio_seconds(task: &UpstreamTask) -> Option<i64> {
+    if task.task_type != UpstreamTaskType::AudioTranscription || task.status != "completed" {
+        return None;
+    }
+    task.upstream_metadata
+        .pointer("/result/duration_seconds")
+        .and_then(Value::as_f64)
+        .filter(|duration| duration.is_finite() && *duration > 0.0 && *duration <= 43_200.0)
+        .map(|duration| duration.ceil() as i64)
 }
 
 fn async_task_latency_ms(task: &UpstreamTask) -> i64 {
@@ -330,13 +380,38 @@ async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        async_task_relay_trace_id, async_task_started_at, completed_image_count,
-        openai_video_success_status,
+        async_task_relay_trace_id, async_task_started_at, completed_audio_seconds,
+        completed_image_count, openai_video_success_status,
     };
-    use crate::task::upstream::UpstreamTaskType;
+    use crate::task::upstream::{UpstreamTask, UpstreamTaskType};
     use chrono::{TimeZone, Utc};
     use serde_json::json;
     use uuid::Uuid;
+
+    #[test]
+    fn completed_audio_duration_is_rounded_up() {
+        let task = UpstreamTask {
+            id: 1,
+            task_type: UpstreamTaskType::AudioTranscription,
+            upstream_task_id: "task-audio".to_string(),
+            user_id: 1,
+            project_id: 1,
+            user_key_id: 1,
+            provider: "qwen".to_string(),
+            model: Some("speech-to-text".to_string()),
+            upstream_model: Some("paraformer-v2".to_string()),
+            channel_id: 1,
+            channel_endpoint_id: 1,
+            channel_key_id: Some(1),
+            credential_id: None,
+            upstream_base_url: "https://dashscope.aliyuncs.com".to_string(),
+            status: "completed".to_string(),
+            terminal: true,
+            upstream_metadata: json!({ "result": { "duration_seconds": 12.01 } }),
+            created_at: Utc::now(),
+        };
+        assert_eq!(completed_audio_seconds(&task), Some(13));
+    }
 
     #[test]
     fn seedance_success_statuses_are_billable_video_terminals() {

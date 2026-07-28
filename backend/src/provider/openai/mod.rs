@@ -1,8 +1,10 @@
+mod audio;
 mod background;
 mod images;
 mod multipart;
 mod videos;
 
+pub(crate) use audio::openai_audio_transcriptions;
 pub(crate) use background::response_terminal;
 pub(crate) use videos::{video_status_text, video_terminal};
 

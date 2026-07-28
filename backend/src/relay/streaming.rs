@@ -818,7 +818,7 @@ impl Drop for StreamingRelay {
                     "downstream client closed relay stream after completed response"
                 );
             } else {
-                tracing::info!(
+                tracing::warn!(
                     relay_trace_id = %ctx.relay_trace_id,
                     relay_attempt = ctx.relay_attempt,
                     relay_final = ctx.relay_final,

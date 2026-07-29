@@ -120,7 +120,7 @@ function billingMeterOptionLabel(row: ChannelPriceForm, billingMeter: BillingMet
   if (row.canUseImageBilling && billingMeter === 'image') return t('billingMeterPerCall')
   if (billingMeter === 'image') return t('billingMeterImageGeneration')
   if (billingMeter === 'video') return t('billingMeterVideo')
-  if (billingMeter === 'audio') return t('billingMeterAudio')
+  if (billingMeter === 'audio') return t('videoBillingPerSecond')
   return t('billingMeterToken')
 }
 
@@ -376,7 +376,7 @@ function updateVideoTierSecondaryPrice(
                       />
                     </div>
                   </div>
-                  <div v-else-if="row.billingMeter === 'audio'" class="image-price-group">
+                  <div v-else-if="row.billingMeter === 'audio'" class="video-price-cell">
                     <div class="video-price-pair-input is-single">
                       <el-input-number
                         v-model="row.unitPrice"
@@ -387,7 +387,6 @@ function updateVideoTierSecondaryPrice(
                         :parser="parseCurrencyInput"
                         :step="0.0001"
                       />
-                      <span class="price-unit-label">{{ t('perSecond') }}</span>
                     </div>
                   </div>
                   <span v-else class="price-muted-cell">{{ t('billingMeterRequired') }}</span>

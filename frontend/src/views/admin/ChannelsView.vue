@@ -142,7 +142,6 @@ const prices = ref<ChannelPrice[]>([])
 const templates = ref<PricingTemplate[]>([])
 const providerModels = ref<ProviderModel[]>([])
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
-const bundledVideoTierCatalog = ref<BundledVideoTierRecord[]>([])
 const pricingLoading = ref(true)
 const servicePolicy = ref<ServicePolicy | null>(null)
 const channelsLoaded = ref(false)
@@ -162,24 +161,6 @@ const channelPageSize = ref(20)
 const channelPageSizes = [20, 50, 100]
 const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 const anyVideoTierResolution = ANY_VIDEO_TIER_RESOLUTION
-
-type BundledPricingModel = {
-  cost?: {
-    video_tiers?: unknown
-  }
-}
-
-type BundledPricingProvider = {
-  models?: Record<string, BundledPricingModel>
-}
-
-type BundledPricingCatalog = Record<string, BundledPricingProvider>
-
-type BundledVideoTierRecord = {
-  provider: string
-  model: string
-  videoTiers: ReferenceVideoTier[]
-}
 
 const priceByModel = computed(
   () =>
@@ -556,7 +537,7 @@ function imagePriceGroups(
   }
 ) {
   if (modelCategory === 'audio') {
-    return [inlinePriceGroup(t('perSecond'), configured ? prices.unit : t('priceMissing'))]
+    return [inlinePriceGroup(`/ ${t('perSecond')}`, configured ? prices.unit : t('priceMissing'))]
   }
   if (modelCategory !== 'image') return []
   if (displayBillingMeter === 'token') {
@@ -748,24 +729,17 @@ function keyStatusTooltip(
 async function loadPricingData() {
   await withLoading(pricingLoading, async () => {
     try {
-      const [
-        fetchedPrices,
-        fetchedTemplates,
-        fetchedProviderModels,
-        fetchedModelReferenceCatalog,
-        fetchedBundledVideoTierCatalog
-      ] = await Promise.all([
-        getChannelPrices(),
-        getPricingTemplates(),
-        getProviderModels(),
-        getModelReferenceCatalog(),
-        getBundledVideoTierCatalog()
-      ])
+      const [fetchedPrices, fetchedTemplates, fetchedProviderModels, fetchedModelReferenceCatalog] =
+        await Promise.all([
+          getChannelPrices(),
+          getPricingTemplates(),
+          getProviderModels(),
+          getModelReferenceCatalog()
+        ])
       prices.value = fetchedPrices
       templates.value = fetchedTemplates
       providerModels.value = fetchedProviderModels
       modelReferenceCatalog.value = fetchedModelReferenceCatalog
-      bundledVideoTierCatalog.value = fetchedBundledVideoTierCatalog
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -872,7 +846,7 @@ function billingMeterDisplayLabel(provider: string, model: string, billingMeter:
     return t('billingMeterPerCall')
   if (billingMeter === 'image') return t('billingMeterImageGeneration')
   if (billingMeter === 'video') return t('billingMeterVideo')
-  if (billingMeter === 'audio') return t('billingMeterAudio')
+  if (billingMeter === 'audio') return t('videoBillingPerSecond')
   return t('billingMeterToken')
 }
 
@@ -973,53 +947,6 @@ function providerMatchesReference(left: string, right: string) {
   return canonicalReferenceProvider(left) === canonicalReferenceProvider(right)
 }
 
-function providerMatchesBundledVideoReference(
-  recordProvider: string,
-  provider: string,
-  model: string
-) {
-  if (providerMatchesReference(recordProvider, provider)) return true
-  const aliases = pricingReferenceModelAliases(model)
-  return (
-    canonicalReferenceProvider(recordProvider) === 'doubao' &&
-    [...aliases].some((alias) => alias.includes('seedance'))
-  )
-}
-
-function isReferenceVideoTier(value: unknown): value is ReferenceVideoTier {
-  if (!value || typeof value !== 'object') return false
-  const tier = value as ReferenceVideoTier
-  return Boolean(tier.tiers && typeof tier.tiers === 'object')
-}
-
-function bundledVideoTierRecordsFromPricingCatalog(catalog: BundledPricingCatalog) {
-  return Object.entries(catalog).flatMap(([provider, providerData]) => {
-    return Object.entries(providerData.models ?? {}).flatMap(([model, modelData]) => {
-      const value = modelData.cost?.video_tiers
-      const videoTiers = Array.isArray(value) ? value.filter(isReferenceVideoTier) : []
-      if (videoTiers.length === 0) return []
-      return [
-        {
-          provider: canonicalReferenceProvider(provider),
-          model,
-          videoTiers
-        }
-      ]
-    })
-  })
-}
-
-async function getBundledVideoTierCatalog() {
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}model-pricing.json`)
-    if (!response.ok) return []
-    const catalog = (await response.json()) as BundledPricingCatalog
-    return bundledVideoTierRecordsFromPricingCatalog(catalog)
-  } catch {
-    return []
-  }
-}
-
 function referenceVideoTierResolutionLabel(tier: ReferenceVideoTier) {
   const label = referenceVideoTierDisplayLabel(tier)
   if (label) return label
@@ -1090,10 +1017,7 @@ function referenceVideoTiersForModel(provider: string, model: string) {
     return referenceVideoTiersForModel(template.provider, model)
   }
 
-  const bundledRecord = findBundledVideoTierRecord(provider, model)
-  return filterReferenceVideoTiersForCurrency(
-    normalizedReferenceVideoTiers(model, bundledRecord?.videoTiers ?? [])
-  )
+  return []
 }
 
 function videoTokenReferenceTierFromTemplate(template?: PricingTemplate): ReferenceVideoTier[] {
@@ -1173,14 +1097,6 @@ function findReferenceProviderModel(provider: string, model: string) {
   const aliases = pricingReferenceModelAliases(model)
   return providerModels.value.find((record) => {
     if (!providerMatchesReference(record.provider, provider)) return false
-    return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
-  })
-}
-
-function findBundledVideoTierRecord(provider: string, model: string) {
-  const aliases = pricingReferenceModelAliases(model)
-  return bundledVideoTierCatalog.value.find((record) => {
-    if (!providerMatchesBundledVideoReference(record.provider, provider, model)) return false
     return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
   })
 }
@@ -1568,21 +1484,11 @@ async function syncCreateReferencePricesIfNeeded() {
 
   try {
     await syncPricingTemplates()
-    const [
-      fetchedTemplates,
-      fetchedProviderModels,
-      fetchedModelReferenceCatalog,
-      fetchedBundledVideoTierCatalog
-    ] = await Promise.all([
-      getPricingTemplates(),
-      getProviderModels(),
-      getModelReferenceCatalog(),
-      getBundledVideoTierCatalog()
-    ])
+    const [fetchedTemplates, fetchedProviderModels, fetchedModelReferenceCatalog] =
+      await Promise.all([getPricingTemplates(), getProviderModels(), getModelReferenceCatalog()])
     templates.value = fetchedTemplates
     providerModels.value = fetchedProviderModels
     modelReferenceCatalog.value = fetchedModelReferenceCatalog
-    bundledVideoTierCatalog.value = fetchedBundledVideoTierCatalog
     return true
   } catch (err) {
     ElMessage.error(readReferenceSyncError(err))

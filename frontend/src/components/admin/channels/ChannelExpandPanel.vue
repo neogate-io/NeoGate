@@ -63,9 +63,9 @@ const modelSections = computed(() =>
       rows: props.rows.filter((row) => row.category === 'text')
     },
     {
-      key: 'image',
-      title: t('imageModelPrices'),
-      rows: props.rows.filter((row) => row.category === 'image')
+      key: 'audio',
+      title: t('audioModelPrices'),
+      rows: props.rows.filter((row) => row.category === 'audio')
     },
     {
       key: 'video',
@@ -73,9 +73,9 @@ const modelSections = computed(() =>
       rows: props.rows.filter((row) => row.category === 'video')
     },
     {
-      key: 'audio',
-      title: t('audioModelPrices'),
-      rows: props.rows.filter((row) => row.category === 'audio')
+      key: 'image',
+      title: t('imageModelPrices'),
+      rows: props.rows.filter((row) => row.category === 'image')
     }
   ].filter((section) => section.rows.length > 0)
 )

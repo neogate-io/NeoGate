@@ -16,7 +16,7 @@ use crate::{
         parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
         BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
-    config::STREAM_IDLE_TIMEOUT,
+    config::{STREAM_IDLE_TIMEOUT, STREAM_KEEP_ALIVE_INTERVAL},
     project::models::UsageRoutingSnapshot,
     AppState,
 };
@@ -32,6 +32,7 @@ use super::{
 };
 
 const MISSING_TERMINAL_STREAM_ERROR: &str = "upstream stream ended before terminal SSE event";
+const DOWNSTREAM_STREAM_KEEP_ALIVE: Bytes = Bytes::from_static(b": PING\n\n");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StreamFinishDisposition {
@@ -39,6 +40,12 @@ enum StreamFinishDisposition {
     HttpError,
     SseError,
     MissingTerminal,
+}
+
+enum StreamPoll {
+    Upstream(Option<Result<Bytes, String>>),
+    KeepAlive,
+    IdleTimeout,
 }
 
 pub(crate) struct RelayContext {
@@ -166,6 +173,8 @@ pub(crate) fn body_from_stream(
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let stream_idle_timeout = ctx.streamed.then_some(STREAM_IDLE_TIMEOUT);
+    let stream_keep_alive_interval = ctx.streamed.then_some(STREAM_KEEP_ALIVE_INTERVAL);
+    let now = tokio::time::Instant::now();
     tracing::debug!(
         relay_trace_id = %ctx.relay_trace_id,
         relay_attempt = ctx.relay_attempt,
@@ -190,6 +199,7 @@ pub(crate) fn body_from_stream(
         content_length,
         usage_buffer_limit_bytes,
         stream_idle_timeout_seconds = ?stream_idle_timeout.map(|timeout| timeout.as_secs()),
+        stream_keep_alive_interval_seconds = ?stream_keep_alive_interval.map(|interval| interval.as_secs()),
         "starting relay response body stream"
     );
     let relay = StreamingRelay {
@@ -206,6 +216,10 @@ pub(crate) fn body_from_stream(
         model_rewriter,
         response_metadata,
         stream_idle_timeout,
+        upstream_idle_deadline: stream_idle_timeout.map(|timeout| now + timeout),
+        downstream_keep_alive_interval: stream_keep_alive_interval,
+        downstream_keep_alive_deadline: stream_keep_alive_interval.map(|interval| now + interval),
+        keep_alive_frames_sent: 0,
         first_response_ms: None,
         last_chunk_ms: None,
         chunks_sent: 0,
@@ -217,12 +231,19 @@ pub(crate) fn body_from_stream(
         Some(relay),
         |relay| async move {
             let mut relay = relay?;
-            let next = match relay.stream_idle_timeout {
-                Some(timeout) => tokio::time::timeout(timeout, relay.stream.next()).await,
-                None => Ok(relay.stream.next().await),
+            let next = match (
+                relay.upstream_idle_deadline,
+                relay.downstream_keep_alive_deadline,
+            ) {
+                (Some(idle_deadline), Some(keep_alive_deadline)) => tokio::select! {
+                    upstream = relay.stream.next() => StreamPoll::Upstream(upstream),
+                    () = tokio::time::sleep_until(keep_alive_deadline) => StreamPoll::KeepAlive,
+                    () = tokio::time::sleep_until(idle_deadline) => StreamPoll::IdleTimeout,
+                },
+                _ => StreamPoll::Upstream(relay.stream.next().await),
             };
             match next {
-                Err(_) => {
+                StreamPoll::IdleTimeout => {
                     let timeout = relay
                         .stream_idle_timeout
                         .expect("stream timeout is present when timeout fires");
@@ -236,7 +257,15 @@ pub(crate) fn body_from_stream(
                         None,
                     ))
                 }
-                Ok(Some(Ok(chunk))) => {
+                StreamPoll::KeepAlive => {
+                    relay.observe_keep_alive();
+                    Some((
+                        Ok::<Bytes, std::io::Error>(DOWNSTREAM_STREAM_KEEP_ALIVE.clone()),
+                        Some(relay),
+                    ))
+                }
+                StreamPoll::Upstream(Some(Ok(chunk))) => {
+                    relay.observe_upstream_activity();
                     let chunk = relay.rewrite_model_chunk(chunk);
                     if chunk.is_empty() {
                         return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
@@ -245,7 +274,7 @@ pub(crate) fn body_from_stream(
                     relay.usage.observe(&chunk);
                     Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                 }
-                Ok(Some(Err(summary))) => {
+                StreamPoll::Upstream(Some(Err(summary))) => {
                     if relay.should_ignore_successful_stream_error(&summary) {
                         relay.finish_trailing_stream_error(summary).await;
                         None
@@ -254,7 +283,7 @@ pub(crate) fn body_from_stream(
                         Some((Err(std::io::Error::other(summary)), None))
                     }
                 }
-                Ok(None) => {
+                StreamPoll::Upstream(None) => {
                     if let Some(chunk) = relay.finish_model_rewrite() {
                         relay.observe_chunk(&chunk);
                         relay.usage.observe(&chunk);
@@ -283,6 +312,10 @@ struct StreamingRelay {
     model_rewriter: Option<SseModelRewriter>,
     response_metadata: UpstreamResponseMetadata,
     stream_idle_timeout: Option<Duration>,
+    upstream_idle_deadline: Option<tokio::time::Instant>,
+    downstream_keep_alive_interval: Option<Duration>,
+    downstream_keep_alive_deadline: Option<tokio::time::Instant>,
+    keep_alive_frames_sent: u64,
     first_response_ms: Option<i64>,
     last_chunk_ms: Option<i64>,
     chunks_sent: u64,
@@ -291,6 +324,34 @@ struct StreamingRelay {
 }
 
 impl StreamingRelay {
+    fn observe_upstream_activity(&mut self) {
+        self.upstream_idle_deadline = self
+            .stream_idle_timeout
+            .map(|timeout| tokio::time::Instant::now() + timeout);
+    }
+
+    fn observe_keep_alive(&mut self) {
+        self.keep_alive_frames_sent = self.keep_alive_frames_sent.saturating_add(1);
+        self.downstream_keep_alive_deadline = self
+            .downstream_keep_alive_interval
+            .map(|interval| tokio::time::Instant::now() + interval);
+
+        if let Some(ctx) = self.ctx.as_ref() {
+            tracing::trace!(
+                relay_trace_id = %ctx.relay_trace_id,
+                relay_attempt = ctx.relay_attempt,
+                provider = %ctx.upstream.provider,
+                channel_id = ctx.upstream.channel_id,
+                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                protocol = ctx.protocol.as_str(),
+                model = %ctx.model,
+                path = ctx.path,
+                keep_alive_frames_sent = self.keep_alive_frames_sent,
+                "sent downstream SSE keep-alive"
+            );
+        }
+    }
+
     fn rewrite_model_chunk(&mut self, chunk: Bytes) -> Bytes {
         match self.model_rewriter.as_mut() {
             Some(rewriter) => rewriter.rewrite_chunk(chunk),
@@ -432,6 +493,7 @@ impl StreamingRelay {
             chunks_sent = self.chunks_sent,
             bytes_sent = self.bytes_sent,
             largest_chunk_bytes = self.largest_chunk_bytes,
+            keep_alive_frames_sent = self.keep_alive_frames_sent,
             latency_ms = ctx.started.elapsed().as_millis() as i64,
             "relay response body stream completed"
         );
@@ -458,6 +520,7 @@ impl StreamingRelay {
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
                 largest_chunk_bytes = self.largest_chunk_bytes,
+                keep_alive_frames_sent = self.keep_alive_frames_sent,
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
                 last_signal = ?self.usage.last_signal_summary(),
                 previous_signal = ?self.usage.previous_signal_summary(),
@@ -500,6 +563,7 @@ impl StreamingRelay {
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
                 largest_chunk_bytes = self.largest_chunk_bytes,
+                keep_alive_frames_sent = self.keep_alive_frames_sent,
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
                 last_signal = ?self.usage.last_signal_summary(),
                 previous_signal = ?self.usage.previous_signal_summary(),
@@ -639,6 +703,7 @@ impl StreamingRelay {
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
                 largest_chunk_bytes = self.largest_chunk_bytes,
+                keep_alive_frames_sent = self.keep_alive_frames_sent,
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
                 error = %summary,
                 "ignored trailing upstream stream read error after completed response"
@@ -676,6 +741,7 @@ impl StreamingRelay {
             chunks_sent = self.chunks_sent,
             bytes_sent = self.bytes_sent,
             largest_chunk_bytes = self.largest_chunk_bytes,
+            keep_alive_frames_sent = self.keep_alive_frames_sent,
             latency_ms = ctx.started.elapsed().as_millis() as i64,
             last_signal = ?self.usage.last_signal_summary(),
             previous_signal = ?self.usage.previous_signal_summary(),
@@ -879,6 +945,7 @@ impl Drop for StreamingRelay {
         let chunks_sent = self.chunks_sent;
         let bytes_sent = self.bytes_sent;
         let largest_chunk_bytes = self.largest_chunk_bytes;
+        let keep_alive_frames_sent = self.keep_alive_frames_sent;
 
         tokio::spawn(async move {
             if stream_complete {
@@ -905,6 +972,7 @@ impl Drop for StreamingRelay {
                     chunks_sent,
                     bytes_sent,
                     largest_chunk_bytes,
+                    keep_alive_frames_sent,
                     latency_ms = ctx.started.elapsed().as_millis() as i64,
                     "downstream client closed relay stream after completed response"
                 );
@@ -932,6 +1000,7 @@ impl Drop for StreamingRelay {
                     chunks_sent,
                     bytes_sent,
                     largest_chunk_bytes,
+                    keep_alive_frames_sent,
                     latency_ms = ctx.started.elapsed().as_millis() as i64,
                     "downstream client closed relay stream before completion"
                 );
@@ -1596,6 +1665,16 @@ data: [DONE]
     }
 
     #[test]
+    fn sse_model_rewriter_preserves_downstream_keep_alive_comments() {
+        let mut rewriter = SseModelRewriter::new("project-model".to_string());
+
+        let output = rewriter.rewrite_chunk(DOWNSTREAM_STREAM_KEEP_ALIVE.clone());
+
+        assert_eq!(output, DOWNSTREAM_STREAM_KEEP_ALIVE);
+        assert!(rewriter.finish().is_none());
+    }
+
+    #[test]
     fn stream_usage_parser_caps_unterminated_buffer() {
         let mut parser = StreamUsageParser::new(1024);
 
@@ -1789,6 +1868,22 @@ data: {"type":"ping"}
             signal_summary(parser.last_event.as_deref(), parser.last_type.as_deref()).as_deref(),
             Some("event:ping data_type:ping")
         );
+    }
+
+    #[test]
+    fn stream_usage_parser_ignores_downstream_keep_alive_comments() {
+        let mut parser = StreamUsageParser::new(1024);
+        parser.observe(
+            br#"event: message_start
+data: {"type":"message_start"}
+"#,
+        );
+
+        parser.observe(&DOWNSTREAM_STREAM_KEEP_ALIVE);
+
+        assert!(!parser.completed);
+        assert_eq!(parser.last_event.as_deref(), Some("message_start"));
+        assert_eq!(parser.last_type.as_deref(), Some("message_start"));
     }
 
     #[test]

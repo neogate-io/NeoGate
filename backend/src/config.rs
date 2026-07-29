@@ -11,6 +11,7 @@ pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(600);
 pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+pub const STREAM_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]

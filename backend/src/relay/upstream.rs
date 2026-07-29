@@ -241,7 +241,11 @@ pub(crate) async fn forward_openai_bound(
     path: &str,
     body: Option<Bytes>,
 ) -> AppResult<reqwest::Response> {
-    let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
     let (url, log_path) = adapter.resolve_bound_url(&upstream.base_url, path);
     send_upstream_request(upstream, UpstreamProtocol::Openai, &log_path, || {
         let mut request = state

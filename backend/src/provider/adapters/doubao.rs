@@ -270,6 +270,7 @@ mod tests {
             responses_chat_fallback: false,
             secret: "sk-test".to_string(),
             account_id: None,
+            adapter_hint: None,
             affinity: None,
         }
     }

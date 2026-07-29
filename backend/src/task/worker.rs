@@ -214,8 +214,12 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         return Ok(());
     }
     let body = if task.task_type == UpstreamTaskType::OpenAiVideo {
-        adapter_for_endpoint(&upstream.provider, &upstream.base_url)
-            .normalize_response_body(RelayRoute::Videos, body)?
+        adapter_for_endpoint(
+            &upstream.provider,
+            &upstream.base_url,
+            upstream.adapter_hint.as_deref(),
+        )
+        .normalize_response_body(RelayRoute::Videos, body)?
     } else {
         body
     };

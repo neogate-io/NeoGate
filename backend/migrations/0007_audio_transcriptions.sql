@@ -40,3 +40,10 @@ ALTER TABLE usage_daily VALIDATE CONSTRAINT usage_daily_billing_meter_check;
 
 UPDATE provider SET display_name = 'OpenAI 兼容' WHERE code = 'openai' AND display_name = 'OpenAI 官方';
 UPDATE provider SET display_name = 'Anthropic 兼容' WHERE code = 'anthropic' AND display_name = 'Anthropic 官方';
+
+-- 上游 endpoint 的 adapter 类型 hint，用于在 provider 字段不再携带适配信息时（如"openai 兼容"渠道）
+-- 显式标记所需适配层。目前支持 'newapi'，null 表示按 provider 默认规则选取。
+ALTER TABLE channel_endpoint ADD COLUMN adapter_hint TEXT;
+
+-- 异步任务快照 endpoint 当时的 adapter_hint，保证任务回捞时使用与创建时一致的适配层。
+ALTER TABLE task_upstream ADD COLUMN adapter_hint TEXT;

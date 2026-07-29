@@ -313,6 +313,7 @@ function compactUsageError(row: UsageRecord) {
   if (/upstream model unavailable|invalidendpointormodel|not\s*found/.test(lower)) {
     return t('usageErrorUpstreamModelUnavailable')
   }
+  if (/stream_timeout|stream idle/.test(lower)) return t('usageErrorUpstreamStreamIdle')
   if (/timeout|timed out|deadline/.test(lower)) return t('usageErrorUpstreamTimeout')
   if (/insufficient|quota|balance|credit/.test(lower)) return t('usageErrorInsufficientCredit')
   if (/unauthorized|forbidden|authentication|permission|access denied/.test(lower)) {
@@ -388,6 +389,18 @@ function usageDetailRows(row: UsageRecord) {
     rows.push({
       label: t('usageDetailTokens'),
       value: `${formatNumber(row.input_tokens, locale.value)} / ${formatNumber(row.output_tokens, locale.value)}`
+    })
+  }
+  if ((row.cache_in_tokens ?? 0) > 0) {
+    rows.push({
+      label: t('cacheReadTokensDetail'),
+      value: formatNumber(row.cache_in_tokens, locale.value)
+    })
+  }
+  if (cacheWriteTokens(row)) {
+    rows.push({
+      label: t('cacheWriteTokensDetail'),
+      value: formatNumber(cacheWriteTokens(row), locale.value)
     })
   }
   if ((row.total_tokens ?? 0) > 0) {

@@ -87,6 +87,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/responses/compact",
             post(openai::openai_responses_compact),
         )
+        .route(
+            "/anthropic/v1/responses/compact",
+            post(openai::openai_responses_compact),
+        )
         .route("/v1/responses/{response_id}", get(openai::openai_response))
         .route(
             "/v1/responses/{response_id}/assets/{index}",
@@ -126,6 +130,14 @@ pub fn router() -> Router<Arc<AppState>> {
             post(anthropic::anthropic_messages),
         )
         .route(
+            "/v1/messages/count_tokens",
+            post(anthropic::anthropic_count_tokens),
+        )
+        .route(
+            "/anthropic/v1/messages/count_tokens",
+            post(anthropic::anthropic_count_tokens),
+        )
+        .route(
             "/v1/messages/batches",
             post(anthropic::create_anthropic_message_batch)
                 .get(anthropic::list_anthropic_message_batches),
@@ -162,8 +174,12 @@ pub(crate) async fn finish_task_json_response(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
-    let body = adapter_for_endpoint(&task.provider, &task.upstream_base_url)
-        .normalize_response_body(RelayRoute::Videos, body)?;
+    let body = adapter_for_endpoint(
+        &task.provider,
+        &task.upstream_base_url,
+        task.adapter_hint.as_deref(),
+    )
+    .normalize_response_body(RelayRoute::Videos, body)?;
     tracing::info!(
         task_id = task.id,
         ?task.task_type,

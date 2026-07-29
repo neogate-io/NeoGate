@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{AssertSqlSafe, Postgres, Row, Transaction};
 
 use crate::{
@@ -239,6 +240,14 @@ pub async fn create_channel(
     sync_channel_models_for_channel(&mut tx, channel_id, &provider_code).await?;
     tx.commit().await?;
 
+    // 后台探测 adapter hint，不阻塞响应
+    {
+        let state_bg = state.clone();
+        tokio::spawn(async move {
+            detect_and_update_channel_endpoint_hints(&state_bg, channel_id).await;
+        });
+    }
+
     get_channel(state, channel_id).await
 }
 
@@ -344,6 +353,14 @@ pub async fn update_channel(
         sync_channel_models_for_channel(&mut tx, id, &provider_code).await?;
     }
     tx.commit().await?;
+
+    // 后台探测 adapter hint（仅对 hint 为 NULL 的 endpoint），不阻塞响应
+    {
+        let state_bg = state.clone();
+        tokio::spawn(async move {
+            detect_and_update_channel_endpoint_hints(&state_bg, id).await;
+        });
+    }
 
     let endpoints = endpoints_by_channel(state, &[id]).await?;
     let models = models_by_channel(state, &[id]).await?;
@@ -1237,4 +1254,133 @@ pub(crate) fn mask_channel_key(secret: &str) -> String {
         .skip(length.saturating_sub(TAIL_LEN))
         .collect();
     format!("{head}********{tail}")
+}
+
+/// 剥离 base_url 末尾的 API 版本路径（/v1、/v2 等）以还原根 URL，
+/// 用于拼接厂商自有的非 /v1 路径（如 new-api 的 /api/status）。
+fn strip_api_version_suffix(base_url: &str) -> &str {
+    let trimmed = base_url.trim_end_matches('/');
+    if let Some(idx) = trimmed.rfind('/') {
+        let last = &trimmed[idx + 1..];
+        if matches!(
+            last,
+            "v1" | "v2" | "v3" | "v4" | "v1beta" | "v1beta1" | "openai"
+        ) {
+            return &trimmed[..idx];
+        }
+    }
+    trimmed
+}
+
+/// 向 `{base_url}/api/status` 发送一次轻量探测，识别上游服务类型。
+/// 目前仅识别 new-api（响应 JSON 同时包含 `version` 和 `start_time` 字段）。
+/// 超时或响应不匹配时静默返回 None，不影响调用方流程。
+async fn probe_adapter_hint(
+    http: &reqwest::Client,
+    base_url: &str,
+    secret: Option<&str>,
+) -> Option<&'static str> {
+    let root = strip_api_version_suffix(base_url);
+    let url = format!("{root}/api/status");
+    let mut req = http.get(&url).timeout(Duration::from_secs(3));
+    if let Some(key) = secret {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: Value = resp.json().await.ok()?;
+    // new-api 特有指纹：同时返回 version 和 start_time
+    if body.get("version").is_some() && body.get("start_time").is_some() {
+        return Some("newapi");
+    }
+    None
+}
+
+/// 后台任务：对 channel 下 adapter_hint 为 NULL 的 openai 端点运行指纹探测，
+/// 若识别成功则写入 DB 并使路由缓存失效。
+/// 仅在 hint 为 NULL 时运行，不覆盖已有的手动配置。
+async fn detect_and_update_channel_endpoint_hints(state: &AppState, channel_id: DbId) {
+    let rows = sqlx::query(
+        "SELECT ce.id, ce.base_url, ck.id AS key_id, ck.secret_ciphertext
+         FROM channel_endpoint ce
+         LEFT JOIN LATERAL (
+             SELECT id, secret_ciphertext
+             FROM channel_key
+             WHERE channel_id = ce.channel_id
+               AND enabled = TRUE
+               AND healthy = TRUE
+             ORDER BY created_at ASC
+             LIMIT 1
+         ) ck ON TRUE
+         WHERE ce.channel_id = $1
+           AND ce.protocol = 'openai'
+           AND ce.adapter_hint IS NULL",
+    )
+    .bind(channel_id)
+    .fetch_all(&state.db.pool)
+    .await;
+
+    let rows = match rows {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::debug!(channel_id, %err, "adapter hint detection: failed to load endpoints");
+            return;
+        }
+    };
+
+    let mut any_updated = false;
+    for row in &rows {
+        let Ok(endpoint_id): Result<DbId, _> = row.try_get("id") else {
+            continue;
+        };
+        let Ok(base_url): Result<String, _> = row.try_get("base_url") else {
+            continue;
+        };
+        let key_id: Option<DbId> = row.try_get("key_id").ok().flatten();
+        let ciphertext: Option<String> = row.try_get("secret_ciphertext").ok().flatten();
+
+        let secret = if let (Some(kid), Some(ct)) = (key_id, ciphertext.as_deref()) {
+            state.secrets.plaintext(kid, ct).ok()
+        } else {
+            None
+        };
+
+        let Some(hint) = probe_adapter_hint(&state.http, &base_url, secret.as_deref()).await else {
+            continue;
+        };
+
+        match sqlx::query(
+            "UPDATE channel_endpoint
+             SET adapter_hint = $2, updated_at = now()
+             WHERE id = $1 AND adapter_hint IS NULL",
+        )
+        .bind(endpoint_id)
+        .bind(hint)
+        .execute(&state.db.pool)
+        .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    channel_id,
+                    endpoint_id,
+                    %base_url,
+                    hint,
+                    "adapter hint detected and saved"
+                );
+                any_updated = true;
+            }
+            Err(err) => {
+                tracing::debug!(endpoint_id, %err, "failed to save adapter hint");
+            }
+        }
+    }
+
+    if any_updated {
+        state
+            .cache_invalidator
+            .invalidate(state, crate::cache::InvalidationEvent::Routing)
+            .await;
+    }
 }

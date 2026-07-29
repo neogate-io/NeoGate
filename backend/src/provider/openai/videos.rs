@@ -186,7 +186,11 @@ async fn relay_openai_video_create(
             upstream_request_path: Some(RelayRoute::Videos.path().to_string()),
             upstream_response_mode: None,
         };
-        let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+        let adapter = adapter_for_endpoint(
+            &ctx.upstream.provider,
+            &ctx.upstream.base_url,
+            ctx.upstream.adapter_hint.as_deref(),
+        );
         let response = if meta.is_json || matches!(adapter.name(), "doubao" | "haxicloud") {
             let prepared = adapter.prepare_openai_request(
                 &ctx.upstream,
@@ -295,8 +299,12 @@ async fn finish_video_create_success(
     let body = match upstream_response.bytes().await {
         Ok(body) => {
             ctx.release_request_permit();
-            adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url)
-                .normalize_response_body(RelayRoute::Videos, body)?
+            adapter_for_endpoint(
+                &ctx.upstream.provider,
+                &ctx.upstream.base_url,
+                ctx.upstream.adapter_hint.as_deref(),
+            )
+            .normalize_response_body(RelayRoute::Videos, body)?
         }
         Err(err) => {
             ctx.release_request_permit();

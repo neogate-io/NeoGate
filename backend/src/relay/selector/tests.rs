@@ -22,6 +22,7 @@ fn candidate(name: &str, priority: i32, weight: i32, models: Vec<&str>) -> Chann
         key_selection_mode: KeySelectionMode::Polling,
         use_credentials: false,
         cooldown_until: None,
+        adapter_hint: None,
         polling: Arc::new(AtomicUsize::new(0)),
     }
 }
@@ -644,6 +645,7 @@ fn affinity_target_preserves_selected_upstream_identity() {
         secret: "secret".to_string(),
         account_id: None,
         affinity: None,
+        adapter_hint: None,
     };
 
     let target = UpstreamAffinityTarget::from(&upstream);

@@ -405,6 +405,7 @@ mod tests {
             channel_key_id: Some(1),
             credential_id: None,
             upstream_base_url: "https://dashscope.aliyuncs.com".to_string(),
+            adapter_hint: None,
             status: "completed".to_string(),
             terminal: true,
             upstream_metadata: json!({ "result": { "duration_seconds": 12.01 } }),

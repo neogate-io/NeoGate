@@ -61,6 +61,7 @@ pub(crate) struct UpstreamTask {
     pub(crate) channel_key_id: Option<DbId>,
     pub(crate) credential_id: Option<DbId>,
     pub(crate) upstream_base_url: String,
+    pub(crate) adapter_hint: Option<String>,
     pub(crate) status: String,
     pub(crate) terminal: bool,
     pub(crate) upstream_metadata: Value,

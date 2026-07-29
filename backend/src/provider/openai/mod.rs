@@ -530,7 +530,11 @@ async fn relay_openai(
                 "Anthropic fallback is not supported for {path}"
             ))),
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
-                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+                let adapter = adapter_for_endpoint(
+                    &ctx.upstream.provider,
+                    &ctx.upstream.base_url,
+                    ctx.upstream.adapter_hint.as_deref(),
+                );
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,

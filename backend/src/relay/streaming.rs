@@ -1970,7 +1970,8 @@ data: {"usage":{"input_tokens":0,"output_tokens":20}}
         );
 
         let usage = parser.finish().expect("merged usage should be retained");
-        assert_eq!(usage.input_tokens, 100);
+        // Anthropic 的 input_tokens=100 是 fresh tokens，加上 cache_read=80，总计应为 180
+        assert_eq!(usage.input_tokens, 180);
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.cached_input_tokens, Some(80));
         assert_eq!(usage.cache_creation_input_tokens, Some(12));

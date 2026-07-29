@@ -87,7 +87,11 @@ pub(super) async fn relay_openai_image(
         )
         .await?;
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
-        let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
+        let adapter = adapter_for_endpoint(
+            &upstream.provider,
+            &upstream.base_url,
+            upstream.adapter_hint.as_deref(),
+        );
         let price = state
             .billing
             .price_for(

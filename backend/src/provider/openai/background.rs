@@ -90,7 +90,11 @@ pub(super) async fn create_background_response(
             .await?
     };
     ensure_key_backed_async_upstream(&upstream)?;
-    let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
     let translates_image_generation = adapter.capabilities().translates_response_image_generation
         && prepared.has_image_generation_tool;
     if translates_image_generation {

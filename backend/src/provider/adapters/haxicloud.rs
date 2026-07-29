@@ -235,6 +235,7 @@ mod tests {
             responses_chat_fallback: false,
             secret: "sk".into(),
             account_id: None,
+            adapter_hint: None,
             affinity: None,
         }
     }

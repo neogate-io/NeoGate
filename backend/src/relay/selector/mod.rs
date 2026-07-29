@@ -130,6 +130,9 @@ pub struct SelectedUpstream {
     pub provider: String,
     pub channel_name: String,
     pub base_url: String,
+    /// 显式 adapter 类型 hint，从 channel_endpoint.adapter_hint 加载。
+    /// None 表示按 provider 默认规则选取。
+    pub adapter_hint: Option<String>,
     /// 运行时降级标志：为 true 时，本条 responses 请求由 adapter 改走 /v1/chat/completions
     /// 并用 bridge 把响应转回 responses 格式。由 per-(endpoint,model) 学习写入，不从 DB 加载。
     pub responses_chat_fallback: bool,
@@ -171,6 +174,7 @@ pub struct ChannelCandidate {
     pub provider: String,
     pub name: String,
     pub base_url: String,
+    pub adapter_hint: Option<String>,
     pub models: Vec<String>,
     pub priority: i32,
     pub weight: i32,
@@ -627,6 +631,7 @@ impl Selector {
             provider: channel.provider.clone(),
             channel_name: channel.name.clone(),
             base_url: channel.base_url.clone(),
+            adapter_hint: channel.adapter_hint.clone(),
             responses_chat_fallback: false,
             secret: runtime.secret,
             account_id: runtime.account_id,

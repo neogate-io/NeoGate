@@ -175,7 +175,11 @@ pub(crate) async fn anthropic_messages(
             UpstreamProtocol::Openai => {
                 let body = bridge::messages_to_openai_chat(upstream_body.clone())?;
                 let route = RelayRoute::ChatCompletions;
-                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+                let adapter = adapter_for_endpoint(
+                    &ctx.upstream.provider,
+                    &ctx.upstream.base_url,
+                    ctx.upstream.adapter_hint.as_deref(),
+                );
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,
@@ -673,8 +677,68 @@ impl Drop for AnthropicResultsRelay {
     }
 }
 
+pub(crate) async fn anthropic_count_tokens(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    let model = count_tokens_model(&body)?;
+    let resolved =
+        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &model)
+            .await?;
+    let upstream_body = if resolved.target_model == model {
+        body
+    } else {
+        rewrite_relay_body_model(body, BodyKind::Anthropic, &resolved.target_model)?
+    };
+    let upstream = if let Some(channel_id) = resolved.target_channel_id {
+        state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                &[UpstreamProtocol::Anthropic],
+                &resolved.target_model,
+                channel_id,
+                SelectionConstraints::default(),
+            )
+            .await?
+            .1
+    } else {
+        state
+            .selector
+            .select(
+                &state.db.pool,
+                &state.secrets,
+                UpstreamProtocol::Anthropic,
+                &resolved.target_model,
+            )
+            .await?
+    };
+    let response = forward_anthropic_bound(
+        &state,
+        &headers,
+        &upstream,
+        Method::POST,
+        "/v1/messages/count_tokens",
+        Some(upstream_body),
+    )
+    .await?;
+    raw_upstream_response(response).await
+}
+
 pub(crate) fn batch_terminal(status: &str) -> bool {
     matches!(status, "ended" | "canceled" | "cancelled" | "expired")
+}
+
+fn count_tokens_model(body: &[u8]) -> AppResult<String> {
+    let value: Value = serde_json::from_slice(body)?;
+    value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))
 }
 
 fn batch_model(body: &[u8]) -> AppResult<String> {

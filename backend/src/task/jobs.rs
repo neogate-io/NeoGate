@@ -562,16 +562,20 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
     } else if let Some(spool) = metadata.request_spool.clone() {
         spool::read(&state.config.response_assets.dir, &spool).await
     } else {
-        adapter_for_endpoint(&upstream.provider, &upstream.base_url)
-            .prepare_response_image_generation_request(Bytes::from(serde_json::to_vec(
-                &metadata.request,
-            )?))?
-            .ok_or_else(|| {
-                AppError::BadRequest(
-                    "provider adapter does not translate response image generation".to_string(),
-                )
-            })
-            .map(|request| request.body)
+        adapter_for_endpoint(
+            &upstream.provider,
+            &upstream.base_url,
+            upstream.adapter_hint.as_deref(),
+        )
+        .prepare_response_image_generation_request(Bytes::from(serde_json::to_vec(
+            &metadata.request,
+        )?))?
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "provider adapter does not translate response image generation".to_string(),
+            )
+        })
+        .map(|request| request.body)
     };
     let body = match body_result {
         Ok(body) => body,

@@ -342,7 +342,7 @@ const content = computed(() => {
           'POST',
           '/v1/messages/count_tokens',
           'model, messages, system, tools',
-          '暂未支持'
+          '已支持'
         ],
         [
           'Message Batches',
@@ -617,7 +617,7 @@ const content = computed(() => {
         'POST',
         '/v1/messages/count_tokens',
         'model, messages, system, tools',
-        'Not supported'
+        'Supported'
       ],
       [
         'Message Batches',

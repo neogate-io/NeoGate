@@ -207,6 +207,7 @@ struct EndpointTarget {
     provider: String,
     protocol: String,
     base_url: String,
+    adapter_hint: Option<String>,
     models: Vec<String>,
     image_models: Vec<String>,
     video_models: Vec<String>,
@@ -961,7 +962,11 @@ fn probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeReque
         };
     }
 
-    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
+    let adapter = adapter_for_endpoint(
+        &endpoint.provider,
+        &endpoint.base_url,
+        endpoint.adapter_hint.as_deref(),
+    );
     let route = RelayRoute::ChatCompletions;
     let mut extra_headers = reqwest::header::HeaderMap::new();
     if endpoint.provider.eq_ignore_ascii_case("qwen") {
@@ -984,7 +989,11 @@ fn video_probe_request(
     key: &KeyTarget,
     model: &str,
 ) -> AppResult<DiagnosticProbeRequest> {
-    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
+    let adapter = adapter_for_endpoint(
+        &endpoint.provider,
+        &endpoint.base_url,
+        endpoint.adapter_hint.as_deref(),
+    );
     let route = RelayRoute::Videos;
     let body = serde_json::to_vec(&json!({
         "model": model,
@@ -1001,6 +1010,7 @@ fn video_probe_request(
             provider: endpoint.provider.clone(),
             channel_name: "diagnostic".to_string(),
             base_url: endpoint.base_url.clone(),
+            adapter_hint: endpoint.adapter_hint.clone(),
             responses_chat_fallback: false,
             secret: key.secret.clone(),
             account_id: None,
@@ -1022,7 +1032,11 @@ fn video_probe_request(
 }
 
 fn image_probe_request(endpoint: &EndpointTarget, model: &str) -> DiagnosticProbeRequest {
-    let adapter = adapter_for_endpoint(&endpoint.provider, &endpoint.base_url);
+    let adapter = adapter_for_endpoint(
+        &endpoint.provider,
+        &endpoint.base_url,
+        endpoint.adapter_hint.as_deref(),
+    );
     let route = RelayRoute::ImageGenerations;
     DiagnosticProbeRequest {
         log_path: route.path().to_string(),
@@ -1072,7 +1086,7 @@ async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDi
 
 async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<EndpointTarget>> {
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT ce.id, c.provider, ce.protocol, ce.base_url,
+        "SELECT ce.id, c.provider, ce.protocol, ce.base_url, ce.adapter_hint,
                 COALESCE(cm.models, ARRAY[]::TEXT[]) AS models,
                 COALESCE(cm.image_models, ARRAY[]::TEXT[]) AS image_models,
                 COALESCE(cm.video_models, ARRAY[]::TEXT[]) AS video_models,
@@ -1116,6 +1130,7 @@ async fn load_endpoints(state: &AppState, channel_id: DbId) -> AppResult<Vec<End
             provider: row.try_get("provider").unwrap_or_default(),
             protocol: row.try_get("protocol").unwrap_or_default(),
             base_url: row.try_get("base_url").unwrap_or_default(),
+            adapter_hint: row.try_get("adapter_hint").unwrap_or_default(),
             models: row.try_get("models").unwrap_or_default(),
             image_models: row.try_get("image_models").unwrap_or_default(),
             video_models: row.try_get("video_models").unwrap_or_default(),

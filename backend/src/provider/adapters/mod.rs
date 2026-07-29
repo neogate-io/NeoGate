@@ -10,7 +10,6 @@ mod types;
 
 pub(crate) use registry::adapter_for_endpoint;
 pub(crate) use types::{
-    AdapterErrorDisposition, AdapterResponseMode, PreparedHttpRetry,
-    PreparedResponseImageGenerationRequest, PreparedUpstreamRequest, ProviderAdapter,
-    ProviderCapabilities, RelayRoute,
+    AdapterErrorDisposition, AdapterResponseMode, PreparedResponseImageGenerationRequest,
+    PreparedUpstreamRequest, ProviderAdapter, ProviderCapabilities, RelayRoute,
 };

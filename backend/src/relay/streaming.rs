@@ -32,6 +32,8 @@ use super::{
 };
 
 const MISSING_TERMINAL_STREAM_ERROR: &str = "upstream stream ended before terminal SSE event";
+const DOWNSTREAM_STREAM_ERROR_MESSAGE: &str =
+    "The upstream response stream ended unexpectedly. Please retry the request.";
 const DOWNSTREAM_STREAM_KEEP_ALIVE: Bytes = Bytes::from_static(b": PING\n\n");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,8 +170,13 @@ pub(crate) fn body_from_stream(
 ) -> Body {
     let streamed = ctx.streamed;
     let path = ctx.path;
-    let model_rewriter = (ctx.streamed && ctx.external_model != ctx.model)
-        .then(|| SseModelRewriter::new(ctx.external_model.clone()));
+    let sse_rewriter = (status.is_success() && ctx.streamed).then(|| {
+        SseStreamRewriter::new(
+            (ctx.external_model != ctx.model).then(|| ctx.external_model.clone()),
+            ctx.path,
+            usage_buffer_limit_bytes,
+        )
+    });
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let stream_idle_timeout = ctx.streamed.then_some(STREAM_IDLE_TIMEOUT);
@@ -213,7 +220,7 @@ pub(crate) fn body_from_stream(
             content_length,
             usage_buffer_limit_bytes,
         ),
-        model_rewriter,
+        sse_rewriter,
         response_metadata,
         stream_idle_timeout,
         upstream_idle_deadline: stream_idle_timeout.map(|timeout| now + timeout),
@@ -251,11 +258,17 @@ pub(crate) fn body_from_stream(
                         "upstream response stream was idle for {} seconds",
                         timeout.as_secs()
                     );
+                    let downstream_error = relay.downstream_stream_error_frame();
                     relay.finish_stream_error(summary.clone()).await;
-                    Some((
-                        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, summary)),
-                        None,
-                    ))
+                    downstream_error.map_or_else(
+                        || {
+                            Some((
+                                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, summary)),
+                                None,
+                            ))
+                        },
+                        |frame| Some((Ok::<Bytes, std::io::Error>(frame), None)),
+                    )
                 }
                 StreamPoll::KeepAlive => {
                     relay.observe_keep_alive();
@@ -266,38 +279,50 @@ pub(crate) fn body_from_stream(
                 }
                 StreamPoll::Upstream(Some(Ok(chunk))) => {
                     relay.observe_upstream_activity();
-                    let chunk = relay.rewrite_model_chunk(chunk);
+                    let rewritten = relay.rewrite_sse_chunk(chunk);
+                    let chunk = rewritten.chunk;
                     if chunk.is_empty() {
                         return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
                     }
                     relay.observe_chunk(&chunk);
                     relay.usage.observe(&chunk);
-                    Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
+                    if rewritten.bare_error {
+                        relay.log_normalized_bare_stream_error();
+                        let _ = relay.finish_stream_success().await;
+                        Some((Ok::<Bytes, std::io::Error>(chunk), None))
+                    } else {
+                        Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
+                    }
                 }
                 StreamPoll::Upstream(Some(Err(summary))) => {
                     if relay.should_ignore_successful_stream_error(&summary) {
                         relay.finish_trailing_stream_error(summary).await;
                         None
                     } else {
+                        let downstream_error = relay.downstream_stream_error_frame();
                         relay.finish_stream_error(summary.clone()).await;
-                        Some((Err(std::io::Error::other(summary)), None))
+                        downstream_error.map_or_else(
+                            || Some((Err(std::io::Error::other(summary)), None)),
+                            |frame| Some((Ok::<Bytes, std::io::Error>(frame), None)),
+                        )
                     }
                 }
                 StreamPoll::Upstream(None) => {
-                    if let Some(chunk) = relay.finish_model_rewrite() {
+                    if let Some(rewritten) = relay.finish_sse_rewrite() {
+                        let chunk = rewritten.chunk;
                         relay.observe_chunk(&chunk);
                         relay.usage.observe(&chunk);
+                        if rewritten.bare_error {
+                            relay.log_normalized_bare_stream_error();
+                            let _ = relay.finish_stream_success().await;
+                            return Some((Ok::<Bytes, std::io::Error>(chunk), None));
+                        }
                         return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
                     }
-                    relay.finish_stream_success().await.map(|summary| {
-                        (
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::UnexpectedEof,
-                                summary,
-                            )),
-                            None,
-                        )
-                    })
+                    relay
+                        .finish_stream_success()
+                        .await
+                        .map(|frame| (Ok::<Bytes, std::io::Error>(frame), None))
                 }
             }
         },
@@ -309,7 +334,7 @@ struct StreamingRelay {
     status: StatusCode,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
     usage: ResponseUsageParser,
-    model_rewriter: Option<SseModelRewriter>,
+    sse_rewriter: Option<SseStreamRewriter>,
     response_metadata: UpstreamResponseMetadata,
     stream_idle_timeout: Option<Duration>,
     upstream_idle_deadline: Option<tokio::time::Instant>,
@@ -352,17 +377,45 @@ impl StreamingRelay {
         }
     }
 
-    fn rewrite_model_chunk(&mut self, chunk: Bytes) -> Bytes {
-        match self.model_rewriter.as_mut() {
+    fn rewrite_sse_chunk(&mut self, chunk: Bytes) -> SseRewriteOutput {
+        match self.sse_rewriter.as_mut() {
             Some(rewriter) => rewriter.rewrite_chunk(chunk),
-            None => chunk,
+            None => SseRewriteOutput {
+                chunk,
+                bare_error: false,
+            },
         }
     }
 
-    fn finish_model_rewrite(&mut self) -> Option<Bytes> {
-        self.model_rewriter
+    fn finish_sse_rewrite(&mut self) -> Option<SseRewriteOutput> {
+        self.sse_rewriter
             .as_mut()
-            .and_then(SseModelRewriter::finish)
+            .and_then(SseStreamRewriter::finish)
+    }
+
+    fn log_normalized_bare_stream_error(&self) {
+        let Some(ctx) = self.ctx.as_ref() else {
+            return;
+        };
+        let stream_error = self.usage.stream_error_summary();
+        tracing::warn!(
+            relay_trace_id = %ctx.relay_trace_id,
+            relay_attempt = ctx.relay_attempt,
+            relay_final = ctx.relay_final,
+            provider = %ctx.upstream.provider,
+            channel_id = ctx.upstream.channel_id,
+            channel_name = %ctx.upstream.channel_name,
+            channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+            channel_key_id = ?ctx.upstream.channel_key_id,
+            credential_id = ?ctx.upstream.credential_id,
+            protocol = ctx.protocol.as_str(),
+            model = %ctx.model,
+            path = ctx.path,
+            sse_error_type = ?stream_error.as_ref().and_then(|error| error.error_type.as_deref()),
+            sse_error_code = ?stream_error.as_ref().and_then(|error| error.error_code.as_deref()),
+            sse_error_message = ?stream_error.as_ref().and_then(|error| error.error_message.as_deref()),
+            "normalized bare upstream JSON error into downstream SSE error event"
+        );
     }
 
     fn observe_chunk(&mut self, chunk: &Bytes) {
@@ -453,7 +506,13 @@ impl StreamingRelay {
         self.status.is_success() && self.usage.response_complete() && is_body_decode_error(summary)
     }
 
-    async fn finish_stream_success(mut self) -> Option<String> {
+    fn downstream_stream_error_frame(&self) -> Option<Bytes> {
+        let ctx = self.ctx.as_ref()?;
+        (self.status.is_success() && ctx.streamed && !self.usage.response_complete())
+            .then(|| downstream_stream_error_frame(ctx.path))
+    }
+
+    async fn finish_stream_success(mut self) -> Option<Bytes> {
         let mut ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let stream_complete = self.usage.response_complete();
@@ -678,7 +737,7 @@ impl StreamingRelay {
         );
         enqueue_relay_usage(&ctx.state, usage, failure).await;
         (disposition == StreamFinishDisposition::MissingTerminal)
-            .then(|| MISSING_TERMINAL_STREAM_ERROR.to_string())
+            .then(|| downstream_stream_error_frame(ctx.path))
     }
 
     async fn finish_trailing_stream_error(self, summary: String) {
@@ -775,35 +834,80 @@ impl StreamingRelay {
     }
 }
 
-struct SseModelRewriter {
+struct SseRewriteOutput {
+    chunk: Bytes,
+    bare_error: bool,
+}
+
+enum SseLineRewrite {
+    Line(Vec<u8>),
+    BareError(Bytes),
+}
+
+struct SseStreamRewriter {
     buffered: Vec<u8>,
-    external_model: String,
+    external_model: Option<String>,
+    path: &'static str,
+    limit_bytes: usize,
+    skipping_oversized_line: bool,
     finished: bool,
 }
 
-impl SseModelRewriter {
-    fn new(external_model: String) -> Self {
+impl SseStreamRewriter {
+    fn new(external_model: Option<String>, path: &'static str, limit_bytes: usize) -> Self {
         Self {
             buffered: Vec::new(),
             external_model,
+            path,
+            limit_bytes,
+            skipping_oversized_line: false,
             finished: false,
         }
     }
 
-    fn rewrite_chunk(&mut self, chunk: Bytes) -> Bytes {
-        if chunk.is_empty() {
-            return chunk;
+    fn rewrite_chunk(&mut self, chunk: Bytes) -> SseRewriteOutput {
+        if chunk.is_empty() || self.finished {
+            return SseRewriteOutput {
+                chunk: Bytes::new(),
+                bare_error: false,
+            };
         }
+        let mut output = Vec::with_capacity(self.buffered.len().saturating_add(chunk.len()));
+        let chunk = if self.skipping_oversized_line {
+            let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') else {
+                return SseRewriteOutput {
+                    chunk,
+                    bare_error: false,
+                };
+            };
+            output.extend_from_slice(&chunk[..=offset]);
+            self.skipping_oversized_line = false;
+            chunk.slice(offset + 1..)
+        } else {
+            chunk
+        };
         self.buffered.extend_from_slice(&chunk);
-        let mut output = Vec::with_capacity(self.buffered.len());
         let mut consumed = 0;
         while let Some(offset) = self.buffered[consumed..]
             .iter()
             .position(|byte| *byte == b'\n')
         {
             let line_end = consumed + offset;
-            output.extend_from_slice(&self.rewrite_line(&self.buffered[consumed..line_end]));
-            output.push(b'\n');
+            match self.rewrite_line(&self.buffered[consumed..line_end]) {
+                SseLineRewrite::Line(line) => {
+                    output.extend_from_slice(&line);
+                    output.push(b'\n');
+                }
+                SseLineRewrite::BareError(frame) => {
+                    output.extend_from_slice(&frame);
+                    self.buffered.clear();
+                    self.finished = true;
+                    return SseRewriteOutput {
+                        chunk: Bytes::from(output),
+                        bare_error: true,
+                    };
+                }
+            }
             consumed = line_end + 1;
         }
         if consumed == self.buffered.len() {
@@ -811,10 +915,34 @@ impl SseModelRewriter {
         } else if consumed > 0 {
             self.buffered.drain(..consumed);
         }
-        Bytes::from(output)
+
+        if self.buffered.len() > self.limit_bytes {
+            output.extend_from_slice(&self.buffered);
+            self.buffered.clear();
+            self.skipping_oversized_line = true;
+            return SseRewriteOutput {
+                chunk: Bytes::from(output),
+                bare_error: false,
+            };
+        }
+
+        if let Some(frame) = normalize_bare_sse_error(&self.buffered, self.path) {
+            output.extend_from_slice(&frame);
+            self.buffered.clear();
+            self.finished = true;
+            return SseRewriteOutput {
+                chunk: Bytes::from(output),
+                bare_error: true,
+            };
+        }
+
+        SseRewriteOutput {
+            chunk: Bytes::from(output),
+            bare_error: false,
+        }
     }
 
-    fn finish(&mut self) -> Option<Bytes> {
+    fn finish(&mut self) -> Option<SseRewriteOutput> {
         if self.finished {
             return None;
         }
@@ -823,26 +951,45 @@ impl SseModelRewriter {
             return None;
         }
         let line = std::mem::take(&mut self.buffered);
-        Some(Bytes::from(self.rewrite_line(&line)))
+        Some(match self.rewrite_line(&line) {
+            SseLineRewrite::Line(line) => SseRewriteOutput {
+                chunk: Bytes::from(line),
+                bare_error: false,
+            },
+            SseLineRewrite::BareError(frame) => SseRewriteOutput {
+                chunk: frame,
+                bare_error: true,
+            },
+        })
     }
 
-    fn rewrite_line(&self, line: &[u8]) -> Vec<u8> {
+    fn rewrite_line(&self, line: &[u8]) -> SseLineRewrite {
         let (line, cr) = match line.strip_suffix(b"\r") {
             Some(line) => (line, true),
             None => (line, false),
         };
-        let Some(rewritten) = rewrite_sse_data_model(line, &self.external_model) else {
+        if let Some(frame) = normalize_bare_sse_error(line, self.path) {
+            return SseLineRewrite::BareError(frame);
+        }
+        let Some(external_model) = self.external_model.as_deref() else {
             let mut output = line.to_vec();
             if cr {
                 output.push(b'\r');
             }
-            return output;
+            return SseLineRewrite::Line(output);
+        };
+        let Some(rewritten) = rewrite_sse_data_model(line, external_model) else {
+            let mut output = line.to_vec();
+            if cr {
+                output.push(b'\r');
+            }
+            return SseLineRewrite::Line(output);
         };
         let mut output = rewritten.into_bytes();
         if cr {
             output.push(b'\r');
         }
-        output
+        SseLineRewrite::Line(output)
     }
 }
 
@@ -929,6 +1076,82 @@ fn streamed_success_missing_terminal(status: StatusCode, streamed: bool, complet
 
 fn is_body_decode_error(summary: &str) -> bool {
     summary.contains("error decoding response body")
+}
+
+fn downstream_stream_error_frame(path: &str) -> Bytes {
+    let data = match path {
+        "/v1/messages" => serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "api_error",
+                "message": DOWNSTREAM_STREAM_ERROR_MESSAGE,
+            },
+        }),
+        "/v1/responses" => serde_json::json!({
+            "type": "error",
+            "code": "server_error",
+            "message": DOWNSTREAM_STREAM_ERROR_MESSAGE,
+            "param": null,
+        }),
+        _ => serde_json::json!({
+            "error": {
+                "message": DOWNSTREAM_STREAM_ERROR_MESSAGE,
+                "type": "server_error",
+                "param": null,
+                "code": "upstream_stream_error",
+            },
+        }),
+    };
+    encode_downstream_stream_error(path, data)
+}
+
+fn normalize_bare_sse_error(line: &[u8], path: &str) -> Option<Bytes> {
+    let line = std::str::from_utf8(line).ok()?.trim();
+    if line.is_empty()
+        || line.starts_with("data:")
+        || line.starts_with("event:")
+        || line.starts_with(':')
+    {
+        return None;
+    }
+    let mut data = serde_json::from_str::<Value>(line).ok()?;
+    let object = data.as_object_mut()?;
+    let type_name = object.get("type").and_then(Value::as_str);
+    let nested_error = object.get("error").and_then(Value::as_object);
+    let nested_error_has_details = nested_error.is_some_and(|error| {
+        ["message", "type", "code"]
+            .iter()
+            .any(|field| error.get(*field).is_some_and(Value::is_string))
+    });
+    let typed_error = type_name == Some("error");
+    let nested_error_envelope =
+        nested_error_has_details && matches!(type_name, None | Some("error"));
+    let top_level_error = typed_error
+        && (object.get("message").is_some_and(Value::is_string)
+            || object.get("code").is_some_and(Value::is_string));
+    let valid_for_path = match path {
+        "/v1/messages" => nested_error_envelope,
+        "/v1/responses" => top_level_error,
+        _ => nested_error_envelope,
+    };
+    if !valid_for_path {
+        return None;
+    }
+    if path == "/v1/messages" {
+        object
+            .entry("type".to_string())
+            .or_insert_with(|| Value::String("error".to_string()));
+    }
+    Some(encode_downstream_stream_error(path, data))
+}
+
+fn encode_downstream_stream_error(path: &str, data: Value) -> Bytes {
+    let data = serde_json::to_string(&data).expect("stream error payload is serializable");
+    if matches!(path, "/v1/messages" | "/v1/responses") {
+        Bytes::from(format!("event: error\ndata: {data}\n\n"))
+    } else {
+        Bytes::from(format!("data: {data}\n\n"))
+    }
 }
 
 impl Drop for StreamingRelay {
@@ -1531,6 +1754,69 @@ fn truncate_for_log(value: &str, limit: usize) -> String {
 mod tests {
     use super::*;
 
+    fn stream_error_data(frame: &Bytes) -> Value {
+        let frame = std::str::from_utf8(frame).expect("stream error frame is utf-8");
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("stream error frame has data");
+        serde_json::from_str(data).expect("stream error data is json")
+    }
+
+    #[test]
+    fn anthropic_incomplete_stream_uses_terminal_error_event() {
+        let frame = downstream_stream_error_frame("/v1/messages");
+        let text = std::str::from_utf8(&frame).expect("utf-8 frame");
+        let data = stream_error_data(&frame);
+        let mut parser = StreamUsageParser::new(1024);
+        parser.observe(&frame);
+
+        assert!(text.starts_with("event: error\n"));
+        assert!(text.ends_with("\n\n"));
+        assert!(parser.completed);
+        assert!(parser.failed);
+        assert_eq!(data.get("type").and_then(Value::as_str), Some("error"));
+        assert_eq!(
+            data.pointer("/error/type").and_then(Value::as_str),
+            Some("api_error")
+        );
+        assert_eq!(
+            data.pointer("/error/message").and_then(Value::as_str),
+            Some(DOWNSTREAM_STREAM_ERROR_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn responses_incomplete_stream_uses_terminal_error_event() {
+        let frame = downstream_stream_error_frame("/v1/responses");
+        let text = std::str::from_utf8(&frame).expect("utf-8 frame");
+        let data = stream_error_data(&frame);
+
+        assert!(text.starts_with("event: error\n"));
+        assert_eq!(data.get("type").and_then(Value::as_str), Some("error"));
+        assert_eq!(
+            data.get("code").and_then(Value::as_str),
+            Some("server_error")
+        );
+    }
+
+    #[test]
+    fn chat_incomplete_stream_uses_openai_error_data() {
+        let frame = downstream_stream_error_frame("/v1/chat/completions");
+        let text = std::str::from_utf8(&frame).expect("utf-8 frame");
+        let data = stream_error_data(&frame);
+
+        assert!(!text.starts_with("event:"));
+        assert_eq!(
+            data.pointer("/error/type").and_then(Value::as_str),
+            Some("server_error")
+        );
+        assert_eq!(
+            data.pointer("/error/code").and_then(Value::as_str),
+            Some("upstream_stream_error")
+        );
+    }
+
     #[test]
     fn completed_successful_stream_body_errors_do_not_fail_the_key() {
         assert!(!stream_body_error_is_failure(StatusCode::OK, true));
@@ -1631,7 +1917,11 @@ mod tests {
 
     #[test]
     fn sse_model_rewriter_rewrites_top_level_model() {
-        let mut rewriter = SseModelRewriter::new("company-chat".to_string());
+        let mut rewriter = SseStreamRewriter::new(
+            Some("company-chat".to_string()),
+            "/v1/chat/completions",
+            1024,
+        );
 
         let output = rewriter.rewrite_chunk(Bytes::from_static(
             br#"event: message
@@ -1641,37 +1931,150 @@ data: [DONE]
         ));
 
         assert_eq!(
-            std::str::from_utf8(&output).unwrap(),
+            std::str::from_utf8(&output.chunk).unwrap(),
             "event: message\ndata: {\"choices\":[],\"id\":\"1\",\"model\":\"company-chat\"}\ndata: [DONE]\n"
         );
+        assert!(!output.bare_error);
         assert!(rewriter.finish().is_none());
     }
 
     #[test]
     fn sse_model_rewriter_buffers_partial_lines() {
-        let mut rewriter = SseModelRewriter::new("project-model".to_string());
+        let mut rewriter =
+            SseStreamRewriter::new(Some("project-model".to_string()), "/v1/messages", 1024);
 
         assert!(rewriter
             .rewrite_chunk(Bytes::from_static(br#"data: {"model":"#))
+            .chunk
             .is_empty());
         let output = rewriter.rewrite_chunk(Bytes::from_static(br#""real-model"}"#));
-        assert!(output.is_empty());
+        assert!(output.chunk.is_empty());
         let trailing = rewriter.finish().expect("unterminated line is flushed");
 
         assert_eq!(
-            std::str::from_utf8(&trailing).unwrap(),
+            std::str::from_utf8(&trailing.chunk).unwrap(),
             "data: {\"model\":\"project-model\"}"
         );
+        assert!(!trailing.bare_error);
     }
 
     #[test]
     fn sse_model_rewriter_preserves_downstream_keep_alive_comments() {
-        let mut rewriter = SseModelRewriter::new("project-model".to_string());
+        let mut rewriter =
+            SseStreamRewriter::new(Some("project-model".to_string()), "/v1/messages", 1024);
 
         let output = rewriter.rewrite_chunk(DOWNSTREAM_STREAM_KEEP_ALIVE.clone());
 
-        assert_eq!(output, DOWNSTREAM_STREAM_KEEP_ALIVE);
+        assert_eq!(output.chunk, DOWNSTREAM_STREAM_KEEP_ALIVE);
+        assert!(!output.bare_error);
         assert!(rewriter.finish().is_none());
+    }
+
+    #[test]
+    fn sse_rewriter_normalizes_bare_anthropic_error() {
+        let mut rewriter = SseStreamRewriter::new(None, "/v1/messages", 1024);
+
+        let output = rewriter.rewrite_chunk(Bytes::from_static(
+            br#"{"type":"error","error":{"type":"api_error","message":"upstream stream idle for 30s"}}"#,
+        ));
+        let data = stream_error_data(&output.chunk);
+
+        assert!(output.bare_error);
+        assert!(std::str::from_utf8(&output.chunk)
+            .expect("utf-8 frame")
+            .starts_with("event: error\n"));
+        assert_eq!(
+            data.pointer("/error/message").and_then(Value::as_str),
+            Some("upstream stream idle for 30s")
+        );
+        assert!(rewriter.finish().is_none());
+    }
+
+    #[test]
+    fn sse_rewriter_normalizes_bare_error_split_across_chunks() {
+        let mut rewriter = SseStreamRewriter::new(None, "/v1/messages", 1024);
+
+        let first = rewriter.rewrite_chunk(Bytes::from_static(
+            br#"{"type":"error","error":{"type":"api_error","message":"upstream "#,
+        ));
+        let second = rewriter.rewrite_chunk(Bytes::from_static(br#"idle"}}"#));
+
+        assert!(first.chunk.is_empty());
+        assert!(!first.bare_error);
+        assert!(second.bare_error);
+        assert_eq!(
+            stream_error_data(&second.chunk)
+                .pointer("/error/message")
+                .and_then(Value::as_str),
+            Some("upstream idle")
+        );
+    }
+
+    #[test]
+    fn sse_rewriter_preserves_events_before_bare_error() {
+        let mut rewriter = SseStreamRewriter::new(None, "/v1/messages", 1024);
+
+        let output = rewriter.rewrite_chunk(Bytes::from_static(
+            b"event: ping\ndata: {\"type\":\"ping\"}\n\n{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"failed\"}}\n",
+        ));
+        let text = std::str::from_utf8(&output.chunk).expect("utf-8 frame");
+
+        assert!(output.bare_error);
+        assert!(text.starts_with("event: ping\ndata: {\"type\":\"ping\"}\n\n"));
+        assert!(text.ends_with("event: error\ndata: {\"error\":{\"message\":\"failed\",\"type\":\"api_error\"},\"type\":\"error\"}\n\n"));
+    }
+
+    #[test]
+    fn sse_rewriter_does_not_normalize_non_error_json() {
+        let mut rewriter = SseStreamRewriter::new(None, "/v1/messages", 1024);
+
+        let output = rewriter.rewrite_chunk(Bytes::from_static(
+            br#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+"#,
+        ));
+
+        assert!(!output.bare_error);
+        assert_eq!(
+            output.chunk,
+            Bytes::from_static(
+                br#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+"#
+            )
+        );
+    }
+
+    #[test]
+    fn sse_rewriter_does_not_normalize_error_metadata_on_non_error_type() {
+        let mut rewriter = SseStreamRewriter::new(None, "/v1/messages", 1024);
+
+        let output = rewriter.rewrite_chunk(Bytes::from_static(
+            b"{\"type\":\"message_delta\",\"error\":{\"message\":\"metadata only\"}}\n",
+        ));
+
+        assert!(!output.bare_error);
+        assert_eq!(
+            output.chunk,
+            Bytes::from_static(
+                b"{\"type\":\"message_delta\",\"error\":{\"message\":\"metadata only\"}}\n"
+            )
+        );
+    }
+
+    #[test]
+    fn sse_rewriter_recovers_after_oversized_line() {
+        let mut rewriter = SseStreamRewriter::new(None, "/v1/messages", 16);
+
+        let oversized = rewriter.rewrite_chunk(Bytes::from_static(b"abcdefghijklmnopq"));
+        let error = rewriter.rewrite_chunk(Bytes::from_static(
+            b"rst\n{\"type\":\"error\",\"error\":{\"message\":\"failed\"}}\n",
+        ));
+
+        assert_eq!(oversized.chunk, Bytes::from_static(b"abcdefghijklmnopq"));
+        assert!(!oversized.bare_error);
+        assert!(error.bare_error);
+        assert!(std::str::from_utf8(&error.chunk)
+            .expect("utf-8 frame")
+            .starts_with("rst\nevent: error\n"));
     }
 
     #[test]

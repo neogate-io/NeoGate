@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{parse_usage_from_bytes, DebitHold, TokenUsage},
+    config::UPSTREAM_TIMEOUT,
     error::{reqwest_status, AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     provider::adapters::adapter_for_endpoint,
@@ -1767,12 +1768,7 @@ async fn update_metadata(
 ) -> AppResult<bool> {
     metadata.response["status"] = Value::String(status.to_string());
     let usage_summary = UsageSummary::value_from_usage(usage)?;
-    let next_poll_at = next_poll_at_for_status(
-        status,
-        terminal,
-        Utc::now(),
-        state.config.http.upstream_timeout,
-    );
+    let next_poll_at = next_poll_at_for_status(status, terminal, Utc::now(), UPSTREAM_TIMEOUT);
     let expires_at = terminal.then(|| asset_expiration(Utc::now()));
     let result = sqlx::query(
         r#"

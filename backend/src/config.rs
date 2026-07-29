@@ -9,6 +9,8 @@ pub const CREDENTIAL_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 pub const DEFAULT_ADMIN_TOKEN_SECRET: &str = "change-me-admin-token-secret-in-production";
 pub const DEFAULT_UPSTREAM_SECRET_KEY: &str = "change-me-upstream-secret-key-in-production";
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(600);
+pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -171,7 +173,6 @@ pub struct DbPoolConfig {
 #[derive(Clone, Debug)]
 pub struct HttpClientConfig {
     pub upstream_connect_timeout: Duration,
-    pub upstream_timeout: Duration,
     pub pool_max_idle_per_host: usize,
     pub pool_idle_timeout: Duration,
 }
@@ -243,11 +244,6 @@ impl Config {
         let process_role = ProcessRole::from_env_value(
             &env::var("PROCESS_ROLE").unwrap_or_else(|_| "all".to_string()),
         )?;
-        let upstream_timeout = Duration::from_secs(parse_u64_with_alias(
-            "UPSTREAM_TIMEOUT_SECONDS",
-            "REQUEST_TIMEOUT_SECONDS",
-            600,
-        )?);
         let config = Self {
             database_url: required("DATABASE_URL")?,
             bind_addr: env::var("BIND_ADDR")
@@ -277,7 +273,6 @@ impl Config {
                 .unwrap_or_else(|_| DEFAULT_UPSTREAM_SECRET_KEY.to_string()),
             http: HttpClientConfig {
                 upstream_connect_timeout: Duration::from_secs(10),
-                upstream_timeout,
                 pool_max_idle_per_host: 100,
                 pool_idle_timeout: Duration::from_secs(90),
             },
@@ -349,9 +344,6 @@ impl Config {
         }
         if self.runtime_mode.is_distributed() && self.redis_url.is_none() {
             anyhow::bail!("REDIS_URL is required when RUNTIME_MODE=distributed");
-        }
-        if self.http.upstream_timeout.is_zero() {
-            anyhow::bail!("UPSTREAM_TIMEOUT_SECONDS must be positive");
         }
         if self.relay.body_limit_bytes == 0 {
             anyhow::bail!("RELAY_BODY_LIMIT_BYTES must be positive");
@@ -543,13 +535,6 @@ fn service_mode_from_env_file(path: &std::path::Path) -> Result<Option<ServiceMo
 
 fn parse_u64(name: &str, default: u64) -> Result<u64> {
     parse_env(name, default)
-}
-
-fn parse_u64_with_alias(name: &str, alias: &str, default: u64) -> Result<u64> {
-    if let Some(value) = parse_env_optional(name)? {
-        return Ok(value);
-    }
-    parse_u64(alias, default)
 }
 
 fn parse_u32(name: &str, default: u32) -> Result<u32> {

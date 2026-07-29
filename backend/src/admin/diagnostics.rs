@@ -9,7 +9,7 @@ use sqlx::Row;
 use crate::{
     billing::BILLABLE_PRICE_CONDITION_CP,
     cache::InvalidationEvent,
-    config::DEFAULT_ANTHROPIC_VERSION,
+    config::{DEFAULT_ANTHROPIC_VERSION, UPSTREAM_TIMEOUT},
     error::{AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     input::trimmed_non_empty,
@@ -27,14 +27,13 @@ use super::{channel::mask_channel_key, credentials::runtime_secret_from_enabled_
 const DIAGNOSTIC_COOLDOWN_MINUTES: i64 = 5;
 
 async fn send_with_upstream_timeout(
-    state: &AppState,
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, AppError> {
-    match tokio::time::timeout(state.config.http.upstream_timeout, request.send()).await {
+    match tokio::time::timeout(UPSTREAM_TIMEOUT, request.send()).await {
         Ok(result) => result.map_err(AppError::from),
         Err(_) => Err(AppError::BadRequest(format!(
             "diagnostic probe timed out after {} seconds",
-            state.config.http.upstream_timeout.as_secs()
+            UPSTREAM_TIMEOUT.as_secs()
         ))),
     }
 }
@@ -605,10 +604,14 @@ async fn run_models_step(
     key: &KeyTarget,
 ) -> ModelsStepResult {
     let started = Instant::now();
-    let response = send_with_upstream_timeout(
+    let response = send_with_upstream_timeout(upstream_request(
         state,
-        upstream_request(state, endpoint, key, "GET", "/v1/models", None),
-    )
+        endpoint,
+        key,
+        "GET",
+        "/v1/models",
+        None,
+    ))
     .await;
     match response {
         Ok(response) => {
@@ -693,18 +696,15 @@ async fn run_probe_step(
         url = %request.url,
         "diagnostic probe request started"
     );
-    let response = send_with_upstream_timeout(
+    let response = send_with_upstream_timeout(upstream_request_url(
         state,
-        upstream_request_url(
-            state,
-            endpoint,
-            key,
-            "POST",
-            &request.url,
-            request.extra_headers,
-            Some(request.body),
-        ),
-    )
+        endpoint,
+        key,
+        "POST",
+        &request.url,
+        request.extra_headers,
+        Some(request.body),
+    ))
     .await;
     match response {
         Ok(response) => {
@@ -801,18 +801,15 @@ async fn run_video_probe_step(
         url = %request.url,
         "diagnostic video probe request started"
     );
-    let response = send_with_upstream_timeout(
+    let response = send_with_upstream_timeout(upstream_request_url(
         state,
-        upstream_request_url(
-            state,
-            endpoint,
-            key,
-            "POST",
-            &request.url,
-            request.extra_headers,
-            Some(request.body),
-        ),
-    )
+        endpoint,
+        key,
+        "POST",
+        &request.url,
+        request.extra_headers,
+        Some(request.body),
+    ))
     .await;
     match response {
         Ok(response) => {
@@ -898,18 +895,15 @@ async fn run_image_probe_step(
         url = %request.url,
         "diagnostic image probe request started"
     );
-    let response = send_with_upstream_timeout(
+    let response = send_with_upstream_timeout(upstream_request_url(
         state,
-        upstream_request_url(
-            state,
-            endpoint,
-            key,
-            "POST",
-            &request.url,
-            request.extra_headers,
-            Some(request.body),
-        ),
-    )
+        endpoint,
+        key,
+        "POST",
+        &request.url,
+        request.extra_headers,
+        Some(request.body),
+    ))
     .await;
     match response {
         Ok(response) => {

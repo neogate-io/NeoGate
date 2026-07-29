@@ -703,12 +703,11 @@ fn pricing_template_from_models_dev_model<'a>(
     if model.is_empty() {
         return None;
     }
-    let billing_meter = if is_audio_transcription_model(model) {
-        BillingMeter::Audio
-    } else {
-        billing_meter_from_models_dev_model(model_data)
-    };
-    let prices = audio_pricing_for_model(model, pricing_micros_from_models_dev_model(model_data));
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let prices = audio_pricing_for_model(
+        billing_meter == BillingMeter::Audio,
+        pricing_micros_from_models_dev_model(model_data),
+    );
     Some(PricingTemplateUpsert {
         provider,
         model,
@@ -727,13 +726,11 @@ fn pricing_template_from_local_cny_model<'a>(
     if model.is_empty() {
         return None;
     }
-    let billing_meter = if is_audio_transcription_model(model) {
-        BillingMeter::Audio
-    } else {
-        billing_meter_from_models_dev_model(model_data)
-    };
-    let prices =
-        audio_pricing_for_model(model, pricing_micros_from_local_pricing_model(model_data));
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let prices = audio_pricing_for_model(
+        billing_meter == BillingMeter::Audio,
+        pricing_micros_from_local_pricing_model(model_data),
+    );
     Some(PricingTemplateUpsert {
         provider,
         model,
@@ -751,9 +748,12 @@ fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<Pri
     pricing_micros_from_cost(model.cost.as_ref()?)
 }
 
-fn audio_pricing_for_model(model: &str, prices: Option<PricingMicros>) -> Option<PricingMicros> {
+fn audio_pricing_for_model(
+    audio_transcription: bool,
+    prices: Option<PricingMicros>,
+) -> Option<PricingMicros> {
     prices.map(|mut prices| {
-        if is_audio_transcription_model(model) && prices.pricing_basis == PricingBasis::Second {
+        if audio_transcription && prices.pricing_basis == PricingBasis::Second {
             prices.billing_meter = BillingMeter::Audio;
         }
         prices
@@ -873,7 +873,9 @@ fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
 }
 
 fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
-    if model
+    if is_audio_transcription_model_data(model) {
+        BillingMeter::Audio
+    } else if model
         .modalities
         .as_ref()
         .is_some_and(|modalities| modality_contains(&modalities.output, "video"))
@@ -890,11 +892,11 @@ fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
     }
 }
 
-fn is_audio_transcription_model(model: &str) -> bool {
-    matches!(
-        model.trim().to_ascii_lowercase().as_str(),
-        "fun-asr" | "paraformer-v2"
-    )
+fn is_audio_transcription_model_data(model: &ModelsDevModel) -> bool {
+    model.modalities.as_ref().is_some_and(|modalities| {
+        modality_contains(&modalities.input, "audio")
+            && modality_contains(&modalities.output, "text")
+    })
 }
 
 fn modality_contains(values: &[String], target: &str) -> bool {
@@ -917,6 +919,7 @@ fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
         "release_date": model.release_date,
         "last_updated": model.last_updated,
         "modalities": model.modalities,
+        "audio_transcription": is_audio_transcription_model_data(model),
         "open_weights": model.open_weights,
         "limit": model.limit,
     })
@@ -927,6 +930,7 @@ fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
         "id": model.id,
         "name": model.name,
         "modalities": model.modalities,
+        "audio_transcription": is_audio_transcription_model_data(model),
     });
     if let Some(cost) = model.cost.as_ref() {
         if let Some(video_tiers) = cost.video_tiers.as_ref() {
@@ -1531,6 +1535,27 @@ mod tests {
         assert_eq!(
             billing_meter_from_models_dev_model(&model),
             BillingMeter::Video
+        );
+    }
+
+    #[test]
+    fn audio_modalities_distinguish_transcription_from_speech_generation() {
+        let transcription: ModelsDevModel =
+            serde_json::from_str(r#"{"modalities":{"input":["audio"],"output":["text"]}}"#)
+                .unwrap();
+        let speech_generation: ModelsDevModel =
+            serde_json::from_str(r#"{"modalities":{"input":["text"],"output":["audio"]}}"#)
+                .unwrap();
+
+        assert!(is_audio_transcription_model_data(&transcription));
+        assert!(!is_audio_transcription_model_data(&speech_generation));
+        assert_eq!(
+            billing_meter_from_models_dev_model(&transcription),
+            BillingMeter::Audio
+        );
+        assert_eq!(
+            billing_meter_from_models_dev_model(&speech_generation),
+            BillingMeter::Token
         );
     }
 

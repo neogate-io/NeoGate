@@ -458,10 +458,6 @@ Check by scenario:
       <td>Non-streaming JSON and SSE usage parsing uses a fixed 16 MiB buffer; usage cannot be extracted from upstream responses larger than that.</td>
     </tr>
     <tr>
-      <td>⏱️ Long-running requests</td>
-      <td>For 504s on long image edits, increase <code>UPSTREAM_TIMEOUT_SECONDS</code>; it defaults to 600 seconds, and the old <code>REQUEST_TIMEOUT_SECONDS</code> name remains a compatibility alias.</td>
-    </tr>
-    <tr>
       <td>🚦 User concurrency</td>
       <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 100 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
     </tr>

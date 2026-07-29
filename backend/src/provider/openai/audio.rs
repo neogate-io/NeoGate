@@ -39,6 +39,12 @@ enum ResponseFormat {
     Text,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioTranscriptionApi {
+    AsyncFile,
+    MultimodalGeneration,
+}
+
 #[derive(Debug)]
 struct AudioRequest {
     model: String,
@@ -62,12 +68,6 @@ pub(crate) async fn openai_audio_transcriptions(
         &request.model,
     )
     .await?;
-    if !is_supported_model(&resolved.target_model) {
-        return Err(AppError::BadRequestWithCode {
-            code: "unsupported_audio_model",
-            message: "audio transcriptions currently require fun-asr or paraformer-v2",
-        });
-    }
     let user_key_model_credit_account =
         auth.model_credit_account(&resolved.external_model).cloned();
     let _request_permit = state.user_request_limiter.try_acquire(auth.user_id).await?;
@@ -87,6 +87,17 @@ pub(crate) async fn openai_audio_transcriptions(
         )
         .await?;
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
+        let transcription_api = ensure_audio_transcription_capability(
+            &state.db.pool,
+            &upstream.provider,
+            &resolved.target_model,
+        )
+        .await?;
+        if transcription_api == AudioTranscriptionApi::MultimodalGeneration
+            && request.language.is_some()
+        {
+            return Err(unsupported_option("language"));
+        }
         let price = state
             .billing
             .price_for(
@@ -116,16 +127,31 @@ pub(crate) async fn openai_audio_transcriptions(
             estimated_seconds.saturating_mul(unit_price),
         )
         .await?;
-        match bailian_asr::upload_and_submit(
-            &state,
-            &upstream,
-            &resolved.target_model,
-            request.audio.clone(),
-            request.extension,
-            request.language.as_deref(),
-        )
-        .await
-        {
+        let submission = match transcription_api {
+            AudioTranscriptionApi::AsyncFile => {
+                bailian_asr::upload_and_submit(
+                    &state,
+                    &upstream,
+                    &resolved.target_model,
+                    request.audio.clone(),
+                    request.extension,
+                    request.language.as_deref(),
+                )
+                .await
+            }
+            AudioTranscriptionApi::MultimodalGeneration => {
+                bailian_asr::transcribe_multimodal(
+                    &state,
+                    &upstream,
+                    &resolved.target_model,
+                    request.audio.clone(),
+                    request.extension,
+                    request.duration_seconds,
+                )
+                .await
+            }
+        };
+        match submission {
             Ok(submission) => break (submission, upstream, protocol, hold),
             Err(err) => {
                 release_empty_hold(&state, hold, "Alibaba ASR pre-submission failure").await;
@@ -144,6 +170,14 @@ pub(crate) async fn openai_audio_transcriptions(
         }
     };
 
+    let inline_result = submission.completed.as_ref().map(|completed| {
+        json!({
+            "text": completed.text,
+            "duration_seconds": completed.duration_seconds,
+            "duration_source": completed.duration_source,
+            "request_id": submission.request_id,
+        })
+    });
     let task_metadata = json!({
         "neogate": {
             "local_duration_seconds": request.duration_seconds,
@@ -154,6 +188,7 @@ pub(crate) async fn openai_audio_transcriptions(
             "relay_started_at": Utc::now().to_rfc3339(),
             "relay_trace_id": relay_trace_id,
             "request_id": submission.request_id,
+            "inline_result": inline_result,
         }
     });
     if let Err(err) = upstream_task::insert_task(
@@ -338,8 +373,31 @@ fn normalize_language(value: String) -> AppResult<String> {
     Ok(language)
 }
 
-fn is_supported_model(model: &str) -> bool {
-    model.eq_ignore_ascii_case("fun-asr") || model.eq_ignore_ascii_case("paraformer-v2")
+async fn ensure_audio_transcription_capability(
+    pool: &sqlx::PgPool,
+    provider: &str,
+    model: &str,
+) -> AppResult<AudioTranscriptionApi> {
+    let api = sqlx::query_scalar::<_, String>(
+        "SELECT capabilities->>'audio_transcription_api'
+         FROM provider_model
+         WHERE lower(provider) = lower($1)
+           AND lower(model) = lower($2)
+           AND capabilities @> '{\"audio_transcription\": true}'::JSONB
+         LIMIT 1",
+    )
+    .bind(provider)
+    .bind(model)
+    .fetch_optional(pool)
+    .await?;
+    match api.as_deref() {
+        Some("async_file") => Ok(AudioTranscriptionApi::AsyncFile),
+        Some("multimodal_generation") => Ok(AudioTranscriptionApi::MultimodalGeneration),
+        _ => Err(AppError::BadRequestWithCode {
+            code: "unsupported_audio_model",
+            message: "the selected model is not configured for audio transcription",
+        }),
+    }
 }
 
 fn unsupported_option(option: &str) -> AppError {
@@ -543,9 +601,9 @@ mod tests {
     #[test]
     fn parses_audio_defaults_and_one_second_wav() {
         let wav = wav_one_second();
-        let (headers, body) = multipart_body(&[("model", "fun-asr")], &[&wav]);
+        let (headers, body) = multipart_body(&[("model", "fun-asr-flash-2026-06-15")], &[&wav]);
         let request = parse_request(&headers, &body).unwrap();
-        assert_eq!(request.model, "fun-asr");
+        assert_eq!(request.model, "fun-asr-flash-2026-06-15");
         assert_eq!(request.response_format, ResponseFormat::Json);
         assert_eq!(request.extension, "wav");
         assert!((request.duration_seconds - 1.0).abs() < 0.001);
@@ -568,20 +626,25 @@ mod tests {
         let request = parse_request(&headers, &body).unwrap();
         assert_eq!(request.response_format, ResponseFormat::Text);
         assert_eq!(request.language.as_deref(), Some("zh-cn"));
-        assert!(is_supported_model(&request.model));
     }
 
     #[test]
     fn rejects_duplicate_fields_files_and_empty_file() {
         let wav = wav_one_second();
+        let (headers, body) = multipart_body(
+            &[
+                ("model", "fun-asr-flash-2026-06-15"),
+                ("model", "paraformer-v2"),
+            ],
+            &[&wav],
+        );
+        assert!(parse_request(&headers, &body).is_err());
+
         let (headers, body) =
-            multipart_body(&[("model", "fun-asr"), ("model", "paraformer-v2")], &[&wav]);
+            multipart_body(&[("model", "fun-asr-flash-2026-06-15")], &[&wav, &wav]);
         assert!(parse_request(&headers, &body).is_err());
 
-        let (headers, body) = multipart_body(&[("model", "fun-asr")], &[&wav, &wav]);
-        assert!(parse_request(&headers, &body).is_err());
-
-        let (headers, body) = multipart_body(&[("model", "fun-asr")], &[b""]);
+        let (headers, body) = multipart_body(&[("model", "fun-asr-flash-2026-06-15")], &[b""]);
         assert!(parse_request(&headers, &body).is_err());
     }
 
@@ -594,7 +657,8 @@ mod tests {
             ("stream", "true"),
             ("timestamp_granularities[]", "word"),
         ] {
-            let (headers, body) = multipart_body(&[("model", "fun-asr"), (name, value)], &[]);
+            let (headers, body) =
+                multipart_body(&[("model", "fun-asr-flash-2026-06-15"), (name, value)], &[]);
             assert!(parse_request(&headers, &body).is_err(), "accepted {name}");
         }
     }

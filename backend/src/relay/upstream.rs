@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use crate::{
     admin::credentials::refresh_openai_runtime_credential,
-    config::DEFAULT_ANTHROPIC_VERSION,
+    config::{DEFAULT_ANTHROPIC_VERSION, UPSTREAM_TIMEOUT},
     error::{AppError, AppResult, UpstreamErrorKind, UpstreamRequestError},
     provider::adapters::{adapter_for_endpoint, PreparedUpstreamRequest},
     AppState,
@@ -60,7 +60,7 @@ pub(crate) async fn forward_openai_with_headers(
     }
     ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, protocol, path, || {
+    send_upstream_request(upstream, protocol, path, || {
         let request = state
             .http
             .post(url.clone())
@@ -83,7 +83,7 @@ pub(crate) async fn forward_prepared_openai(
         return forward_openai_oauth(state, upstream, prepared.body, &prepared.log_path).await;
     }
     ensure_openai_protocol(protocol)?;
-    send_upstream_request(state, upstream, protocol, &prepared.log_path, || {
+    send_upstream_request(upstream, protocol, &prepared.log_path, || {
         let mut request = state
             .http
             .post(prepared.url.clone())
@@ -109,7 +109,7 @@ pub(crate) async fn forward_openai_with_content_type(
 ) -> AppResult<reqwest::Response> {
     ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, protocol, path, || {
+    send_upstream_request(upstream, protocol, path, || {
         let mut request = state
             .http
             .post(url.clone())
@@ -243,7 +243,7 @@ pub(crate) async fn forward_openai_bound(
 ) -> AppResult<reqwest::Response> {
     let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
     let (url, log_path) = adapter.resolve_bound_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, UpstreamProtocol::Openai, &log_path, || {
+    send_upstream_request(upstream, UpstreamProtocol::Openai, &log_path, || {
         let mut request = state
             .http
             .request(method.clone(), url.clone())
@@ -266,7 +266,7 @@ async fn send_openai_oauth_request(
     body: Bytes,
     path: &str,
 ) -> AppResult<reqwest::Response> {
-    send_upstream_request(state, upstream, UpstreamProtocol::OpenAiOauth, path, || {
+    send_upstream_request(upstream, UpstreamProtocol::OpenAiOauth, path, || {
         state
             .http
             .post(url)
@@ -389,7 +389,6 @@ pub(crate) async fn forward_anthropic(
         .map(str::to_string);
 
     send_upstream_request(
-        state,
         upstream,
         UpstreamProtocol::Anthropic,
         "/v1/messages",
@@ -431,7 +430,7 @@ pub(crate) async fn forward_anthropic_bound(
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
 
-    send_upstream_request(state, upstream, UpstreamProtocol::Anthropic, path, || {
+    send_upstream_request(upstream, UpstreamProtocol::Anthropic, path, || {
         let mut request = state
             .http
             .request(method.clone(), url.clone())
@@ -463,7 +462,6 @@ fn apply_anthropic_cli_passthrough_headers(
 }
 
 async fn send_upstream_request<F>(
-    state: &AppState,
     upstream: &SelectedUpstream,
     _protocol: UpstreamProtocol,
     _path: &str,
@@ -473,7 +471,7 @@ where
     F: FnOnce() -> reqwest::RequestBuilder,
 {
     match tokio::time::timeout(
-        state.config.http.upstream_timeout,
+        UPSTREAM_TIMEOUT,
         build().header("accept-encoding", "identity").send(),
     )
     .await
@@ -485,7 +483,7 @@ where
             upstream.provider.clone(),
             format!(
                 "response headers were not received within {} seconds",
-                state.config.http.upstream_timeout.as_secs()
+                UPSTREAM_TIMEOUT.as_secs()
             ),
         ))),
     }

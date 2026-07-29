@@ -90,6 +90,34 @@ Run the video smoke test from `backend/`:
 python -m unittest tests.smoke.test_openai_video
 ```
 
+## OpenAI Audio Transcription Smoke Test
+
+The audio transcription smoke test lives in `smoke/test_openai_audio.py`. It
+uploads audio to a running NeoGate instance and verifies that the
+OpenAI-compatible JSON and text responses contain non-empty transcription
+text. The test does not save or print the transcript.
+
+The test uses `fixtures/audio.wav` by default. Required:
+
+```bash
+NEOGATE_API_KEY=your_neogate_api_key
+```
+
+Set `NEOGATE_AUDIO_FILE` to test another recording. Optional:
+
+```bash
+NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
+NEOGATE_AUDIO_FILE=/path/to/audio.mp3
+NEOGATE_AUDIO_MODEL=fun-asr-flash-2026-06-15
+NEOGATE_AUDIO_EXPECTED_TEXT=expected phrase
+```
+
+Run from `backend/`:
+
+```bash
+python -m unittest tests.smoke.test_openai_audio
+```
+
 ## Relay Benchmark
 
 The relay benchmark tools provide a local OpenAI-compatible mock upstream for

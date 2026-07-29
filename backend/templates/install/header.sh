@@ -26,6 +26,7 @@ INSTALL_LOCALE="${NEOGATE_LOCALE:-}"
 INSTALL_LANG="en"
 INSTALL_STEP=0
 INSTALL_TOTAL_STEPS=6
+NODE_REQUIRED_MAJOR=22
 
 if [[ -t 1 ]]; then
   COLOR_BLUE=$'\033[34m'
@@ -131,6 +132,9 @@ message() {
       verify_failed) printf 'API 密钥验证失败，HTTP %s' "$1" ;;
       node_found) printf 'Node.js %s' "$1" ;;
       npm_found) printf 'npm %s' "$1" ;;
+      node_outdated) printf 'Node.js %s 版本过低（需要 >=%s），需要升级。' "$1" "$2" ;;
+      node_upgrade_prompt) printf '%s' "是否现在安装 Node.js 22？" ;;
+      node_installing_nodesource) printf '%s' "正在通过 NodeSource 仓库安装 Node.js 22..." ;;
       node_missing_disabled) printf '%s' "缺少 Node.js/npm，且安装已禁用。" ;;
       node_missing_prompt) printf '%s' "缺少 Node.js/npm。现在安装吗？" ;;
       node_required) printf '%s' "需要 Node.js/npm。" ;;
@@ -252,6 +256,9 @@ message() {
     verify_failed) printf 'API key verification failed with HTTP %s' "$1" ;;
     node_found) printf 'Node.js %s' "$1" ;;
     npm_found) printf 'npm %s' "$1" ;;
+    node_outdated) printf 'Node.js %s is too old (need >=%s). Upgrade required.' "$1" "$2" ;;
+    node_upgrade_prompt) printf '%s' "Install Node.js 22 now?" ;;
+    node_installing_nodesource) printf '%s' "Installing Node.js 22 via NodeSource repository..." ;;
     node_missing_disabled) printf '%s' "Node.js/npm is missing and installation is disabled." ;;
     node_missing_prompt) printf '%s' "Node.js/npm is missing. Install it now?" ;;
     node_required) printf '%s' "Node.js/npm is required." ;;

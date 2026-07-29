@@ -482,8 +482,29 @@ select_model() {
 
 NPM_REGISTRY="https://registry.npmmirror.com"
 
-# Install Node.js system-wide with the OS package manager so node, npm and
-# globally installed CLIs land on the default PATH for every session.
+node_version_ok() {
+  have_cmd node || return 1
+  local ver major
+  ver="$(node --version 2>/dev/null)"   # e.g. v18.19.1
+  major="${ver#v}"
+  major="${major%%.*}"
+  [[ "$major" =~ ^[0-9]+$ ]] && [[ "$major" -ge "$NODE_REQUIRED_MAJOR" ]]
+}
+
+# Run the NodeSource setup script (fetched via curl) under the appropriate
+# privilege level. In dry-run mode the command is printed but not executed.
+install_node_via_nodesource() {
+  local setup_url="$1"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ curl -fsSL %s | sudo bash -\n' "$setup_url"
+    return 0
+  fi
+  curl -fsSL "$setup_url" | run_as_root bash -
+}
+
+# Install Node.js system-wide. On Linux, apt/dnf/yum use the NodeSource
+# repository so the installed version meets the >=22 requirement instead of
+# shipping whatever the distro packages by default.
 install_node_system() {
   local os
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -496,18 +517,23 @@ install_node_system() {
       ;;
     linux)
       if have_cmd apt-get; then
-        log "$(message node_installing_pkg "apt")"
-        run_as_root apt-get update
-        run_as_root apt-get install -y nodejs npm
+        log "$(message node_installing_nodesource)"
+        install_node_via_nodesource \
+          "https://deb.nodesource.com/setup_${NODE_REQUIRED_MAJOR}.x"
+        run_as_root apt-get install -y nodejs
       elif have_cmd dnf; then
-        log "$(message node_installing_pkg "dnf")"
-        run_as_root dnf install -y nodejs npm
+        log "$(message node_installing_nodesource)"
+        install_node_via_nodesource \
+          "https://rpm.nodesource.com/setup_${NODE_REQUIRED_MAJOR}.x"
+        run_as_root dnf install -y nodejs
       elif have_cmd yum; then
-        log "$(message node_installing_pkg "yum")"
-        run_as_root yum install -y nodejs npm
+        log "$(message node_installing_nodesource)"
+        install_node_via_nodesource \
+          "https://rpm.nodesource.com/setup_${NODE_REQUIRED_MAJOR}.x"
+        run_as_root yum install -y nodejs
       elif have_cmd zypper; then
         log "$(message node_installing_pkg "zypper")"
-        run_as_root zypper --non-interactive install nodejs npm
+        run_as_root zypper --non-interactive install nodejs22 npm
       elif have_cmd pacman; then
         log "$(message node_installing_pkg "pacman")"
         run_as_root pacman -Sy --noconfirm nodejs npm
@@ -523,18 +549,23 @@ install_node_system() {
 
 install_node() {
   if have_cmd node && have_cmd npm; then
-    detail_ok "$(message node_found "$(node --version)")"
-    detail_ok "$(message npm_found "$(npm --version)")"
-    return 0
+    if node_version_ok; then
+      detail_ok "$(message node_found "$(node --version)")"
+      detail_ok "$(message npm_found "$(npm --version)")"
+      return 0
+    fi
+    # Node.js is present but version is too old to run the CLI tools.
+    warn "$(message node_outdated "$(node --version)" "$NODE_REQUIRED_MAJOR")"
   fi
 
   [[ "$SKIP_INSTALL" == "0" ]] || die "$(message node_missing_disabled)"
-  confirm_default_yes "$(message node_missing_prompt)" || die "$(message node_required)"
+  confirm_default_yes "$(message node_upgrade_prompt)" || die "$(message node_required)"
 
   install_node_system
 
   have_cmd node || die "$(message node_path_missing)"
-  have_cmd npm || die "$(message npm_path_missing)"
+  have_cmd npm  || die "$(message npm_path_missing)"
+  node_version_ok || die "$(message node_outdated "$(node --version)" "$NODE_REQUIRED_MAJOR")"
   detail_ok "$(message node_installed "$(node --version)")"
   detail_ok "$(message npm_found "$(npm --version)")"
 }

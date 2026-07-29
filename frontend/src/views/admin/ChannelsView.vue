@@ -813,16 +813,28 @@ function canUseVideoBilling(provider: string, model: string) {
   return output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0
 }
 
-function canUseAudioBilling(model: string) {
-  const normalized = model.trim().toLowerCase()
-  return normalized === 'fun-asr' || normalized === 'paraformer-v2'
+function hasAudioTranscriptionCapability(capabilities: Record<string, unknown> | undefined) {
+  if (!capabilities) return false
+  if (capabilities.audio_transcription === true) return true
+  const input = capabilityValues(capabilities, ['modalities', 'input'])
+  const output = capabilityValues(capabilities, ['modalities', 'output'])
+  return input.includes('audio') && output.includes('text')
+}
+
+function canUseAudioBilling(provider: string, model: string) {
+  const catalogRecord = findReferenceCatalogRecord(provider, model)
+  const providerRecord = findReferenceProviderModel(provider, model)
+  return (
+    hasAudioTranscriptionCapability(catalogRecord?.capabilities) ||
+    hasAudioTranscriptionCapability(providerRecord?.capabilities)
+  )
 }
 
 function modelCategoryForModel(
   provider: string,
   model: string
 ): 'text' | 'image' | 'video' | 'audio' {
-  if (canUseAudioBilling(model)) return 'audio'
+  if (canUseAudioBilling(provider, model)) return 'audio'
   const output = modelOutputModalities(provider, model)
   if (output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0) {
     return 'video'
@@ -832,7 +844,7 @@ function modelCategoryForModel(
 }
 
 function defaultBillingMeterForModel(provider: string, model: string) {
-  if (canUseAudioBilling(model)) return 'audio'
+  if (canUseAudioBilling(provider, model)) return 'audio'
   if (canUseVideoBilling(provider, model)) {
     const template = findPricingTemplate(templates.value, provider, model)
     if (referenceVideoTiersForModel(provider, model).length === 0 && template?.billing_meter) {
@@ -874,7 +886,7 @@ function videoBillingModeDisplayLabel(price: ChannelPrice | undefined, billingMe
 
 function isBillingMeterLocked(provider: string, model: string) {
   return (
-    canUseAudioBilling(model) ||
+    canUseAudioBilling(provider, model) ||
     canUseVideoBilling(provider, model) ||
     !canUseImageBilling(provider, model)
   )

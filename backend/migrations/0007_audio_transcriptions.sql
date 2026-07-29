@@ -38,12 +38,66 @@ ALTER TABLE usage_daily ADD CONSTRAINT usage_daily_billing_meter_check
     CHECK (billing_meter IN ('token', 'image', 'video', 'audio')) NOT VALID;
 ALTER TABLE usage_daily VALIDATE CONSTRAINT usage_daily_billing_meter_check;
 
+INSERT INTO provider_model (
+    provider,
+    model,
+    display_name,
+    source,
+    billing_meter,
+    capabilities,
+    enabled
+)
+VALUES
+    (
+        'qwen',
+        'fun-asr-flash-2026-06-15',
+        'Fun-ASR Flash',
+        'seed',
+        'audio',
+        '{
+            "audio_transcription": true,
+            "audio_transcription_api": "multimodal_generation",
+            "modalities": {"input": ["audio"], "output": ["text"]}
+        }'::JSONB,
+        FALSE
+    ),
+    (
+        'qwen',
+        'paraformer-v2',
+        'Paraformer v2',
+        'seed',
+        'audio',
+        '{
+            "audio_transcription": true,
+            "audio_transcription_api": "async_file",
+            "modalities": {"input": ["audio"], "output": ["text"]}
+        }'::JSONB,
+        FALSE
+    )
+ON CONFLICT (provider, model)
+DO UPDATE SET
+    billing_meter = EXCLUDED.billing_meter,
+    capabilities = provider_model.capabilities || EXCLUDED.capabilities,
+    updated_at = now();
+
 UPDATE provider_model
-SET billing_meter = 'audio', updated_at = now()
-WHERE lower(model) IN ('fun-asr', 'paraformer-v2');
+SET billing_meter = 'audio',
+    capabilities = capabilities || '{
+        "audio_transcription": true,
+        "audio_transcription_api": "async_file",
+        "modalities": {"input": ["audio"], "output": ["text"]}
+    }'::JSONB,
+    updated_at = now()
+WHERE lower(provider) = 'qwen'
+  AND lower(model) = 'fun-asr';
 
 UPDATE pricing_template
 SET billing_meter = 'audio', updated_at = now()
-WHERE lower(model) IN ('fun-asr', 'paraformer-v2')
+WHERE lower(provider) = 'qwen'
+  AND lower(model) IN (
+      'fun-asr',
+      'fun-asr-flash-2026-06-15',
+      'paraformer-v2'
+  )
   AND pricing_basis = 'second'
   AND unit_price_micros > 0;

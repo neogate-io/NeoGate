@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use crate::{
     billing::{parse_usage_from_bytes, TokenUsage},
+    config::UPSTREAM_TIMEOUT,
     error::{reqwest_status, AppResult},
     provider::adapters::{adapter_for_endpoint, bailian_asr, RelayRoute},
     relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
@@ -161,7 +162,6 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         UpstreamTaskType::OpenAiResponse => {
             let path = format!("/v1/responses/{}", task.upstream_task_id);
             poll_upstream_response(
-                state,
                 forward_openai_bound(state, &upstream, Method::GET, &path, None),
                 task.id,
                 task.task_type,
@@ -171,7 +171,6 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         UpstreamTaskType::OpenAiVideo => {
             let path = format!("/v1/videos/{}", task.upstream_task_id);
             poll_upstream_response(
-                state,
                 forward_openai_bound(state, &upstream, Method::GET, &path, None),
                 task.id,
                 task.task_type,
@@ -185,7 +184,6 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         UpstreamTaskType::AnthropicMessageBatch => {
             let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
             poll_upstream_response(
-                state,
                 forward_anthropic_bound(
                     state,
                     &HeaderMap::new(),
@@ -201,7 +199,7 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
         }
     };
     let status = reqwest_status(response.status());
-    let body = read_response_bytes(state, response, task.id, task.task_type).await?;
+    let body = read_response_bytes(response, task.id, task.task_type).await?;
     tracing::info!(
         task_id = task.id,
         ?task.task_type,
@@ -288,19 +286,27 @@ async fn poll_audio_transcription(
             "audio transcription task is missing upstream model".to_string(),
         )
     })?;
-    let poll = bailian_asr::poll(
-        state,
-        &upstream,
-        model,
-        &task.upstream_task_id,
-        local_duration_seconds,
-    )
-    .await?;
-    let neogate = task
+    let poll = match inline_audio_poll_result(&task.upstream_metadata) {
+        Some(result) => result,
+        None => {
+            bailian_asr::poll(
+                state,
+                &upstream,
+                model,
+                &task.upstream_task_id,
+                local_duration_seconds,
+            )
+            .await?
+        }
+    };
+    let mut neogate = task
         .upstream_metadata
         .get("neogate")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    if let Some(object) = neogate.as_object_mut() {
+        object.remove("inline_result");
+    }
     let (status, terminal, result) = match poll {
         bailian_asr::PollResult::Pending { status, request_id } => {
             (status, false, json!({ "request_id": request_id }))
@@ -377,8 +383,34 @@ async fn poll_audio_transcription(
     Ok(())
 }
 
+fn inline_audio_poll_result(metadata: &Value) -> Option<bailian_asr::PollResult> {
+    let result = metadata.pointer("/neogate/inline_result")?;
+    let text = result.get("text")?.as_str()?.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let duration_seconds = result
+        .get("duration_seconds")?
+        .as_f64()
+        .filter(|duration| duration.is_finite() && *duration > 0.0)?;
+    let duration_source = match result.get("duration_source")?.as_str()? {
+        "upstream" => "upstream",
+        "local_fallback" => "local_fallback",
+        _ => return None,
+    };
+    let request_id = result
+        .get("request_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(bailian_asr::PollResult::Completed {
+        text,
+        duration_seconds,
+        duration_source,
+        request_id,
+    })
+}
+
 async fn poll_upstream_response<F>(
-    state: &AppState,
     response: F,
     task_id: i64,
     task_type: UpstreamTaskType,
@@ -386,13 +418,13 @@ async fn poll_upstream_response<F>(
 where
     F: Future<Output = AppResult<reqwest::Response>>,
 {
-    match tokio::time::timeout(state.config.http.upstream_timeout, response).await {
+    match tokio::time::timeout(UPSTREAM_TIMEOUT, response).await {
         Ok(result) => result,
         Err(_) => {
             tracing::warn!(
                 task_id,
                 ?task_type,
-                timeout_secs = state.config.http.upstream_timeout.as_secs(),
+                timeout_secs = UPSTREAM_TIMEOUT.as_secs(),
                 "timed out polling upstream async task response"
             );
             Err(crate::error::AppError::UpstreamUnavailable(
@@ -403,18 +435,17 @@ where
 }
 
 async fn read_response_bytes(
-    state: &AppState,
     response: reqwest::Response,
     task_id: i64,
     task_type: UpstreamTaskType,
 ) -> AppResult<Bytes> {
-    match tokio::time::timeout(state.config.http.upstream_timeout, response.bytes()).await {
+    match tokio::time::timeout(UPSTREAM_TIMEOUT, response.bytes()).await {
         Ok(result) => Ok(result?),
         Err(_) => {
             tracing::warn!(
                 task_id,
                 ?task_type,
-                timeout_secs = state.config.http.upstream_timeout.as_secs(),
+                timeout_secs = UPSTREAM_TIMEOUT.as_secs(),
                 "timed out reading upstream async task response body"
             );
             Err(crate::error::AppError::UpstreamUnavailable(
@@ -431,7 +462,6 @@ async fn poll_anthropic_batch_results_usage(
 ) -> AppResult<Option<TokenUsage>> {
     let path = format!("/v1/messages/batches/{}/results", task.upstream_task_id);
     let response = poll_upstream_response(
-        state,
         forward_anthropic_bound(state, &HeaderMap::new(), upstream, Method::GET, &path, None),
         task.id,
         task.task_type,
@@ -444,20 +474,19 @@ async fn poll_anthropic_batch_results_usage(
     let mut parser = AnthropicResultsUsageParser::default();
     let mut stream = response.bytes_stream();
     loop {
-        let chunk =
-            match tokio::time::timeout(state.config.http.upstream_timeout, stream.next()).await {
-                Ok(Some(chunk)) => chunk?,
-                Ok(None) => break,
-                Err(_) => {
-                    tracing::warn!(
-                        task_id = task.id,
-                        ?task.task_type,
-                        timeout_secs = state.config.http.upstream_timeout.as_secs(),
-                        "timed out reading anthropic batch results stream"
-                    );
-                    return Ok(None);
-                }
-            };
+        let chunk = match tokio::time::timeout(UPSTREAM_TIMEOUT, stream.next()).await {
+            Ok(Some(chunk)) => chunk?,
+            Ok(None) => break,
+            Err(_) => {
+                tracing::warn!(
+                    task_id = task.id,
+                    ?task.task_type,
+                    timeout_secs = UPSTREAM_TIMEOUT.as_secs(),
+                    "timed out reading anthropic batch results stream"
+                );
+                return Ok(None);
+            }
+        };
         parser.observe(&chunk);
     }
     Ok(parser.finish())
@@ -504,4 +533,38 @@ fn openai_response_terminal(status: &str) -> bool {
 
 fn anthropic_batch_terminal(status: &str) -> bool {
     matches!(status, "ended" | "canceled" | "cancelled" | "expired")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_inline_audio_transcription_result() {
+        let metadata = json!({
+            "neogate": {
+                "inline_result": {
+                    "text": "transcript",
+                    "duration_seconds": 2.5,
+                    "duration_source": "upstream",
+                    "request_id": "request-id",
+                }
+            }
+        });
+
+        match inline_audio_poll_result(&metadata).unwrap() {
+            bailian_asr::PollResult::Completed {
+                text,
+                duration_seconds,
+                duration_source,
+                request_id,
+            } => {
+                assert_eq!(text, "transcript");
+                assert_eq!(duration_seconds, 2.5);
+                assert_eq!(duration_source, "upstream");
+                assert_eq!(request_id.as_deref(), Some("request-id"));
+            }
+            _ => panic!("expected completed inline transcription"),
+        }
+    }
 }

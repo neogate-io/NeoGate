@@ -109,6 +109,7 @@ function endpointDescription(name: string, method: string, path: string) {
     'GET /v1/videos/{video_id}': 'Retrieve video task status.',
     'GET /v1/videos/{video_id}/content': 'Download completed video content.',
     'POST /v1/embeddings': 'Create text embeddings.',
+    'POST /v1/audio/transcriptions': 'Transcribe uploaded audio to text.',
     'POST /v1/moderations': 'Moderate input content.'
   }
 
@@ -326,6 +327,14 @@ const openAiVideoContent = computed(
   --output video.mp4`
 )
 
+const openAiAudioTranscription = computed(
+  () => `curl ${openAiBaseUrl.value}/audio/transcriptions \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -F "file=@meeting.mp3" \\
+  -F "model=fun-asr-flash-2026-06-15" \\
+  -F "response_format=json"`
+)
+
 const openAiEmbeddings = computed(
   () => `curl ${openAiBaseUrl.value}/embeddings \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
@@ -404,9 +413,10 @@ const content = computed(() => {
       openAiImageTitle: '2.4 图片生成',
       openAiImageAsyncTitle: '2.5 图片生成（异步）',
       openAiVideoTitle: '2.6 视频生成',
-      openAiEmbeddingsTitle: '2.7 向量嵌入',
-      openAiModelsTitle: '2.8 模型列表',
-      openAiSdkTitle: '2.9 SDK 示例',
+      openAiAudioTitle: '2.7 音频转写',
+      openAiEmbeddingsTitle: '2.8 向量嵌入',
+      openAiModelsTitle: '2.9 模型列表',
+      openAiSdkTitle: '2.10 SDK 示例',
       urlPathsTitle: 'URL 路径',
       openAiTextPaths: [
         ['POST', `${openAiBaseUrl.value}/chat/completions`, 'Chat Completions'],
@@ -433,6 +443,9 @@ const content = computed(() => {
         ['POST', `${openAiBaseUrl.value}/videos`, '创建视频任务'],
         ['GET', `${openAiBaseUrl.value}/videos/{video_id}`, '查询视频任务'],
         ['GET', `${openAiBaseUrl.value}/videos/{video_id}/content`, '下载视频内容']
+      ],
+      openAiAudioPaths: [
+        ['POST', `${openAiBaseUrl.value}/audio/transcriptions`, '将音频转写为文本']
       ],
       openAiEmbeddingsPaths: [['POST', `${openAiBaseUrl.value}/embeddings`, '创建向量嵌入']],
       openAiModelsPaths: [
@@ -631,6 +644,23 @@ const content = computed(() => {
           ]
         }
       ],
+      openAiAudioInterfaces: [
+        {
+          title: 'Audio Transcriptions',
+          method: 'POST',
+          path: `${openAiBaseUrl.value}/audio/transcriptions`,
+          description: '上传音频并返回转写文本。',
+          requestParams: [
+            ['file', 'file，必填', '待转写的音频文件。'],
+            ['model', 'string，必填', '音频转写模型。'],
+            ['language', 'string', '上游模型支持时可提供语言提示。'],
+            ['response_format', 'json | text', '响应格式，默认 json。']
+          ],
+          responseFields: [
+            ['text', 'string', '识别得到的文本内容。']
+          ]
+        }
+      ],
       openAiEmbeddingsInterfaces: [
         {
           title: 'Embeddings',
@@ -687,7 +717,7 @@ const content = computed(() => {
       openAiAuthItems: [
         ['Base URL', openAiBaseUrl.value],
         ['认证头', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
-        ['Content-Type', 'application/json；图片和视频上传接口使用 multipart/form-data']
+        ['Content-Type', 'application/json；图片、视频和音频上传接口使用 multipart/form-data']
       ],
       openAiEndpoints: [
         ['Models', 'GET', '/v1/models', '-', '已支持'],
@@ -781,7 +811,7 @@ const content = computed(() => {
           'POST',
           '/v1/audio/transcriptions',
           'model, file, language, response_format',
-          '暂未支持'
+          '已支持'
         ],
         ['Audio', 'POST', '/v1/audio/translations', 'model, file, response_format', '暂未支持'],
         ['Moderations', 'POST', '/v1/moderations', 'model, input', '已支持'],
@@ -1183,6 +1213,7 @@ const content = computed(() => {
         ['expires_at', 'integer | null', '可下载资产过期时间，若上游返回则透传。'],
         ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。']
       ],
+      openAiAudio: '音频转写接口使用 multipart/form-data 上传音频，并返回 OpenAI 兼容的转写结果。',
       openAiEmbeddings: `Embeddings 接口按 OpenAI 官方 JSON 请求体转发，适合 RAG、语义搜索、去重和召回场景。请求中的 model 会走 ${siteName.value} 的模型权限、渠道选择、计费和用量记录。`
     }
   }
@@ -1195,9 +1226,10 @@ const content = computed(() => {
     openAiImageTitle: '2.4 Images',
     openAiImageAsyncTitle: '2.5 Images async',
     openAiVideoTitle: '2.6 Videos',
-    openAiEmbeddingsTitle: '2.7 Embeddings',
-    openAiModelsTitle: '2.8 Models',
-    openAiSdkTitle: '2.9 SDK examples',
+    openAiAudioTitle: '2.7 Audio transcription',
+    openAiEmbeddingsTitle: '2.8 Embeddings',
+    openAiModelsTitle: '2.9 Models',
+    openAiSdkTitle: '2.10 SDK examples',
     urlPathsTitle: 'URL paths',
     openAiTextPaths: [
       ['POST', `${openAiBaseUrl.value}/chat/completions`, 'Chat Completions'],
@@ -1224,6 +1256,9 @@ const content = computed(() => {
       ['POST', `${openAiBaseUrl.value}/videos`, 'Create video task'],
       ['GET', `${openAiBaseUrl.value}/videos/{video_id}`, 'Retrieve video task'],
       ['GET', `${openAiBaseUrl.value}/videos/{video_id}/content`, 'Download video content']
+    ],
+    openAiAudioPaths: [
+      ['POST', `${openAiBaseUrl.value}/audio/transcriptions`, 'Transcribe audio to text']
     ],
     openAiEmbeddingsPaths: [['POST', `${openAiBaseUrl.value}/embeddings`, 'Create embeddings']],
     openAiModelsPaths: [
@@ -1430,6 +1465,21 @@ const content = computed(() => {
         ]
       }
     ],
+    openAiAudioInterfaces: [
+      {
+        title: 'Audio Transcriptions',
+        method: 'POST',
+        path: `${openAiBaseUrl.value}/audio/transcriptions`,
+        description: 'Upload audio and return the transcribed text.',
+        requestParams: [
+          ['file', 'file, required', 'Audio file to transcribe.'],
+          ['model', 'string, required', 'Audio transcription model.'],
+          ['language', 'string', 'Optional when supported by the upstream model.'],
+          ['response_format', 'json | text', 'Response format; defaults to json.']
+        ],
+        responseFields: [['text', 'string', 'Recognized text content.']]
+      }
+    ],
     openAiEmbeddingsInterfaces: [
       {
         title: 'Embeddings',
@@ -1489,7 +1539,10 @@ const content = computed(() => {
     openAiAuthItems: [
       ['Base URL', openAiBaseUrl.value],
       ['Auth header', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
-      ['Content-Type', 'application/json; image and video upload APIs use multipart/form-data']
+      [
+        'Content-Type',
+        'application/json; image, video, and audio upload APIs use multipart/form-data'
+      ]
     ],
     openAiEndpoints: [
       ['Models', 'GET', '/v1/models', '-', 'Supported'],
@@ -1601,7 +1654,7 @@ const content = computed(() => {
         'POST',
         '/v1/audio/transcriptions',
         'model, file, language, response_format',
-        'Not supported'
+        'Supported'
       ],
       ['Audio', 'POST', '/v1/audio/translations', 'model, file, response_format', 'Not supported'],
       ['Moderations', 'POST', '/v1/moderations', 'model, input', 'Supported'],
@@ -2143,6 +2196,8 @@ const content = computed(() => {
       ],
       ['error', 'object | null', 'On failure, includes code and message; usually null on success.']
     ],
+    openAiAudio:
+      'The audio transcription endpoint accepts multipart/form-data uploads and returns an OpenAI-compatible transcription result.',
     openAiEmbeddings: `Embeddings are forwarded with the official OpenAI JSON request body and are useful for RAG, semantic search, deduplication, and retrieval. The requested model still uses ${siteName.value} model permissions, routing, billing, and usage records.`
   }
 })
@@ -2574,6 +2629,33 @@ const content = computed(() => {
             <pre
               class="docs-code-sample docs-inner-code"
             ><code>{{ openAiVideoContent }}</code></pre>
+          </div>
+        </article>
+      </section>
+
+      <section id="openai-audio" class="docs-subsection">
+        <div class="docs-section-heading docs-subsection-heading">
+          <h2>{{ content.openAiAudioTitle }}</h2>
+          <p>{{ content.openAiAudio }}</p>
+        </div>
+        <InterfaceEndpointList
+          :items="content.openAiAudioInterfaces"
+          :field-headers="content.paramFieldHeaders"
+          :request-title="content.requestParamsTitle"
+          :response-title="content.responseParamsTitle"
+        />
+        <article class="docs-step-card">
+          <h3>Audio Transcription</h3>
+          <div class="docs-copy-block">
+            <el-button
+              :icon="DocumentCopy"
+              text
+              :aria-label="t('copy')"
+              @click="copyDocText(openAiAudioTranscription)"
+            />
+            <pre
+              class="docs-code-sample docs-inner-code"
+            ><code>{{ openAiAudioTranscription }}</code></pre>
           </div>
         </article>
       </section>

@@ -187,14 +187,7 @@ pub async fn record_provider_models(
         if model.is_empty() || !seen.insert(model.to_string()) {
             continue;
         }
-        let billing_meter = if matches!(
-            model.to_ascii_lowercase().as_str(),
-            "fun-asr" | "paraformer-v2"
-        ) {
-            BillingMeter::Audio
-        } else {
-            BillingMeter::Token
-        };
+        let billing_meter = BillingMeter::Token;
         sqlx::query(
             "INSERT INTO provider_model
              (provider, model, display_name, source, billing_meter, capabilities, enabled)

@@ -950,7 +950,6 @@ pub(crate) mod tests {
                 upstream_secret_key: "test-upstream-secret-key".to_string(),
                 http: config::HttpClientConfig {
                     upstream_connect_timeout: Duration::from_secs(10),
-                    upstream_timeout: Duration::from_secs(30),
                     pool_max_idle_per_host: 100,
                     pool_idle_timeout: Duration::from_secs(90),
                 },

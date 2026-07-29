@@ -460,10 +460,6 @@ sudo systemctl reload nginx
       <td>非流式 JSON 和 SSE 的用量解析缓冲区固定为 16 MiB；上游响应超过该大小时无法提取计费用量。</td>
     </tr>
     <tr>
-      <td>⏱️ 长耗时请求</td>
-      <td>图片编辑等长耗时请求如果出现 504，可调大 <code>UPSTREAM_TIMEOUT_SECONDS</code>（默认 600 秒；旧的 <code>REQUEST_TIMEOUT_SECONDS</code> 仍作为兼容别名）。</td>
-    </tr>
-    <tr>
       <td>🚦 用户并发</td>
       <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 100 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
     </tr>

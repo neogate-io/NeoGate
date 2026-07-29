@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Body,
@@ -13,6 +16,7 @@ use crate::{
         parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
         BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
+    config::STREAM_IDLE_TIMEOUT,
     project::models::UsageRoutingSnapshot,
     AppState,
 };
@@ -26,6 +30,16 @@ use super::{
     selector::{SelectedUpstream, UpstreamProtocol},
     usage_from_context, ChannelAffinityKey, RelayRequestParams,
 };
+
+const MISSING_TERMINAL_STREAM_ERROR: &str = "upstream stream ended before terminal SSE event";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamFinishDisposition {
+    Success,
+    HttpError,
+    SseError,
+    MissingTerminal,
+}
 
 pub(crate) struct RelayContext {
     pub(crate) state: Arc<AppState>,
@@ -151,6 +165,7 @@ pub(crate) fn body_from_stream(
         .then(|| SseModelRewriter::new(ctx.external_model.clone()));
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
+    let stream_idle_timeout = ctx.streamed.then_some(STREAM_IDLE_TIMEOUT);
     tracing::debug!(
         relay_trace_id = %ctx.relay_trace_id,
         relay_attempt = ctx.relay_attempt,
@@ -174,6 +189,7 @@ pub(crate) fn body_from_stream(
         streamed = ctx.streamed,
         content_length,
         usage_buffer_limit_bytes,
+        stream_idle_timeout_seconds = ?stream_idle_timeout.map(|timeout| timeout.as_secs()),
         "starting relay response body stream"
     );
     let relay = StreamingRelay {
@@ -189,6 +205,7 @@ pub(crate) fn body_from_stream(
         ),
         model_rewriter,
         response_metadata,
+        stream_idle_timeout,
         first_response_ms: None,
         last_chunk_ms: None,
         chunks_sent: 0,
@@ -200,8 +217,26 @@ pub(crate) fn body_from_stream(
         Some(relay),
         |relay| async move {
             let mut relay = relay?;
-            match relay.stream.next().await {
-                Some(Ok(chunk)) => {
+            let next = match relay.stream_idle_timeout {
+                Some(timeout) => tokio::time::timeout(timeout, relay.stream.next()).await,
+                None => Ok(relay.stream.next().await),
+            };
+            match next {
+                Err(_) => {
+                    let timeout = relay
+                        .stream_idle_timeout
+                        .expect("stream timeout is present when timeout fires");
+                    let summary = format!(
+                        "upstream response stream was idle for {} seconds",
+                        timeout.as_secs()
+                    );
+                    relay.finish_stream_error(summary.clone()).await;
+                    Some((
+                        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, summary)),
+                        None,
+                    ))
+                }
+                Ok(Some(Ok(chunk))) => {
                     let chunk = relay.rewrite_model_chunk(chunk);
                     if chunk.is_empty() {
                         return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
@@ -210,7 +245,7 @@ pub(crate) fn body_from_stream(
                     relay.usage.observe(&chunk);
                     Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                 }
-                Some(Err(summary)) => {
+                Ok(Some(Err(summary))) => {
                     if relay.should_ignore_successful_stream_error(&summary) {
                         relay.finish_trailing_stream_error(summary).await;
                         None
@@ -219,14 +254,21 @@ pub(crate) fn body_from_stream(
                         Some((Err(std::io::Error::other(summary)), None))
                     }
                 }
-                None => {
+                Ok(None) => {
                     if let Some(chunk) = relay.finish_model_rewrite() {
                         relay.observe_chunk(&chunk);
                         relay.usage.observe(&chunk);
                         return Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)));
                     }
-                    relay.finish_stream_success().await;
-                    None
+                    relay.finish_stream_success().await.map(|summary| {
+                        (
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                summary,
+                            )),
+                            None,
+                        )
+                    })
                 }
             }
         },
@@ -240,6 +282,7 @@ struct StreamingRelay {
     usage: ResponseUsageParser,
     model_rewriter: Option<SseModelRewriter>,
     response_metadata: UpstreamResponseMetadata,
+    stream_idle_timeout: Option<Duration>,
     first_response_ms: Option<i64>,
     last_chunk_ms: Option<i64>,
     chunks_sent: u64,
@@ -349,11 +392,14 @@ impl StreamingRelay {
         self.status.is_success() && self.usage.response_complete() && is_body_decode_error(summary)
     }
 
-    async fn finish_stream_success(mut self) {
+    async fn finish_stream_success(mut self) -> Option<String> {
         let mut ctx = self.ctx.take().expect("stream context finalized once");
         let token_usage = self.usage.finish();
         let stream_complete = self.usage.response_complete();
         let stream_failed = self.usage.response_failed();
+        let missing_terminal =
+            streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete);
+        let disposition = stream_finish_disposition(self.status, stream_failed, missing_terminal);
         let stream_error = self.usage.stream_error_summary();
         let stream_error_summary = stream_error
             .as_ref()
@@ -389,8 +435,11 @@ impl StreamingRelay {
             latency_ms = ctx.started.elapsed().as_millis() as i64,
             "relay response body stream completed"
         );
-        if streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete) {
+        if missing_terminal {
             tracing::warn!(
+                relay_trace_id = %ctx.relay_trace_id,
+                relay_attempt = ctx.relay_attempt,
+                relay_final = ctx.relay_final,
                 provider = %ctx.upstream.provider,
                 channel_id = ctx.upstream.channel_id,
                 channel_name = %ctx.upstream.channel_name,
@@ -411,6 +460,11 @@ impl StreamingRelay {
                 largest_chunk_bytes = self.largest_chunk_bytes,
                 latency_ms = ctx.started.elapsed().as_millis() as i64,
                 last_signal = ?self.usage.last_signal_summary(),
+                previous_signal = ?self.usage.previous_signal_summary(),
+                upstream_request_id = ?self.response_metadata.request_id,
+                upstream_trace_id = ?self.response_metadata.trace_id,
+                upstream_cf_ray = ?self.response_metadata.cf_ray,
+                upstream_server_timing = ?self.response_metadata.server_timing,
                 "upstream stream ended before terminal SSE event"
             );
         }
@@ -512,33 +566,43 @@ impl StreamingRelay {
                 }
             }
         }
-        let billing = if self.status.is_success() && !stream_failed {
-            record_channel_affinity(&ctx).await;
-            settle_successful_hold(&ctx, token_usage, "streamed relay").await
-        } else {
-            let release_context = if stream_failed {
-                "stream SSE error"
-            } else {
-                "upstream error"
-            };
-            release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
-            None
+        let billing = match disposition {
+            StreamFinishDisposition::Success => {
+                record_channel_affinity(&ctx).await;
+                settle_successful_hold(&ctx, token_usage, "streamed relay").await
+            }
+            StreamFinishDisposition::HttpError => {
+                release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream error").await;
+                None
+            }
+            StreamFinishDisposition::SseError => {
+                release_empty_hold(&ctx.state, ctx.hold.clone(), "stream SSE error").await;
+                None
+            }
+            StreamFinishDisposition::MissingTerminal => {
+                release_empty_hold(&ctx.state, ctx.hold.clone(), "incomplete stream").await;
+                None
+            }
         };
-        let error_summary = if !self.status.is_success() {
-            Some("upstream error".to_string())
-        } else if stream_failed {
-            Some(stream_error_summary.clone())
-        } else if streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete) {
-            Some("upstream stream ended before terminal SSE event".to_string())
-        } else {
-            None
+        let error_summary = match disposition {
+            StreamFinishDisposition::Success => None,
+            StreamFinishDisposition::HttpError => Some("upstream error".to_string()),
+            StreamFinishDisposition::SseError => Some(stream_error_summary.clone()),
+            StreamFinishDisposition::MissingTerminal => {
+                Some(MISSING_TERMINAL_STREAM_ERROR.to_string())
+            }
         };
-        let failure = if !self.status.is_success() {
-            key_failure_from_context(&ctx, "upstream error".to_string()).await
-        } else if stream_failed {
-            key_failure_from_context(&ctx, stream_error_summary).await
-        } else {
-            None
+        let failure = match disposition {
+            StreamFinishDisposition::Success => None,
+            StreamFinishDisposition::HttpError => {
+                key_failure_from_context(&ctx, "upstream error".to_string()).await
+            }
+            StreamFinishDisposition::SseError => {
+                key_failure_from_context(&ctx, stream_error_summary).await
+            }
+            StreamFinishDisposition::MissingTerminal => {
+                key_failure_from_context(&ctx, MISSING_TERMINAL_STREAM_ERROR.to_string()).await
+            }
         };
         let usage = usage_from_context(
             &ctx,
@@ -549,6 +613,8 @@ impl StreamingRelay {
             billing,
         );
         enqueue_relay_usage(&ctx.state, usage, failure).await;
+        (disposition == StreamFinishDisposition::MissingTerminal)
+            .then(|| MISSING_TERMINAL_STREAM_ERROR.to_string())
     }
 
     async fn finish_trailing_stream_error(self, summary: String) {
@@ -578,7 +644,7 @@ impl StreamingRelay {
                 "ignored trailing upstream stream read error after completed response"
             );
         }
-        self.finish_stream_success().await;
+        let _ = self.finish_stream_success().await;
     }
 
     async fn finish_stream_error(mut self, summary: String) {
@@ -586,6 +652,9 @@ impl StreamingRelay {
             return;
         };
         ctx.release_request_permit();
+        let token_usage = self.usage.finish();
+        let stream_complete = self.usage.response_complete();
+        let stream_failed = stream_body_error_is_failure(self.status, stream_complete);
         tracing::warn!(
             provider = %ctx.upstream.provider,
             channel_id = ctx.upstream.channel_id,
@@ -601,23 +670,29 @@ impl StreamingRelay {
             base_url = %ctx.upstream.base_url,
             status = self.status.as_u16(),
             streamed = ctx.streamed,
+            stream_complete,
             first_response_ms = self.first_response_ms,
             last_chunk_ms = self.last_chunk_ms,
             chunks_sent = self.chunks_sent,
             bytes_sent = self.bytes_sent,
             largest_chunk_bytes = self.largest_chunk_bytes,
             latency_ms = ctx.started.elapsed().as_millis() as i64,
+            last_signal = ?self.usage.last_signal_summary(),
+            previous_signal = ?self.usage.previous_signal_summary(),
+            upstream_request_id = ?self.response_metadata.request_id,
+            upstream_trace_id = ?self.response_metadata.trace_id,
+            upstream_cf_ray = ?self.response_metadata.cf_ray,
+            upstream_server_timing = ?self.response_metadata.server_timing,
             error = %summary,
             "upstream stream failed while relaying response body"
         );
-        let token_usage = self.usage.finish();
-        let billing = if self.status.is_success() {
+        let billing = if !stream_failed {
             settle_successful_hold(&ctx, token_usage, "successful stream error").await
         } else {
             release_empty_hold(&ctx.state, ctx.hold.clone(), "stream error").await;
             None
         };
-        let failure = if should_cooldown_key_for_stream_error(self.status) {
+        let failure = if stream_failed {
             key_failure_from_context(&ctx, summary.clone()).await
         } else {
             None
@@ -762,8 +837,24 @@ async fn settle_successful_hold(
     }
 }
 
-fn should_cooldown_key_for_stream_error(status: StatusCode) -> bool {
-    !status.is_success()
+fn stream_body_error_is_failure(status: StatusCode, complete: bool) -> bool {
+    !status.is_success() || !complete
+}
+
+fn stream_finish_disposition(
+    status: StatusCode,
+    stream_failed: bool,
+    missing_terminal: bool,
+) -> StreamFinishDisposition {
+    if !status.is_success() {
+        StreamFinishDisposition::HttpError
+    } else if stream_failed {
+        StreamFinishDisposition::SseError
+    } else if missing_terminal {
+        StreamFinishDisposition::MissingTerminal
+    } else {
+        StreamFinishDisposition::Success
+    }
 }
 
 fn streamed_success_missing_terminal(status: StatusCode, streamed: bool, complete: bool) -> bool {
@@ -1372,15 +1463,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn successful_stream_body_errors_do_not_cool_down_key() {
-        assert!(!should_cooldown_key_for_stream_error(StatusCode::OK));
+    fn completed_successful_stream_body_errors_do_not_fail_the_key() {
+        assert!(!stream_body_error_is_failure(StatusCode::OK, true));
     }
 
     #[test]
-    fn upstream_error_stream_body_errors_cool_down_key() {
-        assert!(should_cooldown_key_for_stream_error(
-            StatusCode::TOO_MANY_REQUESTS
+    fn incomplete_successful_stream_body_errors_fail_the_key() {
+        assert!(stream_body_error_is_failure(StatusCode::OK, false));
+    }
+
+    #[test]
+    fn upstream_error_stream_body_errors_fail_the_key() {
+        assert!(stream_body_error_is_failure(
+            StatusCode::TOO_MANY_REQUESTS,
+            false
         ));
+    }
+
+    #[test]
+    fn stream_finish_disposition_rejects_missing_terminal() {
+        assert_eq!(
+            stream_finish_disposition(StatusCode::OK, false, true),
+            StreamFinishDisposition::MissingTerminal
+        );
+        assert_eq!(
+            stream_finish_disposition(StatusCode::OK, false, false),
+            StreamFinishDisposition::Success
+        );
+    }
+
+    #[test]
+    fn stream_finish_disposition_prioritizes_explicit_errors() {
+        assert_eq!(
+            stream_finish_disposition(StatusCode::BAD_GATEWAY, false, true),
+            StreamFinishDisposition::HttpError
+        );
+        assert_eq!(
+            stream_finish_disposition(StatusCode::OK, true, true),
+            StreamFinishDisposition::SseError
+        );
     }
 
     #[test]
@@ -1651,6 +1772,23 @@ data: {"type":"message_stop"}
         );
 
         assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_treats_anthropic_ping_as_non_terminal() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"event: ping
+data: {"type":"ping"}
+"#,
+        );
+
+        assert!(!parser.completed);
+        assert_eq!(
+            signal_summary(parser.last_event.as_deref(), parser.last_type.as_deref()).as_deref(),
+            Some("event:ping data_type:ping")
+        );
     }
 
     #[test]

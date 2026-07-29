@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use reqwest::{multipart, RequestBuilder, Response, Url};
@@ -6,6 +7,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
+    config::UPSTREAM_TIMEOUT,
     error::{AppError, AppResult, UpstreamErrorKind, UpstreamRequestError},
     relay::selector::SelectedUpstream,
     AppState,
@@ -20,6 +22,14 @@ pub(crate) struct Submission {
     pub task_id: String,
     pub status: String,
     pub request_id: Option<String>,
+    pub completed: Option<CompletedSubmission>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CompletedSubmission {
+    pub text: String,
+    pub duration_seconds: f64,
+    pub duration_source: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -64,9 +74,8 @@ pub(crate) async fn upload_and_submit(
     extension: &str,
     language: Option<&str>,
 ) -> AppResult<Submission> {
-    ensure_asr_upstream(upstream, model)?;
+    ensure_asr_upstream(upstream)?;
     let policy_response = send(
-        state,
         upstream,
         state
             .http
@@ -97,7 +106,6 @@ pub(crate) async fn upload_and_submit(
         .text("success_action_status", "200")
         .part("file", part);
     let upload_response = send(
-        state,
         upstream,
         state.http.post(&policy.data.upload_host).multipart(form),
     )
@@ -109,7 +117,6 @@ pub(crate) async fn upload_and_submit(
         parameters.insert("language_hints".to_string(), json!([language]));
     }
     let submit_response = send(
-        state,
         upstream,
         state
             .http
@@ -144,19 +151,98 @@ pub(crate) async fn upload_and_submit(
         task_id: task_id.to_string(),
         status: task_status(&value, "PENDING"),
         request_id: request_id(&value),
+        completed: None,
+    })
+}
+
+pub(crate) async fn transcribe_multimodal(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    model: &str,
+    audio: Bytes,
+    extension: &str,
+    local_duration_seconds: f64,
+) -> AppResult<Submission> {
+    ensure_asr_upstream(upstream)?;
+    let media_type = match extension {
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        _ => return Err(AppError::BadRequest("unsupported audio format".to_string())),
+    };
+    let data_uri = format!("data:{media_type};base64,{}", STANDARD.encode(audio));
+    let response = send(
+        upstream,
+        state
+            .http
+            .post(native_url(
+                &upstream.base_url,
+                "/services/aigc/multimodal-generation/generation",
+            )?)
+            .bearer_auth(&upstream.secret)
+            .header("X-DashScope-SSE", "disable")
+            .json(&json!({
+                "model": model,
+                "input": {
+                    "messages": [{
+                        "role": "user",
+                        "content": [{
+                            "type": "input_audio",
+                            "input_audio": { "data": data_uri },
+                        }],
+                    }],
+                },
+                "parameters": { "format": extension },
+            })),
+    )
+    .await?;
+    let body = successful_body(state, upstream, response, "multimodal transcription").await?;
+    let value: Value = serde_json::from_slice(&body).map_err(|_| {
+        AppError::UpstreamUnavailable("Alibaba ASR multimodal response was invalid".to_string())
+    })?;
+    let text = value
+        .pointer("/output/text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            AppError::UpstreamUnavailable(
+                "Alibaba ASR multimodal response missing text".to_string(),
+            )
+        })?;
+    let (duration_seconds, duration_source) = value
+        .pointer("/usage/duration")
+        .and_then(Value::as_f64)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map_or((local_duration_seconds, "local_fallback"), |duration| {
+            (duration, "upstream")
+        });
+    let request_id = request_id(&value);
+    Ok(Submission {
+        task_id: request_id
+            .clone()
+            .unwrap_or_else(|| format!("flash-{}", Uuid::new_v4())),
+        status: "SUCCEEDED".to_string(),
+        request_id,
+        completed: Some(CompletedSubmission {
+            text: text.to_string(),
+            duration_seconds,
+            duration_source,
+        }),
     })
 }
 
 pub(crate) async fn poll(
     state: &AppState,
     upstream: &SelectedUpstream,
-    model: &str,
+    _model: &str,
     task_id: &str,
     local_duration_seconds: f64,
 ) -> AppResult<PollResult> {
-    ensure_asr_upstream(upstream, model)?;
+    ensure_asr_upstream(upstream)?;
     let response = send(
-        state,
         upstream,
         state
             .http
@@ -237,7 +323,7 @@ pub(crate) async fn poll(
             request_id,
         });
     }
-    let result_response = send(state, upstream, state.http.get(transcription_url)).await?;
+    let result_response = send(upstream, state.http.get(transcription_url)).await?;
     let result_status = result_response.status();
     if !result_status.is_success() {
         if result_status.as_u16() == 429 || result_status.is_server_error() {
@@ -299,7 +385,7 @@ pub(crate) async fn poll(
     })
 }
 
-fn ensure_asr_upstream(upstream: &SelectedUpstream, model: &str) -> AppResult<()> {
+fn ensure_asr_upstream(upstream: &SelectedUpstream) -> AppResult<()> {
     if !upstream.provider.eq_ignore_ascii_case("qwen") {
         return Err(AppError::BadRequest(
             "Alibaba ASR requires a qwen channel".to_string(),
@@ -313,18 +399,12 @@ fn ensure_asr_upstream(upstream: &SelectedUpstream, model: &str) -> AppResult<()
     let url = Url::parse(&upstream.base_url)
         .map_err(|_| AppError::BadRequest("invalid Alibaba ASR endpoint URL".to_string()))?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-    let workspace_required = model.eq_ignore_ascii_case("fun-asr");
     let trusted_dashscope_host =
         host == "dashscope.aliyuncs.com" || host.ends_with(WORKSPACE_HOST_SUFFIX);
-    if url.scheme() != "https"
-        || !trusted_dashscope_host
-        || (workspace_required && !host.ends_with(WORKSPACE_HOST_SUFFIX))
-    {
-        return Err(AppError::BadRequest(if workspace_required {
-            "fun-asr endpoint must use a Beijing Model Studio workspace host".to_string()
-        } else {
-            "Alibaba ASR endpoint must use a trusted DashScope host".to_string()
-        }));
+    if url.scheme() != "https" || !trusted_dashscope_host {
+        return Err(AppError::BadRequest(
+            "Alibaba ASR endpoint must use a trusted DashScope host".to_string(),
+        ));
     }
     Ok(())
 }
@@ -351,12 +431,8 @@ fn validate_aliyun_url(value: &str) -> AppResult<()> {
     Ok(())
 }
 
-async fn send(
-    state: &AppState,
-    upstream: &SelectedUpstream,
-    request: RequestBuilder,
-) -> AppResult<Response> {
-    match tokio::time::timeout(state.config.http.upstream_timeout, request.send()).await {
+async fn send(upstream: &SelectedUpstream, request: RequestBuilder) -> AppResult<Response> {
+    match tokio::time::timeout(UPSTREAM_TIMEOUT, request.send()).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(err)) => Err(AppError::UpstreamRequest(
             UpstreamRequestError::from_reqwest(upstream.provider.clone(), &err),
@@ -380,12 +456,31 @@ async fn successful_body(
         if status.as_u16() == 429 || status.is_server_error() {
             return Err(retryable_http_error(upstream, operation, status));
         }
+        let body = read_bounded(state, response).await.unwrap_or_default();
+        let code = safe_upstream_error_code(&body)
+            .map(|code| format!(" ({code})"))
+            .unwrap_or_default();
         return Err(AppError::BadRequest(format!(
-            "Alibaba ASR {operation} was rejected with HTTP {}",
-            status.as_u16()
+            "Alibaba ASR {operation} was rejected with HTTP {}{code}",
+            status.as_u16(),
         )));
     }
     read_bounded(state, response).await
+}
+
+fn safe_upstream_error_code(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    ["/code", "/error/code", "/output/code"]
+        .into_iter()
+        .find_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+        .map(str::to_string)
 }
 
 fn retryable_http_error(
@@ -503,14 +598,28 @@ mod tests {
     }
 
     #[test]
-    fn validates_model_specific_endpoints() {
+    fn extracts_only_safe_upstream_error_codes() {
+        assert_eq!(
+            safe_upstream_error_code(br#"{"code":"InvalidParameter"}"#).as_deref(),
+            Some("InvalidParameter")
+        );
+        assert_eq!(
+            safe_upstream_error_code(br#"{"error":{"code":"Bad_Request-1"}}"#).as_deref(),
+            Some("Bad_Request-1")
+        );
+        assert_eq!(
+            safe_upstream_error_code(br#"{"code":"unsafe value"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn accepts_trusted_dashscope_endpoints() {
         let public = upstream("https://dashscope.aliyuncs.com/compatible-mode/v1");
         let workspace =
             upstream("https://workspace-id.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
-        assert!(ensure_asr_upstream(&public, "paraformer-v2").is_ok());
-        assert!(ensure_asr_upstream(&workspace, "paraformer-v2").is_ok());
-        assert!(ensure_asr_upstream(&workspace, "fun-asr").is_ok());
-        assert!(ensure_asr_upstream(&public, "fun-asr").is_err());
+        assert!(ensure_asr_upstream(&public).is_ok());
+        assert!(ensure_asr_upstream(&workspace).is_ok());
     }
 
     #[test]

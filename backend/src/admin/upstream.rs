@@ -8,7 +8,7 @@ use sqlx::Row;
 use crate::{
     auth::AdminAuth,
     cache::InvalidationEvent,
-    config::DEFAULT_ANTHROPIC_VERSION,
+    config::{DEFAULT_ANTHROPIC_VERSION, UPSTREAM_TIMEOUT},
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
     input::trimmed_non_empty,
@@ -314,7 +314,7 @@ pub(crate) async fn fetch_upstream_models(
         request = request.bearer_auth(secret);
     }
 
-    let response = tokio::time::timeout(state.config.http.upstream_timeout, request.send())
+    let response = tokio::time::timeout(UPSTREAM_TIMEOUT, request.send())
         .await
         .map_err(|_| {
             AppError::UpstreamRequest(UpstreamRequestError::new(
@@ -322,7 +322,7 @@ pub(crate) async fn fetch_upstream_models(
                 upstream_models_error_provider(base_url),
                 format!(
                     "upstream models request timed out after {} seconds",
-                    state.config.http.upstream_timeout.as_secs()
+                    UPSTREAM_TIMEOUT.as_secs()
                 ),
             ))
         })?

@@ -86,6 +86,32 @@ NEOGATE_VIDEO_EXTRA_JSON='{"resolution":"720p","ratio":"16:9"}'
 python -m unittest tests.smoke.test_openai_video
 ```
 
+## OpenAI 音频转写冒烟测试
+
+音频转写测试位于 `smoke/test_openai_audio.py`，会向运行中的 NeoGate 上传音频，
+并验证 OpenAI 兼容 JSON 与 text 响应包含非空转写文本。测试不会保存或打印转写内容。
+
+测试默认使用 `fixtures/audio.wav`。必填：
+
+```bash
+NEOGATE_API_KEY=your_neogate_api_key
+```
+
+测试其他音频时可通过 `NEOGATE_AUDIO_FILE` 覆盖默认夹具。可选：
+
+```bash
+NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
+NEOGATE_AUDIO_FILE=/path/to/audio.mp3
+NEOGATE_AUDIO_MODEL=fun-asr-flash-2026-06-15
+NEOGATE_AUDIO_EXPECTED_TEXT=期望出现的文本
+```
+
+在 `backend/` 目录下运行：
+
+```bash
+python -m unittest tests.smoke.test_openai_audio
+```
+
 ## Relay 压测
 
 Relay 压测工具提供一个本地 OpenAI 兼容 mock 上游服务，用于测量 NeoGate

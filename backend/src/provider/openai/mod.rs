@@ -744,6 +744,14 @@ async fn finish_openai_relay_success(
             "/v1/responses",
             AdapterResponseMode::OpenAiChatAsOpenAiResponse,
         ) => bridge::finish_openai_chat_as_openai_response(ctx, status, upstream_response).await,
+        (UpstreamProtocol::Openai, "/v1/responses", AdapterResponseMode::Passthrough) => {
+            bridge::finish_openai_response_with_reasoning_normalization(
+                ctx,
+                status,
+                upstream_response,
+            )
+            .await
+        }
         _ => finish_relay(ctx, Ok(upstream_response)).await,
     }
 }

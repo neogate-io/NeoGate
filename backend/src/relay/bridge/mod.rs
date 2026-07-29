@@ -3,7 +3,9 @@ mod anthropic_to_responses;
 mod chat_to_anthropic;
 mod chat_to_responses;
 mod common;
+mod reasoning_markup;
 mod responses_common;
+mod responses_reasoning;
 mod responses_to_anthropic;
 mod responses_to_chat;
 mod stream;
@@ -17,6 +19,7 @@ pub(crate) use anthropic_to_chat::{finish_anthropic_as_openai_chat, messages_to_
 pub(crate) use anthropic_to_responses::finish_anthropic_as_openai_response;
 pub(crate) use chat_to_anthropic::{finish_chat_as_anthropic, openai_chat_to_anthropic_messages};
 pub(crate) use chat_to_responses::finish_openai_chat_as_openai_response;
+pub(crate) use responses_reasoning::finish_openai_response_with_reasoning_normalization;
 pub(crate) use responses_to_anthropic::openai_response_to_anthropic_messages;
 pub(crate) use responses_to_chat::openai_response_to_openai_chat;
 

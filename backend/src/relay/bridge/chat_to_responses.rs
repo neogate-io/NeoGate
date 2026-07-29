@@ -96,142 +96,7 @@ impl ReasoningMarkupWarningContext {
     }
 }
 
-const THINKING_OPEN_TAG: &str = "<thinking>";
-const THINKING_CLOSE_TAG: &str = "</thinking>";
-const MAX_BUFFERED_THINKING_MARKUP_BYTES: usize = 64 * 1024;
-
-fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .position(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
-fn strip_one_leading_line_break(value: &str) -> &str {
-    value
-        .strip_prefix("\r\n")
-        .or_else(|| value.strip_prefix('\n'))
-        .unwrap_or(value)
-}
-
-fn split_leading_thinking_markup(content: &str) -> Option<(String, String)> {
-    if content.len() < THINKING_OPEN_TAG.len()
-        || !content.as_bytes()[..THINKING_OPEN_TAG.len()]
-            .eq_ignore_ascii_case(THINKING_OPEN_TAG.as_bytes())
-    {
-        return None;
-    }
-    let after_open = &content[THINKING_OPEN_TAG.len()..];
-    let close = find_ascii_case_insensitive(after_open, THINKING_CLOSE_TAG)?;
-    let after_close = &after_open[close + THINKING_CLOSE_TAG.len()..];
-    Some((
-        after_open[..close].trim().to_string(),
-        strip_one_leading_line_break(after_close).to_string(),
-    ))
-}
-
-#[derive(Default)]
-enum LeadingThinkingMarkup {
-    #[default]
-    Undecided,
-    Thinking,
-    Content,
-}
-
-#[derive(Default)]
-struct LeadingThinkingMarkupParser {
-    state: LeadingThinkingMarkup,
-    buffered: String,
-}
-
-struct ParsedContent {
-    reasoning: Option<String>,
-    content: Option<String>,
-    detected: bool,
-}
-
-impl ParsedContent {
-    fn empty() -> Self {
-        Self {
-            reasoning: None,
-            content: None,
-            detected: false,
-        }
-    }
-}
-
-impl LeadingThinkingMarkupParser {
-    fn push(&mut self, fragment: &str) -> ParsedContent {
-        match self.state {
-            LeadingThinkingMarkup::Content => ParsedContent {
-                reasoning: None,
-                content: Some(fragment.to_string()),
-                detected: false,
-            },
-            LeadingThinkingMarkup::Undecided => {
-                self.buffered.push_str(fragment);
-                let prefix_len = self.buffered.len().min(THINKING_OPEN_TAG.len());
-                if !self.buffered.as_bytes()[..prefix_len]
-                    .eq_ignore_ascii_case(&THINKING_OPEN_TAG.as_bytes()[..prefix_len])
-                {
-                    self.state = LeadingThinkingMarkup::Content;
-                    return ParsedContent {
-                        reasoning: None,
-                        content: Some(std::mem::take(&mut self.buffered)),
-                        detected: false,
-                    };
-                }
-                if self.buffered.len() < THINKING_OPEN_TAG.len() {
-                    return ParsedContent::empty();
-                }
-                self.buffered.drain(..THINKING_OPEN_TAG.len());
-                self.state = LeadingThinkingMarkup::Thinking;
-                self.finish_thinking_if_ready()
-            }
-            LeadingThinkingMarkup::Thinking => {
-                self.buffered.push_str(fragment);
-                self.finish_thinking_if_ready()
-            }
-        }
-    }
-
-    fn finish_thinking_if_ready(&mut self) -> ParsedContent {
-        if let Some(close) = find_ascii_case_insensitive(&self.buffered, THINKING_CLOSE_TAG) {
-            let reasoning = self.buffered[..close].trim().to_string();
-            let content =
-                strip_one_leading_line_break(&self.buffered[close + THINKING_CLOSE_TAG.len()..])
-                    .to_string();
-            self.buffered.clear();
-            self.state = LeadingThinkingMarkup::Content;
-            return ParsedContent {
-                reasoning: (!reasoning.is_empty()).then_some(reasoning),
-                content: (!content.is_empty()).then_some(content),
-                detected: true,
-            };
-        }
-        if self.buffered.len() > MAX_BUFFERED_THINKING_MARKUP_BYTES {
-            self.state = LeadingThinkingMarkup::Content;
-            return ParsedContent {
-                reasoning: None,
-                content: Some(format!(
-                    "{THINKING_OPEN_TAG}{}",
-                    std::mem::take(&mut self.buffered)
-                )),
-                detected: false,
-            };
-        }
-        ParsedContent::empty()
-    }
-
-    fn finish(&mut self) -> Option<String> {
-        let buffered = std::mem::take(&mut self.buffered);
-        match std::mem::take(&mut self.state) {
-            LeadingThinkingMarkup::Undecided if !buffered.is_empty() => Some(buffered),
-            LeadingThinkingMarkup::Thinking => Some(format!("{THINKING_OPEN_TAG}{buffered}")),
-            _ => None,
-        }
-    }
-}
+use super::reasoning_markup::{split_leading_reasoning_markup, LeadingReasoningMarkupParser};
 
 fn warn_if_nonstream_reasoning_markup(body: &[u8], context: &ReasoningMarkupWarningContext) {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
@@ -245,7 +110,7 @@ fn warn_if_nonstream_reasoning_markup(body: &[u8], context: &ReasoningMarkupWarn
         .and_then(|message| message.get("content"))
         .map(text_field_content_to_text)
         .unwrap_or_default();
-    if split_leading_thinking_markup(&content).is_some() {
+    if split_leading_reasoning_markup(&content).is_some() {
         context.warn();
     }
 }
@@ -303,10 +168,7 @@ fn openai_chat_message_to_response_output(
         )];
     };
     let mut output = Vec::new();
-    let structured_reasoning = message
-        .get("reasoning_content")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty());
+    let structured_reasoning = reasoning_content(message);
     if let Some(reasoning) = structured_reasoning {
         output.push(openai_response_reasoning_item(
             format!("rs_{response_id}"),
@@ -325,18 +187,18 @@ fn openai_chat_message_to_response_output(
         .get("content")
         .map(text_field_content_to_text)
         .unwrap_or_default();
-    if let Some((tagged_reasoning, remaining_content)) = split_leading_thinking_markup(&content) {
-        if structured_reasoning.is_none() && !tagged_reasoning.is_empty() {
+    if let Some(parsed) = split_leading_reasoning_markup(&content) {
+        if structured_reasoning.is_none() && !parsed.reasoning.is_empty() {
             output.insert(
                 0,
                 openai_response_reasoning_item(
                     format!("rs_{response_id}"),
-                    tagged_reasoning,
+                    parsed.reasoning,
                     "completed",
                 ),
             );
         }
-        content = remaining_content;
+        content = parsed.content;
     }
     if !content.is_empty() || output.is_empty() {
         output.push(openai_response_message_item(
@@ -393,7 +255,7 @@ pub(super) struct OpenAiChatSseToOpenAiResponse {
     message_finished: bool,
     text: String,
     reasoning_text: String,
-    leading_thinking_markup: LeadingThinkingMarkupParser,
+    leading_thinking_markup: LeadingReasoningMarkupParser,
     warning_context: Option<ReasoningMarkupWarningContext>,
     input_tokens: i64,
     output_tokens: i64,
@@ -432,7 +294,7 @@ impl OpenAiChatSseToOpenAiResponse {
             message_finished: false,
             text: String::new(),
             reasoning_text: String::new(),
-            leading_thinking_markup: LeadingThinkingMarkupParser::default(),
+            leading_thinking_markup: LeadingReasoningMarkupParser::default(),
             warning_context,
             input_tokens: 0,
             output_tokens: 0,
@@ -499,11 +361,7 @@ impl OpenAiChatSseToOpenAiResponse {
         let Some(delta) = choice.get("delta") else {
             return;
         };
-        if let Some(reasoning) = delta
-            .get("reasoning_content")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(reasoning) = reasoning_content(delta) {
             self.push_reasoning_delta(reasoning, out);
         }
         if let Some(content) = delta
@@ -1060,6 +918,14 @@ fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
         .find(|tokens| *tokens > 0)
 }
 
+fn reasoning_content(value: &Value) -> Option<&str> {
+    value
+        .get("reasoning_content")
+        .or_else(|| value.get("reasoning"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
 impl BridgeSseConverter for OpenAiChatSseToOpenAiResponse {
     fn push(&mut self, chunk: &[u8]) -> Bytes {
         Self::push(self, chunk)
@@ -1105,7 +971,7 @@ mod tests {
 
     #[test]
     fn leading_thinking_markup_parser_handles_case_and_stream_boundaries() {
-        let mut parser = LeadingThinkingMarkupParser::default();
+        let mut parser = LeadingReasoningMarkupParser::default();
 
         let first = parser.push("<THINK");
         assert!(first.reasoning.is_none());
@@ -1123,7 +989,7 @@ mod tests {
 
     #[test]
     fn leading_thinking_markup_parser_preserves_normal_and_unclosed_content() {
-        let mut normal = LeadingThinkingMarkupParser::default();
+        let mut normal = LeadingReasoningMarkupParser::default();
         let parsed = normal.push("ordinary <thinking>example</thinking>");
         assert_eq!(
             parsed.content.as_deref(),
@@ -1131,7 +997,7 @@ mod tests {
         );
         assert!(parsed.reasoning.is_none());
 
-        let mut unclosed = LeadingThinkingMarkupParser::default();
+        let mut unclosed = LeadingReasoningMarkupParser::default();
         assert!(unclosed.push("<thinking>unfinished").content.is_none());
         assert_eq!(unclosed.finish().as_deref(), Some("<thinking>unfinished"));
     }
@@ -1150,6 +1016,20 @@ mod tests {
     #[test]
     fn nonstream_structured_reasoning_deduplicates_thinking_markup() {
         let body = br#"{"id":"chatcmpl-1","choices":[{"message":{"reasoning_content":"Structured reasoning","content":"<thinking>Duplicate reasoning</thinking>\nAnswer"}}]}"#;
+        let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["output"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            value["output"][0]["summary"][0]["text"],
+            "Structured reasoning"
+        );
+        assert_eq!(value["output"][1]["content"][0]["text"], "Answer");
+    }
+
+    #[test]
+    fn nonstream_reasoning_alias_is_structured_reasoning() {
+        let body = br#"{"id":"chatcmpl-1","choices":[{"message":{"reasoning":"Structured reasoning","content":"<think>Duplicate reasoning</think>\nAnswer"}}]}"#;
         let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
         let value: Value = serde_json::from_slice(&converted).unwrap();
 

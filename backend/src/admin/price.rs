@@ -14,9 +14,9 @@ use crate::{
 };
 
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
+const MOLIGATE_CNY_PRICING_URL: &str = "https://data.moligate.cn/api/models";
 const PRICE_TEMPLATE_SOURCE_MODELS_DEV: &str = "models_dev";
-const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
-const PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX: &str = "local_cny_fx";
+const PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA: &str = "moligate_data";
 
 #[derive(Debug, Serialize)]
 pub struct ChannelPriceRecord {
@@ -152,16 +152,6 @@ pub struct SyncPricingTemplatesRequest {
 struct ModelsDevProvider {
     #[serde(default)]
     models: HashMap<String, ModelsDevModel>,
-    #[serde(default)]
-    metadata: Option<ModelsDevProviderMetadata>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevProviderMetadata {
-    /// 汇率换算脚本(fetch_modelsdev_pricing.py)写入的 USD->CNY 汇率。
-    /// 存在即表示该 provider 的价格为汇率换算价,非原生 CNY 官方价。
-    #[allow(dead_code)]
-    fx_rate: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,7 +194,7 @@ struct ModelsDevCost {
     output: Option<f64>,
     cache_read: Option<f64>,
     cache_write: Option<f64>,
-    // 非 token 口径字段(由抓取脚本写入)
+    // 非 token 口径字段
     per_image: Option<f64>,
     per_call: Option<f64>,
     per_hour: Option<f64>,
@@ -215,10 +205,9 @@ struct ModelsDevCost {
     per_thousand_calls: Option<f64>,
     per_10k_token_input: Option<f64>,
     per_10k_token_output: Option<f64>,
-    /// 抓取脚本推断的口径字符串(见 PricingBasis::as_str)。
+    /// 上游提供的口径字符串(见 PricingBasis::as_str)。
     basis: Option<String>,
-    /// 多档视频价的完整档位结构(由抓取脚本 parse_multi_tier_video 写入),
-    /// 仅 `basis=multi_tier_video` 时存在。代表档仍写入 input/output。
+    /// 多档视频价的完整档位结构。
     video_tiers: Option<Vec<Value>>,
 }
 
@@ -238,7 +227,7 @@ fn default_enabled() -> bool {
 }
 
 fn default_pricing_template_sync_source() -> String {
-    PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string()
+    String::new()
 }
 
 pub async fn list_provider_models(state: &AppState) -> AppResult<Vec<ProviderModelRecord>> {
@@ -311,7 +300,7 @@ pub async fn live_model_reference_catalog(
 ) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
     let upstream = match state.config.billing_currency {
         BillingCurrency::Usd => fetch_models_dev_pricing_json(state).await?,
-        BillingCurrency::Cny => fetch_local_cny_pricing_json(state).await?,
+        BillingCurrency::Cny => fetch_moligate_cny_pricing_json(state).await?,
     };
     let provider_codes = enabled_provider_codes(state).await?;
     let now = Utc::now();
@@ -327,7 +316,7 @@ pub async fn live_model_reference_catalog(
 
         let source = match state.config.billing_currency {
             BillingCurrency::Usd => PRICE_TEMPLATE_SOURCE_MODELS_DEV,
-            BillingCurrency::Cny => provider_source_for_local_cny(&provider_data),
+            BillingCurrency::Cny => PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
         };
         for (model, model_data) in provider_data.models {
             let template = match state.config.billing_currency {
@@ -335,7 +324,7 @@ pub async fn live_model_reference_catalog(
                     pricing_template_from_models_dev_model(provider, &model, &model_data)
                 }
                 BillingCurrency::Cny => {
-                    pricing_template_from_local_cny_model(provider, &model, &model_data)
+                    pricing_template_from_moligate_cny_model(provider, &model, &model_data)
                 }
             };
             let Some(template) = template else { continue };
@@ -389,20 +378,6 @@ pub async fn list_pricing_policies(state: &AppState) -> AppResult<Vec<PricingPol
     rows.iter().map(pricing_policy_from_row).collect()
 }
 
-/// 判断 local_cny 目录中的 provider 价格来源:含 `metadata.fx_rate` 的为汇率换算价,
-/// 否则为原生 CNY 官方价。返回对应的 `pricing_template.source` 值。
-fn provider_source_for_local_cny(provider_data: &ModelsDevProvider) -> &'static str {
-    if provider_data
-        .metadata
-        .as_ref()
-        .is_some_and(|meta| meta.fx_rate.is_some())
-    {
-        PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX
-    } else {
-        PRICE_TEMPLATE_SOURCE_LOCAL_CNY
-    }
-}
-
 pub async fn sync_pricing_templates(
     state: &AppState,
     req: SyncPricingTemplatesRequest,
@@ -410,10 +385,10 @@ pub async fn sync_pricing_templates(
     match req.source.trim() {
         "" => match state.config.billing_currency {
             BillingCurrency::Usd => sync_models_dev_pricing_templates(state).await,
-            BillingCurrency::Cny => sync_local_cny_pricing_templates(state).await,
+            BillingCurrency::Cny => sync_moligate_cny_pricing_templates(state).await,
         },
         PRICE_TEMPLATE_SOURCE_MODELS_DEV => sync_models_dev_pricing_templates(state).await,
-        PRICE_TEMPLATE_SOURCE_LOCAL_CNY => sync_local_cny_pricing_templates(state).await,
+        PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA => sync_moligate_cny_pricing_templates(state).await,
         source => Err(AppError::BadRequest(format!(
             "unsupported pricing template source: {source}"
         ))),
@@ -548,7 +523,7 @@ async fn sync_models_dev_pricing_templates(
         }
     }
 
-    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_LOCAL_CNY).await?;
+    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA).await?;
 
     Ok(PricingTemplateSyncResult {
         source: PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
@@ -559,25 +534,22 @@ async fn sync_models_dev_pricing_templates(
     })
 }
 
-const LOCAL_CNY_PRICING_JSON_PATH: &str = "/model-pricing.json";
-
-async fn sync_local_cny_pricing_templates(
+async fn sync_moligate_cny_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
-    let upstream = fetch_local_cny_pricing_json(state).await?;
-    apply_local_cny_pricing_templates(state, upstream).await
+    let upstream = fetch_moligate_cny_pricing_json(state).await?;
+    apply_moligate_cny_pricing_templates(state, upstream).await
 }
 
-async fn fetch_local_cny_pricing_json(
+async fn fetch_moligate_cny_pricing_json(
     state: &AppState,
 ) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    let Some(base_url) = state.config.public_base_url.as_deref() else {
-        return Err(AppError::BadRequest(
-            "PUBLIC_BASE_URL is not configured, cannot fetch local CNY pricing JSON".to_string(),
-        ));
-    };
-    let url = format!("{base_url}{LOCAL_CNY_PRICING_JSON_PATH}");
-    fetch_pricing_json(state, &url, local_cny_pricing_unavailable).await
+    fetch_pricing_json(
+        state,
+        MOLIGATE_CNY_PRICING_URL,
+        moligate_cny_pricing_unavailable,
+    )
+    .await
 }
 
 async fn fetch_models_dev_pricing_json(
@@ -609,7 +581,7 @@ async fn fetch_pricing_json(
         .map_err(map_error)
 }
 
-async fn apply_local_cny_pricing_templates(
+async fn apply_moligate_cny_pricing_templates(
     state: &AppState,
     upstream: HashMap<String, ModelsDevProvider>,
 ) -> AppResult<PricingTemplateSyncResult> {
@@ -629,22 +601,26 @@ async fn apply_local_cny_pricing_templates(
             continue;
         }
 
-        let source = provider_source_for_local_cny(&provider_data);
         for (model, model_data) in provider_data.models {
             let Some(template) =
-                pricing_template_from_local_cny_model(provider, &model, &model_data)
+                pricing_template_from_moligate_cny_model(provider, &model, &model_data)
             else {
                 skipped += 1;
                 continue;
             };
-            saved += upsert_synced_pricing_template(state, template, source).await?;
+            saved += upsert_synced_pricing_template(
+                state,
+                template,
+                PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
+            )
+            .await?;
         }
     }
 
     let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MODELS_DEV).await?;
 
     Ok(PricingTemplateSyncResult {
-        source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+        source: PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA.to_string(),
         fetched,
         saved,
         skipped,
@@ -660,11 +636,11 @@ fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
     );
     pricing_reference_source_unavailable()
 }
-fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
+fn moligate_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
     tracing::warn!(
         error = %err,
         error_debug = ?err,
-        "failed to sync local CNY pricing templates from public base url"
+        "failed to sync CNY pricing templates from data.moligate.cn"
     );
     pricing_reference_source_unavailable()
 }
@@ -717,7 +693,7 @@ fn pricing_template_from_models_dev_model<'a>(
     })
 }
 
-fn pricing_template_from_local_cny_model<'a>(
+fn pricing_template_from_moligate_cny_model<'a>(
     provider: &'a str,
     model: &'a str,
     model_data: &ModelsDevModel,
@@ -729,13 +705,13 @@ fn pricing_template_from_local_cny_model<'a>(
     let billing_meter = billing_meter_from_models_dev_model(model_data);
     let prices = audio_pricing_for_model(
         billing_meter == BillingMeter::Audio,
-        pricing_micros_from_local_pricing_model(model_data),
+        pricing_micros_from_moligate_cny_model(model_data),
     );
     Some(PricingTemplateUpsert {
         provider,
         model,
         billing_meter,
-        capabilities: local_pricing_capabilities(model_data),
+        capabilities: moligate_cny_pricing_capabilities(model_data),
         prices,
     })
 }
@@ -744,7 +720,7 @@ fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<Pricin
     pricing_micros_from_cost(model.cost.as_ref()?)
 }
 
-fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<PricingMicros> {
+fn pricing_micros_from_moligate_cny_model(model: &ModelsDevModel) -> Option<PricingMicros> {
     pricing_micros_from_cost(model.cost.as_ref()?)
 }
 
@@ -830,7 +806,7 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         MultiTierVideo => {
-            // input/output 已由抓取脚本取代表档(最低档)写入,作为视频参考价代表档。
+            // input/output 由上游提供代表档,作为视频参考价展示值。
             let input = per_million_to_micros(cost.input)?;
             let output =
                 per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
@@ -925,7 +901,7 @@ fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
     })
 }
 
-fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
+fn moligate_cny_pricing_capabilities(model: &ModelsDevModel) -> Value {
     let mut payload = json!({
         "id": model.id,
         "name": model.name,
@@ -1419,6 +1395,37 @@ fn pricing_policy_from_row(row: &sqlx::postgres::PgRow) -> AppResult<PricingPoli
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_sync_source_uses_billing_currency_default() {
+        let request: SyncPricingTemplatesRequest = serde_json::from_str("{}").unwrap();
+        assert!(request.source.is_empty());
+    }
+
+    #[test]
+    fn parses_moligate_cny_provider_map_shape() {
+        let providers: HashMap<String, ModelsDevProvider> = serde_json::from_str(
+            r#"{
+                "dashscope": {
+                    "models": {
+                        "qwen-test": {
+                            "name": "Qwen Test",
+                            "modalities": {"input": ["text"], "output": ["text"]},
+                            "cost": {"input": 0.8, "output": 2, "basis": "token"},
+                            "metadata": {"currency": "CNY"}
+                        }
+                    },
+                    "metadata": {"currency": "CNY", "fetched_at": "2026-07-29T00:00:00Z"}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let model = providers["dashscope"].models.get("qwen-test").unwrap();
+        let prices = pricing_micros_from_moligate_cny_model(model).unwrap();
+        assert_eq!(prices.input_price_micros, 800_000);
+        assert_eq!(prices.output_price_micros, 2_000_000);
+    }
 
     #[test]
     fn converts_models_dev_per_million_to_micros() {

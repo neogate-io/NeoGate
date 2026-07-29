@@ -75,21 +75,11 @@ export function isManualBaseUrlProvider(provider: ChannelProvider) {
 }
 
 export function withCustomProviderLast(providers: ChannelProviderOption[]) {
-  return [
-    ...providers.filter((provider) => !isManualBaseUrlProvider(provider.value)),
-    newapiProviderOption,
-    sub2apiProviderOption,
-    customProviderOption
-  ]
+  return providers.filter((provider) => !isManualBaseUrlProvider(provider.value))
 }
 
 export function sortProvidersForDisplay(providers: ProviderRecord[]) {
-  const manualProviderOrder = ['newapi', 'sub2api', 'custom']
-  const manualProviders = manualProviderOrder
-    .map((code) => providers.find((provider) => provider.code === code))
-    .filter((provider): provider is ProviderRecord => Boolean(provider))
-  const rest = providers.filter((provider) => !isManualBaseUrlProvider(provider.code))
-  return [...rest, ...manualProviders]
+  return providers.filter((provider) => !isManualBaseUrlProvider(provider.code))
 }
 
 export function findProviderOption(

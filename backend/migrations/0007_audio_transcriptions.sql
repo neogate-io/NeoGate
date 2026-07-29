@@ -37,3 +37,6 @@ ALTER TABLE usage_daily DROP CONSTRAINT IF EXISTS usage_daily_billing_meter_chec
 ALTER TABLE usage_daily ADD CONSTRAINT usage_daily_billing_meter_check
     CHECK (billing_meter IN ('token', 'image', 'video', 'audio')) NOT VALID;
 ALTER TABLE usage_daily VALIDATE CONSTRAINT usage_daily_billing_meter_check;
+
+UPDATE provider SET display_name = 'OpenAI 兼容' WHERE code = 'openai' AND display_name = 'OpenAI 官方';
+UPDATE provider SET display_name = 'Anthropic 兼容' WHERE code = 'anthropic' AND display_name = 'Anthropic 官方';

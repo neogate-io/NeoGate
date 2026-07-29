@@ -1956,6 +1956,35 @@ async fn export_models(
     )
 }
 
+/// 各统计视图共享的基础用量字段，从数据库行中一次性读取以消除重复。
+struct UsageCountsRow {
+    request_count: i64,
+    success_count: i64,
+    error_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    total_tokens: i64,
+    billable_units: i64,
+    cost_micros: i64,
+    avg_latency_ms: Option<f64>,
+}
+
+impl UsageCountsRow {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            request_count: row.try_get("request_count")?,
+            success_count: row.try_get("success_count")?,
+            error_count: row.try_get("error_count")?,
+            input_tokens: row.try_get("input_tokens")?,
+            output_tokens: row.try_get("output_tokens")?,
+            total_tokens: row.try_get("total_tokens")?,
+            billable_units: row.try_get("billable_units")?,
+            cost_micros: row.try_get("cost_micros")?,
+            avg_latency_ms: row.try_get("avg_latency_ms")?,
+        })
+    }
+}
+
 fn aggregate_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageStatsAggregate, sqlx::Error> {
     Ok(UsageStatsAggregate {
         request_count: row.try_get("request_count")?,
@@ -1980,23 +2009,25 @@ fn aggregate_from_row(row: &sqlx::postgres::PgRow) -> Result<UsageStatsAggregate
 fn usage_timeseries_point_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<UsageTimeSeriesPoint, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     Ok(UsageTimeSeriesPoint {
         bucket: row.try_get("bucket")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
+        avg_latency_ms: c.avg_latency_ms,
         avg_first_response_ms: row.try_get("avg_first_response_ms")?,
         avg_output_tokens_per_second: row.try_get("avg_output_tokens_per_second")?,
     })
 }
 
 fn user_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<UserUsageStats, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     let user_id = row.try_get("user_id")?;
     let user_email = row.try_get("user_email")?;
     let user_username = row.try_get("user_username")?;
@@ -2005,34 +2036,35 @@ fn user_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<UserUsageStats, sq
         user_display_name: user_display_name(user_id, &user_email, &user_username),
         user_email,
         user_username,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
+        avg_latency_ms: c.avg_latency_ms,
         model_count: row.try_get("model_count")?,
     })
 }
 
 fn model_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ModelUsageStats, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     Ok(ModelUsageStats {
         channel_id: row.try_get("channel_id")?,
         channel_name: row.try_get("channel_name")?,
         model: row.try_get("model")?,
         billing_meter: row.try_get("billing_meter")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
+        avg_latency_ms: c.avg_latency_ms,
         user_count: row.try_get("user_count")?,
     })
 }
@@ -2040,20 +2072,21 @@ fn model_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ModelUsageStats, 
 fn model_usage_timeseries_point_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<ModelUsageTimeSeriesPoint, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     Ok(ModelUsageTimeSeriesPoint {
         bucket: row.try_get("bucket")?,
         channel_name: row.try_get("channel_name")?,
         model: row.try_get("model")?,
         billing_meter: row.try_get("billing_meter")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
+        avg_latency_ms: c.avg_latency_ms,
         avg_first_response_ms: row.try_get("avg_first_response_ms")?,
         avg_output_tokens_per_second: row.try_get("avg_output_tokens_per_second")?,
     })
@@ -2062,6 +2095,7 @@ fn model_usage_timeseries_point_from_row(
 fn user_model_stats_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<UserModelUsageStats, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     let user_id = row.try_get("user_id")?;
     let user_email = row.try_get("user_email")?;
     let user_username = row.try_get("user_username")?;
@@ -2073,41 +2107,43 @@ fn user_model_stats_from_row(
         channel_name: row.try_get("channel_name")?,
         model: row.try_get("model")?,
         billing_meter: row.try_get("billing_meter")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
+        avg_latency_ms: c.avg_latency_ms,
     })
 }
 
 fn project_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<ProjectUsageStats, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     Ok(ProjectUsageStats {
         project_id: row.try_get("project_id")?,
         project_name: row.try_get("project_name")?,
         owner_user_id: row.try_get("owner_user_id")?,
         member_count: row.try_get("member_count")?,
         key_count: row.try_get("key_count")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
         cost_breakdown: cost_breakdown_from_row(row)?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        avg_latency_ms: c.avg_latency_ms,
     })
 }
 
 fn project_member_stats_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<ProjectMemberUsageStats, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     let user_id = row.try_get("user_id")?;
     let user_email = row.try_get("user_email")?;
     let user_username = row.try_get("user_username")?;
@@ -2120,20 +2156,21 @@ fn project_member_stats_from_row(
         user_username,
         key_count: row.try_get("key_count")?,
         model_count: row.try_get("model_count")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
         cost_breakdown: cost_breakdown_from_row(row)?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        avg_latency_ms: c.avg_latency_ms,
     })
 }
 
 fn key_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<KeyUsageStats, sqlx::Error> {
+    let c = UsageCountsRow::from_row(row)?;
     let user_id = row.try_get("user_id")?;
     let user_email = row.try_get("user_email")?;
     let user_username = row.try_get("user_username")?;
@@ -2148,16 +2185,16 @@ fn key_stats_from_row(row: &sqlx::postgres::PgRow) -> Result<KeyUsageStats, sqlx
         user_email,
         user_username,
         model_count: row.try_get("model_count")?,
-        request_count: row.try_get("request_count")?,
-        success_count: row.try_get("success_count")?,
-        error_count: row.try_get("error_count")?,
-        input_tokens: row.try_get("input_tokens")?,
-        output_tokens: row.try_get("output_tokens")?,
-        total_tokens: row.try_get("total_tokens")?,
-        billable_units: row.try_get("billable_units")?,
-        cost_micros: row.try_get("cost_micros")?,
+        request_count: c.request_count,
+        success_count: c.success_count,
+        error_count: c.error_count,
+        input_tokens: c.input_tokens,
+        output_tokens: c.output_tokens,
+        total_tokens: c.total_tokens,
+        billable_units: c.billable_units,
+        cost_micros: c.cost_micros,
         cost_breakdown: cost_breakdown_from_row(row)?,
-        avg_latency_ms: row.try_get("avg_latency_ms")?,
+        avg_latency_ms: c.avg_latency_ms,
     })
 }
 

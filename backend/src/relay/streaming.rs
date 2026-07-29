@@ -9,6 +9,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
+use tracing::Instrument as _;
 
 use crate::{
     auth::UserAuth,
@@ -182,35 +183,45 @@ pub(crate) fn body_from_stream(
     let stream_idle_timeout = ctx.streamed.then_some(STREAM_IDLE_TIMEOUT);
     let stream_keep_alive_interval = ctx.streamed.then_some(STREAM_KEEP_ALIVE_INTERVAL);
     let now = tokio::time::Instant::now();
-    tracing::debug!(
-        relay_trace_id = %ctx.relay_trace_id,
-        relay_attempt = ctx.relay_attempt,
-        relay_final = ctx.relay_final,
-        provider = %ctx.upstream.provider,
-        channel_id = ctx.upstream.channel_id,
-        channel_name = %ctx.upstream.channel_name,
+    // 创建请求级 span，将固定的 relay/channel/model 上下文字段注册一次。
+    // 流内所有 tracing 事件（以及 Drop 中 spawn 的后台任务）均从这个 span 继承这些字段，
+    // 无需在每条 tracing 宏中重复 ~14 个相同参数。
+    let span = tracing::debug_span!(
+        "relay_stream",
+        relay_trace_id  = %ctx.relay_trace_id,
+        relay_attempt   = ctx.relay_attempt,
+        relay_final     = ctx.relay_final,
+        provider        = %ctx.upstream.provider,
+        channel_id      = ctx.upstream.channel_id,
+        channel_name    = %ctx.upstream.channel_name,
         channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-        channel_key_id = ?ctx.upstream.channel_key_id,
-        credential_id = ?ctx.upstream.credential_id,
-        protocol = ctx.protocol.as_str(),
-        model = %ctx.model,
-        external_model = %ctx.external_model,
-        upstream_model = %ctx.upstream_model,
-        path = ctx.path,
-        upstream_path,
-        response_mode,
-        responses_chat_fallback = response_mode == "openai_chat_as_openai_response",
-        base_url = %ctx.upstream.base_url,
-        status = status.as_u16(),
-        streamed = ctx.streamed,
-        content_length,
-        usage_buffer_limit_bytes,
-        stream_idle_timeout_seconds = ?stream_idle_timeout.map(|timeout| timeout.as_secs()),
-        stream_keep_alive_interval_seconds = ?stream_keep_alive_interval.map(|interval| interval.as_secs()),
-        "starting relay response body stream"
+        channel_key_id  = ?ctx.upstream.channel_key_id,
+        credential_id   = ?ctx.upstream.credential_id,
+        protocol        = ctx.protocol.as_str(),
+        model           = %ctx.model,
+        external_model  = %ctx.external_model,
+        upstream_model  = %ctx.upstream_model,
+        path            = ctx.path,
+        base_url        = %ctx.upstream.base_url,
+        streamed        = ctx.streamed,
     );
+    {
+        let _guard = span.enter();
+        tracing::debug!(
+            upstream_path,
+            response_mode,
+            responses_chat_fallback = response_mode == "openai_chat_as_openai_response",
+            status = status.as_u16(),
+            content_length,
+            usage_buffer_limit_bytes,
+            stream_idle_timeout_seconds = ?stream_idle_timeout.map(|timeout| timeout.as_secs()),
+            stream_keep_alive_interval_seconds = ?stream_keep_alive_interval.map(|interval| interval.as_secs()),
+            "starting relay response body stream"
+        );
+    }
     let relay = StreamingRelay {
         ctx: Some(ctx),
+        span: span.clone(),
         status,
         stream,
         usage: ResponseUsageParser::for_response(
@@ -234,9 +245,10 @@ pub(crate) fn body_from_stream(
         largest_chunk_bytes: 0,
     };
 
-    Body::from_stream(futures_util::stream::unfold(
-        Some(relay),
-        |relay| async move {
+    Body::from_stream(futures_util::stream::unfold(Some(relay), move |relay| {
+        // 克隆 span 并传给每次 poll 产生的 future，使 tracing 上下文字段在整个流生命周期内生效。
+        let span = span.clone();
+        async move {
             let mut relay = relay?;
             let next = match (
                 relay.upstream_idle_deadline,
@@ -325,12 +337,16 @@ pub(crate) fn body_from_stream(
                         .map(|frame| (Ok::<Bytes, std::io::Error>(frame), None))
                 }
             }
-        },
-    ))
+        }
+        .instrument(span)
+    }))
 }
 
 struct StreamingRelay {
     ctx: Option<RelayContext>,
+    /// 持有请求级 tracing span，用于为所有流事件（包括 Drop 中 spawn 的后台任务）提供上下文字段，
+    /// 避免每条 tracing 宏重复 relay_trace_id / provider / model / path 等固定字段。
+    span: tracing::Span,
     status: StatusCode,
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, String>>,
     usage: ResponseUsageParser,
@@ -363,17 +379,10 @@ impl StreamingRelay {
 
         if let Some(ctx) = self.ctx.as_ref() {
             tracing::trace!(
-                relay_trace_id = %ctx.relay_trace_id,
-                relay_attempt = ctx.relay_attempt,
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                path = ctx.path,
                 keep_alive_frames_sent = self.keep_alive_frames_sent,
                 "sent downstream SSE keep-alive"
             );
+            let _ = ctx; // suppress unused-variable lint; span provides channel/model context
         }
     }
 
@@ -394,23 +403,11 @@ impl StreamingRelay {
     }
 
     fn log_normalized_bare_stream_error(&self) {
-        let Some(ctx) = self.ctx.as_ref() else {
+        let Some(_ctx) = self.ctx.as_ref() else {
             return;
         };
         let stream_error = self.usage.stream_error_summary();
         tracing::warn!(
-            relay_trace_id = %ctx.relay_trace_id,
-            relay_attempt = ctx.relay_attempt,
-            relay_final = ctx.relay_final,
-            provider = %ctx.upstream.provider,
-            channel_id = ctx.upstream.channel_id,
-            channel_name = %ctx.upstream.channel_name,
-            channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-            channel_key_id = ?ctx.upstream.channel_key_id,
-            credential_id = ?ctx.upstream.credential_id,
-            protocol = ctx.protocol.as_str(),
-            model = %ctx.model,
-            path = ctx.path,
             sse_error_type = ?stream_error.as_ref().and_then(|error| error.error_type.as_deref()),
             sse_error_code = ?stream_error.as_ref().and_then(|error| error.error_code.as_deref()),
             sse_error_message = ?stream_error.as_ref().and_then(|error| error.error_message.as_deref()),
@@ -434,22 +431,10 @@ impl StreamingRelay {
         self.largest_chunk_bytes = self.largest_chunk_bytes.max(chunk.len());
         let idle_ms = previous_chunk_ms.map_or(elapsed_ms, |last| elapsed_ms.saturating_sub(last));
 
+        let _ = ctx; // span 已持有 relay/channel/model 上下文字段
         if self.chunks_sent == 1 {
             tracing::debug!(
-                relay_trace_id = %ctx.relay_trace_id,
-                relay_attempt = ctx.relay_attempt,
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                path = ctx.path,
                 status = self.status.as_u16(),
-                streamed = ctx.streamed,
                 chunk_bytes = chunk.len(),
                 bytes_sent = self.bytes_sent,
                 first_response_ms = self.first_response_ms,
@@ -458,20 +443,7 @@ impl StreamingRelay {
             );
         } else if self.chunks_sent.is_multiple_of(256) {
             tracing::debug!(
-                relay_trace_id = %ctx.relay_trace_id,
-                relay_attempt = ctx.relay_attempt,
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                path = ctx.path,
                 status = self.status.as_u16(),
-                streamed = ctx.streamed,
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
                 largest_chunk_bytes = self.largest_chunk_bytes,
@@ -482,18 +454,7 @@ impl StreamingRelay {
         }
 
         tracing::trace!(
-            relay_trace_id = %ctx.relay_trace_id,
-            relay_attempt = ctx.relay_attempt,
-            provider = %ctx.upstream.provider,
-            channel_id = ctx.upstream.channel_id,
-            channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-            protocol = ctx.protocol.as_str(),
-            model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-            path = ctx.path,
             status = self.status.as_u16(),
-            streamed = ctx.streamed,
             chunk_bytes = chunk.len(),
             chunks_sent = self.chunks_sent,
             bytes_sent = self.bytes_sent,
@@ -529,23 +490,9 @@ impl StreamingRelay {
         let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
         let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
         tracing::debug!(
-            relay_trace_id = %ctx.relay_trace_id,
-            relay_attempt = ctx.relay_attempt,
-            relay_final = ctx.relay_final,
-            provider = %ctx.upstream.provider,
-            channel_id = ctx.upstream.channel_id,
-            channel_name = %ctx.upstream.channel_name,
-            channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-            channel_key_id = ?ctx.upstream.channel_key_id,
-            credential_id = ?ctx.upstream.credential_id,
-            protocol = ctx.protocol.as_str(),
-            model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-            path = ctx.path,
-            base_url = %ctx.upstream.base_url,
+            upstream_path,
+            response_mode,
             status = self.status.as_u16(),
-            streamed = ctx.streamed,
             stream_complete,
             first_response_ms = self.first_response_ms,
             last_chunk_ms = self.last_chunk_ms,
@@ -558,21 +505,6 @@ impl StreamingRelay {
         );
         if missing_terminal {
             tracing::warn!(
-                relay_trace_id = %ctx.relay_trace_id,
-                relay_attempt = ctx.relay_attempt,
-                relay_final = ctx.relay_final,
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                path = ctx.path,
-                base_url = %ctx.upstream.base_url,
                 status = self.status.as_u16(),
                 first_response_ms = self.first_response_ms,
                 last_chunk_ms = self.last_chunk_ms,
@@ -592,24 +524,9 @@ impl StreamingRelay {
         }
         if stream_failed {
             tracing::warn!(
-                relay_trace_id = %ctx.relay_trace_id,
-                relay_attempt = ctx.relay_attempt,
-                relay_final = ctx.relay_final,
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                path = ctx.path,
                 upstream_path,
                 response_mode,
                 responses_chat_fallback = response_mode == "openai_chat_as_openai_response",
-                base_url = %ctx.upstream.base_url,
                 status = self.status.as_u16(),
                 request_body_bytes = ctx.request_body_bytes,
                 request_input_tokens_estimate = ctx.request_input_tokens_estimate,
@@ -675,13 +592,6 @@ impl StreamingRelay {
                         )
                         .await;
                     tracing::warn!(
-                        provider = %ctx.upstream.provider,
-                        channel_id = ctx.upstream.channel_id,
-                        channel_name = %ctx.upstream.channel_name,
-                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                        protocol = ctx.protocol.as_str(),
-                        model = %ctx.model,
-                        path = ctx.path,
                         sse_error_code = ?summary.error_code,
                         sse_error_message = ?summary.error_message,
                         "upstream rejected responses for this model via SSE error; downgrading to chat on next request",
@@ -741,29 +651,15 @@ impl StreamingRelay {
     }
 
     async fn finish_trailing_stream_error(self, summary: String) {
-        if let Some(ctx) = self.ctx.as_ref() {
+        if self.ctx.is_some() {
             tracing::debug!(
-                provider = %ctx.upstream.provider,
-                channel_id = ctx.upstream.channel_id,
-                channel_name = %ctx.upstream.channel_name,
-                channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                channel_key_id = ?ctx.upstream.channel_key_id,
-                credential_id = ?ctx.upstream.credential_id,
-                protocol = ctx.protocol.as_str(),
-                model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                path = ctx.path,
-                base_url = %ctx.upstream.base_url,
                 status = self.status.as_u16(),
-                streamed = ctx.streamed,
                 first_response_ms = self.first_response_ms,
                 last_chunk_ms = self.last_chunk_ms,
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
                 largest_chunk_bytes = self.largest_chunk_bytes,
                 keep_alive_frames_sent = self.keep_alive_frames_sent,
-                latency_ms = ctx.started.elapsed().as_millis() as i64,
                 error = %summary,
                 "ignored trailing upstream stream read error after completed response"
             );
@@ -780,20 +676,7 @@ impl StreamingRelay {
         let stream_complete = self.usage.response_complete();
         let stream_failed = stream_body_error_is_failure(self.status, stream_complete);
         tracing::warn!(
-            provider = %ctx.upstream.provider,
-            channel_id = ctx.upstream.channel_id,
-            channel_name = %ctx.upstream.channel_name,
-            channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-            channel_key_id = ?ctx.upstream.channel_key_id,
-            credential_id = ?ctx.upstream.credential_id,
-            protocol = ctx.protocol.as_str(),
-            model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-            path = ctx.path,
-            base_url = %ctx.upstream.base_url,
             status = self.status.as_u16(),
-            streamed = ctx.streamed,
             stream_complete,
             first_response_ms = self.first_response_ms,
             last_chunk_ms = self.last_chunk_ms,
@@ -1169,88 +1052,61 @@ impl Drop for StreamingRelay {
         let bytes_sent = self.bytes_sent;
         let largest_chunk_bytes = self.largest_chunk_bytes;
         let keep_alive_frames_sent = self.keep_alive_frames_sent;
+        // 将 span 传入 spawn 的后台任务，使日志仍在请求 span 上下文中发出。
+        let span = self.span.clone();
 
-        tokio::spawn(async move {
-            if stream_complete {
-                tracing::debug!(
-                    relay_trace_id = %ctx.relay_trace_id,
-                    relay_attempt = ctx.relay_attempt,
-                    relay_final = ctx.relay_final,
-                    provider = %ctx.upstream.provider,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_name = %ctx.upstream.channel_name,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    channel_key_id = ?ctx.upstream.channel_key_id,
-                    credential_id = ?ctx.upstream.credential_id,
-                    protocol = ctx.protocol.as_str(),
-                    model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                    path = ctx.path,
-                    base_url = %ctx.upstream.base_url,
-                    status = status.as_u16(),
-                    streamed = ctx.streamed,
+        tokio::spawn(
+            async move {
+                if stream_complete {
+                    tracing::debug!(
+                        status = status.as_u16(),
+                        first_response_ms,
+                        last_chunk_ms,
+                        chunks_sent,
+                        bytes_sent,
+                        largest_chunk_bytes,
+                        keep_alive_frames_sent,
+                        latency_ms = ctx.started.elapsed().as_millis() as i64,
+                        "downstream client closed relay stream after completed response"
+                    );
+                } else {
+                    tracing::warn!(
+                        status = status.as_u16(),
+                        first_response_ms,
+                        last_chunk_ms,
+                        chunks_sent,
+                        bytes_sent,
+                        largest_chunk_bytes,
+                        keep_alive_frames_sent,
+                        latency_ms = ctx.started.elapsed().as_millis() as i64,
+                        "downstream client closed relay stream before completion"
+                    );
+                }
+                let billing = if status.is_success() {
+                    settle_successful_hold(&ctx, token_usage, "dropped successful stream").await
+                } else {
+                    release_empty_hold(&ctx.state, ctx.hold.clone(), "dropped stream").await;
+                    None
+                };
+                let failure = if status.is_success() {
+                    None
+                } else {
+                    key_failure_from_context(&ctx, "upstream error".to_string()).await
+                };
+                let error_summary = (!stream_complete)
+                    .then(|| "downstream stream closed before completion".to_string());
+                let usage = usage_from_context(
+                    &ctx,
+                    Some(status.as_u16() as i32),
+                    error_summary,
                     first_response_ms,
-                    last_chunk_ms,
-                    chunks_sent,
-                    bytes_sent,
-                    largest_chunk_bytes,
-                    keep_alive_frames_sent,
-                    latency_ms = ctx.started.elapsed().as_millis() as i64,
-                    "downstream client closed relay stream after completed response"
+                    token_usage,
+                    billing,
                 );
-            } else {
-                tracing::warn!(
-                    relay_trace_id = %ctx.relay_trace_id,
-                    relay_attempt = ctx.relay_attempt,
-                    relay_final = ctx.relay_final,
-                    provider = %ctx.upstream.provider,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_name = %ctx.upstream.channel_name,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    channel_key_id = ?ctx.upstream.channel_key_id,
-                    credential_id = ?ctx.upstream.credential_id,
-                    protocol = ctx.protocol.as_str(),
-                    model = %ctx.model,
-                external_model = %ctx.external_model,
-                upstream_model = %ctx.upstream_model,
-                    path = ctx.path,
-                    base_url = %ctx.upstream.base_url,
-                    status = status.as_u16(),
-                    streamed = ctx.streamed,
-                    first_response_ms,
-                    last_chunk_ms,
-                    chunks_sent,
-                    bytes_sent,
-                    largest_chunk_bytes,
-                    keep_alive_frames_sent,
-                    latency_ms = ctx.started.elapsed().as_millis() as i64,
-                    "downstream client closed relay stream before completion"
-                );
+                enqueue_relay_usage(&ctx.state, usage, failure).await;
             }
-            let billing = if status.is_success() {
-                settle_successful_hold(&ctx, token_usage, "dropped successful stream").await
-            } else {
-                release_empty_hold(&ctx.state, ctx.hold.clone(), "dropped stream").await;
-                None
-            };
-            let failure = if status.is_success() {
-                None
-            } else {
-                key_failure_from_context(&ctx, "upstream error".to_string()).await
-            };
-            let error_summary = (!stream_complete)
-                .then(|| "downstream stream closed before completion".to_string());
-            let usage = usage_from_context(
-                &ctx,
-                Some(status.as_u16() as i32),
-                error_summary,
-                first_response_ms,
-                token_usage,
-                billing,
-            );
-            enqueue_relay_usage(&ctx.state, usage, failure).await;
-        });
+            .instrument(span),
+        );
     }
 }
 

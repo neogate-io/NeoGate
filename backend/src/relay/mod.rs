@@ -352,14 +352,24 @@ fn rewrite_response_model(body: Bytes, external_model: &str) -> AppResult<Bytes>
 
 async fn finish_relay_error(mut ctx: RelayContext, err: AppError) -> AppResult<Response> {
     let err = relay_upstream_error(&ctx, err);
-    let summary = err.to_string();
     log_relay_upstream_failure(&ctx, &err);
-    let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
     ctx.release_request_permit();
-    let failure = key_failure_from_context(&ctx, summary).await;
-    release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
-    enqueue_relay_usage(&ctx.state, usage, failure).await;
+    record_relay_transport_failure(&ctx, err.to_string(), "failed relay").await;
     Err(err)
+}
+
+/// 记录传输层或前置失败的 relay 请求：释放预扣额度、记录失败 key 冷却并入队 usage。
+/// 仅用于无上游 HTTP 状态码的场景（status_code = None）；有状态码时使用
+/// `record_upstream_http_failure`。
+pub(crate) async fn record_relay_transport_failure(
+    ctx: &RelayContext,
+    summary: String,
+    release_context: &str,
+) {
+    let usage = usage_from_context(ctx, None, Some(summary.clone()), None, None, None);
+    let failure = key_failure_from_context(ctx, summary).await;
+    release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
+    enqueue_relay_usage(&ctx.state, usage, failure).await;
 }
 
 pub(crate) async fn handle_upstream_http_error(
@@ -548,10 +558,7 @@ pub(crate) async fn record_upstream_transport_failure_for_failover(
     ctx: &RelayContext,
     summary: String,
 ) {
-    let usage = usage_from_context(ctx, None, Some(summary.clone()), None, None, None);
-    let failure = key_failure_from_context(ctx, summary).await;
-    release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream transport failover").await;
-    enqueue_relay_usage(&ctx.state, usage, failure).await;
+    record_relay_transport_failure(ctx, summary, "upstream transport failover").await;
 }
 
 pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {

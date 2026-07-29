@@ -1047,6 +1047,26 @@ fn user_email_exists_error() -> AppError {
     }
 }
 
+/// 三个 `adjust_credit*` 函数共享的内层逻辑：若扣减则先从热账本回收，再调用
+/// `adjust_credit_in_tx` 完成余额变更。调用方负责开启和提交事务。
+async fn drain_and_adjust_credit_in_tx(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    credit_account: CreditAccountId,
+    amount_micros: i64,
+    reason: &str,
+    metadata: serde_json::Value,
+) -> AppResult<i64> {
+    if amount_micros < 0 {
+        let recovered = state
+            .billing
+            .drain_hot_credit_account(&credit_account)
+            .await?;
+        recover_hot_credit_in_tx(tx, &recovered).await?;
+    }
+    adjust_credit_in_tx(tx, credit_account, amount_micros, reason, metadata).await
+}
+
 pub async fn adjust_credit(
     state: &AppState,
     credit_account_type: CreditAccountType,
@@ -1057,14 +1077,8 @@ pub async fn adjust_credit(
     let mut tx = state.db.pool.begin().await?;
     let credit_account =
         account::owner_credit_account_for_update(&mut tx, credit_account_type, owner_id).await?;
-    if amount_micros < 0 {
-        let recovered = state
-            .billing
-            .drain_hot_credit_account(&credit_account)
-            .await?;
-        recover_hot_credit_in_tx(&mut tx, &recovered).await?;
-    }
-    let balance_after = adjust_credit_in_tx(
+    let balance_after = drain_and_adjust_credit_in_tx(
+        state,
         &mut tx,
         credit_account,
         amount_micros,
@@ -1087,14 +1101,8 @@ pub async fn adjust_default_project_credit(
     let credit_account =
         account::owner_credit_account_for_update(&mut tx, CreditAccountType::Project, project_id)
             .await?;
-    if amount_micros < 0 {
-        let recovered = state
-            .billing
-            .drain_hot_credit_account(&credit_account)
-            .await?;
-        recover_hot_credit_in_tx(&mut tx, &recovered).await?;
-    }
-    let balance_after = adjust_credit_in_tx(
+    let balance_after = drain_and_adjust_credit_in_tx(
+        state,
         &mut tx,
         credit_account,
         amount_micros,
@@ -1143,14 +1151,8 @@ pub async fn adjust_user_key_model_credit(
     )
     .await?;
 
-    if amount_micros < 0 {
-        let recovered = state
-            .billing
-            .drain_hot_credit_account(&credit_account)
-            .await?;
-        recover_hot_credit_in_tx(&mut tx, &recovered).await?;
-    }
-    let balance_after = adjust_credit_in_tx(
+    let balance_after = drain_and_adjust_credit_in_tx(
+        state,
         &mut tx,
         credit_account.clone(),
         amount_micros,
@@ -1158,7 +1160,7 @@ pub async fn adjust_user_key_model_credit(
         serde_json::json!({
             "source": "admin",
             "user_key_id": user_key_id,
-            "model": model.clone(),
+            "model": model,
         }),
     )
     .await?;

@@ -494,96 +494,39 @@ async fn sync_models_dev_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
     let upstream = fetch_models_dev_pricing_json(state).await?;
-    let provider_codes = enabled_provider_codes(state).await?;
-    let mut fetched = 0usize;
-    let mut skipped = 0usize;
-    let mut saved = 0u64;
-
-    for (upstream_provider, provider_data) in upstream {
-        fetched += provider_data.models.len();
-        let Some(provider) = normalize_template_provider(&upstream_provider) else {
-            skipped += provider_data.models.len();
-            continue;
-        };
-        if !provider_codes.contains(provider) {
-            skipped += provider_data.models.len();
-            continue;
-        }
-
-        for (model, model_data) in provider_data.models {
-            let Some(template) =
-                pricing_template_from_models_dev_model(provider, &model, &model_data)
-            else {
-                skipped += 1;
-                continue;
-            };
-            saved +=
-                upsert_synced_pricing_template(state, template, PRICE_TEMPLATE_SOURCE_MODELS_DEV)
-                    .await?;
-        }
-    }
-
-    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA).await?;
-
-    Ok(PricingTemplateSyncResult {
-        source: PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
-        fetched,
-        saved,
-        skipped,
-        removed,
-    })
+    apply_pricing_templates_from_upstream(
+        state,
+        upstream,
+        PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+        PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
+        models_dev_capabilities,
+    )
+    .await
 }
 
 async fn sync_moligate_cny_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
     let upstream = fetch_moligate_cny_pricing_json(state).await?;
-    apply_moligate_cny_pricing_templates(state, upstream).await
-}
-
-async fn fetch_moligate_cny_pricing_json(
-    state: &AppState,
-) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    fetch_pricing_json(
+    apply_pricing_templates_from_upstream(
         state,
-        MOLIGATE_CNY_PRICING_URL,
-        moligate_cny_pricing_unavailable,
+        upstream,
+        PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
+        PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+        moligate_cny_pricing_capabilities,
     )
     .await
 }
 
-async fn fetch_models_dev_pricing_json(
-    state: &AppState,
-) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    fetch_pricing_json(
-        state,
-        MODELS_DEV_PRICING_URL,
-        models_dev_pricing_unavailable,
-    )
-    .await
-}
-
-async fn fetch_pricing_json(
-    state: &AppState,
-    url: &str,
-    map_error: fn(reqwest::Error) -> AppError,
-) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    state
-        .http
-        .get(url)
-        .send()
-        .await
-        .map_err(map_error)?
-        .error_for_status()
-        .map_err(map_error)?
-        .json::<HashMap<String, ModelsDevProvider>>()
-        .await
-        .map_err(map_error)
-}
-
-async fn apply_moligate_cny_pricing_templates(
+/// 两个定价数据源共享的迭代-upsert-剪枝骨架。
+/// `source` 为本次写入的数据源标签；`stale_source` 为同步后需要清理的旧数据源标签；
+/// `capabilities_fn` 由调用方按数据源格式提取模型能力 JSON。
+async fn apply_pricing_templates_from_upstream(
     state: &AppState,
     upstream: HashMap<String, ModelsDevProvider>,
+    source: &'static str,
+    stale_source: &'static str,
+    capabilities_fn: fn(&ModelsDevModel) -> Value,
 ) -> AppResult<PricingTemplateSyncResult> {
     let provider_codes = enabled_provider_codes(state).await?;
     let mut fetched = 0usize;
@@ -603,24 +546,18 @@ async fn apply_moligate_cny_pricing_templates(
 
         for (model, model_data) in provider_data.models {
             let Some(template) =
-                pricing_template_from_moligate_cny_model(provider, &model, &model_data)
+                pricing_template_from_model(provider, &model, &model_data, capabilities_fn)
             else {
                 skipped += 1;
                 continue;
             };
-            saved += upsert_synced_pricing_template(
-                state,
-                template,
-                PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
-            )
-            .await?;
+            saved += upsert_synced_pricing_template(state, template, source).await?;
         }
     }
 
-    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MODELS_DEV).await?;
-
+    let removed = prune_stale_pricing_templates(state, stale_source).await?;
     Ok(PricingTemplateSyncResult {
-        source: PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA.to_string(),
+        source: source.to_string(),
         fetched,
         saved,
         skipped,
@@ -628,19 +565,47 @@ async fn apply_moligate_cny_pricing_templates(
     })
 }
 
-fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
-    tracing::warn!(
-        error = %err,
-        error_debug = ?err,
-        "failed to sync pricing templates from models.dev"
-    );
-    pricing_reference_source_unavailable()
+async fn fetch_moligate_cny_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    fetch_pricing_json(state, MOLIGATE_CNY_PRICING_URL, |err| {
+        pricing_source_unavailable("data.moligate.cn CNY pricing", err)
+    })
+    .await
 }
-fn moligate_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
+
+async fn fetch_models_dev_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    fetch_pricing_json(state, MODELS_DEV_PRICING_URL, |err| {
+        pricing_source_unavailable("models.dev", err)
+    })
+    .await
+}
+
+async fn fetch_pricing_json(
+    state: &AppState,
+    url: &str,
+    map_error: impl Fn(reqwest::Error) -> AppError,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    state
+        .http
+        .get(url)
+        .send()
+        .await
+        .map_err(&map_error)?
+        .error_for_status()
+        .map_err(&map_error)?
+        .json::<HashMap<String, ModelsDevProvider>>()
+        .await
+        .map_err(map_error)
+}
+
+fn pricing_source_unavailable(source_name: &str, err: reqwest::Error) -> AppError {
     tracing::warn!(
         error = %err,
         error_debug = ?err,
-        "failed to sync CNY pricing templates from data.moligate.cn"
+        "failed to sync pricing templates from {source_name}"
     );
     pricing_reference_source_unavailable()
 }
@@ -670,10 +635,13 @@ struct PricingTemplateUpsert<'a> {
     prices: Option<PricingMicros>,
 }
 
-fn pricing_template_from_models_dev_model<'a>(
+/// 从数据源模型数据构建价格模板 upsert payload。
+/// `capabilities_fn` 由调用方提供，按数据源格式提取 capabilities JSON。
+fn pricing_template_from_model<'a>(
     provider: &'a str,
     model: &'a str,
     model_data: &ModelsDevModel,
+    capabilities_fn: fn(&ModelsDevModel) -> Value,
 ) -> Option<PricingTemplateUpsert<'a>> {
     let model = model.trim();
     if model.is_empty() {
@@ -688,9 +656,17 @@ fn pricing_template_from_models_dev_model<'a>(
         provider,
         model,
         billing_meter,
-        capabilities: models_dev_capabilities(model_data),
+        capabilities: capabilities_fn(model_data),
         prices,
     })
+}
+
+fn pricing_template_from_models_dev_model<'a>(
+    provider: &'a str,
+    model: &'a str,
+    model_data: &ModelsDevModel,
+) -> Option<PricingTemplateUpsert<'a>> {
+    pricing_template_from_model(provider, model, model_data, models_dev_capabilities)
 }
 
 fn pricing_template_from_moligate_cny_model<'a>(
@@ -698,29 +674,15 @@ fn pricing_template_from_moligate_cny_model<'a>(
     model: &'a str,
     model_data: &ModelsDevModel,
 ) -> Option<PricingTemplateUpsert<'a>> {
-    let model = model.trim();
-    if model.is_empty() {
-        return None;
-    }
-    let billing_meter = billing_meter_from_models_dev_model(model_data);
-    let prices = audio_pricing_for_model(
-        billing_meter == BillingMeter::Audio,
-        pricing_micros_from_moligate_cny_model(model_data),
-    );
-    Some(PricingTemplateUpsert {
+    pricing_template_from_model(
         provider,
         model,
-        billing_meter,
-        capabilities: moligate_cny_pricing_capabilities(model_data),
-        prices,
-    })
+        model_data,
+        moligate_cny_pricing_capabilities,
+    )
 }
 
 fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<PricingMicros> {
-    pricing_micros_from_cost(model.cost.as_ref()?)
-}
-
-fn pricing_micros_from_moligate_cny_model(model: &ModelsDevModel) -> Option<PricingMicros> {
     pricing_micros_from_cost(model.cost.as_ref()?)
 }
 
@@ -1422,7 +1384,7 @@ mod tests {
         .unwrap();
 
         let model = providers["dashscope"].models.get("qwen-test").unwrap();
-        let prices = pricing_micros_from_moligate_cny_model(model).unwrap();
+        let prices = pricing_micros_from_models_dev_model(model).unwrap();
         assert_eq!(prices.input_price_micros, 800_000);
         assert_eq!(prices.output_price_micros, 2_000_000);
     }

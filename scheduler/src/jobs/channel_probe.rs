@@ -518,6 +518,7 @@ fn is_text_probe_model(model: &str) -> bool {
         "whisper",
         "tts",
         "audio",
+        "asr",
         "rerank",
         "clip",
         "vision",

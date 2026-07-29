@@ -47,6 +47,7 @@ const ASSET_URL_TTL_SECONDS: u64 = 3600;
 const IMAGE_TASK_LEASE_MARGIN: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const MAX_IMAGE_TASK_ATTEMPTS: u32 = 3;
 const MAX_IMAGE_EDIT_INPUT_BYTES: usize = 50 * 1024 * 1024;
+const IMAGE_REQUEST_BODY_MUST_BE_OBJECT: &str = "image request body must be an object";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -1165,7 +1166,7 @@ fn prepare_image_upstream_request(
     let mut request: Value = serde_json::from_slice(&body)?;
     let object = request
         .as_object_mut()
-        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest(IMAGE_REQUEST_BODY_MUST_BE_OBJECT.to_string()))?;
     object.insert(
         "model".to_string(),
         Value::String(upstream_model.to_string()),
@@ -1264,7 +1265,7 @@ fn validate_image_reference(value: &Value, label: &str) -> AppResult<()> {
 fn image_api_json_request(request: &Value, edit: bool) -> AppResult<Value> {
     let object = request
         .as_object()
-        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest(IMAGE_REQUEST_BODY_MUST_BE_OBJECT.to_string()))?;
     let mut output = serde_json::Map::new();
     let fields: &[&str] = if edit {
         &[
@@ -1327,7 +1328,7 @@ fn has_only_embedded_image_data_urls(object: &serde_json::Map<String, Value>) ->
 fn image_edit_multipart_body(request: &Value) -> AppResult<(Bytes, String)> {
     let object = request
         .as_object()
-        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest(IMAGE_REQUEST_BODY_MUST_BE_OBJECT.to_string()))?;
     let images = object
         .get("images")
         .and_then(Value::as_array)

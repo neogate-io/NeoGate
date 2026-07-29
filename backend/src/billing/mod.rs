@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     fmt,
     hash::{Hash, Hasher},
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
@@ -53,24 +53,32 @@ pub const BILLABLE_PRICE_CONDITION: &str = r#"
         END)
 )
 "#;
-pub const BILLABLE_PRICE_CONDITION_CP: &str = r#"
-(
-    (cp.billing_meter = 'token'
-        AND cp.input_price_micros >= 0
-        AND cp.output_price_micros >= 0)
-    OR (cp.billing_meter = 'image'
-        AND cp.unit_price_micros > 0)
-    OR (cp.billing_meter = 'audio'
-        AND cp.unit_price_micros > 0)
-    OR (cp.billing_meter = 'video'
-        AND cp.video_billing_mode IS NOT NULL
-        AND CASE
-            WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
-            THEN jsonb_array_length(cp.video_price_tiers) > 0
-            ELSE FALSE
-        END)
-)
-"#;
+/// 惰性初始化的 SQL 条件片段，实现 `Display` 后可直接在 `format!("{VAR}")` 中使用。
+pub struct LazyCondition(LazyLock<String>);
+
+impl fmt::Display for LazyCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+/// `BILLABLE_PRICE_CONDITION` 的 `cp.` 表别名版本，从基础常量运行时生成以保持单一来源。
+/// 新增 billing_meter 时只需修改 `BILLABLE_PRICE_CONDITION`，此处自动同步。
+pub static BILLABLE_PRICE_CONDITION_CP: LazyCondition = LazyCondition(LazyLock::new(|| {
+    const PRICE_COLUMNS: &[&str] = &[
+        "billing_meter",
+        "input_price_micros",
+        "output_price_micros",
+        "unit_price_micros",
+        "video_billing_mode",
+        "video_price_tiers",
+    ];
+    let mut s = BILLABLE_PRICE_CONDITION.to_string();
+    for col in PRICE_COLUMNS {
+        s = s.replace(col, &format!("cp.{col}"));
+    }
+    s
+}));
 const ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT: usize = 20;
 
 #[derive(Clone)]

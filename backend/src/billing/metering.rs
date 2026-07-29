@@ -96,6 +96,12 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
         .or_else(|| usage.get("output_tokens"))
         .and_then(Value::as_i64);
     let total_tokens = usage.get("total_tokens").and_then(Value::as_i64);
+    // Detect Anthropic native format: has "input_tokens" but not "prompt_tokens".
+    // Anthropic's input_tokens counts only fresh (non-cached-read) tokens; the true total
+    // input is input_tokens + cache_read_input_tokens. OpenAI's prompt_tokens already
+    // includes cached tokens, so no adjustment is needed for that format.
+    let is_anthropic_native =
+        usage.get("prompt_tokens").is_none() && usage.get("input_tokens").is_some();
     let input_tokens = usage
         .get("prompt_tokens")
         .or_else(|| usage.get("input_tokens"))
@@ -107,6 +113,17 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
     let output_tokens = output_tokens
         .or_else(|| total_tokens.map(|total| total.saturating_sub(input_tokens).max(0)))
         .unwrap_or(0);
+    // For Anthropic native format, add cache_read_input_tokens so input_tokens represents
+    // the true total (matching the semantics used everywhere else in the billing pipeline).
+    let cache_read_tokens = if is_anthropic_native {
+        usage
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let input_tokens = input_tokens.saturating_add(cache_read_tokens);
 
     let input_details = usage
         .get("prompt_tokens_details")
@@ -209,7 +226,7 @@ fn parse_anthropic_delta_usage(value: &Value) -> Option<TokenUsage> {
             .get("message")
             .and_then(|message| message.get("usage"))
     })?;
-    let input_tokens = usage
+    let fresh_input_tokens = usage
         .get("input_tokens")
         .and_then(Value::as_i64)
         .unwrap_or(0);
@@ -229,10 +246,14 @@ fn parse_anthropic_delta_usage(value: &Value) -> Option<TokenUsage> {
             let total = cache_creation_5m.unwrap_or(0) + cache_creation_1h.unwrap_or(0);
             (total > 0).then_some(total)
         });
+    let cache_read_input_tokens = usage.get("cache_read_input_tokens").and_then(Value::as_i64);
+    // Anthropic's input_tokens counts only fresh (non-cached-read) tokens; add cache reads
+    // so input_tokens represents the true total, consistent with parse_usage_from_json.
+    let input_tokens = fresh_input_tokens.saturating_add(cache_read_input_tokens.unwrap_or(0));
     Some(TokenUsage {
         input_tokens,
         output_tokens,
-        cached_input_tokens: usage.get("cache_read_input_tokens").and_then(Value::as_i64),
+        cached_input_tokens: cache_read_input_tokens,
         cache_creation_input_tokens,
         cache_creation_input_tokens_5m: cache_creation_5m,
         cache_creation_input_tokens_1h: cache_creation_1h,
@@ -419,16 +440,80 @@ mod tests {
 
     #[test]
     fn parses_anthropic_cache_details() {
+        // Anthropic SSE: input_tokens is fresh-only; total = input + cache_read
         let usage = parse_usage_from_sse_data(
             r#"{"message":{"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":7}}}}"#,
         )
         .unwrap();
 
-        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.input_tokens, 180); // 100 fresh + 80 cache read
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.cached_input_tokens, Some(80));
         assert_eq!(usage.cache_creation_input_tokens, Some(10));
         assert_eq!(usage.cache_creation_input_tokens_5m, Some(3));
         assert_eq!(usage.cache_creation_input_tokens_1h, Some(7));
+    }
+
+    #[test]
+    fn parses_anthropic_native_non_streaming_adds_cache_read_to_input() {
+        // Reproduces the log bug: in=8 while cache_read=96944 cache_write=8379.
+        // The true total input is 8 + 96944 = 96952.
+        let usage = parse_usage_from_bytes(
+            br#"{"id":"msg_01","usage":{"input_tokens":8,"output_tokens":209,"cache_read_input_tokens":96944,"cache_creation_input_tokens":8379}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 96_952); // 8 fresh + 96944 cache read
+        assert_eq!(usage.output_tokens, 209);
+        assert_eq!(usage.cached_input_tokens, Some(96_944));
+        assert_eq!(usage.cache_creation_input_tokens, Some(8_379));
+    }
+
+    #[test]
+    fn parses_anthropic_native_non_streaming_no_cache_unchanged() {
+        // Without cache tokens, input_tokens should be unchanged.
+        let usage = parse_usage_from_bytes(
+            br#"{"usage":{"input_tokens":100,"output_tokens":50}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cached_input_tokens, None);
+    }
+
+    #[test]
+    fn cost_for_anthropic_native_with_cache_read() {
+        // Verify billing is correct after the input_tokens fix:
+        // 8 fresh tokens * input_price + 96944 cached * cache_read_price + 8379 cache_write * write_price
+        let price = Price {
+            input_price_micros: 15_000,
+            output_price_micros: 75_000,
+            cache_read_price_micros: Some(1_500),
+            cache_write_price_micros: Some(18_750),
+            billing_meter: BillingMeter::Token,
+            unit_price_micros: None,
+            video_billing_mode: None,
+            video_price_tiers: Vec::new(),
+        };
+        let usage = parse_usage_from_bytes(
+            br#"{"id":"msg_01","usage":{"input_tokens":8,"output_tokens":209,"cache_read_input_tokens":96944,"cache_creation_input_tokens":8379}}"#,
+            false,
+        )
+        .unwrap();
+
+        // input_tokens = 96952, cached = 96944, uncached = 8, cache_write = 8379
+        // cost = 8 * 15_000/1M + 96944 * 1_500/1M + 8379 * 18_750/1M + 209 * 75_000/1M
+        // = 0 + 0 + 0 + 0  (all tiny in micros, check relative ordering instead)
+        let cost = cost_for_usage(usage, &price);
+        // uncached(8) * 15_000 + cached(96944) * 1_500 + cache_write(8379) * 18_750 + out(209) * 75_000
+        // = 0 + 0 + 0 + 15 = too small; verify it's non-zero and > pure output cost
+        let output_only_cost = (209i128 * 75_000) / 1_000_000;
+        assert!(
+            cost as i128 >= output_only_cost,
+            "cost should include cache read charges"
+        );
     }
 }

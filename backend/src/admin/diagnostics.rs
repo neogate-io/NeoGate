@@ -488,27 +488,24 @@ async fn diagnose_key(
         Vec::new()
     };
 
-    let probe_models = diagnostic_probe_models(&endpoint.models);
-    if scope.includes_text() && !probe_models.is_empty() {
-        for model in &probe_models {
+    if scope.includes_text() && !endpoint.models.is_empty() {
+        for model in &endpoint.models {
             send_model_started_event(progress, endpoint, key, model);
             let step = run_probe_step(state, endpoint, key, model).await;
             send_model_result_event(progress, endpoint, key, model, &step);
             steps.push(step);
         }
     }
-    let video_probe_models = diagnostic_video_probe_models(&endpoint.video_models);
-    if scope.includes_video() && !video_probe_models.is_empty() {
-        for model in &video_probe_models {
+    if scope.includes_video() && !endpoint.video_models.is_empty() {
+        for model in &endpoint.video_models {
             send_model_started_event(progress, endpoint, key, model);
             let step = run_video_probe_step(state, endpoint, key, model).await;
             send_model_result_event(progress, endpoint, key, model, &step);
             steps.push(step);
         }
     }
-    let image_probe_models = diagnostic_image_probe_models(&endpoint.image_models);
-    if scope.includes_image() && !image_probe_models.is_empty() {
-        for model in &image_probe_models {
+    if scope.includes_image() && !endpoint.image_models.is_empty() {
+        for model in &endpoint.image_models {
             send_model_started_event(progress, endpoint, key, model);
             let step = run_image_probe_step(state, endpoint, key, model).await;
             send_model_result_event(progress, endpoint, key, model, &step);
@@ -677,24 +674,33 @@ async fn run_models_step(
     }
 }
 
-async fn run_probe_step(
+/// 公共 probe 执行骨架：发送请求、记录日志、构造 DiagnosticStep。
+/// `step_prefix` 用于生成 step 名称（如 "probe"、"video_probe"），
+/// `kind` 作为结构化日志字段以区分探测类型，
+/// `success_message` 由调用方提供成功时的提示文本。
+#[allow(clippy::too_many_arguments)]
+async fn execute_url_probe(
     state: &AppState,
     endpoint: &EndpointTarget,
     key: &KeyTarget,
     model: &str,
+    step_prefix: &str,
+    kind: &str,
+    request: DiagnosticProbeRequest,
+    success_message: impl FnOnce(&str) -> String,
 ) -> DiagnosticStep {
     let started = Instant::now();
-    let request = probe_request(endpoint, model);
     let key_label = diagnostic_key_log_label(key);
     tracing::info!(
         endpoint_id = endpoint.id,
         protocol = %endpoint.protocol,
         base_url = %endpoint.base_url,
         key = %key_label,
-        model = %model,
+        kind,
+        model,
         path = %request.log_path,
         url = %request.url,
-        "diagnostic probe request started"
+        "diagnostic probe started"
     );
     let response = send_with_upstream_timeout(upstream_request_url(
         state,
@@ -706,6 +712,7 @@ async fn run_probe_step(
         Some(request.body),
     ))
     .await;
+    let step_name = format!("{step_prefix}:{model}");
     match response {
         Ok(response) => {
             let status = response.status();
@@ -715,29 +722,31 @@ async fn run_probe_step(
                     endpoint_id = endpoint.id,
                     protocol = %endpoint.protocol,
                     key = %key_label,
-                    model = %model,
+                    kind,
+                    model,
                     status = status.as_u16(),
                     duration_ms,
-                    "diagnostic probe request succeeded"
+                    "diagnostic probe succeeded"
                 );
             } else {
                 tracing::warn!(
                     endpoint_id = endpoint.id,
                     protocol = %endpoint.protocol,
                     key = %key_label,
-                    model = %model,
+                    kind,
+                    model,
                     status = status.as_u16(),
                     duration_ms,
-                    "diagnostic probe request failed"
+                    "diagnostic probe failed"
                 );
             }
             let message = if status.is_success() {
-                format!("模型 {model} 轻量调用成功")
+                success_message(model)
             } else {
                 upstream_failure_message(status, response).await
             };
             diagnostic_step(
-                format!("probe:{model}"),
+                step_name,
                 if status.is_success() {
                     DiagnosticStatus::Ok
                 } else {
@@ -755,13 +764,14 @@ async fn run_probe_step(
                 endpoint_id = endpoint.id,
                 protocol = %endpoint.protocol,
                 key = %key_label,
-                model = %model,
+                kind,
+                model,
                 duration_ms,
                 error = %message,
-                "diagnostic probe request errored"
+                "diagnostic probe errored"
             );
             diagnostic_step(
-                format!("probe:{model}"),
+                step_name,
                 DiagnosticStatus::Failed,
                 message,
                 duration_ms,
@@ -769,6 +779,25 @@ async fn run_probe_step(
             )
         }
     }
+}
+
+async fn run_probe_step(
+    state: &AppState,
+    endpoint: &EndpointTarget,
+    key: &KeyTarget,
+    model: &str,
+) -> DiagnosticStep {
+    execute_url_probe(
+        state,
+        endpoint,
+        key,
+        model,
+        "probe",
+        "text",
+        probe_request(endpoint, model),
+        |m| format!("模型 {m} 轻量调用成功"),
+    )
+    .await
 }
 
 async fn run_video_probe_step(
@@ -779,7 +808,7 @@ async fn run_video_probe_step(
 ) -> DiagnosticStep {
     let started = Instant::now();
     let request = match video_probe_request(endpoint, key, model) {
-        Ok(request) => request,
+        Ok(r) => r,
         Err(err) => {
             return diagnostic_step(
                 format!("video_probe:{model}"),
@@ -790,90 +819,17 @@ async fn run_video_probe_step(
             );
         }
     };
-    let key_label = diagnostic_key_log_label(key);
-    tracing::info!(
-        endpoint_id = endpoint.id,
-        protocol = %endpoint.protocol,
-        base_url = %endpoint.base_url,
-        key = %key_label,
-        model = %model,
-        path = %request.log_path,
-        url = %request.url,
-        "diagnostic video probe request started"
-    );
-    let response = send_with_upstream_timeout(upstream_request_url(
+    execute_url_probe(
         state,
         endpoint,
         key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
-    ))
-    .await;
-    match response {
-        Ok(response) => {
-            let status = response.status();
-            let duration_ms = started.elapsed().as_millis() as i64;
-            if status.is_success() {
-                tracing::info!(
-                    endpoint_id = endpoint.id,
-                    protocol = %endpoint.protocol,
-                    key = %key_label,
-                    model = %model,
-                    status = status.as_u16(),
-                    duration_ms,
-                    "diagnostic video probe request succeeded"
-                );
-            } else {
-                tracing::warn!(
-                    endpoint_id = endpoint.id,
-                    protocol = %endpoint.protocol,
-                    key = %key_label,
-                    model = %model,
-                    status = status.as_u16(),
-                    duration_ms,
-                    "diagnostic video probe request failed"
-                );
-            }
-            let message = if status.is_success() {
-                format!("视频模型 {model} 任务创建成功")
-            } else {
-                upstream_failure_message(status, response).await
-            };
-            diagnostic_step(
-                format!("video_probe:{model}"),
-                if status.is_success() {
-                    DiagnosticStatus::Ok
-                } else {
-                    DiagnosticStatus::Failed
-                },
-                message,
-                duration_ms,
-                Some(status.as_u16()),
-            )
-        }
-        Err(err) => {
-            let duration_ms = started.elapsed().as_millis() as i64;
-            let message = transport_error_message(&err);
-            tracing::warn!(
-                endpoint_id = endpoint.id,
-                protocol = %endpoint.protocol,
-                key = %key_label,
-                model = %model,
-                duration_ms,
-                error = %message,
-                "diagnostic video probe request errored"
-            );
-            diagnostic_step(
-                format!("video_probe:{model}"),
-                DiagnosticStatus::Failed,
-                message,
-                duration_ms,
-                None,
-            )
-        }
-    }
+        model,
+        "video_probe",
+        "video",
+        request,
+        |m| format!("视频模型 {m} 任务创建成功"),
+    )
+    .await
 }
 
 async fn run_image_probe_step(
@@ -882,92 +838,17 @@ async fn run_image_probe_step(
     key: &KeyTarget,
     model: &str,
 ) -> DiagnosticStep {
-    let started = Instant::now();
-    let request = image_probe_request(endpoint, model);
-    let key_label = diagnostic_key_log_label(key);
-    tracing::info!(
-        endpoint_id = endpoint.id,
-        protocol = %endpoint.protocol,
-        base_url = %endpoint.base_url,
-        key = %key_label,
-        model = %model,
-        path = %request.log_path,
-        url = %request.url,
-        "diagnostic image probe request started"
-    );
-    let response = send_with_upstream_timeout(upstream_request_url(
+    execute_url_probe(
         state,
         endpoint,
         key,
-        "POST",
-        &request.url,
-        request.extra_headers,
-        Some(request.body),
-    ))
-    .await;
-    match response {
-        Ok(response) => {
-            let status = response.status();
-            let duration_ms = started.elapsed().as_millis() as i64;
-            if status.is_success() {
-                tracing::info!(
-                    endpoint_id = endpoint.id,
-                    protocol = %endpoint.protocol,
-                    key = %key_label,
-                    model = %model,
-                    status = status.as_u16(),
-                    duration_ms,
-                    "diagnostic image probe request succeeded"
-                );
-            } else {
-                tracing::warn!(
-                    endpoint_id = endpoint.id,
-                    protocol = %endpoint.protocol,
-                    key = %key_label,
-                    model = %model,
-                    status = status.as_u16(),
-                    duration_ms,
-                    "diagnostic image probe request failed"
-                );
-            }
-            let message = if status.is_success() {
-                format!("图片模型 {model} 生成请求成功")
-            } else {
-                upstream_failure_message(status, response).await
-            };
-            diagnostic_step(
-                format!("image_probe:{model}"),
-                if status.is_success() {
-                    DiagnosticStatus::Ok
-                } else {
-                    DiagnosticStatus::Failed
-                },
-                message,
-                duration_ms,
-                Some(status.as_u16()),
-            )
-        }
-        Err(err) => {
-            let duration_ms = started.elapsed().as_millis() as i64;
-            let message = transport_error_message(&err);
-            tracing::warn!(
-                endpoint_id = endpoint.id,
-                protocol = %endpoint.protocol,
-                key = %key_label,
-                model = %model,
-                duration_ms,
-                error = %message,
-                "diagnostic image probe request errored"
-            );
-            diagnostic_step(
-                format!("image_probe:{model}"),
-                DiagnosticStatus::Failed,
-                message,
-                duration_ms,
-                None,
-            )
-        }
-    }
+        model,
+        "image_probe",
+        "image",
+        image_probe_request(endpoint, model),
+        |m| format!("图片模型 {m} 生成请求成功"),
+    )
+    .await
 }
 
 fn upstream_request(
@@ -1167,18 +1048,6 @@ fn upstream_protocol_from_str(protocol: &str) -> AppResult<UpstreamProtocol> {
 
 fn probe_model(endpoint: &EndpointTarget) -> Option<String> {
     endpoint.models.first().cloned()
-}
-
-fn diagnostic_probe_models(configured_models: &[String]) -> Vec<String> {
-    configured_models.to_vec()
-}
-
-fn diagnostic_video_probe_models(configured_video_models: &[String]) -> Vec<String> {
-    configured_video_models.to_vec()
-}
-
-fn diagnostic_image_probe_models(configured_image_models: &[String]) -> Vec<String> {
-    configured_image_models.to_vec()
 }
 
 async fn load_channel(state: &AppState, channel_id: DbId) -> AppResult<ChannelDiagnosticTarget> {
@@ -2253,30 +2122,6 @@ mod tests {
     }
 
     #[test]
-    fn priced_text_models_are_used_without_name_guessing() {
-        let configured = vec![
-            "gpt-5.4".to_string(),
-            "doubao-seedance-2-0-fast-260128".to_string(),
-        ];
-
-        assert_eq!(diagnostic_probe_models(&configured), configured);
-    }
-
-    #[test]
-    fn priced_video_models_are_used_without_name_guessing() {
-        let configured = vec!["doubao-seedance-2-0-fast-260128".to_string()];
-
-        assert_eq!(diagnostic_video_probe_models(&configured), configured);
-    }
-
-    #[test]
-    fn priced_image_models_are_used_without_name_guessing() {
-        let configured = vec!["gpt-image-2".to_string()];
-
-        assert_eq!(diagnostic_image_probe_models(&configured), configured);
-    }
-
-    #[test]
     fn upstream_error_summary_reads_nested_error_message() {
         let body = r#"{"error":{"message":"model permission denied","type":"forbidden"}}"#;
 
@@ -2307,12 +2152,5 @@ mod tests {
             upstream_status_message(StatusCode::TOO_MANY_REQUESTS, "request limit exceeded"),
             "上游限流，请稍后重试或切换 Key"
         );
-    }
-
-    #[test]
-    fn empty_configured_models_do_not_fallback_to_discovered_text_probe() {
-        let configured = Vec::new();
-
-        assert!(diagnostic_probe_models(&configured).is_empty());
     }
 }

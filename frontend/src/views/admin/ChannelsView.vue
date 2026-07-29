@@ -1305,9 +1305,8 @@ function openPriceDialog(row: Channel) {
           ? referenceVideoTiersToForm(referenceVideoTiers)
           : []
     const inputPrice = price?.input_price_micros ?? template?.input_price_micros ?? 0
-    const cacheWritePrice = template
-      ? (template.cache_write_price_micros ?? price?.cache_write_price_micros)
-      : (price?.cache_write_price_micros ?? inputPrice)
+    const cacheWritePrice =
+      price?.cache_write_price_micros ?? template?.cache_write_price_micros ?? inputPrice
     priceForms[key] = {
       channelId: row.id,
       provider: row.provider,

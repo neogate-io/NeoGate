@@ -208,20 +208,33 @@ fn reasoning_effort_from_value(value: &Value) -> Option<String> {
                 .and_then(|reasoning| reasoning.get("effort"))
                 .and_then(Value::as_str)
         })
+        // output_config.effort: adaptive thinking 模型（claude-opus-4-7+）使用此字段
+        .or_else(|| {
+            value
+                .get("output_config")
+                .and_then(|config| config.get("effort"))
+                .and_then(Value::as_str)
+        })
         .map(safe_log_label)
         .or_else(|| {
+            let thinking_type = value
+                .get("thinking")
+                .and_then(|thinking| thinking.get("type"))
+                .and_then(Value::as_str);
             let enabled = value
                 .get("reasoning")
                 .and_then(|reasoning| reasoning.get("enabled"))
                 .and_then(Value::as_bool)
                 .or_else(|| {
-                    value
-                        .get("thinking")
-                        .and_then(|thinking| thinking.get("type"))
-                        .and_then(Value::as_str)
-                        .map(|kind| kind == "enabled")
+                    // "adaptive" 与 "enabled" 都表示 thinking 已激活
+                    thinking_type.map(|kind| kind == "enabled" || kind == "adaptive")
                 })?;
-            Some(if enabled { "enabled" } else { "disabled" }.to_string())
+            // adaptive thinking 单独显示，与旧式 enabled/disabled 区分
+            if thinking_type == Some("adaptive") {
+                Some("adaptive".to_string())
+            } else {
+                Some(if enabled { "enabled" } else { "disabled" }.to_string())
+            }
         })
 }
 
@@ -489,6 +502,58 @@ mod tests {
         assert_eq!(params.response_format.as_deref(), Some("json_schema"));
         assert_eq!(params.parallel_tool_calls, Some(true));
         assert_eq!(params.store, Some(false));
+    }
+
+    #[test]
+    fn extracts_adaptive_thinking_effort_from_output_config() {
+        // claude-opus-4-7+ 使用 output_config.effort + thinking.type: "adaptive"
+        let body = Bytes::from_static(
+            br#"{"model":"claude-opus-4-8","max_tokens":4096,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hello"}]}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::Anthropic, 4096).unwrap();
+        let params = prepared.meta.request_params;
+
+        assert_eq!(params.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn extracts_adaptive_thinking_without_output_config() {
+        // 只有 thinking.type: "adaptive"，没有 output_config 时，显示 "adaptive"
+        let body = Bytes::from_static(
+            br#"{"model":"claude-opus-4-8","max_tokens":4096,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hello"}]}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::Anthropic, 4096).unwrap();
+        let params = prepared.meta.request_params;
+
+        assert_eq!(params.reasoning_effort.as_deref(), Some("adaptive"));
+    }
+
+    #[test]
+    fn extracts_legacy_thinking_enabled() {
+        // 旧格式：thinking.type: "enabled"（claude 4.5/4.6 等）
+        let body = Bytes::from_static(
+            br#"{"model":"claude-sonnet-4-6","max_tokens":16000,"thinking":{"type":"enabled","budget_tokens":10000},"messages":[{"role":"user","content":"hello"}]}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::Anthropic, 4096).unwrap();
+        let params = prepared.meta.request_params;
+
+        assert_eq!(params.reasoning_effort.as_deref(), Some("enabled"));
+    }
+
+    #[test]
+    fn extracts_thinking_disabled() {
+        // thinking 显式 disabled
+        let body = Bytes::from_static(
+            br#"{"model":"claude-opus-4-8","max_tokens":4096,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"hello"}]}"#,
+        );
+
+        let prepared = prepare_relay_body(body, BodyKind::Anthropic, 4096).unwrap();
+        let params = prepared.meta.request_params;
+
+        assert_eq!(params.reasoning_effort.as_deref(), Some("disabled"));
     }
 
     #[test]

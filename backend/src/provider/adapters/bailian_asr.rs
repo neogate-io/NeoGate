@@ -15,7 +15,10 @@ use crate::{
 
 const POLICY_BASE_URL: &str =
     "https://dashscope.aliyuncs.com/api/v1/uploads?action=getPolicy&model=";
-const WORKSPACE_HOST_SUFFIX: &str = ".cn-beijing.maas.aliyuncs.com";
+const WORKSPACE_HOST_SUFFIXES: [&str; 2] = [
+    ".cn-beijing.maas.aliyuncs.com",
+    ".ap-southeast-1.maas.aliyuncs.com",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct Submission {
@@ -30,6 +33,13 @@ pub(crate) struct CompletedSubmission {
     pub text: String,
     pub duration_seconds: f64,
     pub duration_source: &'static str,
+    pub details: Option<Value>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MultimodalOptions<'a> {
+    pub context: Option<&'a str>,
+    pub sample_rate: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +52,7 @@ pub(crate) enum PollResult {
         text: String,
         duration_seconds: f64,
         duration_source: &'static str,
+        details: Option<Value>,
         request_id: Option<String>,
     },
     Failed {
@@ -162,16 +173,10 @@ pub(crate) async fn transcribe_multimodal(
     audio: Bytes,
     extension: &str,
     local_duration_seconds: f64,
+    options: MultimodalOptions<'_>,
 ) -> AppResult<Submission> {
     ensure_asr_upstream(upstream)?;
-    let media_type = match extension {
-        "wav" => "audio/wav",
-        "mp3" => "audio/mpeg",
-        "flac" => "audio/flac",
-        "m4a" => "audio/mp4",
-        "ogg" => "audio/ogg",
-        _ => return Err(AppError::BadRequest("unsupported audio format".to_string())),
-    };
+    let media_type = audio_media_type(extension)?;
     let data_uri = format!("data:{media_type};base64,{}", STANDARD.encode(audio));
     let response = send(
         upstream,
@@ -183,19 +188,7 @@ pub(crate) async fn transcribe_multimodal(
             )?)
             .bearer_auth(&upstream.secret)
             .header("X-DashScope-SSE", "disable")
-            .json(&json!({
-                "model": model,
-                "input": {
-                    "messages": [{
-                        "role": "user",
-                        "content": [{
-                            "type": "input_audio",
-                            "input_audio": { "data": data_uri },
-                        }],
-                    }],
-                },
-                "parameters": { "format": extension },
-            })),
+            .json(&multimodal_request(model, &data_uri, extension, &options)),
     )
     .await?;
     let body = successful_body(state, upstream, response, "multimodal transcription").await?;
@@ -230,7 +223,97 @@ pub(crate) async fn transcribe_multimodal(
             text: text.to_string(),
             duration_seconds,
             duration_source,
+            details: value.get("output").cloned(),
         }),
+    })
+}
+
+pub(crate) async fn transcribe_multimodal_stream(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    model: &str,
+    audio: Bytes,
+    extension: &str,
+    options: MultimodalOptions<'_>,
+) -> AppResult<Response> {
+    ensure_asr_upstream(upstream)?;
+    let media_type = audio_media_type(extension)?;
+    let data_uri = format!("data:{media_type};base64,{}", STANDARD.encode(audio));
+    let response = send(
+        upstream,
+        state
+            .http
+            .post(native_url(
+                &upstream.base_url,
+                "/services/aigc/multimodal-generation/generation",
+            )?)
+            .bearer_auth(&upstream.secret)
+            .header("X-DashScope-SSE", "enable")
+            .json(&multimodal_request(model, &data_uri, extension, &options)),
+    )
+    .await?;
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    if status.as_u16() == 429 || status.is_server_error() {
+        return Err(retryable_http_error(
+            upstream,
+            "streaming multimodal transcription",
+            status,
+        ));
+    }
+    let body = read_bounded(state, response).await.unwrap_or_default();
+    let code = safe_upstream_error_code(&body)
+        .map(|code| format!(" ({code})"))
+        .unwrap_or_default();
+    Err(AppError::BadRequest(format!(
+        "Alibaba ASR streaming multimodal transcription was rejected with HTTP {}{code}",
+        status.as_u16()
+    )))
+}
+
+fn audio_media_type(extension: &str) -> AppResult<&'static str> {
+    match extension {
+        "wav" => Ok("audio/wav"),
+        "mp3" => Ok("audio/mp3"),
+        "flac" => Ok("audio/flac"),
+        "m4a" | "mp4" => Ok("audio/mp4"),
+        "ogg" => Ok("audio/ogg"),
+        "opus" => Ok("audio/opus"),
+        "webm" => Ok("audio/webm"),
+        _ => Err(AppError::BadRequest("unsupported audio format".to_string())),
+    }
+}
+
+fn multimodal_request(
+    model: &str,
+    audio_data: &str,
+    extension: &str,
+    options: &MultimodalOptions<'_>,
+) -> Value {
+    let mut messages = Vec::new();
+    if let Some(context) = options.context.filter(|context| !context.is_empty()) {
+        messages.push(json!({
+            "role": "user",
+            "content": [{ "type": "input_text", "text": context }],
+        }));
+    }
+    messages.push(json!({
+        "role": "user",
+        "content": [{
+            "type": "input_audio",
+            "input_audio": { "data": audio_data },
+        }],
+    }));
+    let mut parameters = serde_json::Map::from_iter([("format".to_string(), json!(extension))]);
+    if let Some(sample_rate) = options.sample_rate {
+        parameters.insert("sample_rate".to_string(), json!(sample_rate.to_string()));
+    }
+    json!({
+        "model": model,
+        "input": { "messages": messages },
+        "parameters": parameters,
     })
 }
 
@@ -381,6 +464,7 @@ pub(crate) async fn poll(
         text,
         duration_seconds,
         duration_source,
+        details: Some(transcription),
         request_id,
     })
 }
@@ -399,8 +483,11 @@ fn ensure_asr_upstream(upstream: &SelectedUpstream) -> AppResult<()> {
     let url = Url::parse(&upstream.base_url)
         .map_err(|_| AppError::BadRequest("invalid Alibaba ASR endpoint URL".to_string()))?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-    let trusted_dashscope_host =
-        host == "dashscope.aliyuncs.com" || host.ends_with(WORKSPACE_HOST_SUFFIX);
+    let trusted_dashscope_host = host == "dashscope.aliyuncs.com"
+        || host == "dashscope-intl.aliyuncs.com"
+        || WORKSPACE_HOST_SUFFIXES
+            .iter()
+            .any(|suffix| host.ends_with(suffix));
     if url.scheme() != "https" || !trusted_dashscope_host {
         return Err(AppError::BadRequest(
             "Alibaba ASR endpoint must use a trusted DashScope host".to_string(),

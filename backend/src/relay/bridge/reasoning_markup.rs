@@ -1,7 +1,8 @@
 //! Conservative compatibility parsing for reasoning blocks emitted as text.
 //
 // Structured reasoning fields remain the source of truth. This parser only
-// handles a complete block at the beginning of an assistant response.
+// handles markup at the beginning of an assistant response; a complete
+// opening tag is enough when the provider omits the closing tag.
 
 const MAX_LEADING_WHITESPACE_BYTES: usize = 256;
 const MAX_BUFFERED_BYTES: usize = 64 * 1024;
@@ -54,13 +55,22 @@ pub(crate) fn split_leading_reasoning_markup(content: &str) -> Option<ParsedReas
             && rest.as_bytes()[..open.len()].eq_ignore_ascii_case(open.as_bytes())
     })?;
     let after_open = &rest[open.len()..];
-    let close_pos = find_ascii_case_insensitive(after_open, close)?;
-    let after_close = &after_open[close_pos + close.len()..];
-    Some(ParsedReasoningMarkup {
-        reasoning: after_open[..close_pos].trim().to_string(),
-        content: strip_one_leading_line_break(after_close).to_string(),
-        tag: open,
-    })
+    if let Some(close_pos) = find_ascii_case_insensitive(after_open, close) {
+        let after_close = &after_open[close_pos + close.len()..];
+        Some(ParsedReasoningMarkup {
+            reasoning: after_open[..close_pos].trim().to_string(),
+            content: strip_one_leading_line_break(after_close).to_string(),
+            tag: open,
+        })
+    } else {
+        // A complete leading opening tag is enough to classify the remainder
+        // as reasoning when an upstream response is truncated or interrupted.
+        Some(ParsedReasoningMarkup {
+            reasoning: after_open.trim().to_string(),
+            content: String::new(),
+            tag: open,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,16 +229,30 @@ impl LeadingReasoningMarkupParser {
         }
     }
 
-    pub(crate) fn finish(&mut self) -> Option<String> {
+    pub(crate) fn finish(&mut self) -> MarkupChunk {
         let buffered = std::mem::take(&mut self.buffered);
         match self.state {
-            State::Reasoning => Some(format!(
-                "{}{}",
-                self.original_prefix.as_deref().unwrap_or("<thinking>"),
-                buffered
-            )),
-            State::Undecided if !buffered.is_empty() => Some(buffered),
-            _ => None,
+            State::Reasoning => {
+                self.state = State::Content;
+                let reasoning = buffered.trim().to_string();
+                MarkupChunk {
+                    reasoning: (!reasoning.is_empty()).then_some(reasoning),
+                    content: None,
+                    tag: self.close.and_then(|close| {
+                        TAGS.iter()
+                            .find(|(_, candidate_close)| *candidate_close == close)
+                            .map(|(open, _)| *open)
+                    }),
+                    detected: true,
+                }
+            }
+            State::Undecided if !buffered.is_empty() => MarkupChunk {
+                reasoning: None,
+                content: Some(buffered),
+                tag: None,
+                detected: false,
+            },
+            _ => MarkupChunk::empty(),
         }
     }
 }
@@ -265,9 +289,29 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_markup_preserves_original_prefix() {
+    fn unclosed_markup_becomes_reasoning_without_exposing_tag() {
         let mut parser = LeadingReasoningMarkupParser::default();
         assert!(parser.push(" \n<THINK>unfinished").content.is_none());
-        assert_eq!(parser.finish().as_deref(), Some(" \n<THINK>unfinished"));
+        let chunk = parser.finish();
+        assert_eq!(chunk.reasoning.as_deref(), Some("unfinished"));
+        assert_eq!(chunk.content, None);
+        assert_eq!(chunk.tag, Some("<think>"));
+        assert!(chunk.detected);
+    }
+
+    #[test]
+    fn incomplete_opening_tag_is_preserved_as_content() {
+        let mut parser = LeadingReasoningMarkupParser::default();
+        assert!(parser.push("<thi").content.is_none());
+        let chunk = parser.finish();
+        assert_eq!(chunk.content.as_deref(), Some("<thi"));
+        assert!(!chunk.detected);
+    }
+
+    #[test]
+    fn nonstream_unclosed_markup_becomes_reasoning() {
+        let parsed = split_leading_reasoning_markup("<thinking>private plan").unwrap();
+        assert_eq!(parsed.reasoning, "private plan");
+        assert!(parsed.content.is_empty());
     }
 }

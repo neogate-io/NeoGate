@@ -23,6 +23,7 @@ export type ChannelPriceForm = {
   provider: string
   model: string
   modelCategory: 'text' | 'image' | 'video' | 'audio'
+  audioTranscriptionMode: 'file' | 'realtime' | null
   billingMeter: BillingMeter | null
   videoBillingMode: VideoBillingMode | null
   videoPriceTiers: ChannelVideoPriceTierForm[]
@@ -287,6 +288,19 @@ function updateVideoTierSecondaryPrice(
               >
                 <div class="price-model-cell" :title="row.model">
                   <span>{{ row.model }}</span>
+                  <el-tag
+                    v-if="row.audioTranscriptionMode"
+                    class="audio-transcription-mode-tag"
+                    effect="plain"
+                    size="small"
+                    :type="row.audioTranscriptionMode === 'realtime' ? 'success' : 'info'"
+                  >
+                    {{
+                      row.audioTranscriptionMode === 'realtime'
+                        ? t('realtimeAudioTranscription')
+                        : t('fileAudioTranscription')
+                    }}
+                  </el-tag>
                 </div>
                 <div class="price-meter-cell">
                   <span v-if="row.billingMeterLocked" class="price-meter-static">
@@ -813,6 +827,13 @@ function updateVideoTierSecondaryPrice(
 .price-model-cell span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.price-model-cell .audio-transcription-mode-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 500;
+  overflow: visible;
 }
 
 .price-pair-field {

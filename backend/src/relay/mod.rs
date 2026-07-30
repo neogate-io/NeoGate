@@ -52,7 +52,7 @@ pub(crate) use error::{
     describe_upstream_http_failure, is_model_error_text, FailureCooldown, UpstreamFailureKind,
     UpstreamHttpFailure,
 };
-pub(crate) use limit::UserRequestLimiter;
+pub(crate) use limit::{UserRequestLimiter, UserRequestPermit};
 use models::{
     list_anthropic_models, list_openai_models, retrieve_anthropic_model, retrieve_openai_model,
 };

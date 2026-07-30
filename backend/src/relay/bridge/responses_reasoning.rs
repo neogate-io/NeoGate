@@ -303,9 +303,18 @@ impl NativeResponsesSseNormalizer {
                 }
                 let Some(delta) = delta else {
                     if terminal {
-                        let _ = self.parser.finish();
-                        self.mode = StreamMode::Passthrough;
-                        self.flush_pending_raw(out);
+                        let parsed = self.parser.finish();
+                        if parsed.detected {
+                            self.begin_normalization(
+                                parsed.reasoning.unwrap_or_default(),
+                                parsed.content,
+                                parsed.tag.unwrap_or("<thinking>"),
+                                out,
+                            );
+                        } else {
+                            self.mode = StreamMode::Passthrough;
+                            self.flush_pending_raw(out);
+                        }
                     }
                     return;
                 };
@@ -609,8 +618,17 @@ impl NativeResponsesSseNormalizer {
 
     fn finish(&mut self, out: &mut Vec<u8>) {
         if matches!(self.mode, StreamMode::Undecided) {
-            let _ = self.parser.finish();
-            self.flush_pending_raw(out);
+            let parsed = self.parser.finish();
+            if parsed.detected {
+                self.begin_normalization(
+                    parsed.reasoning.unwrap_or_default(),
+                    parsed.content,
+                    parsed.tag.unwrap_or("<thinking>"),
+                    out,
+                );
+            } else {
+                self.flush_pending_raw(out);
+            }
         }
         if !self.buffer.is_empty() {
             out.extend_from_slice(&std::mem::take(&mut self.buffer));
@@ -766,6 +784,22 @@ mod tests {
     }
 
     #[test]
+    fn nonstream_normalizes_unclosed_markup() {
+        let mut response = json!({
+            "id":"resp_1",
+            "output":[
+                {"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"<thinking>private plan"}]}
+            ]
+        });
+        let normalized = normalize_response_value(&mut response).unwrap();
+
+        assert!(!normalized.structured_reasoning_present);
+        assert_eq!(response["output"][0]["type"], "reasoning");
+        assert_eq!(response["output"][0]["summary"][0]["text"], "private plan");
+        assert_eq!(response["output"][1]["content"][0]["text"], "");
+    }
+
+    #[test]
     fn stream_normalizes_split_markup_and_terminal_snapshot() {
         let mut normalizer = NativeResponsesSseNormalizer::new("gpt-test".to_string(), false, None);
         let input = concat!(
@@ -820,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_preserves_unclosed_markup() {
+    fn stream_normalizes_unclosed_markup_on_terminal_event() {
         let mut normalizer = NativeResponsesSseNormalizer::new("gpt-test".to_string(), false, None);
         let input = concat!(
             "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"sequence_number\":0,\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n",
@@ -828,8 +862,23 @@ mod tests {
             "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"sequence_number\":2,\"response\":{\"output\":[]}}\n\n"
         );
         let output = String::from_utf8(normalizer.push(input.as_bytes()).to_vec()).unwrap();
-        assert!(output.contains("<THINK>unfinished"));
-        assert!(!output.contains("response.reasoning_summary_text.delta"));
+        assert!(!output.contains("<THINK>unfinished"));
+        assert!(output.contains("response.reasoning_summary_text.delta"));
+        assert!(output.contains("\"delta\":\"unfinished\""));
+    }
+
+    #[test]
+    fn stream_normalizes_unclosed_markup_when_transport_ends() {
+        let mut normalizer = NativeResponsesSseNormalizer::new("gpt-test".to_string(), false, None);
+        let input = concat!(
+            "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"sequence_number\":0,\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+            "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"msg_1\",\"output_index\":0,\"delta\":\"<thinking>unfinished\"}\n\n"
+        );
+        let mut output = normalizer.push(input.as_bytes()).to_vec();
+        normalizer.finish(&mut output);
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("<thinking>unfinished"));
+        assert!(output.contains("\"delta\":\"unfinished\""));
     }
 
     #[test]

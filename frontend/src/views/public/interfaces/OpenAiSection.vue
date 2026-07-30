@@ -655,11 +655,17 @@ const content = computed(() => {
           requestParams: [
             ['file', 'file，必填', '待转写的音频文件。'],
             ['model', 'string，必填', '音频转写模型。'],
-            ['language', 'string', '上游模型支持时可提供语言提示。'],
-            ['response_format', 'json | text', '响应格式，默认 json。']
+            ['language / languages[]', 'string | array', '语言提示；不可与另一项同时使用。'],
+            ['prompt / keywords[]', 'string | array', 'Fun-ASR-Flash 上下文提示，总长度不超过 400 字符。'],
+            ['response_format', 'json | text | verbose_json | srt | vtt', '响应格式，默认 json。'],
+            ['timestamp_granularities[]', 'word | segment', 'verbose_json 的词级或句段级时间戳。'],
+            ['stream', 'boolean', 'Fun-ASR-Flash 返回 transcript.text.delta/done SSE。'],
+            ['temperature', 'number', '仅支持 Fun-ASR-Flash 的 0。']
           ],
           responseFields: [
-            ['text', 'string', '识别得到的文本内容。']
+            ['text', 'string', '识别得到的文本内容。'],
+            ['segments / words', 'array', 'verbose_json 中的句段和词级时间戳。'],
+            ['usage', 'object', '按音频秒数计费的用量。']
           ]
         }
       ],
@@ -1483,10 +1489,18 @@ const content = computed(() => {
         requestParams: [
           ['file', 'file, required', 'Audio file to transcribe.'],
           ['model', 'string, required', 'Audio transcription model.'],
-          ['language', 'string', 'Optional when supported by the upstream model.'],
-          ['response_format', 'json | text', 'Response format; defaults to json.']
+          ['language / languages[]', 'string | array', 'Language hint; these fields are mutually exclusive.'],
+          ['prompt / keywords[]', 'string | array', 'Fun-ASR-Flash context, limited to 400 characters.'],
+          ['response_format', 'json | text | verbose_json | srt | vtt', 'Response format; defaults to json.'],
+          ['timestamp_granularities[]', 'word | segment', 'Word or segment timestamps for verbose_json.'],
+          ['stream', 'boolean', 'Fun-ASR-Flash transcript.text.delta/done SSE stream.'],
+          ['temperature', 'number', 'Only 0 is supported by Fun-ASR-Flash.']
         ],
-        responseFields: [['text', 'string', 'Recognized text content.']]
+        responseFields: [
+          ['text', 'string', 'Recognized text content.'],
+          ['segments / words', 'array', 'Segment and word timestamps in verbose_json.'],
+          ['usage', 'object', 'Usage measured in audio seconds.']
+        ]
       }
     ],
     openAiEmbeddingsInterfaces: [

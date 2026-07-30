@@ -236,6 +236,12 @@ pub(crate) async fn openai_realtime(
         &[],
     )
     .await?;
+    ensure_realtime_audio_transcription_capability(
+        &state.db.pool,
+        &upstream.provider,
+        &resolved.target_model,
+    )
+    .await?;
     let upstream_url = qwen_realtime_url(&upstream, &resolved.target_model)?;
     let price = state
         .billing
@@ -291,6 +297,34 @@ pub(crate) async fn openai_realtime(
             let outcome = proxy_session(client, upstream_socket, ctx.started, upstream_model).await;
             finish_session(ctx, outcome).await;
         }))
+}
+
+async fn ensure_realtime_audio_transcription_capability(
+    pool: &sqlx::PgPool,
+    provider: &str,
+    model: &str,
+) -> AppResult<()> {
+    let capabilities = sqlx::query_scalar::<_, Value>(
+        "SELECT capabilities
+         FROM provider_model
+         WHERE lower(provider) = lower($1)
+           AND lower(model) = lower($2)
+         LIMIT 1",
+    )
+    .bind(provider)
+    .bind(model)
+    .fetch_optional(pool)
+    .await?;
+    if capabilities.as_ref().and_then(|capabilities| {
+        crate::admin::provider::catalog_audio_transcription_adapter(provider, capabilities)
+    }) == Some(crate::admin::provider::AudioTranscriptionAdapter::QwenRealtime)
+    {
+        return Ok(());
+    }
+    Err(AppError::BadRequestWithCode {
+        code: "unsupported_realtime_audio_model",
+        message: "the selected model is not configured for realtime audio transcription",
+    })
 }
 
 fn realtime_audio_unit_price(price: &Price) -> AppResult<i64> {

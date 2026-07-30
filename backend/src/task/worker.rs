@@ -319,6 +319,7 @@ async fn poll_audio_transcription(
             text,
             duration_seconds,
             duration_source,
+            details,
             request_id,
         } => {
             if duration_source == "local_fallback" {
@@ -337,6 +338,7 @@ async fn poll_audio_transcription(
                     "text": text,
                     "duration_seconds": duration_seconds,
                     "duration_source": duration_source,
+                    "details": details,
                     "request_id": request_id,
                 }),
             )
@@ -406,10 +408,15 @@ fn inline_audio_poll_result(metadata: &Value) -> Option<bailian_asr::PollResult>
         .get("request_id")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let details = result
+        .get("details")
+        .cloned()
+        .filter(|value| !value.is_null());
     Some(bailian_asr::PollResult::Completed {
         text,
         duration_seconds,
         duration_source,
+        details,
         request_id,
     })
 }
@@ -561,11 +568,13 @@ mod tests {
                 text,
                 duration_seconds,
                 duration_source,
+                details,
                 request_id,
             } => {
                 assert_eq!(text, "transcript");
                 assert_eq!(duration_seconds, 2.5);
                 assert_eq!(duration_source, "upstream");
+                assert!(details.is_none());
                 assert_eq!(request_id.as_deref(), Some("request-id"));
             }
             _ => panic!("expected completed inline transcription"),

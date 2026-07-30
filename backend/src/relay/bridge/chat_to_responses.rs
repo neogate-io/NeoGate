@@ -427,7 +427,16 @@ impl OpenAiChatSseToOpenAiResponse {
     }
 
     fn flush_pending_content(&mut self, out: &mut Vec<u8>) {
-        if let Some(content) = self.leading_thinking_markup.finish() {
+        let parsed = self.leading_thinking_markup.finish();
+        if parsed.detected {
+            self.warn_reasoning_markup();
+        }
+        if let Some(reasoning) = parsed.reasoning {
+            if !self.reasoning_started {
+                self.push_reasoning_delta(&reasoning, out);
+            }
+        }
+        if let Some(content) = parsed.content {
             self.push_content_delta(&content, out);
         }
     }
@@ -988,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn leading_thinking_markup_parser_preserves_normal_and_unclosed_content() {
+    fn leading_thinking_markup_parser_preserves_normal_content_and_hides_unclosed_markup() {
         let mut normal = LeadingReasoningMarkupParser::default();
         let parsed = normal.push("ordinary <thinking>example</thinking>");
         assert_eq!(
@@ -999,7 +1008,10 @@ mod tests {
 
         let mut unclosed = LeadingReasoningMarkupParser::default();
         assert!(unclosed.push("<thinking>unfinished").content.is_none());
-        assert_eq!(unclosed.finish().as_deref(), Some("<thinking>unfinished"));
+        let chunk = unclosed.finish();
+        assert_eq!(chunk.reasoning.as_deref(), Some("unfinished"));
+        assert_eq!(chunk.content, None);
+        assert!(chunk.detected);
     }
 
     #[test]
@@ -1063,5 +1075,23 @@ mod tests {
         assert!(output.contains(r#""delta":"Public""#));
         assert!(!output.contains("<thinking>"));
         assert!(!output.contains("</thinking>"));
+    }
+
+    #[test]
+    fn streaming_unclosed_thinking_markup_uses_reasoning_events() {
+        let mut converter = OpenAiChatSseToOpenAiResponse::new("gpt-test".to_string());
+        let mut output = converter
+            .push(
+                br#"data: {"choices":[{"delta":{"content":"<thinking>Private"}}]}
+
+"#,
+            )
+            .to_vec();
+        output.extend_from_slice(&converter.push(b"data: [DONE]\n\n"));
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains("response.reasoning_summary_text.delta"));
+        assert!(output.contains(r#""delta":"Private""#));
+        assert!(!output.contains("<thinking>"));
     }
 }

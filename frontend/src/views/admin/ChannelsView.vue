@@ -787,21 +787,32 @@ function canUseVideoBilling(provider: string, model: string) {
   return output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0
 }
 
-function hasAudioTranscriptionCapability(capabilities: Record<string, unknown> | undefined) {
-  if (!capabilities) return false
-  if (capabilities.audio_transcription === true) return true
+function inferredAudioTranscriptionMode(
+  capabilities: Record<string, unknown> | undefined
+): 'file' | 'realtime' | null {
+  if (!capabilities) return null
+  if (capabilities.realtime_audio_transcription === true) return 'realtime'
+  if (capabilities.audio_transcription === true) return 'file'
   const input = capabilityValues(capabilities, ['modalities', 'input'])
   const output = capabilityValues(capabilities, ['modalities', 'output'])
-  return input.includes('audio') && output.includes('text')
+  return input.includes('audio') && output.includes('text') ? 'file' : null
+}
+
+function audioTranscriptionModeForModel(provider: string, model: string) {
+  const catalogCapabilities = findReferenceCatalogRecord(provider, model)?.capabilities
+  const providerCapabilities = findReferenceProviderModel(provider, model)?.capabilities
+  const capabilities = [catalogCapabilities, providerCapabilities]
+
+  if (capabilities.some((value) => value?.realtime_audio_transcription === true)) {
+    return 'realtime'
+  }
+  return capabilities
+    .map(inferredAudioTranscriptionMode)
+    .find((mode): mode is 'file' => mode === 'file') ?? null
 }
 
 function canUseAudioBilling(provider: string, model: string) {
-  const catalogRecord = findReferenceCatalogRecord(provider, model)
-  const providerRecord = findReferenceProviderModel(provider, model)
-  return (
-    hasAudioTranscriptionCapability(catalogRecord?.capabilities) ||
-    hasAudioTranscriptionCapability(providerRecord?.capabilities)
-  )
+  return audioTranscriptionModeForModel(provider, model) !== null
 }
 
 function modelCategoryForModel(
@@ -1312,6 +1323,7 @@ function openPriceDialog(row: Channel) {
       provider: row.provider,
       model,
       modelCategory: modelCategoryForModel(row.provider, model),
+      audioTranscriptionMode: audioTranscriptionModeForModel(row.provider, model),
       billingMeter,
       videoBillingMode,
       videoPriceTiers: initialVideoPriceTiers,

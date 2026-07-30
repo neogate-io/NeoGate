@@ -1,9 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use sqlx::Row;
 
 use crate::{
-    billing::BillingMeter,
     error::{AppError, AppResult},
     AppState,
 };
@@ -18,6 +20,51 @@ const NEWAPI_PROVIDER_NAME: &str = "NewAPI";
 const SUB2API_PROVIDER_DISPLAY_NAME: &str = "Sub2API";
 const SUB2API_PROVIDER_NAME: &str = "Sub2API";
 pub const OPENAI_OAUTH_PROTOCOL: &str = "openai_oauth";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AudioTranscriptionAdapter {
+    AsyncFile,
+    MultimodalGeneration,
+    QwenRealtime,
+}
+
+pub(crate) fn catalog_audio_transcription_adapter(
+    provider: &str,
+    capabilities: &Value,
+) -> Option<AudioTranscriptionAdapter> {
+    if !provider.trim().eq_ignore_ascii_case("qwen") {
+        return None;
+    }
+    let transcription = capabilities.pointer("/catalog/capabilities/audio_transcription")?;
+    let interfaces = capabilities.pointer("/catalog/interfaces")?.as_array()?;
+    interfaces.iter().find_map(|interface| {
+        if interface.get("operation")?.as_str()? != "audio_transcription" {
+            return None;
+        }
+        let mode = interface.get("mode")?.as_str()?;
+        let transport = interface.get("transport")?.as_str()?;
+        let protocol = interface.get("upstream_protocol")?.as_str()?;
+        let request_style = interface.get("request_style")?.as_str()?;
+        match (mode, transport, protocol, request_style) {
+            ("file", "https", "dashscope_http", "dashscope_async_file")
+                if transcription.get("file").and_then(Value::as_bool) == Some(true) =>
+            {
+                Some(AudioTranscriptionAdapter::AsyncFile)
+            }
+            ("file", "https", "dashscope_http", "dashscope_multimodal_generation")
+                if transcription.get("file").and_then(Value::as_bool) == Some(true) =>
+            {
+                Some(AudioTranscriptionAdapter::MultimodalGeneration)
+            }
+            ("realtime", "websocket", "dashscope_websocket", "dashscope_qwen_realtime")
+                if transcription.get("realtime").and_then(Value::as_bool) == Some(true) =>
+            {
+                Some(AudioTranscriptionAdapter::QwenRealtime)
+            }
+            _ => None,
+        }
+    })
+}
 
 struct BuiltinManualProvider {
     code: &'static str,
@@ -187,11 +234,10 @@ pub async fn record_provider_models(
         if model.is_empty() || !seen.insert(model.to_string()) {
             continue;
         }
-        let billing_meter = BillingMeter::Token;
         sqlx::query(
             "INSERT INTO provider_model
              (provider, model, display_name, source, billing_meter, capabilities, enabled)
-             VALUES ($1, $2, $2, $3, $4, '{}'::JSONB, $5)
+             VALUES ($1, $2, $2, $3, 'token', '{}'::JSONB, $4)
              ON CONFLICT (provider, model)
              DO UPDATE SET
                  display_name = CASE
@@ -199,10 +245,6 @@ pub async fn record_provider_models(
                      ELSE provider_model.display_name
                  END,
                  source = EXCLUDED.source,
-                 billing_meter = CASE
-                     WHEN EXCLUDED.billing_meter = 'audio' THEN EXCLUDED.billing_meter
-                     ELSE provider_model.billing_meter
-                 END,
                  enabled = provider_model.enabled OR EXCLUDED.enabled,
                  discovered_at = CASE
                      WHEN EXCLUDED.source = 'upstream' THEN now()
@@ -213,7 +255,6 @@ pub async fn record_provider_models(
         .bind(provider)
         .bind(model)
         .bind(source)
-        .bind(billing_meter.as_str())
         .bind(enabled)
         .execute(&state.db.pool)
         .await?;
@@ -253,4 +294,85 @@ fn provider_default_endpoints_from_row(
             base_url: row.try_get("default_anthropic_base_url")?,
         },
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_supported_audio_adapters_from_catalog_interfaces() {
+        for (request_style, mode, transport, protocol, expected) in [
+            (
+                "dashscope_async_file",
+                "file",
+                "https",
+                "dashscope_http",
+                AudioTranscriptionAdapter::AsyncFile,
+            ),
+            (
+                "dashscope_multimodal_generation",
+                "file",
+                "https",
+                "dashscope_http",
+                AudioTranscriptionAdapter::MultimodalGeneration,
+            ),
+            (
+                "dashscope_qwen_realtime",
+                "realtime",
+                "websocket",
+                "dashscope_websocket",
+                AudioTranscriptionAdapter::QwenRealtime,
+            ),
+        ] {
+            let capabilities = json!({
+                "catalog": {
+                    "capabilities": {
+                        "audio_transcription": { "file": mode == "file", "realtime": mode == "realtime" }
+                    },
+                    "interfaces": [{
+                        "operation": "audio_transcription",
+                        "mode": mode,
+                        "transport": transport,
+                        "upstream_protocol": protocol,
+                        "request_style": request_style
+                    }]
+                }
+            });
+            assert_eq!(
+                catalog_audio_transcription_adapter("qwen", &capabilities),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_inconsistent_or_unsupported_catalog_interfaces() {
+        let unsupported = json!({
+            "catalog": {
+                "capabilities": {
+                    "audio_transcription": { "file": false, "realtime": true }
+                },
+                "interfaces": [{
+                    "operation": "audio_transcription",
+                    "mode": "realtime",
+                    "transport": "websocket",
+                    "upstream_protocol": "dashscope_websocket",
+                    "request_style": "dashscope_realtime"
+                }]
+            }
+        });
+        assert_eq!(
+            catalog_audio_transcription_adapter("qwen", &unsupported),
+            None
+        );
+        assert_eq!(
+            catalog_audio_transcription_adapter("custom", &unsupported),
+            None
+        );
+        assert_eq!(
+            catalog_audio_transcription_adapter("qwen", &json!({})),
+            None
+        );
+    }
 }

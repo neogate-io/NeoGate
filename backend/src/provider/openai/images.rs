@@ -134,6 +134,7 @@ pub(super) async fn relay_openai_image(
             auth: auth.clone(),
             upstream: upstream.clone(),
             protocol,
+            method: "POST",
             path,
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),

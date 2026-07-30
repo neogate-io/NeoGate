@@ -251,6 +251,7 @@ pub(super) async fn create_background_response(
         auth: auth.clone(),
         upstream: upstream.clone(),
         protocol: UpstreamProtocol::Openai,
+        method: "POST",
         path: "/v1/responses",
         model: target_model.clone(),
         external_model: external_model.clone(),

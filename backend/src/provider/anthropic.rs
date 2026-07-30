@@ -147,6 +147,7 @@ pub(crate) async fn anthropic_messages(
             auth: auth.clone(),
             upstream,
             protocol,
+            method: "POST",
             path: "/v1/messages",
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),

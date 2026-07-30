@@ -56,6 +56,7 @@ pub(crate) struct RelayContext {
     pub(crate) auth: UserAuth,
     pub(crate) upstream: SelectedUpstream,
     pub(crate) protocol: UpstreamProtocol,
+    pub(crate) method: &'static str,
     pub(crate) path: &'static str,
     pub(crate) model: String,
     pub(crate) external_model: String,

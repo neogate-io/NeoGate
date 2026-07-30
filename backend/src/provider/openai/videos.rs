@@ -165,6 +165,7 @@ async fn relay_openai_video_create(
             auth: auth.clone(),
             upstream: upstream.clone(),
             protocol,
+            method: "POST",
             path: VIDEO_CREATE_PATH,
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),

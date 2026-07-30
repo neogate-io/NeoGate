@@ -495,6 +495,7 @@ async fn relay_openai(
             auth: auth.clone(),
             upstream,
             protocol,
+            method: "POST",
             path,
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),

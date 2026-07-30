@@ -774,6 +774,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let cached_input_tokens = token_usage.and_then(|usage| usage.cached_input_tokens);
     let cache_creation_input_tokens =
         token_usage.and_then(|usage| usage.cache_creation_input_tokens);
+    let summary_input_tokens = summary_input_tokens(input_tokens, cache_creation_input_tokens);
     let cache_creation_input_tokens_5m =
         token_usage.and_then(|usage| usage.cache_creation_input_tokens_5m);
     let cache_creation_input_tokens_1h =
@@ -811,7 +812,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     if ctx.upstream_model != usage.model.as_deref().unwrap_or(&ctx.model) {
         push_field(&mut info, "upstream_model", &ctx.upstream_model);
     }
-    push_opt(&mut info, "input", input_tokens);
+    push_opt(&mut info, "input", summary_input_tokens);
     push_opt(&mut info, "output", output_tokens);
     push_opt(&mut info, "cache_read", cached_input_tokens);
     push_opt(&mut info, "cache_write", cache_creation_input_tokens);
@@ -953,6 +954,15 @@ fn generation_tokens_per_second(
     let generation_ms = latency_ms.saturating_sub(first_response_ms?);
     (output_tokens > 0 && generation_ms > 0)
         .then_some((output_tokens as f64 * 1000.0) / generation_ms as f64)
+}
+
+fn summary_input_tokens(
+    input_tokens: Option<i64>,
+    cache_creation_input_tokens: Option<i64>,
+) -> Option<i64> {
+    input_tokens.map(|input_tokens| {
+        input_tokens.saturating_add(cache_creation_input_tokens.unwrap_or(0).max(0))
+    })
 }
 
 fn push_request_params(line: &mut String, params: &RelayRequestParams) {
@@ -1307,5 +1317,16 @@ mod tests {
         let generation_rate = generation_tokens_per_second(Some(106), 7_864, Some(5_565));
         assert!((generation_rate.unwrap() - 46.107).abs() < 0.001);
         assert_eq!(generation_tokens_per_second(Some(106), 7_864, None), None);
+    }
+
+    #[test]
+    fn summary_input_includes_cache_creation_tokens() {
+        assert_eq!(summary_input_tokens(Some(58), Some(207_135)), Some(207_193));
+        assert_eq!(
+            summary_input_tokens(Some(207_193), Some(1_209)),
+            Some(208_402)
+        );
+        assert_eq!(summary_input_tokens(Some(58), None), Some(58));
+        assert_eq!(summary_input_tokens(None, Some(207_135)), None);
     }
 }

@@ -11,6 +11,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getChannels } from '../../api/channels'
+import { getProviders } from '../../api/providers'
 import {
   getLiveModelReferenceCatalog,
   getModelReferenceCatalog,
@@ -25,6 +26,7 @@ import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import type {
   Channel,
   ModelReferenceCatalogRecord,
+  ProviderRecord,
   VideoTier,
   VideoTierDimension
 } from '../../types/admin'
@@ -59,6 +61,7 @@ const adminModelForm = ref({
   defaultTextChannelId: null as number | null
 })
 const channels = ref<Channel[]>([])
+const providers = ref<ProviderRecord[]>([])
 const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
 const adminModelSaving = ref(false)
 const syncingTemplates = ref(false)
@@ -78,9 +81,20 @@ const referencePricesLastUpdated = computed(() => {
     ? t('referencePricesNeverSynced')
     : formatDateTime(new Date(latest).toISOString(), locale.value)
 })
+const providerDisplayNames = computed(
+  () => new Map(providers.value.map((provider) => [provider.code, provider.display_name]))
+)
+
+function providerDisplayName(provider: string) {
+  return providerDisplayNames.value.get(provider) ?? provider
+}
+
 const sortedPricingTemplates = computed(() => {
   return [...modelReferenceCatalog.value].sort((left, right) => {
-    const providerCompare = left.provider.localeCompare(right.provider)
+    const providerCompare = providerDisplayName(left.provider).localeCompare(
+      providerDisplayName(right.provider),
+      locale.value
+    )
     return providerCompare || left.model.localeCompare(right.model)
   })
 })
@@ -89,9 +103,13 @@ const filteredPricingTemplates = computed(() => {
   if (!keyword) return sortedPricingTemplates.value
 
   return sortedPricingTemplates.value.filter((template) => {
-    return [template.provider, template.model, template.display_name, template.source].some(
-      (value) => value.toLowerCase().includes(keyword)
-    )
+    return [
+      template.provider,
+      providerDisplayName(template.provider),
+      template.model,
+      template.display_name,
+      template.source
+    ].some((value) => value.toLowerCase().includes(keyword))
   })
 })
 const creditRequiredDescription = computed(() => {
@@ -369,15 +387,18 @@ function applyAdminModelSetting(setting: Awaited<ReturnType<typeof getAdminModel
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [policy, adminModelSetting, fetchedChannels, catalog] = await Promise.all([
-        getAdminServicePolicy(),
-        getAdminModelSetting(),
-        getChannels(),
-        getModelReferenceCatalog()
-      ])
+      const [policy, adminModelSetting, fetchedChannels, fetchedProviders, catalog] =
+        await Promise.all([
+          getAdminServicePolicy(),
+          getAdminModelSetting(),
+          getChannels(),
+          getProviders(),
+          getModelReferenceCatalog()
+        ])
       servicePolicy.value = policy
       applyAdminModelSetting(adminModelSetting)
       channels.value = fetchedChannels
+      providers.value = fetchedProviders
       modelReferenceCatalog.value = catalog
     } catch (err) {
       ElMessage.error(readError(err))
@@ -595,7 +616,11 @@ onMounted(load)
         max-height="62vh"
         stripe
       >
-        <el-table-column prop="provider" :label="t('provider')" width="112" />
+        <el-table-column :label="t('provider')" width="148">
+          <template #default="{ row }">
+            {{ providerDisplayName(row.provider) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="model" :label="t('modelName')" min-width="220" />
         <el-table-column :label="t('pricingBasis')" width="92" align="center" header-align="center">
           <template #default="{ row }">

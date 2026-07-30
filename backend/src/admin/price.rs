@@ -205,6 +205,7 @@ struct ModelsDevCost {
     per_thousand_calls: Option<f64>,
     per_10k_token_input: Option<f64>,
     per_10k_token_output: Option<f64>,
+    per_million_tokens: Option<f64>,
     /// 上游提供的口径字符串(见 PricingBasis::as_str)。
     basis: Option<String>,
     /// 多档视频价的完整档位结构。
@@ -702,7 +703,15 @@ fn audio_pricing_for_model(
 /// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
 /// `pricing_basis` 影响参考价展示文案;实际计费链路仍以 `billing_meter` 为准。
 fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
-    let basis = parse_pricing_basis(cost.basis.as_deref());
+    let basis = if cost
+        .video_tiers
+        .as_ref()
+        .is_some_and(|tiers| !tiers.is_empty())
+    {
+        PricingBasis::MultiTierVideo
+    } else {
+        parse_pricing_basis(cost.basis.as_deref())
+    };
     use PricingBasis::*;
     match basis {
         Image => {
@@ -768,10 +777,11 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         MultiTierVideo => {
-            // input/output 由上游提供代表档,作为视频参考价展示值。
-            let input = per_million_to_micros(cost.input)?;
-            let output =
-                per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
+            // 新数据源只提供 video_tiers 时，从首档取一个代表价用于列表摘要。
+            let representative = representative_video_tier_price(cost.video_tiers.as_deref());
+            let input = per_million_to_micros(cost.input.or(representative))?;
+            let output = per_million_to_micros(cost.output)
+                .or_else(|| per_million_to_micros(cost.input.or(representative)))?;
             Some(PricingMicros {
                 input_price_micros: input,
                 output_price_micros: output,
@@ -783,8 +793,8 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         Token => {
-            let input = per_million_to_micros(cost.input)?;
-            let output = per_million_to_micros(cost.output)?;
+            let input = per_million_to_micros(cost.input.or(cost.per_million_tokens))?;
+            let output = per_million_to_micros(cost.output.or(cost.per_million_tokens))?;
             Some(PricingMicros {
                 input_price_micros: input,
                 output_price_micros: output,
@@ -796,6 +806,31 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
     }
+}
+
+fn representative_video_tier_price(video_tiers: Option<&[Value]>) -> Option<f64> {
+    const DIMENSION_PRIORITY: &[&str] = &[
+        "input_without_video",
+        "input_with_video",
+        "with_audio",
+        "without_audio",
+        "price",
+    ];
+
+    for tier in video_tiers? {
+        let Some(dimensions) = tier.get("tiers").and_then(Value::as_object) else {
+            continue;
+        };
+        for dimension in DIMENSION_PRIORITY {
+            if let Some(value) = dimensions.get(*dimension).and_then(Value::as_f64) {
+                return Some(value);
+            }
+        }
+        if let Some(value) = dimensions.values().find_map(Value::as_f64) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
@@ -1480,6 +1515,59 @@ mod tests {
         assert_eq!(prices.pricing_basis, PricingBasis::Per10kToken);
         assert_eq!(prices.input_price_micros, 360_000);
         assert_eq!(prices.output_price_micros, 3_600_000);
+    }
+
+    #[test]
+    fn moligate_per_million_tokens_uses_same_input_output_price() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["text","image","video"],"output":["video"]},
+                "cost":{"per_million_tokens":15}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("doubao", "doubao-seedance-1.0-pro", &model)
+                .unwrap();
+        let prices = template.prices.unwrap();
+
+        assert_eq!(template.billing_meter, BillingMeter::Video);
+        assert_eq!(prices.pricing_basis, PricingBasis::Token);
+        assert_eq!(prices.input_price_micros, 15_000_000);
+        assert_eq!(prices.output_price_micros, 15_000_000);
+    }
+
+    #[test]
+    fn moligate_video_tiers_infer_multi_tier_price() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["text","image","video"],"output":["video"]},
+                "cost":{"video_tiers":[
+                    {"resolution":"480p,720p","tiers":{
+                        "input_without_video":46,
+                        "input_with_video":28
+                    }},
+                    {"resolution":"1080p","tiers":{
+                        "input_without_video":51,
+                        "input_with_video":31
+                    }}
+                ]}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("doubao", "doubao-seedance-2.0", &model)
+                .unwrap();
+        let prices = template.prices.unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::MultiTierVideo);
+        assert_eq!(prices.billing_meter, BillingMeter::Video);
+        assert_eq!(prices.input_price_micros, 46_000_000);
+        assert_eq!(prices.output_price_micros, 46_000_000);
+        assert_eq!(
+            template.capabilities["video_tiers"][0]["tiers"]["input_with_video"],
+            28
+        );
     }
 
     #[test]

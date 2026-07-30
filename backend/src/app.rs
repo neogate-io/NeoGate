@@ -77,6 +77,11 @@ pub async fn run() -> anyhow::Result<()> {
     load_dotenv();
     init_tracing();
 
+    // tokio-tungstenite/reqwest/sqlx 各自通过 feature 拉入 rustls，可能同时启用
+    // aws-lc-rs 与 ring，rustls 无法自动选定进程级 CryptoProvider 会直接 panic。
+    // 这里显式安装 aws-lc-rs 作为默认 provider（已安装时返回 Err，忽略即可）。
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let probe = RuntimeProbe::from_env()?;
     if !probe.full_config_ready() {
         return run_bootstrap_listener(&probe).await;

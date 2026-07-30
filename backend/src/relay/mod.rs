@@ -53,7 +53,9 @@ pub(crate) use error::{
     UpstreamHttpFailure,
 };
 pub(crate) use limit::UserRequestLimiter;
-use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
+use models::{
+    list_anthropic_models, list_openai_models, retrieve_anthropic_model, retrieve_openai_model,
+};
 pub(crate) use request::{
     prepare_relay_body, rewrite_relay_body_model, safe_log_label, BodyKind, PreparedRelayBody,
     RelayRequestParams,
@@ -123,6 +125,15 @@ pub fn router() -> Router<Arc<AppState>> {
             "/anthropic",
             get(anthropic_gateway_probe).head(anthropic_gateway_probe),
         )
+        // 标准 Anthropic Models API 路径：Anthropic 官方 SDK 的 models.list() /
+        // models.retrieve() 打的是 <base>/v1/models[/{id}]，客户端以 origin/anthropic
+        // 为 base 时即 /anthropic/v1/models[/{id}]。
+        .route("/anthropic/v1/models", get(list_anthropic_models))
+        .route(
+            "/anthropic/v1/models/{model_id}",
+            get(retrieve_anthropic_model),
+        )
+        // 兼容旧路径（NeoGate 早期非标准路径），保留避免破坏既有调用方。
         .route("/anthropic/v1/messages/models", get(list_anthropic_models))
         .route("/v1/messages", post(anthropic::anthropic_messages))
         .route(

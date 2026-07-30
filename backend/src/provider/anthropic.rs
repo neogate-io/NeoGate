@@ -16,7 +16,7 @@ use crate::{
     auth::UserAuth,
     error::{reqwest_status, AppError, AppResult},
     input::bounded_limit,
-    provider::adapters::{adapter_for_endpoint, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, AnthropicCapabilities, RelayRoute},
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -328,6 +328,15 @@ pub(crate) async fn create_anthropic_message_batch(
             .await?
     };
     ensure_key_backed_async_upstream(&upstream)?;
+    // new-api 类上游没有 /v1/messages/batches 端点，转发只会拿到 404。批量是异步操作，
+    // 无法像 count_tokens 那样本地兜底，因此在预扣额度前直接返回明确的“上游不支持”错误。
+    let capabilities = AnthropicCapabilities::for_adapter_hint(upstream.adapter_hint.as_deref());
+    if !capabilities.supports_batch {
+        return Err(AppError::BadRequestWithCode {
+            code: "batch_unsupported",
+            message: "selected upstream does not support the Anthropic message batches API",
+        });
+    }
     let price = state
         .billing
         .price_for(
@@ -716,16 +725,40 @@ pub(crate) async fn anthropic_count_tokens(
             )
             .await?
     };
+    // new-api 类上游只实现了 /v1/messages，没有 count_tokens 端点，转发必然 404。
+    // 对已知不支持的上游直接本地估算，避免浪费一次往返，也避免把上游 404 透传给
+    // Claude Code（那会破坏其上下文占比追踪与自动压缩）。
+    let capabilities = AnthropicCapabilities::for_adapter_hint(upstream.adapter_hint.as_deref());
+    if !capabilities.supports_count_tokens {
+        return local_count_tokens_response(&upstream_body);
+    }
+
     let response = forward_anthropic_bound(
         &state,
         &headers,
         &upstream,
         Method::POST,
         "/v1/messages/count_tokens",
-        Some(upstream_body),
+        Some(upstream_body.clone()),
     )
     .await?;
+    // 其他上游若返回 404（不支持该端点），同样回退到本地估算。
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return local_count_tokens_response(&upstream_body);
+    }
     raw_upstream_response(response).await
+}
+
+/// 用本地估算器构造一个合法的 Anthropic count_tokens 响应 `{"input_tokens": N}`。
+fn local_count_tokens_response(body: &Bytes) -> AppResult<Response> {
+    let input_tokens = crate::billing::estimate_anthropic_input_tokens(body);
+    let payload = json!({ "input_tokens": input_tokens });
+    let body = Bytes::from(serde_json::to_vec(&payload)?);
+    response_from_bytes(
+        StatusCode::OK,
+        HeaderValue::from_static("application/json"),
+        body,
+    )
 }
 
 pub(crate) fn batch_terminal(status: &str) -> bool {

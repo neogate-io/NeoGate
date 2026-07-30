@@ -128,8 +128,9 @@ const anthropicBatch = computed(
 )
 
 const anthropicModels = computed(
-  () => `curl ${anthropicBaseUrl.value}/v1/messages/models \\
-  -H "x-api-key: YOUR_NEOGATE_API_KEY"`
+  () => `curl ${anthropicBaseUrl.value}/v1/models \\
+  -H "x-api-key: YOUR_NEOGATE_API_KEY" \\
+  -H "anthropic-version: 2023-06-01"`
 )
 
 const anthropicBatchList = computed(
@@ -200,7 +201,9 @@ const content = computed(() => {
         ]
       ],
       anthropicModelsPaths: [
-        ['GET', `${anthropicBaseUrl.value}/v1/messages/models`, 'NeoGate 兼容模型列表']
+        ['GET', `${anthropicBaseUrl.value}/v1/models`, '模型列表'],
+        ['GET', `${anthropicBaseUrl.value}/v1/models/{model_id}`, '模型详情'],
+        ['GET', `${anthropicBaseUrl.value}/v1/messages/models`, '兼容旧路径（模型列表）']
       ],
       anthropicMessageInterfaces: [
         {
@@ -292,8 +295,8 @@ const content = computed(() => {
         {
           title: 'Models',
           method: 'GET',
-          path: `${anthropicBaseUrl.value}/v1/messages/models`,
-          description: '读取当前 API Key 可调用的 Anthropic 兼容模型列表。',
+          path: `${anthropicBaseUrl.value}/v1/models`,
+          description: '读取当前 API Key 可调用的 Anthropic 模型列表。',
           requestParams: [
             ['limit', 'integer', '分页大小。'],
             ['before_id / after_id', 'string', '分页游标。']
@@ -314,7 +317,7 @@ const content = computed(() => {
         ['获取结果', '任务结束后下载 results，每行对应一条 custom_id 的处理结果。']
       ],
       anthropicModelsText:
-        'Anthropic 官方 Models API 路径为 /v1/models 与 /v1/models/{model_id}。NeoGate 当前通过 /anthropic/v1/messages/models 提供兼容模型列表，用于 SDK 初始化或模型选择页。',
+        'Anthropic 官方 Models API 路径为 /v1/models 与 /v1/models/{model_id}，NeoGate 已在 /anthropic 前缀下提供，官方 SDK 的 models.list() / models.retrieve() 可直接使用。旧路径 /anthropic/v1/messages/models 仍保留以兼容既有调用方。',
       anthropicModelItems: [
         ['模型标识', '返回的 id 可直接作为 /v1/messages 的 model 参数。'],
         ['权限过滤', '列表会按当前 API Key 权限和后台启用渠道过滤。']
@@ -380,8 +383,8 @@ const content = computed(() => {
           'message_batch_id',
           '已支持'
         ],
-        ['Models', 'GET', '/v1/models', 'limit, before_id, after_id', '暂未支持'],
-        ['Models', 'GET', '/v1/models/{model_id}', 'model_id', '暂未支持'],
+        ['Models', 'GET', '/v1/models', 'limit, before_id, after_id', '已支持'],
+        ['Models', 'GET', '/v1/models/{model_id}', 'model_id', '已支持'],
         ['Files', 'POST', '/v1/files', 'file, purpose, anthropic-beta', '暂未支持'],
         ['Files', 'GET', '/v1/files', 'limit, before_id, after_id', '暂未支持'],
         ['Files', 'GET', '/v1/files/{file_id}', 'file_id', '暂未支持'],
@@ -469,7 +472,9 @@ const content = computed(() => {
       ]
     ],
     anthropicModelsPaths: [
-      ['GET', `${anthropicBaseUrl.value}/v1/messages/models`, 'NeoGate compatible model list']
+      ['GET', `${anthropicBaseUrl.value}/v1/models`, 'List models'],
+      ['GET', `${anthropicBaseUrl.value}/v1/models/{model_id}`, 'Retrieve model'],
+      ['GET', `${anthropicBaseUrl.value}/v1/messages/models`, 'Legacy path (list models)']
     ],
     anthropicMessageInterfaces: [
       {
@@ -561,8 +566,8 @@ const content = computed(() => {
       {
         title: 'Models',
         method: 'GET',
-        path: `${anthropicBaseUrl.value}/v1/messages/models`,
-        description: 'List Anthropic-compatible models callable by the current API key.',
+        path: `${anthropicBaseUrl.value}/v1/models`,
+        description: 'List Anthropic models callable by the current API key.',
         requestParams: [
           ['limit', 'integer', 'Page size.'],
           ['before_id / after_id', 'string', 'Pagination cursor.']
@@ -586,7 +591,7 @@ const content = computed(() => {
       ]
     ],
     anthropicModelsText:
-      'The official Anthropic Models API paths are /v1/models and /v1/models/{model_id}. NeoGate currently exposes a compatible model list through /anthropic/v1/messages/models for SDK initialization or model pickers.',
+      'The official Anthropic Models API paths are /v1/models and /v1/models/{model_id}. NeoGate now serves both under the /anthropic prefix, so the official SDK models.list() / models.retrieve() work directly. The legacy /anthropic/v1/messages/models path is kept for backward compatibility.',
     anthropicModelItems: [
       ['Model IDs', 'Returned ids can be used directly as the model parameter for /v1/messages.'],
       [
@@ -655,8 +660,8 @@ const content = computed(() => {
         'message_batch_id',
         'Supported'
       ],
-      ['Models', 'GET', '/v1/models', 'limit, before_id, after_id', 'Not supported'],
-      ['Models', 'GET', '/v1/models/{model_id}', 'model_id', 'Not supported'],
+      ['Models', 'GET', '/v1/models', 'limit, before_id, after_id', 'Supported'],
+      ['Models', 'GET', '/v1/models/{model_id}', 'model_id', 'Supported'],
       ['Files', 'POST', '/v1/files', 'file, purpose, anthropic-beta', 'Not supported'],
       ['Files', 'GET', '/v1/files', 'limit, before_id, after_id', 'Not supported'],
       ['Files', 'GET', '/v1/files/{file_id}', 'file_id', 'Not supported'],

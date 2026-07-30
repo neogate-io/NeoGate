@@ -21,6 +21,7 @@ pub(crate) mod account;
 mod credit;
 mod metering;
 pub mod outbox;
+mod token_estimate;
 mod types;
 pub mod video;
 
@@ -29,6 +30,7 @@ pub use metering::{
     cost_for_billable_usage, estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes,
     parse_usage_from_sse_data,
 };
+pub use token_estimate::estimate_anthropic_input_tokens;
 pub use types::{
     BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
     DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode, VideoPriceTier,
@@ -975,26 +977,35 @@ async fn recover_allocations_in_db(
     pool: &PgPool,
     allocations: &[HotAllocation],
 ) -> AppResult<AllocationRecoverySummary> {
-    let ids = allocations
-        .iter()
-        .map(|allocation| allocation.allocation_id)
-        .collect::<Vec<_>>();
-    let mut tx = pool.begin().await?;
-    let rows = sqlx::query(
-        "SELECT id, credit_account_id, amount_micros, consumed_micros, returned_micros, created_at
-         FROM credit_allocation
-         WHERE id = ANY($1) AND status = 'active'
-         ORDER BY id ASC
-         FOR UPDATE",
-    )
-    .bind(&ids)
-    .fetch_all(&mut *tx)
-    .await?;
-
     let now = Utc::now();
     let mut summary = AllocationRecoverySummary::default();
-    for row in rows {
-        let allocation_id: DbId = row.try_get("id")?;
+
+    // Process each allocation in its own transaction to avoid deadlocks with the
+    // billing outbox. The previous approach locked all stale allocations in a
+    // single batch TX (FOR UPDATE on all IDs at once), while the billing outbox
+    // locks allocation rows one at a time as it processes records. If the outbox
+    // held lock A and waited for B, while recovery held B and waited for credit_account
+    // (locked by outbox via A's processing), a deadlock resulted. Processing
+    // allocations individually limits each TX to one allocation lock at a time,
+    // eliminating the cross-lock dependency.
+    for allocation in allocations {
+        let allocation_id = allocation.allocation_id;
+        let mut tx = pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT id, credit_account_id, amount_micros, consumed_micros, returned_micros, created_at
+             FROM credit_allocation
+             WHERE id = $1 AND status = 'active'
+             FOR UPDATE",
+        )
+        .bind(allocation_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            tx.commit().await?;
+            continue;
+        };
+
         let credit_account_id: DbId = row.try_get("credit_account_id")?;
         let amount: i64 = row.try_get("amount_micros")?;
         let consumed: i64 = row.try_get("consumed_micros")?;
@@ -1002,6 +1013,7 @@ async fn recover_allocations_in_db(
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let recover_amount = amount - consumed - returned;
         if recover_amount <= 0 {
+            tx.commit().await?;
             continue;
         }
         let age_seconds = (now - created_at).num_seconds().max(0);
@@ -1028,6 +1040,9 @@ async fn recover_allocations_in_db(
         }))
         .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
+
         summary.count += 1;
         summary.recovered_micros += recover_amount;
         if summary
@@ -1051,7 +1066,6 @@ async fn recover_allocations_in_db(
             summary.truncated += 1;
         }
     }
-    tx.commit().await?;
     Ok(summary)
 }
 

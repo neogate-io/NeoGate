@@ -50,7 +50,7 @@ pub(super) struct AnthropicModelList {
 }
 
 #[derive(Debug, Serialize)]
-struct AnthropicModel {
+pub(super) struct AnthropicModel {
     id: String,
     #[serde(rename = "type")]
     model_type: &'static str,
@@ -106,6 +106,19 @@ pub(super) async fn list_anthropic_models(
 ) -> AppResult<Json<AnthropicModelList>> {
     let models = available_models(&state, &auth, None).await?;
     Ok(Json(anthropic_model_list(models, query)))
+}
+
+pub(super) async fn retrieve_anthropic_model(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    Path(model_id): Path<String>,
+) -> AppResult<Json<AnthropicModel>> {
+    let models = available_models(&state, &auth, None).await?;
+    let model = models
+        .into_iter()
+        .find(|model| model.id == model_id)
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(anthropic_model(&model.id)))
 }
 
 async fn available_models(
@@ -228,12 +241,7 @@ fn anthropic_model_list(models: Vec<AvailableModel>, query: ListModelsQuery) -> 
     let has_more = end < models.len();
     let data: Vec<_> = models[start..end]
         .iter()
-        .map(|model| AnthropicModel {
-            id: model.id.clone(),
-            model_type: "model",
-            display_name: display_model_name(&model.id),
-            created_at: "1970-01-01T00:00:00Z",
-        })
+        .map(|model| anthropic_model(&model.id))
         .collect();
     let first_id = data.first().map(|model| model.id.clone());
     let last_id = data.last().map(|model| model.id.clone());
@@ -243,6 +251,15 @@ fn anthropic_model_list(models: Vec<AvailableModel>, query: ListModelsQuery) -> 
         first_id,
         has_more,
         last_id,
+    }
+}
+
+fn anthropic_model(id: &str) -> AnthropicModel {
+    AnthropicModel {
+        id: id.to_string(),
+        model_type: "model",
+        display_name: display_model_name(id),
+        created_at: "1970-01-01T00:00:00Z",
     }
 }
 
@@ -294,5 +311,17 @@ mod tests {
             display_model_name("provider/claude-sonnet"),
             "claude sonnet"
         );
+    }
+
+    #[test]
+    fn anthropic_model_has_official_shape() {
+        let model = anthropic_model("claude-opus-4-8");
+        assert_eq!(model.id, "claude-opus-4-8");
+        assert_eq!(model.model_type, "model");
+        assert_eq!(model.display_name, "claude opus 4 8");
+        // 序列化后 type 字段名符合官方响应（rename = "type"）。
+        let value = serde_json::to_value(&model).unwrap();
+        assert_eq!(value["type"], "model");
+        assert_eq!(value["id"], "claude-opus-4-8");
     }
 }

@@ -90,6 +90,7 @@ function endpointDescription(name: string, method: string, path: string) {
     'POST /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs': '提交工具调用结果。',
     'POST /v1/realtime/sessions': '创建实时语音/多模态会话。',
     'POST /v1/realtime/transcription_sessions': '创建实时转写会话。',
+    'GET /v1/realtime?model=…': '建立实时语音识别 WebSocket 会话（当前对接 qwen3-asr-flash-realtime，按音频时长计费）。',
     'POST/GET /v1/evals': '创建或列出评测。',
     'GET/PATCH/DELETE /v1/evals/{eval_id}': '查询、更新或删除评测。',
     'POST/GET /v1/evals/{eval_id}/runs': '创建或列出评测运行。',
@@ -110,6 +111,7 @@ function endpointDescription(name: string, method: string, path: string) {
     'GET /v1/videos/{video_id}/content': 'Download completed video content.',
     'POST /v1/embeddings': 'Create text embeddings.',
     'POST /v1/audio/transcriptions': 'Transcribe uploaded audio to text.',
+    'GET /v1/realtime?model=…': 'Open a realtime speech-transcription WebSocket session (currently backed by qwen3-asr-flash-realtime, billed per audio second).',
     'POST /v1/moderations': 'Moderate input content.'
   }
 
@@ -980,6 +982,13 @@ const content = computed(() => {
           '暂未支持'
         ],
         [
+          'Realtime',
+          'GET (WebSocket)',
+          '/v1/realtime?model=…',
+          'model (query)；wss 升级后按 OpenAI 官方 Realtime 转写协议收发（transcription_session.update、input_audio_buffer.append、delta/completed 事件），当前对接阿里云 qwen3-asr-flash-realtime 实时转写，按音频时长计费',
+          '已支持'
+        ],
+        [
           'Evals',
           'POST/GET',
           '/v1/evals',
@@ -1833,6 +1842,13 @@ const content = computed(() => {
         '/v1/realtime/transcription_sessions',
         'input_audio_format, input_audio_transcription',
         'Not supported'
+      ],
+      [
+        'Realtime',
+        'GET (WebSocket)',
+        '/v1/realtime?model=…',
+        'model (query); after the wss upgrade, speak the official OpenAI Realtime transcription protocol (transcription_session.update, input_audio_buffer.append, delta/completed events). Currently relays to Alibaba qwen3-asr-flash-realtime, billed per audio second',
+        'Supported'
       ],
       [
         'Evals',

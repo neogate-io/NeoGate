@@ -232,6 +232,15 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+## 容量与运行参数
+
+- 跨域部署时配置 `CORS_ALLOWED_ORIGINS`；同域反向代理通常不需要额外配置。
+- 后端请求体上限由 `RELAY_BODY_LIMIT_BYTES` 控制，默认 64 MiB；反向代理的请求体限制不应低于该值。
+- 非流式 JSON 和 SSE 的计费用量解析缓冲区固定为 16 MiB；超过该大小的上游响应无法提取计费用量。
+- `USER_CONCURRENT_REQUEST_LIMIT` 默认限制每个用户最多 100 个并发模型请求；`GLOBAL_CONCURRENT_REQUEST_LIMIT` 默认 0，表示不启用全局并发限制。
+- 通道探测默认每 10 分钟执行一次，模型目录默认每天同步一次，可分别通过 `CHANNEL_PROBE_INTERVAL_SECONDS` 和 `UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS` 调整。
+- 使用后台图片生成或其他需要本地响应资产的任务时，确保 `NEOGATE_ASSET_DIR` 位于可写、容量充足且持久化的存储中。
+
 ## 故障排查
 
 - `docker compose ps` 中服务未进入 `running` 或 `healthy`：先查看 `docker compose logs -f`。

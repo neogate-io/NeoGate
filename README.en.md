@@ -4,7 +4,7 @@
 
 🚀 **A Rust-built LLM API gateway for maximum performance, ease of use, and enterprise private deployment**
 
-Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, app publishing to WeCom, webhooks, web widgets, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, smart model routing, audio and video processing, enterprise app publishing, multi-tenant API keys, usage tracking, billing, and private deployment.
 
 <p align="center">
   <a href="README.md">中文</a> |
@@ -35,7 +35,7 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
 
 NeoGate is a Rust-built LLM API gateway for enterprise private deployment, focused on maximum performance, ease of use, and operational control. It helps enterprises bring LLM calls into a gateway that is manageable, observable, and billable.
 
-With App Management, NeoGate can publish model capabilities to WeCom, webhook, and web widget entry points, so employees, business systems, and external apps can use AI directly. NeoGate is a fit for internal AI gateways, multi-project and multi-team management, multi-app access, and billing-oriented operations.
+NeoGate runs on enterprise-owned servers, private clouds, or internal networks, centralizing upstream credentials, model access policies, project members and API keys, usage records, and cost data. Enterprises can keep existing OpenAI and Anthropic clients while establishing independent permission, budget, and cost boundaries for departments, projects, and internal applications, then scale from a standalone deployment to a multi-replica architecture as demand grows.
 
 Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
@@ -50,7 +50,7 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
 ## 🔎 Search Keywords
 
-`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `AI app management` · `WeCom integration` · `webhook AI app` · `web chat widget` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `realtime ASR` · `OpenAI video API` · `Alibaba Cloud Bailian` · `self-hosted AI infrastructure` · `smart model routing` · `AI app management` · `WeCom integration` · `Feishu integration` · `DingTalk integration` · `webhook AI app` · `web chat widget` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
 
 ---
 
@@ -78,19 +78,27 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
     </tr>
     <tr>
       <td>🧰 App management</td>
-      <td>Create WeCom, webhook, and web widget apps so employees or external systems can talk to models directly.</td>
+      <td>Create WeCom, Feishu, DingTalk, webhook, and web widget apps so employees or external systems can talk to models directly.</td>
     </tr>
     <tr>
-      <td>🧭 Model routing</td>
+      <td>🧠 Smart model routing</td>
+      <td>Detect multimodal input, tool use, code, reasoning effort, context length, and other request signals, then select a model by complexity while retaining an explainable routing decision.</td>
+    </tr>
+    <tr>
+      <td>🧭 Reliable upstream routing</td>
       <td>Route requests by model, priority, and weight, with automatic cooldown and switching when upstream keys fail.</td>
     </tr>
     <tr>
-      <td>📊 Usage records</td>
-      <td>Track usage by user, project, API key, model, and channel for troubleshooting, analysis, and accounting.</td>
+      <td>🎙️ Audio/video processing</td>
+      <td>Provide OpenAI-compatible file transcription, Realtime speech recognition, and video generation APIs, with unified asynchronous task handling, result retrieval, failover, and billing by audio duration or video configuration.</td>
+    </tr>
+    <tr>
+      <td>📊 Usage and cost analysis</td>
+      <td>Track calls by user, project, API key, model, and channel, then aggregate cost, request count, success rate, and token usage with date filters, multi-level drilldowns, and CSV export.</td>
     </tr>
     <tr>
       <td>💳 Service billing</td>
-      <td>Support internal mode and billing mode, with quota, recharge, and payment features for internal or paid use.</td>
+      <td>Support internal and billing modes, plus project-, API-key-, and model-level credit, reservation settlement, recharge, payment, and an auditable ledger.</td>
     </tr>
     <tr>
       <td>🚀 Cluster deployment</td>
@@ -123,7 +131,7 @@ Repository: [neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 - **Safer credentials**: Upstream secrets stay out of individual apps, while permissions, quotas, and policies stay in one place.
 - **Clearer cost tracking**: See who used what, which project used it, and how many tokens and dollars were spent.
 - **Better team boundaries**: Separate teams, customers, and internal apps by project, with clean isolation and reporting.
-- **Easier AI rollout**: Publish model access to WeCom, webhook, and web widget entry points your users already touch every day.
+- **Easier AI rollout**: Publish model access to WeCom, Feishu, DingTalk, webhook, and web widget entry points your users already touch every day.
 - **Broader operating model**: Run NeoGate as an internal AI gateway or extend it into quota, recharge, payment, and billing operations.
 
 ---
@@ -186,9 +194,6 @@ docker compose -f docker-compose.build.yml up -d --build
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
-> [!TIP]
-> When building from source on a 2 GB memory server, if the frontend and backend builds run out of memory when compiled together, build them in steps: run `docker compose -f docker-compose.build.yml build backend`, then `docker compose -f docker-compose.build.yml build web`, and finally `docker compose -f docker-compose.build.yml up -d --no-build`.
-
 After startup, open `http://SERVER_IP:8080`. The first-run wizard will guide you through the admin account, service mode, initial upstream, prices, SMTP, and payment settings.
 
 #### Domain and Host Nginx
@@ -236,38 +241,15 @@ If the admin username is not `admin`, replace `--username`.
 
 ### 🧑‍💻 Local Source Run
 
-Running from source is suitable for development, debugging, and custom deployment. You can use the development flow to try the full setup, or use release builds with Nginx and systemd for self-managed deployments. For production environments, Docker Compose or the cluster deployment path is still recommended first.
+Running from source is suitable for development, debugging, and custom deployments. Install PostgreSQL 16, Rust 1.94+, Node.js 20+, and pnpm first.
 
-#### Shared Preparation
+#### Prepare the Database
 
-Prepare these dependencies first:
-
-| Dependency | Recommended version |
-| --- | --- |
-| PostgreSQL | 16 or a compatible version |
-| Rust | 1.94 or newer |
-| Node.js | 20 or a compatible version |
-| pnpm | A version compatible with the frontend project |
-
-Verify that these commands are available:
-
-```bash
-psql --version
-cargo --version
-node --version
-pnpm --version
-```
-
-> [!TIP]
-> If `cargo --version` shows an older version such as 1.75, upgrade the Rust toolchain before starting the backend; older Cargo versions cannot build some dependencies.
-
-Create a dedicated NeoGate database user and database:
+Open PostgreSQL:
 
 ```bash
 sudo -u postgres psql
 ```
-
-Run this in `psql`:
 
 ```sql
 CREATE USER neogate WITH PASSWORD 'change-me';
@@ -275,210 +257,72 @@ CREATE DATABASE neogate OWNER neogate;
 \q
 ```
 
-Use this PostgreSQL connection URL in the first-run wizard:
+Database connection URL:
 
 ```text
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-On first startup, if runtime configuration is incomplete, the backend enters bootstrap mode. The first-run page writes the database connection, site identity, and generated secrets for you. In most cases, you do not need to edit `.env` before starting.
+#### Development Run
 
-#### Development Deployment
+Start the backend, scheduled jobs, and frontend separately:
 
-Development deployment uses the Rust debug build and the Vite dev server. Use it for local development, debugging, and trying the first-run flow.
+```bash
+cargo run -p neogate
+```
 
-<table>
-  <thead>
-    <tr>
-      <th width="120">Service</th>
-      <th>Command</th>
-      <th width="190">Default URL</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Backend</td>
-      <td><code>cargo run -p neogate</code></td>
-      <td><code>http://127.0.0.1:8080</code></td>
-    </tr>
-    <tr>
-      <td>Scheduled jobs</td>
-      <td><code>cargo run -p neogate-scheduler</code></td>
-      <td>No HTTP URL</td>
-    </tr>
-    <tr>
-      <td>Frontend</td>
-      <td><code>cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev --host 0.0.0.0</code></td>
-      <td><code>http://SERVER_IP:5173</code></td>
-    </tr>
-  </tbody>
-</table>
+```bash
+cargo run -p neogate-scheduler
+```
 
-Open `http://SERVER_IP:5173`; the app redirects to the first-run wizard automatically. Complete the runtime configuration, admin account, service mode, initial upstream, and optional SMTP settings. If the page asks for a restart after saving runtime configuration, restart the backend and refresh the page.
+```bash
+cd frontend
+pnpm install
+pnpm dev --host 0.0.0.0
+```
 
-#### Production Deployment
+Open `http://localhost:5173`; for remote development, use `http://SERVER_IP:5173`. Complete the database connection, administrator account, service mode, and initial upstream in the first-run wizard. If the page asks for a restart after saving the runtime configuration, restart the backend.
 
-For production deployment, build the backend and scheduled jobs in release mode and serve the frontend static files with Nginx. Use systemd, supervisord, or another process manager to keep the backend and scheduled jobs running.
+#### Production Run
 
-Build the backend and scheduled jobs:
+Build the backend, scheduled jobs, and frontend:
 
 ```bash
 cargo build --release -p neogate -p neogate-scheduler
+cd frontend
+pnpm install
+pnpm build
+cd ..
 ```
 
-Run the backend:
+Start the backend and scheduled jobs separately:
 
 ```bash
 BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
 ```
 
-Run the scheduled jobs:
-
 ```bash
 ./target/release/neogate-scheduler
 ```
 
-You can also run the backend with systemd and have it start the scheduled jobs automatically. This example assumes the project is located at `/opt/neogate` and the release build was created from the repository root:
+In production, use systemd, supervisord, or another process manager to keep services running. Serve `frontend/dist` with Nginx, proxy backend requests, and enable HTTPS. Docker Compose or the cluster deployment path remains the recommended option for production environments.
 
-```ini
-[Unit]
-Description=NeoGate backend
-
-[Service]
-WorkingDirectory=/opt/neogate
-Environment=BIND_ADDR=127.0.0.1:8080
-Environment=RUST_LOG=info
-Environment=NEOGATE_ENV_FILE=/opt/neogate/.env
-ExecStart=/opt/neogate/deploy/systemd/start-neogate.sh
-KillMode=control-group
-TimeoutStopSec=30
-Restart=always
-StandardOutput=append:/var/log/neogate/backend.log
-StandardError=append:/var/log/neogate/backend-error.log
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Save it as `/etc/systemd/system/neogate.service`, then start it:
-
-```bash
-sudo mkdir -p /var/log/neogate
-sudo systemctl daemon-reload
-sudo systemctl enable --now neogate
-sudo systemctl status neogate
-```
-
-Add logrotate for service logs to avoid unbounded log file growth:
-
-```bash
-sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
-/var/log/neogate/*.log {
-    daily
-    rotate 14
-    compress
-    missingok
-    notifempty
-    copytruncate
-}
-EOF
-```
-
-Build the frontend:
-
-```bash
-cd frontend
-pnpm install
-pnpm build
-```
-
-After the build, serve `frontend/dist` with Nginx or another static web server. The included `deploy/nginx/source-build.conf.example` uses `/usr/share/nginx/html` as the static file root and proxies backend APIs and health-check paths to the local backend at `http://127.0.0.1:8080`.
-
-For source deployments, you can use it like this:
-
-```bash
-sudo install -d /usr/share/nginx/html
-sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/source-build.conf.example /etc/nginx/conf.d/neogate.conf
-sudo nginx -t
-sudo systemctl reload nginx
-```
+---
 
 ## ✅ Production Checklist
 
-Required before going live:
+Before going live, verify at least the following:
 
-<table>
-  <thead>
-    <tr>
-      <th width="190">Check</th>
-      <th>Recommendation</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>👤 Admin account</td>
-      <td>Create the admin account in the first-run wizard and avoid weak passwords; if the password is lost, use <code>neogate admin reset-password</code> on the server to recover access.</td>
-    </tr>
-    <tr>
-      <td>🔐 System secrets</td>
-      <td>Use long, random values for <code>ADMIN_TOKEN_SECRET</code> and <code>UPSTREAM_SECRET_KEY</code>; the first-run wizard can generate them for standalone deployments, while clustered deployments need shared values in the environment for every node.</td>
-    </tr>
-    <tr>
-      <td>🌍 Public URL</td>
-      <td>Set a trusted <code>PUBLIC_BASE_URL</code> in the first-run wizard or environment configuration for password reset links and install script URLs.</td>
-    </tr>
-    <tr>
-      <td>🏷️ Site name</td>
-      <td>Set <code>SITE_NAME</code> in the first-run wizard or environment configuration for page, email, and payment gateway display.</td>
-    </tr>
-  </tbody>
-</table>
+- **Security and domain**: Use a strong administrator password and randomly generated `ADMIN_TOKEN_SECRET` and `UPSTREAM_SECRET_KEY` values. Serve NeoGate over HTTPS and configure `PUBLIC_BASE_URL` and the reverse proxy correctly.
+- **Upstream availability**: Use channel diagnostics to validate models, endpoints, and credentials. Keep the scheduled jobs process running for channel probes and model catalog synchronization.
+- **Billing configuration**: Before enabling billing mode, verify model prices, credit policies, recharge plans, and payment callbacks. In internal mode, also confirm that usage and cost records are being collected.
+- **Data persistence**: Persist and regularly back up PostgreSQL, runtime configuration, and system secrets. When using background image generation or other workflows that store response assets locally, persist `NEOGATE_ASSET_DIR` as well.
+- **Cluster deployment**: Multi-replica deployments must share PostgreSQL, Redis, and system secrets. Plan API, Worker, and Scheduler roles according to the expected load.
 
-Check by scenario:
+For detailed configuration and capacity limits, see:
 
-<table>
-  <thead>
-    <tr>
-      <th width="210">Scenario</th>
-      <th>Recommendation</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>🔁 Cross-origin access</td>
-      <td>When the frontend and API are accessed cross-origin, set the correct <code>CORS_ALLOWED_ORIGINS</code>; same-origin reverse proxy deployments usually do not need extra CORS configuration.</td>
-    </tr>
-    <tr>
-      <td>📦 Large request proxying</td>
-      <td>When proxying image edits, file uploads, or very long context requests, make sure the reverse proxy request-body limit is at least the backend <code>RELAY_BODY_LIMIT_BYTES</code> value, which defaults to 64 MiB.</td>
-    </tr>
-    <tr>
-      <td>🧾 Billing usage parsing</td>
-      <td>Non-streaming JSON and SSE usage parsing uses a fixed 16 MiB buffer; usage cannot be extracted from upstream responses larger than that.</td>
-    </tr>
-    <tr>
-      <td>🚦 User concurrency</td>
-      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> defaults to 100 concurrent model requests per user; <code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> defaults to 0, which disables the global concurrency limit.</td>
-    </tr>
-    <tr>
-      <td>🔀 Upstream failover</td>
-      <td>When an upstream returns 429, 5xx, 529, or a timeout/connection error occurs, NeoGate automatically retries another selectable upstream up to 5 times.</td>
-    </tr>
-    <tr>
-      <td>🩺 Upstream monitoring</td>
-      <td>Channel availability is probed by the scheduled jobs process every 10 minutes by default; adjust <code>CHANNEL_PROBE_INTERVAL_SECONDS</code> if needed. Upstream model lists are synced once per day by default; adjust <code>UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS</code> if needed.</td>
-    </tr>
-    <tr>
-      <td>💳 Billing mode</td>
-      <td>For billing mode, configure model prices, recharge plans, and the payment gateway in the first-run wizard or admin console.</td>
-    </tr>
-    <tr>
-      <td>🌐 Clustered deployment</td>
-      <td>For clustered deployment, set <code>RUNTIME_MODE=distributed</code> and configure Redis. Otherwise, keep the default single-node mode.</td>
-    </tr>
-  </tbody>
-</table>
+- [Standalone deployment](docs/deployment/standalone.md)
+- [Cluster deployment](docs/deployment/cluster.md)
 
 ---
 
@@ -500,6 +344,13 @@ The NeoGate name, logo, and related marks are not licensed under AGPL. Their use
 | 🤝 Contributions | [Pull Requests](https://github.com/neogate-io/NeoGate/pulls) |
 | 💬 Official QQ group | `1179649618` |
 
-<p align="left">
-  <img src="frontend/public/qrcode.png" alt="NeoGate official QQ group QR code" width="220" />
-</p>
+<table>
+  <tr>
+    <th>WeChat Contact</th>
+    <th>Official QQ Group</th>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/wechat.png" alt="NeoGate WeChat contact QR code" width="220" /></td>
+    <td><img src="docs/assets/qq.png" alt="NeoGate official QQ group QR code" width="220" /></td>
+  </tr>
+</table>

@@ -232,6 +232,15 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+## Capacity and Runtime Settings
+
+- Set `CORS_ALLOWED_ORIGINS` for cross-origin deployments; same-origin reverse proxy deployments usually need no additional CORS configuration.
+- The backend request-body limit is controlled by `RELAY_BODY_LIMIT_BYTES` and defaults to 64 MiB. The reverse proxy limit should not be lower than this value.
+- Non-streaming JSON and SSE billing usage parsing uses a fixed 16 MiB buffer; usage cannot be extracted from larger upstream responses.
+- `USER_CONCURRENT_REQUEST_LIMIT` defaults to 100 concurrent model requests per user. `GLOBAL_CONCURRENT_REQUEST_LIMIT` defaults to 0, which disables the global concurrency limit.
+- Channel probes run every 10 minutes and model catalogs sync once per day by default. Adjust them with `CHANNEL_PROBE_INTERVAL_SECONDS` and `UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS`.
+- When using background image generation or other workflows that store response assets locally, place `NEOGATE_ASSET_DIR` on writable, sufficiently sized, persistent storage.
+
 ## Troubleshooting
 
 - Services do not become `running` or `healthy`: start with `docker compose logs -f`.

@@ -12,3 +12,4 @@ output/
 backend/tests/output/
 __pycache__/
 .claude/
+.codex-tmp/

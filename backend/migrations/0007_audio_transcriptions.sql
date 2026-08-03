@@ -47,3 +47,7 @@ ALTER TABLE channel_endpoint ADD COLUMN adapter_hint TEXT;
 
 -- 异步任务快照 endpoint 当时的 adapter_hint，保证任务回捞时使用与创建时一致的适配层。
 ALTER TABLE task_upstream ADD COLUMN adapter_hint TEXT;
+
+-- 上游任务 ID 只在调用方 API Key 范围内唯一，不应跨租户按 provider 去重。
+ALTER TABLE task_upstream
+    DROP CONSTRAINT IF EXISTS task_upstream_task_type_provider_upstream_task_id_key;

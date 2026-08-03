@@ -68,12 +68,13 @@ pub(crate) fn spawn(state: Arc<AppState>) {
 }
 
 async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
-    let tasks = upstream::claim_due_tasks(
-        &state.db.pool,
-        state.config.task.upstream_poll_batch_size,
-        super::POLL_INTERVAL,
-    )
-    .await?;
+    let claim_limit = state
+        .config
+        .task
+        .upstream_poll_batch_size
+        .min(MAX_CONCURRENT_POLLED_TASKS as i64);
+    let (tasks, claimed_until) =
+        upstream::claim_due_tasks(&state.db.pool, claim_limit, super::TASK_CLAIM_TIMEOUT).await?;
     let concurrency = tasks.len().clamp(1, MAX_CONCURRENT_POLLED_TASKS);
     stream::iter(tasks)
         .for_each_concurrent(concurrency, |task| {
@@ -90,6 +91,20 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
                             "failed to poll one upstream async task: {err}"
                         );
                     }
+                }
+                if let Err(err) = upstream::release_task_claim(
+                    &state.db.pool,
+                    task_id,
+                    claimed_until,
+                    super::POLL_INTERVAL,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        task_id,
+                        ?task_type,
+                        "failed to release upstream async task claim: {err}"
+                    );
                 }
             }
         })
@@ -158,48 +173,66 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
     if task.task_type == UpstreamTaskType::AudioTranscription {
         return poll_audio_transcription(state, task, upstream).await;
     }
-    let response = match task.task_type {
-        UpstreamTaskType::OpenAiResponse => {
-            let path = format!("/v1/responses/{}", task.upstream_task_id);
-            poll_upstream_response(
-                forward_openai_bound(state, &upstream, Method::GET, &path, None),
-                task.id,
-                task.task_type,
-            )
-            .await?
-        }
-        UpstreamTaskType::OpenAiVideo => {
-            let path = format!("/v1/videos/{}", task.upstream_task_id);
-            poll_upstream_response(
-                forward_openai_bound(state, &upstream, Method::GET, &path, None),
-                task.id,
-                task.task_type,
-            )
-            .await?
-        }
-        UpstreamTaskType::AudioTranscription => {
-            unreachable!("handled before generic upstream polling")
-        }
-        UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
-        UpstreamTaskType::AnthropicMessageBatch => {
-            let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
-            poll_upstream_response(
-                forward_anthropic_bound(
-                    state,
-                    &HeaderMap::new(),
-                    &upstream,
-                    Method::GET,
-                    &path,
-                    None,
-                ),
-                task.id,
-                task.task_type,
-            )
-            .await?
-        }
+    let poll_response = async {
+        let response = match task.task_type {
+            UpstreamTaskType::OpenAiResponse => {
+                let path = format!("/v1/responses/{}", task.upstream_task_id);
+                poll_upstream_response(
+                    forward_openai_bound(state, &upstream, Method::GET, &path, None),
+                    task.id,
+                    task.task_type,
+                )
+                .await?
+            }
+            UpstreamTaskType::OpenAiVideo => {
+                let path = format!("/v1/videos/{}", task.upstream_task_id);
+                poll_upstream_response(
+                    forward_openai_bound(state, &upstream, Method::GET, &path, None),
+                    task.id,
+                    task.task_type,
+                )
+                .await?
+            }
+            UpstreamTaskType::AudioTranscription => {
+                unreachable!("handled before generic upstream polling")
+            }
+            UpstreamTaskType::NeogateResponse => unreachable!("handled before upstream polling"),
+            UpstreamTaskType::AnthropicMessageBatch => {
+                let path = format!("/v1/messages/batches/{}", task.upstream_task_id);
+                poll_upstream_response(
+                    forward_anthropic_bound(
+                        state,
+                        &HeaderMap::new(),
+                        &upstream,
+                        Method::GET,
+                        &path,
+                        None,
+                    ),
+                    task.id,
+                    task.task_type,
+                )
+                .await?
+            }
+        };
+        let status = reqwest_status(response.status());
+        let body = read_response_bytes(response, task.id, task.task_type).await?;
+        AppResult::Ok((status, body))
     };
-    let status = reqwest_status(response.status());
-    let body = read_response_bytes(response, task.id, task.task_type).await?;
+    let (status, body) =
+        match tokio::time::timeout(super::TASK_POLL_ATTEMPT_TIMEOUT, poll_response).await {
+            Ok(result) => result?,
+            Err(_) => {
+                tracing::warn!(
+                    task_id = task.id,
+                    ?task.task_type,
+                    timeout_secs = super::TASK_POLL_ATTEMPT_TIMEOUT.as_secs(),
+                    "timed out polling upstream async task"
+                );
+                return Err(crate::error::AppError::UpstreamUnavailable(
+                    "upstream async task poll attempt timed out".to_string(),
+                ));
+            }
+        };
     tracing::info!(
         task_id = task.id,
         ?task.task_type,
@@ -293,14 +326,31 @@ async fn poll_audio_transcription(
     let poll = match inline_audio_poll_result(&task.upstream_metadata) {
         Some(result) => result,
         None => {
-            bailian_asr::poll(
-                state,
-                &upstream,
-                model,
-                &task.upstream_task_id,
-                local_duration_seconds,
+            match tokio::time::timeout(
+                super::TASK_POLL_ATTEMPT_TIMEOUT,
+                bailian_asr::poll(
+                    state,
+                    &upstream,
+                    model,
+                    &task.upstream_task_id,
+                    local_duration_seconds,
+                ),
             )
-            .await?
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    tracing::warn!(
+                        task_id = task.id,
+                        ?task.task_type,
+                        timeout_secs = super::TASK_POLL_ATTEMPT_TIMEOUT.as_secs(),
+                        "timed out polling upstream audio transcription task"
+                    );
+                    return Err(crate::error::AppError::UpstreamUnavailable(
+                        "upstream audio transcription poll attempt timed out".to_string(),
+                    ));
+                }
+            }
         }
     };
     let mut neogate = task

@@ -49,7 +49,7 @@ pub(crate) async fn insert_task(
     let expires_at = Utc::now()
         + ChronoDuration::from_std(retention)
             .unwrap_or_else(|_| ChronoDuration::seconds(2_592_000));
-    sqlx::query(
+    let inserted = sqlx::query(
         r#"
         INSERT INTO task_upstream (
             task_type, upstream_task_id, user_id, project_id, user_key_id,
@@ -58,11 +58,8 @@ pub(crate) async fn insert_task(
             status, terminal, billing_hold, upstream_metadata, next_poll_at, expires_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-        ON CONFLICT (task_type, provider, upstream_task_id) DO UPDATE
-        SET status = EXCLUDED.status,
-            terminal = EXCLUDED.terminal,
-            upstream_metadata = EXCLUDED.upstream_metadata,
-            updated_at = now()
+        ON CONFLICT (user_key_id, task_type, upstream_task_id) DO NOTHING
+        RETURNING id
         "#,
     )
     .bind(task.task_type.as_str())
@@ -86,8 +83,13 @@ pub(crate) async fn insert_task(
     .bind(task.upstream_metadata)
     .bind(next_poll_at)
     .bind(expires_at)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
+    if inserted.is_none() {
+        return Err(AppError::Conflict(
+            "an async task with this upstream id already exists for the API key".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -113,9 +115,9 @@ pub(crate) async fn fetch_task_for_auth(
 pub(crate) async fn claim_due_tasks(
     pool: &PgPool,
     limit: i64,
-    poll_interval: Duration,
-) -> AppResult<Vec<UpstreamTask>> {
-    let next_poll_at = next_poll_at(poll_interval);
+    claim_timeout: Duration,
+) -> AppResult<(Vec<UpstreamTask>, DateTime<Utc>)> {
+    let claimed_until = next_poll_at(claim_timeout);
     let rows = sqlx::query(
         r#"
         WITH due AS (
@@ -140,10 +142,37 @@ pub(crate) async fn claim_due_tasks(
         "#,
     )
     .bind(limit)
-    .bind(next_poll_at)
+    .bind(claimed_until)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(task_from_row).collect()
+    Ok((
+        rows.iter().map(task_from_row).collect::<AppResult<_>>()?,
+        claimed_until,
+    ))
+}
+
+pub(crate) async fn release_task_claim(
+    pool: &PgPool,
+    task_id: DbId,
+    claimed_until: DateTime<Utc>,
+    poll_interval: Duration,
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE task_upstream
+        SET next_poll_at = $3,
+            updated_at = now()
+        WHERE id = $1
+          AND terminal = FALSE
+          AND next_poll_at = $2
+        "#,
+    )
+    .bind(task_id)
+    .bind(claimed_until)
+    .bind(next_poll_at(poll_interval))
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn fetch_stale_terminal_held_tasks(

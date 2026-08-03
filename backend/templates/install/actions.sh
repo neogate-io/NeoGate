@@ -525,7 +525,10 @@ install_node_system() {
         log "$(message node_installing_nodesource)"
         install_node_via_nodesource \
           "https://rpm.nodesource.com/setup_${NODE_REQUIRED_MAJOR}.x"
-        run_as_root dnf install -y nodejs
+        # NodeSource's package replaces the distro Node.js package.  On RPM
+        # systems, packages such as nodejs-full-i18n pin the old nodejs
+        # version and otherwise make dnf reject the upgrade as conflicting.
+        run_as_root dnf install -y --allowerasing nodejs
       elif have_cmd yum; then
         log "$(message node_installing_nodesource)"
         install_node_via_nodesource \

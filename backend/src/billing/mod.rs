@@ -30,7 +30,7 @@ pub use metering::{
     cost_for_billable_usage, estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes,
     parse_usage_from_sse_data,
 };
-pub use token_estimate::estimate_anthropic_input_tokens;
+pub use token_estimate::{estimate_anthropic_input_tokens, estimate_claude_text_tokens};
 pub use types::{
     BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
     DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode, VideoPriceTier,

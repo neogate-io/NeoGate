@@ -14,8 +14,9 @@ use tracing::Instrument as _;
 use crate::{
     auth::UserAuth,
     billing::{
-        parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
-        BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
+        estimate_claude_text_tokens, parse_usage_from_bytes, parse_usage_from_sse_data,
+        BillableUsage, BillingAccounts, BillingCharge, CreditAccountId, DebitHold, Price,
+        SettleRequest, TokenUsage,
     },
     config::{STREAM_IDLE_TIMEOUT, STREAM_KEEP_ALIVE_INTERVAL},
     project::models::UsageRoutingSnapshot,
@@ -476,9 +477,30 @@ impl StreamingRelay {
 
     async fn finish_stream_success(mut self) -> Option<Bytes> {
         let mut ctx = self.ctx.take().expect("stream context finalized once");
-        let token_usage = self.usage.finish();
+        let observed_token_usage = self.usage.finish();
+        let observed_token_usage_state = token_usage_state(observed_token_usage);
+        let responses_output_estimate = self.usage.estimated_responses_output();
+        let responses_terminal_usage_present = self.usage.responses_terminal_usage_present();
+        let responses_terminal_response_id = self
+            .usage
+            .responses_terminal_response_id()
+            .map(ToOwned::to_owned);
         let stream_complete = self.usage.response_complete();
         let stream_failed = self.usage.response_failed();
+        let (token_usage, usage_estimated) = if ctx.path == "/v1/responses"
+            && ctx.streamed
+            && self.status.is_success()
+            && stream_complete
+            && !stream_failed
+        {
+            responses_usage_with_estimate(
+                observed_token_usage,
+                ctx.request_input_tokens_estimate,
+                responses_output_estimate,
+            )
+        } else {
+            (observed_token_usage, false)
+        };
         let missing_terminal =
             streamed_success_missing_terminal(self.status, ctx.streamed, stream_complete);
         let disposition = stream_finish_disposition(self.status, stream_failed, missing_terminal);
@@ -521,6 +543,32 @@ impl StreamingRelay {
                 upstream_cf_ray = ?self.response_metadata.cf_ray,
                 upstream_server_timing = ?self.response_metadata.server_timing,
                 "upstream stream ended before terminal SSE event"
+            );
+        }
+        if ctx.path == "/v1/responses"
+            && ctx.streamed
+            && self.status.is_success()
+            && stream_complete
+            && !stream_failed
+            && observed_token_usage_state != TokenUsageState::Present
+        {
+            tracing::warn!(
+                upstream_path,
+                response_mode,
+                status = self.status.as_u16(),
+                usage_state = observed_token_usage_state.as_str(),
+                usage_estimated,
+                terminal_usage_present = responses_terminal_usage_present,
+                terminal_response_id = ?responses_terminal_response_id.as_deref(),
+                last_signal = ?self.usage.last_signal_summary(),
+                observed_input_tokens = ?observed_token_usage.map(|usage| usage.input_tokens),
+                observed_output_tokens = ?observed_token_usage.map(|usage| usage.output_tokens),
+                observed_cached_input_tokens = ?observed_token_usage.and_then(|usage| usage.cached_input_tokens),
+                observed_reasoning_output_tokens = ?observed_token_usage.and_then(|usage| usage.reasoning_output_tokens),
+                estimated_input_tokens = token_usage.map(|usage| usage.input_tokens),
+                estimated_output_tokens = token_usage.map(|usage| usage.output_tokens),
+                estimated_reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens),
+                "completed Responses stream did not provide meaningful token usage"
             );
         }
         if stream_failed {
@@ -1046,7 +1094,21 @@ impl Drop for StreamingRelay {
         ctx.release_request_permit();
         let status = self.status;
         let stream_complete = self.usage.response_complete();
-        let token_usage = self.usage.finish();
+        let observed_token_usage = self.usage.finish();
+        let responses_output_estimate = self.usage.estimated_responses_output();
+        let (token_usage, usage_estimated) = if ctx.path == "/v1/responses"
+            && ctx.streamed
+            && status.is_success()
+            && stream_complete
+        {
+            responses_usage_with_estimate(
+                observed_token_usage,
+                ctx.request_input_tokens_estimate,
+                responses_output_estimate,
+            )
+        } else {
+            (observed_token_usage, false)
+        };
         let first_response_ms = self.first_response_ms;
         let last_chunk_ms = self.last_chunk_ms;
         let chunks_sent = self.chunks_sent;
@@ -1067,6 +1129,7 @@ impl Drop for StreamingRelay {
                         bytes_sent,
                         largest_chunk_bytes,
                         keep_alive_frames_sent,
+                        usage_estimated,
                         latency_ms = ctx.started.elapsed().as_millis() as i64,
                         "downstream client closed relay stream after completed response"
                     );
@@ -1195,6 +1258,24 @@ impl ResponseUsageParser {
         matches!(self, Self::Sse(parser) if parser.failed)
     }
 
+    fn responses_terminal_usage_present(&self) -> bool {
+        matches!(self, Self::Sse(parser) if parser.responses_terminal_usage_present)
+    }
+
+    fn responses_terminal_response_id(&self) -> Option<&str> {
+        match self {
+            Self::Sse(parser) => parser.responses_terminal_response_id.as_deref(),
+            Self::Json { .. } | Self::Disabled => None,
+        }
+    }
+
+    fn estimated_responses_output(&self) -> ResponsesOutputEstimate {
+        match self {
+            Self::Sse(parser) => parser.estimated_responses_output(),
+            Self::Json { .. } | Self::Disabled => ResponsesOutputEstimate::default(),
+        }
+    }
+
     fn stream_error_summary(&self) -> Option<StreamErrorSummary> {
         match self {
             Self::Sse(parser) => parser.last_error.clone(),
@@ -1261,6 +1342,11 @@ struct ParsedLine {
     event: Option<String>,
     data: Option<String>,
     data_type: Option<String>,
+    responses_terminal_usage_present: bool,
+    responses_terminal_response_id: Option<String>,
+    responses_output_delta: Option<String>,
+    responses_function_arguments_delta: Option<String>,
+    responses_reasoning_delta: Option<String>,
     completed: bool,
     failed: bool,
     done: bool,
@@ -1279,6 +1365,11 @@ pub(crate) struct StreamUsageParser {
     saw_done: bool,
     failed: bool,
     last_error: Option<StreamErrorSummary>,
+    responses_terminal_usage_present: bool,
+    responses_terminal_response_id: Option<String>,
+    responses_output_text: String,
+    responses_function_arguments: String,
+    responses_reasoning: String,
 }
 
 impl StreamUsageParser {
@@ -1296,6 +1387,11 @@ impl StreamUsageParser {
             saw_done: false,
             failed: false,
             last_error: None,
+            responses_terminal_usage_present: false,
+            responses_terminal_response_id: None,
+            responses_output_text: String::new(),
+            responses_function_arguments: String::new(),
+            responses_reasoning: String::new(),
         }
     }
 
@@ -1349,6 +1445,21 @@ impl StreamUsageParser {
     }
 
     fn observe_parsed_line(&mut self, parsed: ParsedLine) {
+        if parsed.responses_terminal_usage_present {
+            self.responses_terminal_usage_present = true;
+        }
+        if parsed.responses_terminal_response_id.is_some() {
+            self.responses_terminal_response_id = parsed.responses_terminal_response_id.clone();
+        }
+        if let Some(delta) = parsed.responses_output_delta.as_deref() {
+            self.responses_output_text.push_str(delta);
+        }
+        if let Some(delta) = parsed.responses_function_arguments_delta.as_deref() {
+            self.responses_function_arguments.push_str(delta);
+        }
+        if let Some(delta) = parsed.responses_reasoning_delta.as_deref() {
+            self.responses_reasoning.push_str(delta);
+        }
         if let Some(usage) = parsed.usage {
             match &mut self.latest {
                 Some(latest) => merge_token_usage(latest, usage),
@@ -1407,10 +1518,24 @@ impl StreamUsageParser {
                 ..Default::default()
             };
         }
+        let data_type = sse_data_type_name(data);
+        let usage = parse_usage_from_sse_data(data);
+        let responses_terminal = data_type
+            .as_deref()
+            .is_some_and(responses_event_is_terminal);
+        let (responses_output_delta, responses_function_arguments_delta, responses_reasoning_delta) =
+            responses_deltas_from_sse_data(data, data_type.as_deref());
         ParsedLine {
-            usage: parse_usage_from_sse_data(data),
+            responses_terminal_usage_present: responses_terminal && usage.is_some(),
+            responses_terminal_response_id: responses_terminal
+                .then(|| response_id_from_sse_data(data))
+                .flatten(),
+            usage,
             data: Some(data.to_string()),
-            data_type: sse_data_type_name(data),
+            data_type,
+            responses_output_delta,
+            responses_function_arguments_delta,
+            responses_reasoning_delta,
             completed: sse_data_has_terminal_type(data),
             failed: sse_data_has_failure_type(data),
             ..Default::default()
@@ -1427,6 +1552,87 @@ impl StreamUsageParser {
         }
         self.latest
     }
+
+    fn estimated_responses_output(&self) -> ResponsesOutputEstimate {
+        let text_tokens = estimate_claude_text_tokens(&self.responses_output_text);
+        let function_arguments_tokens =
+            estimate_claude_text_tokens(&self.responses_function_arguments);
+        let reasoning_tokens = estimate_claude_text_tokens(&self.responses_reasoning);
+        ResponsesOutputEstimate {
+            output_tokens: text_tokens
+                .saturating_add(function_arguments_tokens)
+                .saturating_add(reasoning_tokens),
+            reasoning_tokens,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ResponsesOutputEstimate {
+    output_tokens: i64,
+    reasoning_tokens: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenUsageState {
+    Missing,
+    AllZero,
+    Present,
+}
+
+impl TokenUsageState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::AllZero => "all_zero",
+            Self::Present => "present",
+        }
+    }
+}
+
+fn token_usage_state(usage: Option<TokenUsage>) -> TokenUsageState {
+    let Some(usage) = usage else {
+        return TokenUsageState::Missing;
+    };
+    let meaningful = usage.input_tokens > 0
+        || usage.output_tokens > 0
+        || usage.cached_input_tokens.unwrap_or(0) > 0
+        || usage.cache_creation_input_tokens.unwrap_or(0) > 0
+        || usage.cache_creation_input_tokens_5m.unwrap_or(0) > 0
+        || usage.cache_creation_input_tokens_1h.unwrap_or(0) > 0
+        || usage.reasoning_output_tokens.unwrap_or(0) > 0
+        || usage.audio_input_tokens.unwrap_or(0) > 0
+        || usage.audio_output_tokens.unwrap_or(0) > 0;
+    if meaningful {
+        TokenUsageState::Present
+    } else {
+        TokenUsageState::AllZero
+    }
+}
+
+fn responses_usage_with_estimate(
+    observed: Option<TokenUsage>,
+    input_tokens_estimate: i64,
+    output: ResponsesOutputEstimate,
+) -> (Option<TokenUsage>, bool) {
+    if token_usage_state(observed) == TokenUsageState::Present || output.output_tokens <= 0 {
+        return (observed, false);
+    }
+    (
+        Some(TokenUsage {
+            input_tokens: input_tokens_estimate.max(0),
+            output_tokens: output.output_tokens,
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: (output.reasoning_tokens > 0)
+                .then_some(output.reasoning_tokens),
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        }),
+        true,
+    )
 }
 
 fn merge_token_usage(current: &mut TokenUsage, incoming: TokenUsage) {
@@ -1456,10 +1662,24 @@ fn stream_event_is_terminal(event: &str) -> bool {
         event,
         "message_stop"
             | "response.completed"
+            | "response.done"
             | "response.incomplete"
             | "response.failed"
             | "response.cancelled"
+            | "response.canceled"
             | "error"
+    )
+}
+
+fn responses_event_is_terminal(event: &str) -> bool {
+    matches!(
+        event,
+        "response.completed"
+            | "response.done"
+            | "response.incomplete"
+            | "response.failed"
+            | "response.cancelled"
+            | "response.canceled"
     )
 }
 
@@ -1470,9 +1690,11 @@ fn stream_event_is_failure(event: &str) -> bool {
 fn sse_data_has_terminal_type(data: &str) -> bool {
     data.contains("message_stop") && sse_data_type_is(data, "message_stop")
         || data.contains("response.completed") && sse_data_type_is(data, "response.completed")
+        || data.contains("response.done") && sse_data_type_is(data, "response.done")
         || data.contains("response.incomplete") && sse_data_type_is(data, "response.incomplete")
         || data.contains("response.failed") && sse_data_type_is(data, "response.failed")
         || data.contains("response.cancelled") && sse_data_type_is(data, "response.cancelled")
+        || data.contains("response.canceled") && sse_data_type_is(data, "response.canceled")
         || data.contains("\"error\"") && sse_data_type_is(data, "error")
 }
 
@@ -1487,6 +1709,39 @@ fn sse_data_type_name(data: &str) -> Option<String> {
         .get("type")
         .and_then(|type_| type_.as_str())
         .map(ToString::to_string)
+}
+
+fn response_id_from_sse_data(data: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(data).ok()?;
+    value
+        .get("response")
+        .and_then(|response| response.get("id"))
+        .and_then(Value::as_str)
+        .map(|id| truncate_for_log(id, 256))
+}
+
+fn responses_deltas_from_sse_data(
+    data: &str,
+    data_type: Option<&str>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let Some(data_type) = data_type else {
+        return (None, None, None);
+    };
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return (None, None, None);
+    };
+    let delta = value
+        .get("delta")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    match data_type {
+        "response.output_text.delta" => (delta, None, None),
+        "response.function_call_arguments.delta" => (None, delta, None),
+        "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+            (None, None, delta)
+        }
+        _ => (None, None, None),
+    }
 }
 
 fn sse_data_type_is(data: &str, expected: &str) -> bool {
@@ -2030,6 +2285,176 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"outpu
         );
 
         assert!(parser.completed);
+    }
+
+    #[test]
+    fn stream_usage_parser_tracks_nonzero_responses_terminal_usage() {
+        let mut parser = StreamUsageParser::new(2048);
+
+        parser.observe(
+            br#"data: {"type":"response.created","response":{"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}
+data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}}
+"#,
+        );
+
+        let usage = parser.finish().expect("terminal usage");
+        assert_eq!(token_usage_state(Some(usage)), TokenUsageState::Present);
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 3);
+        assert!(parser.responses_terminal_usage_present);
+        assert_eq!(
+            parser.responses_terminal_response_id.as_deref(),
+            Some("resp_123")
+        );
+    }
+
+    #[test]
+    fn stream_usage_parser_classifies_zero_responses_terminal_usage() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"type":"response.completed","response":{"id":"resp_zero","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}
+"#,
+        );
+
+        let usage = parser.finish().expect("zero terminal usage");
+        assert_eq!(token_usage_state(Some(usage)), TokenUsageState::AllZero);
+        assert!(parser.responses_terminal_usage_present);
+        assert_eq!(
+            parser.responses_terminal_response_id.as_deref(),
+            Some("resp_zero")
+        );
+    }
+
+    #[test]
+    fn stream_usage_parser_distinguishes_placeholder_from_terminal_usage() {
+        let mut parser = StreamUsageParser::new(2048);
+
+        parser.observe(
+            br#"data: {"type":"response.created","response":{"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}
+data: {"type":"response.completed","response":{"id":"resp_placeholder","status":"completed"}}
+"#,
+        );
+
+        let usage = parser.finish().expect("placeholder usage");
+        assert_eq!(token_usage_state(Some(usage)), TokenUsageState::AllZero);
+        assert!(!parser.responses_terminal_usage_present);
+        assert_eq!(
+            parser.responses_terminal_response_id.as_deref(),
+            Some("resp_placeholder")
+        );
+    }
+
+    #[test]
+    fn stream_usage_parser_classifies_missing_responses_usage() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(
+            br#"data: {"type":"response.completed","response":{"id":"resp_missing","status":"completed"}}
+"#,
+        );
+
+        assert_eq!(token_usage_state(parser.finish()), TokenUsageState::Missing);
+        assert!(!parser.responses_terminal_usage_present);
+        assert_eq!(
+            parser.responses_terminal_response_id.as_deref(),
+            Some("resp_missing")
+        );
+    }
+
+    #[test]
+    fn responses_usage_estimate_covers_text_tools_and_reasoning() {
+        let mut parser = StreamUsageParser::new(4096);
+
+        parser.observe(
+            br#"data: {"type":"response.output_text.delta","delta":"Hello world"}
+data: {"type":"response.function_call_arguments.delta","delta":"{\"city\":\"Shanghai\"}"}
+data: {"type":"response.reasoning_summary_text.delta","delta":"Check the request"}
+data: {"type":"response.completed","response":{"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}
+"#,
+        );
+
+        let observed = parser.finish();
+        let output = parser.estimated_responses_output();
+        let (usage, estimated) = responses_usage_with_estimate(observed, 321, output);
+        let usage = usage.expect("estimated usage");
+
+        assert!(estimated);
+        assert_eq!(usage.input_tokens, 321);
+        assert_eq!(usage.output_tokens, output.output_tokens);
+        assert_eq!(usage.reasoning_output_tokens, Some(output.reasoning_tokens));
+        assert!(usage.output_tokens > usage.reasoning_output_tokens.unwrap_or(0));
+    }
+
+    #[test]
+    fn responses_usage_estimate_does_not_override_upstream_usage() {
+        let observed = Some(TokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cached_input_tokens: Some(50),
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: Some(5),
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        });
+
+        let (usage, estimated) = responses_usage_with_estimate(
+            observed,
+            999,
+            ResponsesOutputEstimate {
+                output_tokens: 88,
+                reasoning_tokens: 33,
+            },
+        );
+
+        assert!(!estimated);
+        let usage = usage.expect("upstream usage");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cached_input_tokens, Some(50));
+        assert_eq!(usage.reasoning_output_tokens, Some(5));
+    }
+
+    #[test]
+    fn responses_usage_estimate_requires_observed_output() {
+        let observed = Some(TokenUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_input_tokens: Some(0),
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: Some(0),
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        });
+
+        let (usage, estimated) =
+            responses_usage_with_estimate(observed, 999, ResponsesOutputEstimate::default());
+
+        assert!(!estimated);
+        assert_eq!(token_usage_state(usage), TokenUsageState::AllZero);
+    }
+
+    #[test]
+    fn stream_usage_parser_accepts_responses_terminal_aliases() {
+        for terminal in ["response.done", "response.canceled"] {
+            let mut parser = StreamUsageParser::new(1024);
+            parser.observe(
+                format!(
+                    "event: {terminal}\ndata: {{\"type\":\"{terminal}\",\"response\":{{\"id\":\"resp_alias\"}}}}\n"
+                )
+                .as_bytes(),
+            );
+
+            assert!(parser.completed, "{terminal}");
+            assert_eq!(
+                parser.responses_terminal_response_id.as_deref(),
+                Some("resp_alias")
+            );
+        }
     }
 
     #[test]

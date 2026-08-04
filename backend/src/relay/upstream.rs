@@ -241,6 +241,17 @@ pub(crate) async fn forward_openai_bound(
     path: &str,
     body: Option<Bytes>,
 ) -> AppResult<reqwest::Response> {
+    forward_openai_bound_with_headers(state, upstream, method, path, body, &HeaderMap::new()).await
+}
+
+pub(crate) async fn forward_openai_bound_with_headers(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    path: &str,
+    body: Option<Bytes>,
+    headers: &HeaderMap,
+) -> AppResult<reqwest::Response> {
     let adapter = adapter_for_endpoint(
         &upstream.provider,
         &upstream.base_url,
@@ -252,10 +263,15 @@ pub(crate) async fn forward_openai_bound(
             .http
             .request(method.clone(), url.clone())
             .bearer_auth(&upstream.secret);
+        if let Some(value) = headers.get("accept") {
+            request = request.header("accept", value.clone());
+        }
         if let Some(body) = body.clone() {
-            request = request
-                .header("content-type", "application/json")
-                .body(body);
+            let content_type = headers
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+            request = request.header("content-type", content_type).body(body);
         }
         request
     })

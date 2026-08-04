@@ -319,6 +319,40 @@ impl Selector {
         self.select_from_snapshot(&scope)
     }
 
+    #[cfg(feature = "adapter-haxicloud")]
+    pub(crate) async fn select_matching_endpoint(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        protocol: UpstreamProtocol,
+        model: &str,
+        matches: impl Fn(&ChannelCandidate) -> bool,
+    ) -> AppResult<SelectedUpstream> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let channel = choose::choose_channel_for_request_matching(
+            &snapshot,
+            protocol,
+            model,
+            now,
+            &model_blocks,
+            &[],
+            None,
+            matches,
+        )
+        .ok_or_else(|| {
+            AppError::UpstreamUnavailable(format!(
+                "no available matching upstream channel for {model}"
+            ))
+        })?;
+        let keys = channel_keys(&snapshot, channel);
+        let key = choose_key(channel, keys, model, now, &model_blocks, &[]).ok_or_else(|| {
+            AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
+        })?;
+        self.selected_upstream_from_candidate(secrets, channel, key)
+    }
+
     pub(crate) async fn select_with_affinity(
         &self,
         pool: &PgPool,

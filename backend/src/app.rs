@@ -814,6 +814,7 @@ fn cors_layer_from_origins(cors_allowed_origins: &[String]) -> anyhow::Result<Co
     let allowed_methods = [
         Method::GET,
         Method::POST,
+        Method::PUT,
         Method::PATCH,
         Method::DELETE,
         Method::OPTIONS,

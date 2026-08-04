@@ -1,20 +1,135 @@
-use axum::http::HeaderMap;
+use std::sync::Arc;
+
+use axum::{
+    extract::{OriginalUri, State},
+    http::{HeaderMap, Method},
+    response::Response,
+    routing::{get, post, put},
+    Router,
+};
 use bytes::Bytes;
 use serde_json::{Map, Value};
 
 use super::{AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute};
 use crate::{
+    auth::UserAuth,
     error::{AppError, AppResult},
     relay::{
+        forward_openai_bound_with_headers, raw_upstream_response,
         selector::{SelectedUpstream, UpstreamProtocol},
         upstream_url,
     },
+    AppState,
 };
 
 pub(crate) static HAXICLOUD_ADAPTER: HaxicloudAdapter = HaxicloudAdapter;
 pub(crate) struct HaxicloudAdapter;
 const TASKS_PATH: &str = "/contents/generations/tasks";
 const HAXICLOUD_HOST: &str = "token.haxicloud.com";
+const ASSET_ROUTING_MODEL: &str = "dreamina-seedance-2-0-260128";
+
+pub(crate) fn router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/asset-groups", get(proxy_get).post(proxy_post))
+        .route("/v1/asset-groups/{id}", put(proxy_put).delete(proxy_delete))
+        .route("/v1/assets", post(proxy_post))
+        .route("/v1/assets/upload", post(proxy_post))
+        .route("/v1/assets/sync-upload", post(proxy_post))
+        .route("/v1/assets/sync", post(proxy_post))
+        .route("/v1/assets/importable", get(proxy_get))
+        .route("/v1/assets/import", post(proxy_post))
+        .route("/v1/assets/{id}", get(proxy_get).delete(proxy_delete))
+        .route("/v1/realperson/agreement", post(proxy_post))
+        .route("/v1/realperson/session", post(proxy_post))
+        .route("/v1/realperson/result", post(proxy_post))
+}
+
+async fn proxy_get(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::GET, Bytes::new()).await
+}
+
+async fn proxy_post(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::POST, body).await
+}
+
+async fn proxy_put(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::PUT, body).await
+}
+
+async fn proxy_delete(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::DELETE, Bytes::new()).await
+}
+
+async fn proxy(
+    State(state): State<Arc<AppState>>,
+    _auth: UserAuth,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    method: Method,
+    body: Bytes,
+) -> AppResult<Response> {
+    let upstream = state
+        .selector
+        .select_matching_endpoint(
+            &state.db.pool,
+            &state.secrets,
+            UpstreamProtocol::Openai,
+            ASSET_ROUTING_MODEL,
+            |channel| {
+                super::adapter_for_endpoint(
+                    &channel.provider,
+                    &channel.base_url,
+                    channel.adapter_hint.as_deref(),
+                )
+                .name()
+                    == "haxicloud"
+            },
+        )
+        .await
+        .map_err(|err| match err {
+            AppError::UpstreamUnavailable(_) => AppError::UpstreamUnavailable(
+                "no available HaxiCloud channel for asset or real-person APIs".to_string(),
+            ),
+            err => err,
+        })?;
+
+    let path = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| uri.path());
+    let response = forward_openai_bound_with_headers(
+        &state,
+        &upstream,
+        method,
+        path,
+        (!body.is_empty()).then_some(body),
+        &headers,
+    )
+    .await?;
+    raw_upstream_response(response).await
+}
 
 pub(crate) fn matches_base_url(base_url: &str) -> bool {
     reqwest::Url::parse(base_url)
@@ -282,6 +397,19 @@ mod tests {
             "https://token.haxicloud.com/api/v3/contents/generations/tasks/task_123"
         );
         assert_eq!(log_path, "/contents/generations/tasks/task_123");
+    }
+
+    #[test]
+    fn asset_paths_preserve_v1_and_query_parameters() {
+        let (url, log_path) = HAXICLOUD_ADAPTER.resolve_bound_url(
+            "https://token.haxicloud.com/v1",
+            "/v1/assets/importable?target_group_id=20",
+        );
+        assert_eq!(
+            url,
+            "https://token.haxicloud.com/v1/assets/importable?target_group_id=20"
+        );
+        assert_eq!(log_path, "/v1/assets/importable?target_group_id=20");
     }
 
     #[test]

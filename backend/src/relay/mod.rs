@@ -61,6 +61,8 @@ pub(crate) use request::{
     RelayRequestParams,
 };
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext, StreamUsageParser};
+#[cfg(feature = "adapter-haxicloud")]
+pub(crate) use upstream::forward_openai_bound_with_headers;
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
     log_relay_upstream_failure, relay_upstream_error, upstream_url,
@@ -72,6 +74,7 @@ const UPSTREAM_ERROR_BODY_READ_LIMIT: usize = 64 * 1024;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(crate::provider::adapters::router())
         .route("/v1/models", get(list_openai_models))
         .route("/v1/models/{model_id}", get(retrieve_openai_model))
         .route(
@@ -718,10 +721,8 @@ pub(crate) fn usage_from_context(
     billing: Option<BillingCharge>,
 ) -> UsageInsert {
     let latency_ms = ctx.started.elapsed().as_millis() as i64;
-    let output_tokens_per_second = token_usage.and_then(|usage| {
-        (latency_ms > 0 && usage.output_tokens > 0)
-            .then_some((usage.output_tokens as f64 * 1000.0) / latency_ms as f64)
-    });
+    let output_tokens_per_second =
+        output_tokens_per_second(token_usage.map(|usage| usage.output_tokens), latency_ms);
     let billing_meter = billing
         .as_ref()
         .map_or(ctx.price.billing_meter, |billing| billing.billing_meter);
@@ -782,8 +783,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens);
     let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
     let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
-    let generation_tokens_per_second =
-        generation_tokens_per_second(output_tokens, usage.latency_ms, usage.first_response_ms);
+    let output_tokens_per_second = output_tokens_per_second(output_tokens, usage.latency_ms);
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let responses_chat_fallback = response_mode == "openai_chat_as_openai_response";
@@ -818,7 +818,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     push_opt(&mut info, "cache_write", cache_creation_input_tokens);
     push_opt(&mut info, "reasoning", reasoning_output_tokens);
     push_opt(&mut info, "cost_micros", cost_micros);
-    push_opt_f64(&mut info, "tps", generation_tokens_per_second);
+    push_opt_f64(&mut info, "tps", output_tokens_per_second);
     push_info_request_params(&mut info, &ctx.request_params);
     if usage.relay_attempt > 1 {
         push_field(&mut info, "attempt", usage.relay_attempt);
@@ -945,15 +945,10 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     tracing::debug!("{detail}");
 }
 
-fn generation_tokens_per_second(
-    output_tokens: Option<i64>,
-    latency_ms: i64,
-    first_response_ms: Option<i64>,
-) -> Option<f64> {
+fn output_tokens_per_second(output_tokens: Option<i64>, latency_ms: i64) -> Option<f64> {
     let output_tokens = output_tokens?;
-    let generation_ms = latency_ms.saturating_sub(first_response_ms?);
-    (output_tokens > 0 && generation_ms > 0)
-        .then_some((output_tokens as f64 * 1000.0) / generation_ms as f64)
+    (output_tokens > 0 && latency_ms > 0)
+        .then_some((output_tokens as f64 * 1000.0) / latency_ms as f64)
 }
 
 fn summary_input_tokens(
@@ -1313,10 +1308,11 @@ mod tests {
     }
 
     #[test]
-    fn calculates_generation_rate_after_first_response() {
-        let generation_rate = generation_tokens_per_second(Some(106), 7_864, Some(5_565));
-        assert!((generation_rate.unwrap() - 46.107).abs() < 0.001);
-        assert_eq!(generation_tokens_per_second(Some(106), 7_864, None), None);
+    fn calculates_output_rate_over_total_latency() {
+        let output_rate = output_tokens_per_second(Some(1_206), 43_181);
+        assert!((output_rate.unwrap() - 27.929).abs() < 0.001);
+        assert_eq!(output_tokens_per_second(Some(106), 0), None);
+        assert_eq!(output_tokens_per_second(None, 7_864), None);
     }
 
     #[test]

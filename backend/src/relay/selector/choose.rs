@@ -74,6 +74,28 @@ pub(super) fn choose_channel_for_request<'a>(
     attempted: &[AttemptedUpstream],
     excluded_endpoint_ids: Option<&[DbId]>,
 ) -> Option<&'a ChannelCandidate> {
+    choose_channel_for_request_matching(
+        cache,
+        protocol,
+        model,
+        now,
+        model_blocks,
+        attempted,
+        excluded_endpoint_ids,
+        |_| true,
+    )
+}
+
+pub(super) fn choose_channel_for_request_matching<'a>(
+    cache: &'a RoutingCache,
+    protocol: UpstreamProtocol,
+    model: &str,
+    now: DateTime<Utc>,
+    model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
+    excluded_endpoint_ids: Option<&[DbId]>,
+    matches: impl Fn(&ChannelCandidate) -> bool,
+) -> Option<&'a ChannelCandidate> {
     let availability = ChannelAvailability {
         protocol,
         model,
@@ -96,7 +118,7 @@ pub(super) fn choose_channel_for_request<'a>(
     let mut selected = None;
 
     for channel in indexed {
-        if !channel_is_available(cache, channel, &availability) {
+        if !matches(channel) || !channel_is_available(cache, channel, &availability) {
             continue;
         }
         let weight = channel.weight.max(1);

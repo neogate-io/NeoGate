@@ -283,6 +283,7 @@ export type ChannelModel = {
   channel_id: number
   provider: string
   model: string
+  base_model?: string | null
   enabled: boolean
   status: 'available' | 'missing' | 'disabled'
   runtime_status: 'normal' | 'cooldown' | 'failed'

@@ -10,6 +10,7 @@ import { computed, ref, watch } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import type { Channel } from '../../../types/admin'
 import { copyTextWithMessage } from '../../../utils/clipboard'
+import ChannelBaseModelCell from './ChannelBaseModelCell.vue'
 
 export type ChannelExpandPriceGroup = {
   label: string
@@ -25,6 +26,8 @@ export type ChannelExpandVideoTierRow = {
 
 export type ChannelExpandPriceRow = {
   model: string
+  baseModel: string | null
+  baseModelSaving: boolean
   category: 'text' | 'image' | 'video' | 'audio'
   billingMeterLabel: string
   price: string
@@ -49,6 +52,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   toggleModelRuntime: [channelId: number, model: string, enabled: boolean]
+  updateBaseModel: [channelId: number, model: string, baseModel: string | null]
   editPrice: [channel: Channel]
 }>()
 
@@ -123,6 +127,7 @@ async function copyModelName(model: string) {
         <div v-if="section.key === 'video'" class="channel-expand-video-editor">
           <div class="channel-expand-video-head">
             <span>{{ t('modelName') }}</span>
+            <span>{{ t('baseModel') }}</span>
             <span>{{ t('billingMeter') }}</span>
             <span>{{ t('videoTierResolutions') }}</span>
             <span>{{ t('modelPrice') }}</span>
@@ -153,6 +158,12 @@ async function copyModelName(model: string) {
                 </el-button>
               </el-tooltip>
             </span>
+            <ChannelBaseModelCell
+              :model="item.model"
+              :base-model="item.baseModel"
+              :saving="item.baseModelSaving"
+              @save="emit('updateBaseModel', channel.id, item.model, $event)"
+            />
             <span class="channel-detail-meter">
               <span class="channel-detail-meter-badge">{{ item.videoBillingMode }}</span>
             </span>
@@ -235,6 +246,7 @@ async function copyModelName(model: string) {
         >
           <div class="channel-expand-price-row is-head">
             <span>{{ t('modelName') }}</span>
+            <span>{{ t('baseModel') }}</span>
             <span v-if="section.key === 'image' || section.key === 'audio'">{{
               t('billingMeter')
             }}</span>
@@ -272,6 +284,12 @@ async function copyModelName(model: string) {
                 </el-button>
               </el-tooltip>
             </span>
+            <ChannelBaseModelCell
+              :model="item.model"
+              :base-model="item.baseModel"
+              :saving="item.baseModelSaving"
+              @save="emit('updateBaseModel', channel.id, item.model, $event)"
+            />
             <span
               v-if="section.key === 'image' || section.key === 'audio'"
               class="channel-detail-meter"
@@ -460,13 +478,14 @@ async function copyModelName(model: string) {
   display: grid;
   grid-template-columns:
     minmax(190px, 1fr)
+    minmax(200px, 0.8fr)
     128px
     128px
     240px
     92px
     76px
     132px;
-  min-width: 1012px;
+  min-width: 1224px;
 }
 
 .channel-expand-video-head {
@@ -475,13 +494,14 @@ async function copyModelName(model: string) {
   border-bottom: 1px solid #e2e8f0;
   color: #334155;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 600;
   letter-spacing: 0;
   min-height: 38px;
 }
 
 .channel-expand-video-head > span,
 .channel-expand-video-model-row > .channel-price-model,
+.channel-expand-video-model-row > .channel-base-model,
 .channel-expand-video-model-row > .channel-detail-meter,
 .channel-expand-video-model-row > .channel-detail-status,
 .channel-expand-video-model-row > .channel-detail-runtime-raw,
@@ -502,9 +522,13 @@ async function copyModelName(model: string) {
   text-align: left;
 }
 
-.channel-expand-video-head > span:nth-child(2),
+.channel-expand-video-head > span:nth-child(2) {
+  text-align: left;
+}
+
 .channel-expand-video-head > span:nth-child(3),
 .channel-expand-video-head > span:nth-child(4),
+.channel-expand-video-head > span:nth-child(5),
 .channel-expand-video-model-row > .channel-detail-meter {
   justify-content: center;
   text-align: center;
@@ -534,7 +558,7 @@ async function copyModelName(model: string) {
 
 .channel-video-tier-stack {
   display: grid;
-  grid-column: 3 / 5;
+  grid-column: 4 / 6;
   min-width: 0;
 }
 
@@ -576,6 +600,7 @@ async function copyModelName(model: string) {
   row-gap: 8px;
   grid-template-columns:
     minmax(120px, 1.5fr)
+    minmax(200px, 1fr)
     minmax(160px, 0.7fr)
     minmax(160px, 0.7fr)
     92px
@@ -588,6 +613,7 @@ async function copyModelName(model: string) {
 .channel-expand-price-table.is-image-table .channel-expand-price-row {
   grid-template-columns:
     minmax(120px, 1.4fr)
+    minmax(200px, 1fr)
     104px
     minmax(240px, 1fr)
     92px
@@ -603,7 +629,7 @@ async function copyModelName(model: string) {
   background: #f6f8fb;
   color: #334155;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 600;
   letter-spacing: 0;
   min-height: 38px;
 }
@@ -621,23 +647,23 @@ async function copyModelName(model: string) {
   min-width: 0;
 }
 
-.channel-expand-price-row.is-head span:nth-child(2),
 .channel-expand-price-row.is-head span:nth-child(3),
+.channel-expand-price-row.is-head span:nth-child(4),
 .channel-detail-price {
   text-align: right;
 }
 
-.channel-expand-price-row.is-head span:nth-child(4),
 .channel-expand-price-row.is-head span:nth-child(5),
-.channel-expand-price-row.is-head span:nth-child(6) {
+.channel-expand-price-row.is-head span:nth-child(6),
+.channel-expand-price-row.is-head span:nth-child(7) {
   text-align: center;
 }
 
-.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(2),
 .channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(3),
 .channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(4),
 .channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(5),
-.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(6) {
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(6),
+.channel-expand-price-table.is-image-table .channel-expand-price-row.is-head span:nth-child(7) {
   text-align: center;
 }
 
@@ -696,7 +722,7 @@ async function copyModelName(model: string) {
   font-weight: 400;
 }
 
-.channel-expand-price-row.is-head span:nth-child(4),
+.channel-expand-price-row.is-head span:nth-child(5),
 .channel-detail-status {
   padding-left: 12px;
 }
@@ -737,8 +763,10 @@ async function copyModelName(model: string) {
 }
 
 .channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-price-model,
+.channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-base-model,
 .channel-expand-panel.is-channel-disabled .channel-expand-price-row .channel-detail-price,
 .channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-price-model,
+.channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-base-model,
 .channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-detail-price,
 .channel-expand-panel.is-channel-disabled .channel-expand-video-model-row .channel-detail-meter {
   color: #94a3b8;
@@ -771,6 +799,8 @@ async function copyModelName(model: string) {
 .channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-price-model,
 .channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-base-model,
+.channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-detail-price,
 .channel-expand-price-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-detail-meter,
@@ -789,6 +819,8 @@ async function copyModelName(model: string) {
 
 .channel-expand-video-model-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-price-model,
+.channel-expand-video-model-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
+  .channel-base-model,
 .channel-expand-video-model-row.is-disabled:not(.is-missing):not(.is-upstream-missing)
   .channel-detail-price,
 .channel-expand-video-model-row.is-disabled:not(.is-missing):not(.is-upstream-missing)

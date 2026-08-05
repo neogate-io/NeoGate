@@ -3,7 +3,8 @@ import type { PricingTemplate } from '../types/admin'
 import {
   estimatedVideoTokensPerSecond,
   findPricingTemplate,
-  pricingReferenceModelAliases
+  pricingReferenceModelAliases,
+  resolvePricingReference
 } from './pricing'
 
 describe('pricingReferenceModelAliases', () => {
@@ -20,9 +21,9 @@ describe('pricingReferenceModelAliases', () => {
   })
 
   it('ignores billing display prefixes on Dreamina Seedance ids', () => {
-    expect(
-      pricingReferenceModelAliases('【按秒计费】dreamina-seedance-2-0-260128')
-    ).toContain('doubao-seedance-2.0')
+    expect(pricingReferenceModelAliases('【按秒计费】dreamina-seedance-2-0-260128')).toContain(
+      'doubao-seedance-2.0'
+    )
   })
 
   it('finds token-priced reference templates for dated doubao seedance model ids', () => {
@@ -43,6 +44,26 @@ describe('pricingReferenceModelAliases', () => {
     expect(findPricingTemplate([template], 'doubao', 'doubao-seedance-1-0-pro-fast-251015')).toBe(
       template
     )
+  })
+
+  it('resolves reference pricing from the base model instead of the upstream model', () => {
+    const template: PricingTemplate = {
+      id: 2,
+      provider: 'doubao',
+      model: 'doubao-seedance-2.0',
+      input_price_micros: 1_000_000,
+      output_price_micros: 2_000_000,
+      billing_meter: 'token',
+      pricing_basis: 'token',
+      source: 'local',
+      enabled: true,
+      created_at: '',
+      updated_at: ''
+    }
+
+    expect(
+      resolvePricingReference([template], 'openai', 'sd_2.0_discount', 'doubao-seedance-2.0')
+    ).toEqual({ provider: 'doubao', model: 'doubao-seedance-2.0' })
   })
 })
 

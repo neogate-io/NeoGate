@@ -147,7 +147,7 @@ export function updateChannel(
 export function updateChannelModel(
   channelId: number,
   model: string,
-  payload: { enabled: boolean }
+  payload: { enabled?: boolean; base_model?: string | null }
 ) {
   return adminRequest<ChannelModel>(
     `/api/admin/channels/${channelId}/models/${encodeURIComponent(model)}`,

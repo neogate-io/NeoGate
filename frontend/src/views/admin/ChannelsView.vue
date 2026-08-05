@@ -63,6 +63,7 @@ import {
   isChannelPriceConfigured,
   priceKey,
   pricingReferenceModelAliases,
+  resolvePricingReference,
   resolvedVideoTokensPerSecondEstimate
 } from '../../utils/pricing'
 import {
@@ -149,6 +150,7 @@ const priceDialogOpen = ref(false)
 const savingPrices = ref(false)
 const channelTableRef = ref()
 const togglingRuntimeKeys = useReactiveSet<string>()
+const updatingBaseModelKeys = useReactiveSet<string>()
 const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
 const appliedChannelSearch = ref('')
@@ -299,14 +301,19 @@ function channelModelRecords(row: Channel) {
   )
 }
 
+function modelClassificationReference(provider: string, model: string, baseModel?: string | null) {
+  return resolvePricingReference(templates.value, provider, model, baseModel)
+}
+
 function channelDiagnosticCapabilities(row: Channel) {
   const models = channelModelRecords(row)
   return models.reduce(
     (capabilities, item) => {
+      const reference = modelClassificationReference(row.provider, item.model, item.base_model)
       const meter =
         item.billing_meter ??
         priceByModel.value.get(channelPriceKey(row.id, item.model))?.billing_meter
-      const displayMeter = displayBillingMeterForModel(row.provider, item.model, meter)
+      const displayMeter = displayBillingMeterForModel(reference.provider, reference.model, meter)
       if (displayMeter === 'image') {
         capabilities.image = true
       } else if (displayMeter === 'video') {
@@ -368,11 +375,15 @@ function channelPriceStatus(row: Channel) {
 function channelPriceRows(row: Channel) {
   return channelModelRecords(row).map((channelModel) => {
     const model = channelModel.model
+    const baseModel = channelModel.base_model ?? null
+    const baseModelSaving = isBaseModelUpdating(row.id, model)
     const price = priceByModel.value.get(channelPriceKey(row.id, model))
     const hasConfiguredPrice = channelModel.price_configured || isChannelPriceConfigured(price)
     if (pricingLoading.value && prices.value.length === 0) {
       return {
         model,
+        baseModel,
+        baseModelSaving,
         disabled: false,
         missing: false,
         billingEnabled: false,
@@ -430,10 +441,15 @@ function channelPriceRows(row: Channel) {
       : t('priceMissing')
     const modelStatus = channelModel.status
     const upstreamMissing = modelStatus === 'missing'
-    const modelCategory = modelCategoryForModel(row.provider, model)
-    const defaultBillingMeter = defaultBillingMeterForModel(row.provider, model)
+    const reference = modelClassificationReference(row.provider, model, channelModel.base_model)
+    const modelCategory = modelCategoryForModel(reference.provider, reference.model)
+    const defaultBillingMeter = defaultBillingMeterForModel(reference.provider, reference.model)
     const displayBillingMeter = billingMeter ?? defaultBillingMeter
-    const billingMeterLabel = billingMeterDisplayLabel(row.provider, model, displayBillingMeter)
+    const billingMeterLabel = billingMeterDisplayLabel(
+      reference.provider,
+      reference.model,
+      displayBillingMeter
+    )
     const formattedPriceParts = {
       input: inputPrice,
       output: outputPrice,
@@ -455,10 +471,12 @@ function channelPriceRows(row: Channel) {
             }
           ]
         : displayBillingMeter === 'video'
-          ? videoTierRows(row.provider, model, price)
+          ? videoTierRows(reference.provider, reference.model, price)
           : []
     return {
       model,
+      baseModel,
+      baseModelSaving,
       disabled: !modelEnabled,
       missing: !hasConfiguredPrice,
       billingEnabled,
@@ -652,6 +670,10 @@ function isRuntimeToggling(channelId: number, model: string) {
   return togglingRuntimeKeys.has(runtimeKey(channelId, model))
 }
 
+function isBaseModelUpdating(channelId: number, model: string) {
+  return updatingBaseModelKeys.has(runtimeKey(channelId, model))
+}
+
 function isChannelToggling(channelId: number) {
   return togglingChannelIds.has(channelId)
 }
@@ -806,9 +828,11 @@ function audioTranscriptionModeForModel(provider: string, model: string) {
   if (capabilities.some((value) => value?.realtime_audio_transcription === true)) {
     return 'realtime'
   }
-  return capabilities
-    .map(inferredAudioTranscriptionMode)
-    .find((mode): mode is 'file' => mode === 'file') ?? null
+  return (
+    capabilities
+      .map(inferredAudioTranscriptionMode)
+      .find((mode): mode is 'file' => mode === 'file') ?? null
+  )
 }
 
 function canUseAudioBilling(provider: string, model: string) {
@@ -881,12 +905,12 @@ function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm
   if (form.canUseVideoBilling && template.billing_meter === 'token') return true
   return (
     template.billing_meter ===
-    (form.billingMeter ?? defaultBillingMeterForModel(form.provider, form.model))
+    (form.billingMeter ?? defaultBillingMeterForModel(form.referenceProvider, form.referenceModel))
   )
 }
 
 function findApplicablePricingTemplate(form: ChannelPriceForm) {
-  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  const template = findPricingTemplate(templates.value, form.referenceProvider, form.referenceModel)
   return template && templateAppliesToForm(template, form) ? template : undefined
 }
 
@@ -1048,6 +1072,10 @@ function priceDialogReferenceVideoTiersForModel(provider: string, model: string)
   const tiers = referenceVideoTiersForModel(provider, model)
   if (tiers.length > 0) return tiers
   return videoTokenReferenceTierFromTemplate(findPricingTemplate(templates.value, provider, model))
+}
+
+function referenceVideoTiersForForm(form: ChannelPriceForm) {
+  return priceDialogReferenceVideoTiersForModel(form.referenceProvider, form.referenceModel)
 }
 
 function isMainlandReferenceVideoTier(tier: ReferenceVideoTier) {
@@ -1279,15 +1307,20 @@ function openPriceDialog(row: Channel) {
   for (const model of channelModelList(row)) {
     const key = channelPriceKey(row.id, model)
     const price = priceByModel.value.get(key)
-    const template = findPricingTemplate(templates.value, row.provider, model)
-    const supportsImageBilling = canUseImageBilling(row.provider, model)
-    const supportsVideoBilling = canUseVideoBilling(row.provider, model)
+    const channelModel = channelModelRecords(row).find((item) => item.model === model)
+    const reference = modelClassificationReference(row.provider, model, channelModel?.base_model)
+    const template = findPricingTemplate(templates.value, reference.provider, reference.model)
+    const supportsImageBilling = canUseImageBilling(reference.provider, reference.model)
+    const supportsVideoBilling = canUseVideoBilling(reference.provider, reference.model)
     const referenceVideoTiers = supportsVideoBilling
-      ? priceDialogReferenceVideoTiersForModel(row.provider, model)
+      ? priceDialogReferenceVideoTiersForModel(reference.provider, reference.model)
       : []
-    const lockedBillingMeter = lockedBillingMeterForReferencePrice(row.provider, model)
+    const lockedBillingMeter = lockedBillingMeterForReferencePrice(
+      reference.provider,
+      reference.model
+    )
     const lockedVideoBillingMode = lockedVideoBillingModeForReferenceTiers(referenceVideoTiers)
-    const defaultBillingMeter = defaultBillingMeterForModel(row.provider, model)
+    const defaultBillingMeter = defaultBillingMeterForModel(reference.provider, reference.model)
     const savedBillingMeter =
       price?.billing_meter === 'image' && supportsImageBilling
         ? 'image'
@@ -1322,8 +1355,10 @@ function openPriceDialog(row: Channel) {
       channelId: row.id,
       provider: row.provider,
       model,
-      modelCategory: modelCategoryForModel(row.provider, model),
-      audioTranscriptionMode: audioTranscriptionModeForModel(row.provider, model),
+      referenceProvider: reference.provider,
+      referenceModel: reference.model,
+      modelCategory: modelCategoryForModel(reference.provider, reference.model),
+      audioTranscriptionMode: audioTranscriptionModeForModel(reference.provider, reference.model),
       billingMeter,
       videoBillingMode,
       videoPriceTiers: initialVideoPriceTiers,
@@ -1342,7 +1377,8 @@ function openPriceDialog(row: Channel) {
       enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
       hasPrice: hasEnabledBillablePrice(price, billingMeter),
       hasPriceRecord: Boolean(price),
-      billingMeterLocked: Boolean(lockedBillingMeter) || isBillingMeterLocked(row.provider, model),
+      billingMeterLocked:
+        Boolean(lockedBillingMeter) || isBillingMeterLocked(reference.provider, reference.model),
       videoBillingModeLocked: Boolean(lockedVideoBillingMode),
       canUseImageBilling: supportsImageBilling,
       canUseVideoBilling: supportsVideoBilling
@@ -1354,8 +1390,7 @@ function openPriceDialog(row: Channel) {
 function hasReferencePrice(form: (typeof priceForms)[string]) {
   if (form.canUseVideoBilling) {
     return (
-      priceDialogReferenceVideoTiersForModel(form.provider, form.model).length > 0 ||
-      Boolean(findApplicablePricingTemplate(form))
+      referenceVideoTiersForForm(form).length > 0 || Boolean(findApplicablePricingTemplate(form))
     )
   }
   return Boolean(findApplicablePricingTemplate(form))
@@ -1367,7 +1402,7 @@ function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
 
 function referencePriceSummary(form: (typeof priceForms)[string]) {
   if (form.canUseVideoBilling) {
-    const tiers = priceDialogReferenceVideoTiersForModel(form.provider, form.model)
+    const tiers = referenceVideoTiersForForm(form)
     if (tiers.length > 0) {
       return tiers
         .map((tier) => {
@@ -1418,11 +1453,9 @@ function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVid
   const resolutions = new Set(
     splitCommaList(tier.resolutionsText).map((resolution) => resolution.toLowerCase())
   )
-  const referenceTier = priceDialogReferenceVideoTiersForModel(form.provider, form.model).find(
-    (item) => {
-      return referenceVideoTierMatchesFormResolutions(item, resolutions)
-    }
-  )
+  const referenceTier = referenceVideoTiersForForm(form).find((item) => {
+    return referenceVideoTierMatchesFormResolutions(item, resolutions)
+  })
   if (!referenceTier) return ''
 
   return referenceVideoTierSummary(referenceTier)
@@ -1430,7 +1463,7 @@ function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVid
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
   if (form.canUseVideoBilling) {
-    const tiers = priceDialogReferenceVideoTiersForModel(form.provider, form.model)
+    const tiers = referenceVideoTiersForForm(form)
     if (tiers.length > 0) {
       form.videoBillingMode = defaultVideoBillingModeForReferenceTiers(tiers)
       form.billingMeter = 'video'
@@ -1575,6 +1608,21 @@ async function toggleChannelModelRuntime(channelId: number, model: string, enabl
     try {
       await updateChannelModel(channelId, model, { enabled })
       await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+async function updateChannelBaseModel(channelId: number, model: string, baseModel: string | null) {
+  const key = runtimeKey(channelId, model)
+  if (updatingBaseModelKeys.has(key)) return
+
+  await updatingBaseModelKeys.withItem(key, async () => {
+    try {
+      await updateChannelModel(channelId, model, { base_model: baseModel })
+      await loadChannels()
+      ElMessage.success(t('baseModelSaved'))
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -1747,6 +1795,7 @@ onMounted(loadInitialData)
               :rows="channelPriceRows(row)"
               @edit-price="openPriceDialog"
               @toggle-model-runtime="toggleChannelModelRuntime"
+              @update-base-model="updateChannelBaseModel"
             />
           </template>
         </el-table-column>

@@ -138,3 +138,17 @@ export function findPricingTemplate(templates: PricingTemplate[], provider: stri
     enabledTemplates.find((template) => template.provider.trim() !== normalizedProvider)
   )
 }
+
+export function resolvePricingReference(
+  templates: PricingTemplate[],
+  provider: string,
+  model: string,
+  baseModel?: string | null
+) {
+  const referenceModel = baseModel?.trim() || model
+  const template = findPricingTemplate(templates, provider, referenceModel)
+  return {
+    provider: template?.provider ?? provider,
+    model: template?.model ?? referenceModel
+  }
+}

@@ -22,6 +22,8 @@ export type ChannelPriceForm = {
   channelId: number
   provider: string
   model: string
+  referenceProvider: string
+  referenceModel: string
   modelCategory: 'text' | 'image' | 'video' | 'audio'
   audioTranscriptionMode: 'file' | 'realtime' | null
   billingMeter: BillingMeter | null

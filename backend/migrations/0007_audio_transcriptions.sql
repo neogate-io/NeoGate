@@ -58,3 +58,6 @@ UPDATE provider
 SET enabled = FALSE,
     updated_at = now()
 WHERE code IN ('custom', 'newapi', 'sub2api');
+
+-- 新增模型时记录匹配到的参考价格模型。已有数据不回填。
+ALTER TABLE channel_model ADD COLUMN base_model TEXT;

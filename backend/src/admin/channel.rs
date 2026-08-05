@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -74,6 +77,7 @@ pub struct ChannelModelRecord {
     pub channel_id: DbId,
     pub provider: String,
     pub model: String,
+    pub base_model: Option<String>,
     pub enabled: bool,
     pub status: String,
     pub runtime_status: String,
@@ -187,6 +191,17 @@ pub struct UpdateChannelKeyRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateChannelModelRequest {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_base_model")]
+    pub base_model: Option<Option<String>>,
+}
+
+fn deserialize_nullable_base_model<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 fn default_true() -> bool {
@@ -398,9 +413,16 @@ pub async fn update_channel_model(
         ensure_channel_model_has_enabled_price(state, channel_id, model).await?;
     }
 
+    let update_base_model = req.base_model.is_some();
+    let base_model = req
+        .base_model
+        .flatten()
+        .and_then(|value| trimmed_non_empty(Some(&value)).map(str::to_string));
+
     let row = sqlx::query(
         "UPDATE channel_model
          SET enabled = COALESCE($3, enabled),
+             base_model = CASE WHEN $4 THEN $5 ELSE base_model END,
              status = CASE
                  WHEN COALESCE($3, enabled) = FALSE THEN 'disabled'
                  WHEN status = 'disabled' THEN 'available'
@@ -430,6 +452,8 @@ pub async fn update_channel_model(
     .bind(channel_id)
     .bind(model)
     .bind(req.enabled)
+    .bind(update_base_model)
+    .bind(base_model)
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -912,15 +936,16 @@ async fn upsert_endpoint(
 async fn sync_channel_models_for_channel(
     tx: &mut Transaction<'_, Postgres>,
     channel_id: DbId,
-    _provider: &str,
+    provider: &str,
 ) -> AppResult<()> {
     let rows = sqlx::query("SELECT models FROM channel_endpoint WHERE channel_id = $1")
         .bind(channel_id)
         .fetch_all(&mut **tx)
         .await?;
 
+    let templates = base_model_templates(tx).await?;
     let mut active_models = Vec::<String>::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for row in rows {
         let models: Vec<String> = row.try_get("models")?;
         for model in models {
@@ -929,13 +954,15 @@ async fn sync_channel_models_for_channel(
                 continue;
             }
             let price_configured = model_has_enabled_price(tx, channel_id, model).await?;
+            let base_model = find_base_model(&templates, provider, model);
             active_models.push(model.to_string());
             sqlx::query(
                 "INSERT INTO channel_model
-                 (channel_id, model, enabled, status, runtime_status, last_seen_at)
-                 VALUES ($1, $2, $3, 'available', 'normal', now())
+                 (channel_id, model, base_model, enabled, status, runtime_status, last_seen_at)
+                 VALUES ($1, $2, $3, $4, 'available', 'normal', now())
                  ON CONFLICT (channel_id, model)
                  DO UPDATE SET
+                     base_model = EXCLUDED.base_model,
                      enabled = EXCLUDED.enabled,
                      status = 'available',
                      missing_since = NULL,
@@ -944,6 +971,7 @@ async fn sync_channel_models_for_channel(
             )
             .bind(channel_id)
             .bind(model)
+            .bind(base_model)
             .bind(price_configured)
             .execute(&mut **tx)
             .await?;
@@ -968,6 +996,204 @@ async fn sync_channel_models_for_channel(
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct BaseModelTemplate {
+    provider: String,
+    model: String,
+}
+
+async fn base_model_templates(
+    tx: &mut Transaction<'_, Postgres>,
+) -> AppResult<Vec<BaseModelTemplate>> {
+    let rows = sqlx::query(
+        "SELECT provider, model
+         FROM pricing_template
+         WHERE enabled = TRUE
+           AND source <> 'confirmed_price'
+         ORDER BY provider ASC, model ASC",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(BaseModelTemplate {
+                provider: row.try_get("provider")?,
+                model: row.try_get("model")?,
+            })
+        })
+        .collect()
+}
+
+fn find_base_model(templates: &[BaseModelTemplate], provider: &str, model: &str) -> Option<String> {
+    let provider = provider.trim();
+    let model = model.trim().to_lowercase();
+    let aliases = pricing_reference_model_aliases(&model);
+    let matching: Vec<&BaseModelTemplate> = templates
+        .iter()
+        .filter(|template| {
+            pricing_reference_model_aliases(&template.model)
+                .iter()
+                .any(|alias| aliases.contains(alias))
+        })
+        .collect();
+
+    matching
+        .iter()
+        .copied()
+        .find(|template| {
+            template.provider.trim() == provider
+                && template.model.trim().eq_ignore_ascii_case(&model)
+        })
+        .or_else(|| {
+            matching
+                .iter()
+                .copied()
+                .find(|template| template.provider.trim() == provider)
+        })
+        .or_else(|| {
+            matching.iter().copied().find(|template| {
+                template.provider.trim() != provider
+                    && template.model.trim().eq_ignore_ascii_case(&model)
+            })
+        })
+        .or_else(|| {
+            matching
+                .iter()
+                .copied()
+                .find(|template| template.provider.trim() != provider)
+        })
+        .map(|template| template.model.clone())
+}
+
+fn pricing_reference_model_aliases(model: &str) -> HashSet<String> {
+    let mut aliases = HashSet::new();
+    let mut queue = VecDeque::from([model.trim().to_lowercase()]);
+
+    while let Some(alias) = queue.pop_front() {
+        if alias.is_empty() || !aliases.insert(alias.clone()) {
+            continue;
+        }
+
+        let without_display_prefix = strip_model_display_prefixes(&alias);
+        if without_display_prefix != alias {
+            queue.push_back(without_display_prefix);
+        }
+
+        let dotted_version = dot_version_alias(&alias);
+        if dotted_version != alias {
+            queue.push_back(dotted_version);
+        }
+
+        if let Some(without_date) = strip_six_digit_suffix(&alias) {
+            queue.push_back(without_date.clone());
+            let dotted_without_date = dot_version_alias(&without_date);
+            if dotted_without_date != alias {
+                queue.push_back(dotted_without_date);
+            }
+        }
+
+        if let Some(without_resolution) = strip_resolution_suffix(&alias) {
+            queue.push_back(without_resolution);
+        }
+
+        if let Some((prefix, remainder)) = alias.split_once(':') {
+            if !prefix.is_empty() && prefix.chars().all(|value| value.is_ascii_digit()) {
+                queue.push_back(remainder.to_string());
+            }
+        }
+
+        if let Some(seedance) = alias.strip_prefix("dreamina-seedance-") {
+            queue.push_back(format!("seedance-{seedance}"));
+        }
+
+        if let Some(seedance) = alias.strip_prefix("seedance-") {
+            queue.push_back(format!("doubao-seedance-{seedance}"));
+        }
+
+        let seedance = alias.strip_prefix("doubao-").unwrap_or(&alias);
+        if matches!(seedance, "seedance-2.0-fast" | "seedance-2.0-mini") {
+            queue.push_back(format!("{alias}-1080p"));
+        }
+    }
+
+    aliases
+}
+
+fn strip_model_display_prefixes(model: &str) -> String {
+    let mut value = model;
+    loop {
+        let closing = if value.starts_with('【') {
+            '】'
+        } else if value.starts_with('[') {
+            ']'
+        } else {
+            break;
+        };
+        let Some(index) = value.find(closing) else {
+            break;
+        };
+        value = value[index + closing.len_utf8()..].trim_start();
+    }
+    value.to_string()
+}
+
+fn strip_six_digit_suffix(model: &str) -> Option<String> {
+    let (base, suffix) = model.rsplit_once('-')?;
+    (suffix.len() == 6 && suffix.chars().all(|value| value.is_ascii_digit()))
+        .then(|| base.to_string())
+}
+
+fn strip_resolution_suffix(model: &str) -> Option<String> {
+    ["-480p", "-720p", "-1080p", "-4k"]
+        .iter()
+        .find_map(|suffix| model.strip_suffix(suffix).map(str::to_string))
+}
+
+fn dot_version_alias(model: &str) -> String {
+    let chars: Vec<char> = model.chars().collect();
+    let mut result = String::with_capacity(model.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] != '-' {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let major_start = index + 1;
+        let mut major_end = major_start;
+        while major_end < chars.len() && chars[major_end].is_ascii_digit() {
+            major_end += 1;
+        }
+        if major_end == major_start || major_end >= chars.len() || chars[major_end] != '-' {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let minor_start = major_end + 1;
+        let mut minor_end = minor_start;
+        while minor_end < chars.len() && chars[minor_end].is_ascii_digit() {
+            minor_end += 1;
+        }
+        if minor_end == minor_start || (minor_end < chars.len() && chars[minor_end] != '-') {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        result.push('-');
+        result.extend(&chars[major_start..major_end]);
+        result.push('.');
+        result.extend(&chars[minor_start..minor_end]);
+        index = minor_end;
+    }
+
+    result
 }
 
 async fn model_has_enabled_price(
@@ -1072,7 +1298,7 @@ async fn models_by_channel(
     }
 
     let rows = sqlx::query(AssertSqlSafe(format!(
-        "SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.enabled,
+        "SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.base_model, cm.enabled,
                 cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
                 cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
                 cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
@@ -1187,6 +1413,7 @@ fn channel_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelModel
         channel_id: row.try_get("channel_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
+        base_model: row.try_get("base_model")?,
         enabled: row.try_get("enabled")?,
         status: row.try_get("status")?,
         runtime_status: row.try_get("runtime_status")?,
@@ -1381,5 +1608,78 @@ async fn detect_and_update_channel_endpoint_hints(state: &AppState, channel_id: 
             .cache_invalidator
             .invalidate(state, crate::cache::InvalidationEvent::Routing)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        find_base_model, pricing_reference_model_aliases, BaseModelTemplate,
+        UpdateChannelModelRequest,
+    };
+
+    fn template(provider: &str, model: &str) -> BaseModelTemplate {
+        BaseModelTemplate {
+            provider: provider.to_string(),
+            model: model.to_string(),
+        }
+    }
+
+    #[test]
+    fn base_model_aliases_normalize_upstream_model_variants() {
+        let aliases = pricing_reference_model_aliases("【按秒计费】dreamina-seedance-2-0-260128");
+
+        assert!(aliases.contains("doubao-seedance-2.0"));
+    }
+
+    #[test]
+    fn base_model_match_prefers_same_provider_reference() {
+        let templates = vec![
+            template("other", "doubao-seedance-1.0-pro-fast"),
+            template("doubao", "doubao-seedance-1.0-pro-fast"),
+        ];
+
+        assert_eq!(
+            find_base_model(&templates, "doubao", "doubao-seedance-1-0-pro-fast-251015").as_deref(),
+            Some("doubao-seedance-1.0-pro-fast")
+        );
+    }
+
+    #[test]
+    fn base_model_match_can_use_cross_provider_reference() {
+        let templates = vec![template("doubao", "doubao-seedance-2.0")];
+
+        assert_eq!(
+            find_base_model(
+                &templates,
+                "openai",
+                "[per second] dreamina-seedance-2-0-260128"
+            )
+            .as_deref(),
+            Some("doubao-seedance-2.0")
+        );
+    }
+
+    #[test]
+    fn base_model_match_returns_none_for_unknown_model() {
+        let templates = vec![template("openai", "gpt-5")];
+
+        assert_eq!(find_base_model(&templates, "openai", "unknown-model"), None);
+    }
+
+    #[test]
+    fn channel_model_update_distinguishes_missing_null_and_named_base_model() {
+        let missing: UpdateChannelModelRequest = serde_json::from_value(serde_json::json!({}))
+            .expect("missing base_model should deserialize");
+        let cleared: UpdateChannelModelRequest =
+            serde_json::from_value(serde_json::json!({ "base_model": null }))
+                .expect("null base_model should deserialize");
+        let named: UpdateChannelModelRequest =
+            serde_json::from_value(serde_json::json!({ "base_model": "gpt-5" }))
+                .expect("named base_model should deserialize");
+
+        assert_eq!(missing.base_model, None);
+        assert_eq!(cleared.base_model, Some(None));
+        assert_eq!(named.base_model, Some(Some("gpt-5".to_string())));
     }
 }

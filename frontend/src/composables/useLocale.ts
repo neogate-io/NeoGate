@@ -11,7 +11,7 @@ import {
 const localeStorageKey = 'neogate_locale'
 const storedLocale =
   typeof localStorage === 'undefined' ? null : localStorage.getItem(localeStorageKey)
-const locale = ref<Locale>(isLocale(storedLocale) ? storedLocale : defaultLocale)
+export const locale = ref<Locale>(isLocale(storedLocale) ? storedLocale : defaultLocale)
 
 export function useLocale() {
   function t(key: MessageKey, params?: TranslateParams) {

@@ -1,5 +1,8 @@
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { ApiError, readApiErrorPayload } from '../utils/errors'
+import { translate } from '../i18n'
+import { locale } from '../composables/useLocale'
 import { router } from '../router'
 
 export type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -99,6 +102,7 @@ function handleAuthFailure(err: unknown) {
     return
   }
 
+  ElMessage.warning(translate(locale.value, 'sessionExpired'))
   auth.clearToken()
   void router
     .replace({

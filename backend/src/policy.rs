@@ -20,10 +20,7 @@ use crate::{
             PricingTemplateRecord, PricingTemplateSyncResult, SyncPricingTemplatesRequest,
             UpsertChannelPriceRequest,
         },
-        provider::{
-            ensure_builtin_manual_provider_by_code, list_providers, provider_default_endpoints,
-            record_provider_models,
-        },
+        provider::{list_providers, provider_default_endpoints, record_provider_models},
         setting::{
             test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,
             UpsertSmtpSettingRequest,
@@ -436,7 +433,6 @@ pub async fn setup_upstream_models_for_state(
             "upstream api key is required".to_string(),
         ));
     }
-    ensure_builtin_manual_provider_by_code(state, provider).await?;
     provider_default_endpoints(state, provider)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider}")))?;

@@ -16,8 +16,8 @@ use crate::{
 
 use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
-    ensure_builtin_manual_provider_by_code, provider_default_endpoint_base_url,
-    provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
+    provider_default_endpoint_base_url, provider_default_endpoints, record_provider_models,
+    OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -210,7 +210,6 @@ pub async fn create_channel(
     if provider_code.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
     }
-    ensure_builtin_manual_provider_by_code(state, &provider_code).await?;
     ensure_provider_exists(state, &provider_code).await?;
     let endpoints = normalize_create_endpoints(state, &provider_code, &req).await?;
     let endpoint_models = models_from_endpoints(&endpoints);

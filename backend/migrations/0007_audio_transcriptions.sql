@@ -40,6 +40,8 @@ ALTER TABLE usage_daily VALIDATE CONSTRAINT usage_daily_billing_meter_check;
 
 UPDATE provider SET display_name = 'OpenAI 兼容' WHERE code = 'openai' AND display_name = 'OpenAI 官方';
 UPDATE provider SET display_name = 'Anthropic 兼容' WHERE code = 'anthropic' AND display_name = 'Anthropic 官方';
+UPDATE provider SET default_openai_base_url = '' WHERE code = 'openai';
+UPDATE provider SET default_anthropic_base_url = '' WHERE code = 'anthropic';
 
 -- 上游 endpoint 的 adapter 类型 hint，用于在 provider 字段不再携带适配信息时（如"openai 兼容"渠道）
 -- 显式标记所需适配层。目前支持 'newapi'，null 表示按 provider 默认规则选取。
@@ -51,3 +53,8 @@ ALTER TABLE task_upstream ADD COLUMN adapter_hint TEXT;
 -- 上游任务 ID 只在调用方 API Key 范围内唯一，不应跨租户按 provider 去重。
 ALTER TABLE task_upstream
     DROP CONSTRAINT IF EXISTS task_upstream_task_type_provider_upstream_task_id_key;
+
+UPDATE provider
+SET enabled = FALSE,
+    updated_at = now()
+WHERE code IN ('custom', 'newapi', 'sub2api');

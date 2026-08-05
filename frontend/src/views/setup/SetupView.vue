@@ -46,11 +46,7 @@ import {
   readModelFetchError,
   readSmtpTestError
 } from '../../utils/errors'
-import {
-  isManualBaseUrlProvider,
-  sortProvidersForDisplay,
-  splitCommaList
-} from '../../utils/channel'
+import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
@@ -139,8 +135,6 @@ const setupForm = reactive({
   protocol: 'openai' as Protocol,
   channelName: '',
   baseUrl: '',
-  openAiBaseUrl: '',
-  anthropicBaseUrl: '',
   secret: '',
   models: ''
 })
@@ -368,9 +362,6 @@ const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
 const providerOptions = computed(() => sortProvidersForDisplay(providers.value))
-const isManualBaseUrlProviderSelected = computed(() =>
-  Boolean(selectedProvider.value && isManualBaseUrlProvider(selectedProvider.value.code))
-)
 const bootstrapMissingDatabase = computed(() => !status.value?.database_configured)
 const clusterBlocked = computed(
   () => status.value?.bootstrap_required && status.value.runtime_mode === 'distributed'
@@ -985,52 +976,22 @@ function isBusinessStepDone(step: BusinessSetupStep) {
 function applyProviderDefaults() {
   const provider = selectedProvider.value
   if (!provider) return
-  if (isManualBaseUrlProvider(provider.code)) {
-    setupForm.channelName = ''
-    setupForm.baseUrl = ''
-    setupForm.openAiBaseUrl = ''
-    setupForm.anthropicBaseUrl = ''
-    setupForm.protocol = 'openai'
-    return
-  }
 
   setupForm.channelName = provider.display_name
-  setupForm.openAiBaseUrl = ''
-  setupForm.anthropicBaseUrl = ''
-  const endpoint =
+  const defaultEndpoint =
     provider.default_endpoints.find((item) => item.protocol === 'openai' && item.base_url) ??
     provider.default_endpoints.find((item) => item.protocol === 'anthropic' && item.base_url)
-  if (endpoint?.protocol === 'openai' || endpoint?.protocol === 'anthropic') {
-    setupForm.protocol = endpoint.protocol
-  }
-  setupForm.baseUrl = endpoint?.base_url || ''
+  setupForm.protocol =
+    defaultEndpoint?.protocol === 'anthropic' || provider.code === 'anthropic'
+      ? 'anthropic'
+      : 'openai'
+  setupForm.baseUrl = defaultEndpoint?.base_url || ''
 }
 
 function setupEndpointsForSubmit(models: string[]) {
   const provider = selectedProvider.value
   const endpointModels = [...models]
-  if (!provider || isManualBaseUrlProvider(provider.code)) {
-    const endpoints: SetupEndpointPayload[] = []
-    const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
-    const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
-    if (openAiBaseUrl) {
-      endpoints.push({
-        protocol: 'openai',
-        base_url: openAiBaseUrl,
-        models: endpointModels,
-        enabled: true
-      })
-    }
-    if (anthropicBaseUrl) {
-      endpoints.push({
-        protocol: 'anthropic',
-        base_url: anthropicBaseUrl,
-        models: endpointModels,
-        enabled: true
-      })
-    }
-    return endpoints
-  }
+  if (!provider) return []
 
   const endpoints: SetupEndpointPayload[] = []
   for (const endpoint of provider.default_endpoints) {
@@ -1049,26 +1010,6 @@ function setupEndpointsForSubmit(models: string[]) {
 }
 
 function setupModelFetchEndpoint() {
-  if (isManualBaseUrlProviderSelected.value) {
-    const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
-    if (openAiBaseUrl) {
-      return {
-        protocol: 'openai' as const,
-        base_url: openAiBaseUrl
-      }
-    }
-
-    const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
-    if (anthropicBaseUrl) {
-      return {
-        protocol: 'anthropic' as const,
-        base_url: anthropicBaseUrl
-      }
-    }
-
-    return null
-  }
-
   const baseUrl = setupForm.baseUrl.trim()
   return baseUrl
     ? {
@@ -1492,21 +1433,7 @@ onMounted(load)
                   :placeholder="t('channelNamePlaceholder')"
                 />
               </el-form-item>
-              <template v-if="isManualBaseUrlProviderSelected">
-                <el-form-item :label="t('openAiBaseUrl')">
-                  <el-input
-                    v-model="setupForm.openAiBaseUrl"
-                    :placeholder="t('baseUrlPlaceholder')"
-                  />
-                </el-form-item>
-                <el-form-item :label="t('anthropicBaseUrl')">
-                  <el-input
-                    v-model="setupForm.anthropicBaseUrl"
-                    :placeholder="t('anthropicBaseUrlPlaceholder')"
-                  />
-                </el-form-item>
-              </template>
-              <el-form-item v-else :label="t('baseUrl')">
+              <el-form-item :label="t('baseUrl')">
                 <el-input v-model="setupForm.baseUrl" :placeholder="t('baseUrlPlaceholder')" />
               </el-form-item>
             </div>

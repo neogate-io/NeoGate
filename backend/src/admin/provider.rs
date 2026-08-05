@@ -10,15 +10,6 @@ use crate::{
     AppState,
 };
 
-pub const CUSTOM_PROVIDER_CODE: &str = "custom";
-pub const NEWAPI_PROVIDER_CODE: &str = "newapi";
-pub const SUB2API_PROVIDER_CODE: &str = "sub2api";
-const CUSTOM_PROVIDER_DISPLAY_NAME: &str = "自定义";
-const CUSTOM_PROVIDER_NAME: &str = "Custom";
-const NEWAPI_PROVIDER_DISPLAY_NAME: &str = "NewAPI";
-const NEWAPI_PROVIDER_NAME: &str = "NewAPI";
-const SUB2API_PROVIDER_DISPLAY_NAME: &str = "Sub2API";
-const SUB2API_PROVIDER_NAME: &str = "Sub2API";
 pub const OPENAI_OAUTH_PROTOCOL: &str = "openai_oauth";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,34 +57,6 @@ pub(crate) fn catalog_audio_transcription_adapter(
     })
 }
 
-struct BuiltinManualProvider {
-    code: &'static str,
-    display_name: &'static str,
-    name: &'static str,
-    sort_order: i32,
-}
-
-const BUILTIN_MANUAL_PROVIDERS: &[BuiltinManualProvider] = &[
-    BuiltinManualProvider {
-        code: CUSTOM_PROVIDER_CODE,
-        display_name: CUSTOM_PROVIDER_DISPLAY_NAME,
-        name: CUSTOM_PROVIDER_NAME,
-        sort_order: 0,
-    },
-    BuiltinManualProvider {
-        code: NEWAPI_PROVIDER_CODE,
-        display_name: NEWAPI_PROVIDER_DISPLAY_NAME,
-        name: NEWAPI_PROVIDER_NAME,
-        sort_order: 1,
-    },
-    BuiltinManualProvider {
-        code: SUB2API_PROVIDER_CODE,
-        display_name: SUB2API_PROVIDER_DISPLAY_NAME,
-        name: SUB2API_PROVIDER_NAME,
-        sort_order: 2,
-    },
-];
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderRecord {
     pub id: i64,
@@ -114,8 +77,6 @@ pub struct ProviderDefaultEndpointRecord {
 }
 
 pub async fn list_providers(state: &AppState) -> AppResult<Vec<ProviderRecord>> {
-    ensure_builtin_manual_providers(state).await?;
-
     let rows = sqlx::query(
         "SELECT id, code, display_name, name,
                 default_openai_base_url, default_openai_oauth_base_url, default_anthropic_base_url,
@@ -172,53 +133,6 @@ pub async fn provider_default_endpoints(
 
     row.map(|row| provider_default_endpoints_from_row(&row))
         .transpose()
-}
-
-pub async fn ensure_builtin_manual_provider_by_code(state: &AppState, code: &str) -> AppResult<()> {
-    let Some(provider) = BUILTIN_MANUAL_PROVIDERS
-        .iter()
-        .find(|provider| provider.code == code)
-    else {
-        return Ok(());
-    };
-
-    ensure_builtin_manual_provider_record(state, provider).await
-}
-
-async fn ensure_builtin_manual_providers(state: &AppState) -> AppResult<()> {
-    for provider in BUILTIN_MANUAL_PROVIDERS {
-        ensure_builtin_manual_provider_record(state, provider).await?;
-    }
-    Ok(())
-}
-
-async fn ensure_builtin_manual_provider_record(
-    state: &AppState,
-    provider: &BuiltinManualProvider,
-) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO provider
-         (code, display_name, name, default_openai_base_url,
-          default_openai_oauth_base_url, default_anthropic_base_url, enabled, sort_order)
-         VALUES ($1, $2, $3, '', '', '', TRUE, $4)
-         ON CONFLICT (code) DO UPDATE
-         SET display_name = EXCLUDED.display_name,
-             name = EXCLUDED.name,
-             default_openai_base_url = EXCLUDED.default_openai_base_url,
-             default_openai_oauth_base_url = EXCLUDED.default_openai_oauth_base_url,
-             default_anthropic_base_url = EXCLUDED.default_anthropic_base_url,
-             enabled = TRUE,
-             sort_order = EXCLUDED.sort_order,
-             updated_at = now()",
-    )
-    .bind(provider.code)
-    .bind(provider.display_name)
-    .bind(provider.name)
-    .bind(provider.sort_order)
-    .execute(&state.db.pool)
-    .await?;
-
-    Ok(())
 }
 
 pub async fn record_provider_models(

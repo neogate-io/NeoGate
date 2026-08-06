@@ -84,6 +84,28 @@ GlobalAI OPC limits the fast model to `480p/720p`, the regular model to
 `480p/720p/1080p`, and duration to 4-15 seconds. Environment variables
 override `backend/.env`; output is saved under `tests/output/openai_video/`.
 
+The two-asset reference test first creates and polls two image assets through
+`/v1/assets`, then creates a video using `asset://asset_*` references:
+
+```bash
+NEOGATE_API_KEY='your NeoGate user API key' \
+NEOGATE_VIDEO_MODEL='sd_2.0_discount' \
+NEOGATE_VIDEO_SIZE='1280x720' \
+NEOGATE_VIDEO_RESOLUTION='720p' \
+NEOGATE_VIDEO_SECONDS='5' \
+python3 -m unittest -v \
+  backend.tests.smoke.test_openai_video.test_videos_create_with_two_asset_references
+```
+
+The source image URLs can be overridden with `NEOGATE_ASSET_IMAGE_URL_1` and
+`NEOGATE_ASSET_IMAGE_URL_2`. Asset polling waits up to 300 seconds by default;
+override it with `NEOGATE_ASSET_POLL_TIMEOUT_SECONDS`. Asset creation is not
+billed; video generation calls a real upstream and incurs charges.
+
+Every API and CDN request/response is saved as separate `*_request.json` and
+`*_response.json` files under `tests/output/openai_video/`. Authorization is
+omitted; binary video responses record headers and byte size instead of body.
+
 ## OpenAI Audio Transcription Smoke Test
 
 The audio transcription smoke test lives in `smoke/test_openai_audio.py`. It

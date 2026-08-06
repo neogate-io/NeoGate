@@ -144,11 +144,12 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
 
     fn normalize_asset_response(&self, body: Bytes) -> AppResult<NormalizedAsset> {
         let value: Value = serde_json::from_slice(&body)?;
-        let object = value.as_object().ok_or_else(|| {
-            AppError::BadRequest("GlobalAI asset response must be an object".into())
+        let object = asset_payload(&value).ok_or_else(|| {
+            AppError::BadRequest("GlobalAI asset response must contain an asset object".into())
         })?;
         let upstream_asset_id = object
             .get("assetId")
+            .or_else(|| object.get("asset_id"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
@@ -156,6 +157,7 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
             })?;
         let asset_type = object
             .get("assetType")
+            .or_else(|| object.get("asset_type"))
             .and_then(Value::as_str)
             .and_then(AssetType::parse)
             .ok_or_else(|| {
@@ -169,6 +171,7 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
         );
         let error_message = object
             .get("errorMessage")
+            .or_else(|| object.get("error_message"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
@@ -339,6 +342,19 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
         }
         Ok(Some(url))
     }
+}
+
+fn asset_payload(value: &Value) -> Option<&Map<String, Value>> {
+    let object = value.as_object()?;
+    if object.contains_key("assetId") || object.contains_key("asset_id") {
+        return Some(object);
+    }
+    for key in ["data", "result", "output", "asset"] {
+        if let Some(payload) = object.get(key).and_then(asset_payload) {
+            return Some(payload);
+        }
+    }
+    None
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {
@@ -859,6 +875,18 @@ mod tests {
                 .unwrap(),
             "assetId://upstream-asset"
         );
+    }
+
+    #[test]
+    fn normalizes_wrapped_asset_response() {
+        let body = Bytes::from_static(
+            br#"{"code":200,"data":{"asset_id":"wrapped-asset","asset_type":"Image","status":"ACTIVE","error_message":null}}"#,
+        );
+        let normalized = GLOBALAIOPC_ADAPTER.normalize_asset_response(body).unwrap();
+        assert_eq!(normalized.upstream_asset_id, "wrapped-asset");
+        assert_eq!(normalized.asset_type, AssetType::Image);
+        assert_eq!(normalized.status, "active");
+        assert_eq!(normalized.error_message, None);
     }
 
     #[test]

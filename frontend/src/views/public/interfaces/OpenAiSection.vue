@@ -46,6 +46,8 @@ function endpointDescription(name: string, method: string, path: string) {
     'POST /v1/videos/edits': '编辑已有视频。',
     'POST /v1/videos/extensions': '扩展已有视频时长或内容。',
     'POST /v1/videos/{video_id}/remix': '基于已有视频重新生成版本。',
+    'POST /v1/assets': '通过公网 URL 创建可复用的图片、视频或音频素材。',
+    'GET /v1/assets/{asset_id}': '查询并刷新素材处理状态。',
     'POST /v1/embeddings': '创建文本向量嵌入。',
     'POST /v1/audio/speech': '将文本转换为语音。',
     'POST /v1/audio/transcriptions': '将音频转写为文本。',
@@ -90,7 +92,8 @@ function endpointDescription(name: string, method: string, path: string) {
     'POST /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs': '提交工具调用结果。',
     'POST /v1/realtime/sessions': '创建实时语音/多模态会话。',
     'POST /v1/realtime/transcription_sessions': '创建实时转写会话。',
-    'GET /v1/realtime?model=…': '建立实时语音识别 WebSocket 会话（当前对接 qwen3-asr-flash-realtime，按音频时长计费）。',
+    'GET /v1/realtime?model=…':
+      '建立实时语音识别 WebSocket 会话（当前对接 qwen3-asr-flash-realtime，按音频时长计费）。',
     'POST/GET /v1/evals': '创建或列出评测。',
     'GET/PATCH/DELETE /v1/evals/{eval_id}': '查询、更新或删除评测。',
     'POST/GET /v1/evals/{eval_id}/runs': '创建或列出评测运行。',
@@ -109,9 +112,12 @@ function endpointDescription(name: string, method: string, path: string) {
     'POST /v1/videos': 'Create a video generation task.',
     'GET /v1/videos/{video_id}': 'Retrieve video task status.',
     'GET /v1/videos/{video_id}/content': 'Download completed video content.',
+    'POST /v1/assets': 'Create a reusable image, video, or audio asset from a public URL.',
+    'GET /v1/assets/{asset_id}': 'Retrieve and refresh asset processing status.',
     'POST /v1/embeddings': 'Create text embeddings.',
     'POST /v1/audio/transcriptions': 'Transcribe uploaded audio to text.',
-    'GET /v1/realtime?model=…': 'Open a realtime speech-transcription WebSocket session (currently backed by qwen3-asr-flash-realtime, billed per audio second).',
+    'GET /v1/realtime?model=…':
+      'Open a realtime speech-transcription WebSocket session (currently backed by qwen3-asr-flash-realtime, billed per audio second).',
     'POST /v1/moderations': 'Moderate input content.'
   }
 
@@ -318,6 +324,48 @@ const openAiVideoCreateWithReference = computed(
   -F "input_reference=@reference.png;type=image/png"`
 )
 
+const openAiAssetCreate = computed(
+  () => `curl ${openAiBaseUrl.value}/assets \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "sd_2.0_discount",
+    "type": "image",
+    "url": "https://example.com/reference-1.png",
+    "name": "reference-1"
+  }'`
+)
+
+const openAiAssetRetrieve = computed(
+  () => `curl ${openAiBaseUrl.value}/assets/asset_123 \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY"`
+)
+
+const openAiVideoCreateWithAssets = computed(
+  () => `curl ${openAiBaseUrl.value}/videos \\
+  -H "Authorization: Bearer YOUR_NEOGATE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "sd_2.0_discount",
+    "prompt": "Combine both references into a cinematic tracking shot",
+    "seconds": 5,
+    "ratio": "16:9",
+    "resolution": "720p",
+    "content": [
+      {
+        "type": "image_url",
+        "role": "reference_image",
+        "image_url": { "url": "asset://asset_reference_1" }
+      },
+      {
+        "type": "image_url",
+        "role": "reference_image",
+        "image_url": { "url": "asset://asset_reference_2" }
+      }
+    ]
+  }'`
+)
+
 const openAiVideoRetrieve = computed(
   () => `curl ${openAiBaseUrl.value}/videos/video_123 \\
   -H "Authorization: Bearer YOUR_NEOGATE_API_KEY"`
@@ -414,7 +462,7 @@ const content = computed(() => {
       openAiTextAsyncTitle: '2.3 文本生成（异步）',
       openAiImageTitle: '2.4 图片生成',
       openAiImageAsyncTitle: '2.5 图片生成（异步）',
-      openAiVideoTitle: '2.6 视频生成',
+      openAiVideoTitle: '2.6 视频与素材',
       openAiAudioTitle: '2.7 音频转写',
       openAiEmbeddingsTitle: '2.8 向量嵌入',
       openAiModelsTitle: '2.9 模型列表',
@@ -445,6 +493,10 @@ const content = computed(() => {
         ['POST', `${openAiBaseUrl.value}/videos`, '创建视频任务'],
         ['GET', `${openAiBaseUrl.value}/videos/{video_id}`, '查询视频任务'],
         ['GET', `${openAiBaseUrl.value}/videos/{video_id}/content`, '下载视频内容']
+      ],
+      openAiAssetPaths: [
+        ['POST', openAiBaseUrl.value + '/assets', '创建素材（NeoGate 扩展）'],
+        ['GET', openAiBaseUrl.value + '/assets/{asset_id}', '查询素材状态（NeoGate 扩展）']
       ],
       openAiAudioPaths: [
         ['POST', `${openAiBaseUrl.value}/audio/transcriptions`, '将音频转写为文本']
@@ -596,7 +648,8 @@ const content = computed(() => {
           title: 'Responses Image Task',
           method: 'POST',
           path: `${openAiBaseUrl.value}/responses`,
-          description: '通过 Responses 的 image_generation 工具创建图片后台任务；编辑时传入 input_image 并设置 action=edit。',
+          description:
+            '通过 Responses 的 image_generation 工具创建图片后台任务；编辑时传入 input_image 并设置 action=edit。',
           requestParams: [
             ['model', 'string，必填', 'Responses 主模型。'],
             ['input', 'string | array，必填', '文生图或图生图输入。'],
@@ -618,13 +671,20 @@ const content = computed(() => {
           title: 'Videos Create',
           method: 'POST',
           path: `${openAiBaseUrl.value}/videos`,
-          description: '创建视频生成任务。',
+          description: '创建视频生成任务；支持 OpenAI 单参考图输入及 NeoGate 多素材扩展。',
           requestParams: [
             ['model', 'string，必填', '视频模型，例如 sora-2。'],
             ['prompt', 'string，必填', '视频内容描述。'],
             ['input_reference', 'file | object', '可选参考图。'],
+            ['content[]', 'array', 'NeoGate 扩展。传入一个或多个图片、视频或音频参考素材。'],
             ['size', 'string', '视频尺寸。'],
-            ['seconds', 'string | number', '视频时长。']
+            ['seconds / duration', 'string | number', '视频时长；duration 为 NeoGate 扩展别名。'],
+            [
+              'ratio / resolution',
+              'string',
+              'NeoGate 扩展。宽高比和输出清晰度；可用值以模型能力为准。'
+            ],
+            ['generate_audio', 'boolean', 'NeoGate 扩展。请求生成随视频音频；是否支持取决于模型。']
           ],
           responseFields: [
             ['id', 'string', '视频任务 ID。'],
@@ -646,6 +706,45 @@ const content = computed(() => {
           ]
         }
       ],
+      openAiAssetInterfaces: [
+        {
+          title: 'Assets Create',
+          method: 'POST',
+          path: openAiBaseUrl.value + '/assets',
+          description:
+            '通过公网 URL 创建可复用的图片、视频或音频素材。素材按项目共享，不直接暴露上游素材 ID。',
+          requestParams: [
+            ['model', 'string，必填', '具备素材能力的视频模型。'],
+            ['type', 'image | video | audio，必填', '素材类型，必须与后续视频引用字段匹配。'],
+            [
+              'url',
+              'string，必填',
+              '公网 HTTP/HTTPS URL；不支持 base64、data URL、multipart 或本地地址。'
+            ],
+            ['name', 'string', '可选名称，最多 50 个 Unicode 字符。']
+          ],
+          responseFields: [
+            ['id', 'string', 'NeoGate 素材 ID，格式为 asset_*。'],
+            ['type', 'string', '素材类型。'],
+            ['url', 'string', '创建时提交的公网 URL。'],
+            ['name', 'string | null', '素材名称。'],
+            ['status', 'string', 'processing、active、failed、expired 或 deleted。'],
+            ['error', 'string', '仅在失败时返回。']
+          ]
+        },
+        {
+          title: 'Assets Retrieve',
+          method: 'GET',
+          path: openAiBaseUrl.value + '/assets/{asset_id}',
+          description: '查询素材并刷新处理状态；素材访问按当前项目隔离。',
+          requestParams: [['asset_id', 'string，必填', '创建素材返回的 asset_* ID。']],
+          responseFields: [
+            ['id', 'string', 'NeoGate 素材 ID。'],
+            ['status', 'string', 'processing、active、failed、expired 或 deleted。'],
+            ['error', 'string', '仅在失败时返回。']
+          ]
+        }
+      ],
       openAiAudioInterfaces: [
         {
           title: 'Audio Transcriptions',
@@ -656,7 +755,11 @@ const content = computed(() => {
             ['file', 'file，必填', '待转写的音频文件。'],
             ['model', 'string，必填', '音频转写模型。'],
             ['language / languages[]', 'string | array', '语言提示；不可与另一项同时使用。'],
-            ['prompt / keywords[]', 'string | array', 'Fun-ASR-Flash 上下文提示，总长度不超过 400 字符。'],
+            [
+              'prompt / keywords[]',
+              'string | array',
+              'Fun-ASR-Flash 上下文提示，总长度不超过 400 字符。'
+            ],
             ['response_format', 'json | text | verbose_json | srt | vtt', '响应格式，默认 json。'],
             ['timestamp_granularities[]', 'word | segment', 'verbose_json 的词级或句段级时间戳。'],
             ['stream', 'boolean', 'Fun-ASR-Flash 返回 transcript.text.delta/done SSE。'],
@@ -704,8 +807,12 @@ const content = computed(() => {
       videoWorkflowTitle: '视频生成流程',
       videoWorkflowItems: [
         [
+          '准备素材（可选）',
+          '调用 /v1/assets 创建素材，并轮询到 active；素材创建不产生视频生成费用。'
+        ],
+        [
           '创建任务',
-          '调用 /v1/videos 创建视频任务，可选择纯文本 prompt 或上传 input_reference 参考图。'
+          '调用 /v1/videos 创建任务。单参考图可使用 input_reference；多参考素材使用 NeoGate 扩展 content[]。'
         ],
         ['查询状态', '通过 /v1/videos/{video_id} 查询任务状态、进度和失败原因。'],
         ['下载内容', '任务完成后调用 /v1/videos/{video_id}/content 下载 MP4 文件。']
@@ -713,15 +820,23 @@ const content = computed(() => {
       videoNotes: [
         [
           '参考图上传',
-          '带参考图的视频创建使用 multipart/form-data，input_reference 字段传入图片文件。'
+          'OpenAI 兼容模式使用 multipart/form-data 的 input_reference 上传一张图片；NeoGate 扩展可在 JSON content[] 中引用公网 URL 或 asset://asset_*。'
+        ],
+        [
+          '多参考素材',
+          'content[] 支持图片、视频和音频类型；可用数量、角色组合和媒体能力以所选模型及渠道为准。'
+        ],
+        [
+          '素材约束',
+          'asset:// 引用必须属于当前项目、类型匹配且状态为 active；同一请求中的素材必须绑定到同一可用上游。'
         ],
         [
           '任务状态',
           '返回 status 为 queued、in_progress、completed 或 failed；失败时查看 error 字段。'
         ]
       ],
-      endpointHeaders: ['模块', '方法', '官方路径', '接口说明', '状态'],
-      openAiIntro: `OpenAI 兼容接口统一使用 Bearer Token 认证。Base URL 填写 ${siteName.value} 的 /v1 地址。下表按 OpenAI 官方 API reference 列出接口族；其他接口会在状态列说明当前支持情况。`,
+      endpointHeaders: ['模块', '方法', '接口路径', '接口说明', '状态'],
+      openAiIntro: `接口统一使用 Bearer Token 认证。Base URL 填写 ${siteName.value} 的 /v1 地址。下表包含 OpenAI 兼容接口和 ${siteName.value} 扩展接口；扩展能力会在状态列或说明中明确标注。`,
       openAiAuthItems: [
         ['Base URL', openAiBaseUrl.value],
         ['认证头', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
@@ -798,7 +913,15 @@ const content = computed(() => {
           '已支持（含流式）'
         ],
         ['Images', 'POST', '/v1/images/variations', 'model=dall-e-2, image, size, n', '已支持'],
-        ['Videos', 'POST', '/v1/videos', 'model, prompt, input_reference, size, seconds', '已支持'],
+        [
+          'Videos',
+          'POST',
+          '/v1/videos',
+          'model, prompt, input_reference/content, size, seconds',
+          '已支持（含 NeoGate 多素材扩展）'
+        ],
+        ['Assets', 'POST', '/v1/assets', 'model, type, url, name', '已支持（NeoGate 扩展）'],
+        ['Assets', 'GET', '/v1/assets/{asset_id}', 'asset_id', '已支持（NeoGate 扩展）'],
         ['Videos', 'GET', '/v1/videos', 'limit, after, order', '暂未支持'],
         ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', '已支持'],
         ['Videos', 'DELETE', '/v1/videos/{video_id}', 'video_id', '暂未支持'],
@@ -1157,7 +1280,11 @@ const content = computed(() => {
         ['tools[].action', 'generate | edit | auto', '控制生成、编辑或由模型自动决定动作。'],
         ['tools[].size', 'string', '图片尺寸，例如 1024x1024、1536x1024、1024x1536 或 auto。'],
         ['tools[].quality', 'string', '图片质量，例如 auto、low、medium、high。'],
-        ['tools[].background', 'string', '背景模式，例如 transparent 或 opaque；取决于所选模型和上游能力。'],
+        [
+          'tools[].background',
+          'string',
+          '背景模式，例如 transparent 或 opaque；取决于所选模型和上游能力。'
+        ],
         ['tools[].output_format', 'string', '图片输出格式，例如 png、jpeg 或 webp。'],
         [
           'background',
@@ -1193,7 +1320,7 @@ const content = computed(() => {
         ['error', 'object | null', '失败时包含 code 与 message；成功时通常为空。'],
         ['usage', 'object | null', `终态返回的用量信息，${siteName.value} 会用于记录和结算。`]
       ],
-      openAiVideo: `Videos API 按 OpenAI 官方异步任务模型转发。创建视频后会返回 video job，可通过查询接口轮询状态；任务完成后使用 content 接口下载 MP4。${siteName.value} 当前支持创建、查询和下载内容，列表、删除、编辑、扩展和 remix 暂未支持。`,
+      openAiVideo: `Videos API 按 OpenAI 异步任务模型转发，${siteName.value} 另提供通用素材 API 和多参考素材扩展。创建视频后通过查询接口轮询状态，完成后使用 content 接口下载视频。当前支持创建、查询和下载；列表、删除、编辑、扩展和 remix 暂未支持。`,
       videoRequestParams: [
         [
           'model',
@@ -1204,7 +1331,12 @@ const content = computed(() => {
         [
           'input_reference',
           'object | file',
-          '可选参考图；官方 JSON 结构可传 image_url 或 file_id，multipart 调用可上传参考文件。'
+          'OpenAI 兼容的单参考图。JSON 传 image_url，或用 multipart 上传一张图片；当前不支持 file_id。'
+        ],
+        [
+          'content[]',
+          'array',
+          'NeoGate 扩展。使用 image_url、video_url 或 audio_url 传多个公网 URL 或 asset://asset_* 引用，并通过 role 指定用途。'
         ],
         [
           'size',
@@ -1212,6 +1344,10 @@ const content = computed(() => {
           '视频尺寸，例如 720x1280、1280x720、1024x1792 或 1792x1024；可用尺寸以模型和上游为准。'
         ],
         ['seconds', 'string | number', '视频时长，例如 4、8 或 12 秒；可用时长以模型和上游为准。'],
+        ['duration', 'integer', 'NeoGate 扩展。seconds 的别名；可用范围以模型和渠道为准。'],
+        ['ratio', 'string', 'NeoGate 扩展。输出宽高比，例如 16:9、9:16 或 1:1。'],
+        ['resolution', 'string', 'NeoGate 扩展。输出清晰度，例如 480p、720p 或 1080p。'],
+        ['generate_audio', 'boolean', 'NeoGate 扩展。为支持的模型请求同步生成音频。'],
         ['video.id', 'string', '编辑或扩展视频时引用已完成的视频 ID。'],
         ['after / limit / order', 'string | number', '列表接口分页和排序参数；当前暂未支持。']
       ],
@@ -1240,7 +1376,7 @@ const content = computed(() => {
     openAiTextAsyncTitle: '2.3 Text generation async',
     openAiImageTitle: '2.4 Images',
     openAiImageAsyncTitle: '2.5 Images async',
-    openAiVideoTitle: '2.6 Videos',
+    openAiVideoTitle: '2.6 Videos and assets',
     openAiAudioTitle: '2.7 Audio transcription',
     openAiEmbeddingsTitle: '2.8 Embeddings',
     openAiModelsTitle: '2.9 Models',
@@ -1271,6 +1407,14 @@ const content = computed(() => {
       ['POST', `${openAiBaseUrl.value}/videos`, 'Create video task'],
       ['GET', `${openAiBaseUrl.value}/videos/{video_id}`, 'Retrieve video task'],
       ['GET', `${openAiBaseUrl.value}/videos/{video_id}/content`, 'Download video content']
+    ],
+    openAiAssetPaths: [
+      ['POST', openAiBaseUrl.value + '/assets', 'Create asset (NeoGate extension)'],
+      [
+        'GET',
+        openAiBaseUrl.value + '/assets/{asset_id}',
+        'Retrieve asset status (NeoGate extension)'
+      ]
     ],
     openAiAudioPaths: [
       ['POST', `${openAiBaseUrl.value}/audio/transcriptions`, 'Transcribe audio to text']
@@ -1426,7 +1570,8 @@ const content = computed(() => {
         title: 'Responses Image Task',
         method: 'POST',
         path: `${openAiBaseUrl.value}/responses`,
-        description: 'Create an image background task through the Responses image_generation tool. For edits, provide input_image and set action=edit.',
+        description:
+          'Create an image background task through the Responses image_generation tool. For edits, provide input_image and set action=edit.',
         requestParams: [
           ['model', 'string, required', 'Responses model.'],
           ['input', 'string | array, required', 'Text-to-image or image-to-image input.'],
@@ -1452,13 +1597,33 @@ const content = computed(() => {
         title: 'Videos Create',
         method: 'POST',
         path: `${openAiBaseUrl.value}/videos`,
-        description: 'Create a video generation task.',
+        description:
+          'Create a video generation task with an OpenAI-compatible single image or NeoGate multi-asset extensions.',
         requestParams: [
           ['model', 'string, required', 'Video model, such as sora-2.'],
           ['prompt', 'string, required', 'Video description.'],
           ['input_reference', 'file | object', 'Optional reference image.'],
+          [
+            'content[]',
+            'array',
+            'NeoGate extension for one or more image, video, or audio references.'
+          ],
           ['size', 'string', 'Video size.'],
-          ['seconds', 'string | number', 'Video duration.']
+          [
+            'seconds / duration',
+            'string | number',
+            'Video duration; duration is a NeoGate extension alias.'
+          ],
+          [
+            'ratio / resolution',
+            'string',
+            'NeoGate extensions for aspect ratio and output resolution. Available values depend on the model.'
+          ],
+          [
+            'generate_audio',
+            'boolean',
+            'NeoGate extension requesting generated audio when supported by the model.'
+          ]
         ],
         responseFields: [
           ['id', 'string', 'Video task ID.'],
@@ -1480,6 +1645,52 @@ const content = computed(() => {
         ]
       }
     ],
+    openAiAssetInterfaces: [
+      {
+        title: 'Assets Create',
+        method: 'POST',
+        path: openAiBaseUrl.value + '/assets',
+        description:
+          'Create a reusable image, video, or audio asset from a public URL. Assets are shared within a project and upstream asset IDs are never exposed.',
+        requestParams: [
+          ['model', 'string, required', 'A video model that supports assets.'],
+          [
+            'type',
+            'image | video | audio, required',
+            'Asset type; it must match the video reference field used later.'
+          ],
+          [
+            'url',
+            'string, required',
+            'Public HTTP/HTTPS URL. Base64, data URLs, multipart uploads, and local addresses are not supported.'
+          ],
+          ['name', 'string', 'Optional name, limited to 50 Unicode characters.']
+        ],
+        responseFields: [
+          ['id', 'string', 'NeoGate asset ID in asset_* format.'],
+          ['type', 'string', 'Asset type.'],
+          ['url', 'string', 'Public URL submitted during creation.'],
+          ['name', 'string | null', 'Asset name.'],
+          ['status', 'string', 'processing, active, failed, expired, or deleted.'],
+          ['error', 'string', 'Returned only when processing fails.']
+        ]
+      },
+      {
+        title: 'Assets Retrieve',
+        method: 'GET',
+        path: openAiBaseUrl.value + '/assets/{asset_id}',
+        description:
+          'Retrieve an asset and refresh its processing status. Access is isolated to the current project.',
+        requestParams: [
+          ['asset_id', 'string, required', 'The asset_* ID returned by asset creation.']
+        ],
+        responseFields: [
+          ['id', 'string', 'NeoGate asset ID.'],
+          ['status', 'string', 'processing, active, failed, expired, or deleted.'],
+          ['error', 'string', 'Returned only when processing fails.']
+        ]
+      }
+    ],
     openAiAudioInterfaces: [
       {
         title: 'Audio Transcriptions',
@@ -1489,10 +1700,26 @@ const content = computed(() => {
         requestParams: [
           ['file', 'file, required', 'Audio file to transcribe.'],
           ['model', 'string, required', 'Audio transcription model.'],
-          ['language / languages[]', 'string | array', 'Language hint; these fields are mutually exclusive.'],
-          ['prompt / keywords[]', 'string | array', 'Fun-ASR-Flash context, limited to 400 characters.'],
-          ['response_format', 'json | text | verbose_json | srt | vtt', 'Response format; defaults to json.'],
-          ['timestamp_granularities[]', 'word | segment', 'Word or segment timestamps for verbose_json.'],
+          [
+            'language / languages[]',
+            'string | array',
+            'Language hint; these fields are mutually exclusive.'
+          ],
+          [
+            'prompt / keywords[]',
+            'string | array',
+            'Fun-ASR-Flash context, limited to 400 characters.'
+          ],
+          [
+            'response_format',
+            'json | text | verbose_json | srt | vtt',
+            'Response format; defaults to json.'
+          ],
+          [
+            'timestamp_granularities[]',
+            'word | segment',
+            'Word or segment timestamps for verbose_json.'
+          ],
           ['stream', 'boolean', 'Fun-ASR-Flash transcript.text.delta/done SSE stream.'],
           ['temperature', 'number', 'Only 0 is supported by Fun-ASR-Flash.']
         ],
@@ -1538,8 +1765,12 @@ const content = computed(() => {
     videoWorkflowTitle: 'Video workflow',
     videoWorkflowItems: [
       [
+        'Prepare assets (optional)',
+        'Call /v1/assets and poll until active. Creating assets does not incur video generation charges.'
+      ],
+      [
         'Create task',
-        'Call /v1/videos to create a video task with a text prompt or an input_reference image.'
+        'Call /v1/videos. Use input_reference for one image or the NeoGate content[] extension for multiple references.'
       ],
       ['Check status', 'Use /v1/videos/{video_id} to check status, progress, and failure details.'],
       [
@@ -1550,15 +1781,23 @@ const content = computed(() => {
     videoNotes: [
       [
         'Reference upload',
-        'Video creation with a reference image uses multipart/form-data and passes the image file as input_reference.'
+        'OpenAI-compatible requests upload one image through multipart input_reference. NeoGate JSON requests can use public URLs or asset://asset_* references in content[].'
+      ],
+      [
+        'Multiple references',
+        'content[] supports image, video, and audio inputs. Limits, role combinations, and media capabilities depend on the selected model and channel.'
+      ],
+      [
+        'Asset constraints',
+        'asset:// references must belong to the current project, match the field type, and be active. Assets in one request must resolve to the same available upstream binding.'
       ],
       [
         'Task status',
         'The status can be queued, in_progress, completed, or failed; inspect error when a task fails.'
       ]
     ],
-    endpointHeaders: ['Module', 'Method', 'Official path', 'Description', 'Status'],
-    openAiIntro: `OpenAI-compatible APIs use Bearer Token auth. Set the Base URL to the ${siteName.value} /v1 URL. The table follows the official OpenAI API reference; other APIs show their current support status in the table.`,
+    endpointHeaders: ['Module', 'Method', 'API path', 'Description', 'Status'],
+    openAiIntro: `All APIs use Bearer Token auth. Set the Base URL to the ${siteName.value} /v1 URL. The table includes OpenAI-compatible APIs and ${siteName.value} extensions; extensions are explicitly identified in the status or description.`,
     openAiAuthItems: [
       ['Base URL', openAiBaseUrl.value],
       ['Auth header', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
@@ -1648,9 +1887,11 @@ const content = computed(() => {
         'Videos',
         'POST',
         '/v1/videos',
-        'model, prompt, input_reference, size, seconds',
-        'Supported'
+        'model, prompt, input_reference/content, size, seconds',
+        'Supported (including NeoGate multi-asset extensions)'
       ],
+      ['Assets', 'POST', '/v1/assets', 'model, type, url, name', 'Supported (NeoGate extension)'],
+      ['Assets', 'GET', '/v1/assets/{asset_id}', 'asset_id', 'Supported (NeoGate extension)'],
       ['Videos', 'GET', '/v1/videos', 'limit, after, order', 'Not supported'],
       ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', 'Supported'],
       ['Videos', 'DELETE', '/v1/videos/{video_id}', 'video_id', 'Not supported'],
@@ -2107,7 +2348,11 @@ const content = computed(() => {
       ],
       ['tools[].size', 'string', 'Image size, such as 1024x1024, 1536x1024, 1024x1536, or auto.'],
       ['tools[].quality', 'string', 'Image quality, such as auto, low, medium, or high.'],
-      ['tools[].background', 'string', 'Background mode, such as transparent or opaque, subject to model and upstream support.'],
+      [
+        'tools[].background',
+        'string',
+        'Background mode, such as transparent or opaque, subject to model and upstream support.'
+      ],
       ['tools[].output_format', 'string', 'Output image format, such as png, jpeg, or webp.'],
       [
         'image_format',
@@ -2167,7 +2412,7 @@ const content = computed(() => {
         `Final usage data used by ${siteName.value} for records and settlement.`
       ]
     ],
-    openAiVideo: `The Videos API is forwarded using OpenAI's official async job model. Create returns a video job, retrieve polls status, and content downloads the completed MP4. ${siteName.value} currently supports create, retrieve, and content download; list, delete, edits, extensions, and remix are not currently supported.`,
+    openAiVideo: `The Videos API follows OpenAI's asynchronous job model, with ${siteName.value} extensions for reusable assets and multiple references. Create returns a video job, retrieve polls status, and content downloads the completed video. Create, retrieve, and content download are supported; list, delete, edits, extensions, and remix are not currently supported.`,
     videoRequestParams: [
       [
         'model',
@@ -2182,7 +2427,12 @@ const content = computed(() => {
       [
         'input_reference',
         'object | file',
-        'Optional reference image. Official JSON accepts image_url or file_id; multipart requests can upload a reference file.'
+        'OpenAI-compatible single reference image. JSON accepts image_url, or multipart can upload one image. file_id is not currently supported.'
+      ],
+      [
+        'content[]',
+        'array',
+        'NeoGate extension using image_url, video_url, or audio_url for multiple public URLs or asset://asset_* references, with role describing each input.'
       ],
       [
         'size',
@@ -2193,6 +2443,22 @@ const content = computed(() => {
         'seconds',
         'string | number',
         'Clip duration, such as 4, 8, or 12 seconds. Availability depends on the model and upstream.'
+      ],
+      [
+        'duration',
+        'integer',
+        'NeoGate extension and alias for seconds. Available range depends on the model and channel.'
+      ],
+      ['ratio', 'string', 'NeoGate extension for aspect ratio, such as 16:9, 9:16, or 1:1.'],
+      [
+        'resolution',
+        'string',
+        'NeoGate extension for output resolution, such as 480p, 720p, or 1080p.'
+      ],
+      [
+        'generate_audio',
+        'boolean',
+        'NeoGate extension requesting synchronized audio from supported models.'
       ],
       ['video.id', 'string', 'Completed video ID used by edit or extension requests.'],
       [
@@ -2588,6 +2854,12 @@ const content = computed(() => {
           :request-title="content.requestParamsTitle"
           :response-title="content.responseParamsTitle"
         />
+        <InterfaceEndpointList
+          :items="content.openAiAssetInterfaces"
+          :field-headers="content.paramFieldHeaders"
+          :request-title="content.requestParamsTitle"
+          :response-title="content.responseParamsTitle"
+        />
         <article class="docs-step-card">
           <h3>{{ content.videoWorkflowTitle }}</h3>
           <div class="docs-check-list docs-inner-check-list">
@@ -2631,6 +2903,46 @@ const content = computed(() => {
             <pre
               class="docs-code-sample docs-inner-code"
             ><code>{{ openAiVideoCreateWithReference }}</code></pre>
+          </div>
+        </article>
+        <article class="docs-step-card">
+          <h3>Create Asset (NeoGate Extension)</h3>
+          <div class="docs-copy-block">
+            <el-button
+              :icon="DocumentCopy"
+              text
+              :aria-label="t('copy')"
+              @click="copyDocText(openAiAssetCreate)"
+            />
+            <pre class="docs-code-sample docs-inner-code"><code>{{ openAiAssetCreate }}</code></pre>
+          </div>
+        </article>
+        <article class="docs-step-card">
+          <h3>Retrieve Asset (NeoGate Extension)</h3>
+          <div class="docs-copy-block">
+            <el-button
+              :icon="DocumentCopy"
+              text
+              :aria-label="t('copy')"
+              @click="copyDocText(openAiAssetRetrieve)"
+            />
+            <pre
+              class="docs-code-sample docs-inner-code"
+            ><code>{{ openAiAssetRetrieve }}</code></pre>
+          </div>
+        </article>
+        <article class="docs-step-card">
+          <h3>Create Video With Two Assets (NeoGate Extension)</h3>
+          <div class="docs-copy-block">
+            <el-button
+              :icon="DocumentCopy"
+              text
+              :aria-label="t('copy')"
+              @click="copyDocText(openAiVideoCreateWithAssets)"
+            />
+            <pre
+              class="docs-code-sample docs-inner-code"
+            ><code>{{ openAiVideoCreateWithAssets }}</code></pre>
           </div>
         </article>
         <article class="docs-step-card">

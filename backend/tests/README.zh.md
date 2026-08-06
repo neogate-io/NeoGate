@@ -80,6 +80,27 @@ GlobalAI OPC fast 模型支持 `480p/720p`，普通模型支持
 `480p/720p/1080p`，时长为 4 到 15 秒。环境变量优先于 `backend/.env`；
 测试结果保存在 `tests/output/openai_video/`。
 
+两张素材参考图测试会先创建并轮询两个 `/v1/assets` 图片素材，再使用
+`asset://asset_*` 创建视频：
+
+```bash
+NEOGATE_API_KEY='你的 NeoGate 用户 API Key' \
+NEOGATE_VIDEO_MODEL='sd_2.0_discount' \
+NEOGATE_VIDEO_SIZE='1280x720' \
+NEOGATE_VIDEO_RESOLUTION='720p' \
+NEOGATE_VIDEO_SECONDS='5' \
+python3 -m unittest -v \
+  backend.tests.smoke.test_openai_video.test_videos_create_with_two_asset_references
+```
+
+素材源 URL 默认使用公网图片，可通过 `NEOGATE_ASSET_IMAGE_URL_1` 和
+`NEOGATE_ASSET_IMAGE_URL_2` 覆盖。素材轮询默认最多等待 300 秒，可通过
+`NEOGATE_ASSET_POLL_TIMEOUT_SECONDS` 调整。素材创建不计费，视频生成会产生真实上游费用。
+
+每次 API 和 CDN 请求、响应都会分别保存为 `*_request.json` 和
+`*_response.json`，目录为 `tests/output/openai_video/`。记录中不包含
+Authorization；二进制视频响应只记录响应头和字节数，不写入 JSON 正文。
+
 ## OpenAI 音频转写冒烟测试
 
 音频转写测试位于 `smoke/test_openai_audio.py`，会向运行中的 NeoGate 上传音频，

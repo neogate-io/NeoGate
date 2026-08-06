@@ -37,7 +37,7 @@ use super::{
     assets::resolve_video_asset_request,
     content_type_header, json_string_field, log_relay_transport_failover,
     multipart::{
-        multipart_boundary, multipart_text_fields, rewrite_multipart_model_field,
+        multipart_boundary, multipart_files, multipart_text_fields, rewrite_multipart_model_field,
         safe_multipart_log_label,
     },
     positive_i64_field, positive_i64_text, required_json_string_field, select_upstream_excluding,
@@ -484,6 +484,7 @@ fn json_video_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
     let value: Value = serde_json::from_slice(body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let model = required_json_string_field(&value, "model")?;
+    validate_json_video_references(&value)?;
     Ok(VideoRequestMeta {
         model: model.clone(),
         request_params: RelayRequestParams::video(
@@ -503,18 +504,29 @@ fn multipart_video_request_meta(
     content_type: HeaderValue,
 ) -> AppResult<VideoRequestMeta> {
     let boundary = multipart_boundary(content_type_text)?;
+    validate_multipart_video_references(body, &boundary)?;
     let mut model = None;
+    let mut prompt = None;
     let mut size = None;
     let mut seconds = None;
     for (name, value) in multipart_text_fields(body, &boundary)? {
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
+            "prompt" if !value.trim().is_empty() => prompt = Some(value),
             "size" if !value.is_empty() => size = Some(safe_multipart_log_label(&value)),
             "seconds" | "duration" => seconds = positive_i64_text(&value),
+            "input_reference" => {
+                return Err(AppError::BadRequest(
+                    "input_reference must be uploaded as an image file".into(),
+                ));
+            }
             _ => {}
         }
     }
     let model = model.ok_or_else(|| AppError::BadRequest("model is required".to_string()))?;
+    if prompt.is_none() {
+        return Err(AppError::BadRequest("prompt is required".to_string()));
+    }
     let video_billing_input = video::video_billing_input(size.as_deref(), seconds, false);
     Ok(VideoRequestMeta {
         model,
@@ -523,6 +535,136 @@ fn multipart_video_request_meta(
         content_type,
         is_json: false,
     })
+}
+
+/// Validate the reference shape at the public OpenAI-compatible boundary.
+/// Provider-specific multimodal extensions remain in JSON `content[]` and
+/// are validated by the selected adapter.
+fn validate_json_video_references(value: &Value) -> AppResult<()> {
+    let Some(reference) = value.get("input_reference") else {
+        return validate_extended_video_content(value);
+    };
+    let image_url = match reference {
+        Value::String(url) => url.clone(),
+        Value::Object(object) => {
+            if object.contains_key("file_id") {
+                return Err(AppError::BadRequest(
+                    "input_reference.file_id is not supported; use multipart input_reference or an asset://asset_* reference".into(),
+                ));
+            }
+            object
+                .get("image_url")
+                .and_then(Value::as_str)
+                .filter(|url| !url.trim().is_empty())
+                .ok_or_else(|| {
+                    AppError::BadRequest("input_reference.image_url is required".into())
+                })?
+                .to_string()
+        }
+        _ => {
+            return Err(AppError::BadRequest(
+                "input_reference must be an image URL or an object with image_url".into(),
+            ));
+        }
+    };
+    let lower = image_url.to_ascii_lowercase();
+    if !(lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("data:image/")
+        || lower.starts_with("asset://asset_"))
+    {
+        return Err(AppError::BadRequest(
+            "input_reference.image_url must be an http(s) URL, image data URL, or asset://asset_* reference".into(),
+        ));
+    }
+    validate_extended_video_content(value)
+}
+
+fn validate_extended_video_content(value: &Value) -> AppResult<()> {
+    let Some(content) = value.get("content") else {
+        return Ok(());
+    };
+    let content = content
+        .as_array()
+        .ok_or_else(|| AppError::BadRequest("content must be an array".into()))?;
+    for item in content {
+        let object = item
+            .as_object()
+            .ok_or_else(|| AppError::BadRequest("content items must be objects".into()))?;
+        let item_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::BadRequest("content item type is required".into()))?;
+        match item_type {
+            "text" => {
+                if object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(|text| text.trim().is_empty())
+                {
+                    return Err(AppError::BadRequest(
+                        "text content requires non-empty text".into(),
+                    ));
+                }
+            }
+            "image_url" | "video_url" | "audio_url" => {
+                if object
+                    .get(item_type)
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("url"))
+                    .and_then(Value::as_str)
+                    .is_none_or(|url| url.trim().is_empty())
+                {
+                    return Err(AppError::BadRequest(format!(
+                        "{item_type} content requires {item_type}.url"
+                    )));
+                }
+            }
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "unsupported video content type: {item_type}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_multipart_video_references(body: &[u8], boundary: &str) -> AppResult<()> {
+    let files = multipart_files(body, boundary)?;
+    if let Some(file) = files.iter().find(|file| file.name != "input_reference") {
+        return Err(AppError::BadRequest(format!(
+            "unsupported video multipart file field: {}",
+            file.name
+        )));
+    }
+    let references: Vec<_> = files
+        .into_iter()
+        .filter(|file| file.name == "input_reference")
+        .collect();
+    if references.len() > 1 {
+        return Err(AppError::BadRequest(
+            "input_reference accepts only one reference image in the OpenAI video protocol".into(),
+        ));
+    }
+    if let Some(reference) = references.first() {
+        if reference.data.is_empty() {
+            return Err(AppError::BadRequest(
+                "input_reference image file must not be empty".into(),
+            ));
+        }
+        let content_type = reference
+            .content_type
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !content_type.is_empty() && !content_type.starts_with("image/") {
+            return Err(AppError::BadRequest(
+                "input_reference must be an image file".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn video_terminal(status: &str) -> bool {
@@ -590,6 +732,75 @@ mod tests {
     }
 
     #[test]
+    fn accepts_json_image_reference_and_multimodal_extension() {
+        let value = serde_json::json!({
+            "model": "sd_2.0_discount",
+            "input_reference": {"image_url": "https://example.com/cover.png"},
+            "content": [
+                {"type": "text", "text": "walk"},
+                {"type": "video_url", "video_url": {"url": "https://example.com/ref.mp4"}}
+            ]
+        });
+
+        validate_json_video_references(&value).unwrap();
+    }
+
+    #[test]
+    fn rejects_file_id_and_invalid_extended_content() {
+        let file_id = serde_json::json!({
+            "model": "sora-2",
+            "input_reference": {"file_id": "file-123"}
+        });
+        assert!(validate_json_video_references(&file_id)
+            .unwrap_err()
+            .to_string()
+            .contains("file_id is not supported"));
+
+        let invalid_content = serde_json::json!({
+            "model": "sd_2.0_discount",
+            "content": [{"type": "video_url", "video_url": {}}]
+        });
+        assert!(validate_json_video_references(&invalid_content)
+            .unwrap_err()
+            .to_string()
+            .contains("video_url.url"));
+    }
+
+    #[test]
+    fn rejects_multiple_or_non_image_multipart_references() {
+        let content_type = "multipart/form-data; boundary=boundary";
+        let multiple = b"--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\na\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"b.png\"\r\nContent-Type: image/png\r\n\r\nb\r\n--boundary--\r\n";
+        assert!(multipart_video_request_meta(
+            multiple,
+            content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=boundary"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("only one reference image"));
+
+        let video = b"--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"ref.mp4\"\r\nContent-Type: video/mp4\r\n\r\nvideo\r\n--boundary--\r\n";
+        assert!(multipart_video_request_meta(
+            video,
+            content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=boundary"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must be an image file"));
+
+        let empty = b"--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--boundary\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ndraw\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"ref.png\"\r\nContent-Type: image/png\r\n\r\n\r\n--boundary--\r\n";
+        assert!(multipart_video_request_meta(
+            empty,
+            content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=boundary"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must not be empty"));
+    }
+
+    #[test]
     fn parses_nested_video_task_response_fields() {
         let value = serde_json::json!({
             "output": {
@@ -605,7 +816,7 @@ mod tests {
 
     #[test]
     fn parses_and_rewrites_multipart_video_model() {
-        let body = b"------neogate-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncompany-video\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n------neogate-boundary--\r\n";
+        let body = b"------neogate-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncompany-video\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ndraw\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n------neogate-boundary--\r\n";
         let content_type = "multipart/form-data; boundary=----neogate-boundary";
         let meta = multipart_video_request_meta(
             body,

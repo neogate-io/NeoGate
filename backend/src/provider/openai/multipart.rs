@@ -39,6 +39,7 @@ pub(super) fn multipart_text_fields(
 pub(super) struct MultipartFile {
     pub(super) name: String,
     pub(super) data: Bytes,
+    pub(super) content_type: Option<String>,
 }
 
 pub(super) fn multipart_files(body: &[u8], boundary: &str) -> AppResult<Vec<MultipartFile>> {
@@ -183,6 +184,11 @@ fn multipart_file(part: &[u8]) -> AppResult<Option<MultipartFile>> {
     Ok(Some(MultipartFile {
         name,
         data: Bytes::copy_from_slice(value),
+        content_type: headers.lines().find_map(|line| {
+            line.split_once(':')
+                .filter(|(key, _)| key.trim().eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.trim().to_string())
+        }),
     }))
 }
 

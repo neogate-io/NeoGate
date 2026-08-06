@@ -236,7 +236,7 @@ fn image_urls(input: &Map<String, Value>) -> Vec<String> {
     if let Some(image) = input.get("image").and_then(Value::as_str) {
         urls.push(image.to_string());
     }
-    if let Some(image) = input.get("input_reference").and_then(Value::as_str) {
+    if let Some(image) = input.get("input_reference").and_then(image_reference_url) {
         urls.push(image.to_string());
     }
     if let Some(images) = input.get("images").and_then(Value::as_array) {
@@ -248,6 +248,12 @@ fn image_urls(input: &Map<String, Value>) -> Vec<String> {
     }
     urls.retain(|url| !url.trim().is_empty());
     urls
+}
+
+fn image_reference_url(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get("image_url")?.as_str())
 }
 
 fn content_array(output: &mut Map<String, Value>) -> &mut Vec<Value> {

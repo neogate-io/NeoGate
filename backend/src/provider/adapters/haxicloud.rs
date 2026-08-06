@@ -307,7 +307,7 @@ fn append_images(input: &Map<String, Value>, output: &mut Map<String, Value>) {
     for key in ["image", "input_reference"] {
         if let Some(url) = input
             .get(key)
-            .and_then(Value::as_str)
+            .and_then(image_reference_url)
             .filter(|v| !v.trim().is_empty())
         {
             urls.push(url.to_string());
@@ -336,6 +336,12 @@ fn append_images(input: &Map<String, Value>, output: &mut Map<String, Value>) {
     for key in ["image", "input_reference", "images"] {
         output.remove(key);
     }
+}
+
+fn image_reference_url(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get("image_url")?.as_str())
 }
 
 #[cfg(test)]

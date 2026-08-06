@@ -468,6 +468,20 @@ fn build_content(input: &Map<String, Value>) -> AppResult<Vec<Value>> {
             content.insert(0, serde_json::json!({"type":"text", "text":prompt}));
         }
     }
+    if let Some(reference) = input.get("input_reference") {
+        let image_url = reference
+            .as_str()
+            .or_else(|| reference.as_object()?.get("image_url")?.as_str())
+            .filter(|url| !url.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("GlobalAI OPC input_reference requires an image URL".into())
+            })?;
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "role": "reference_image",
+            "image_url": {"url": image_url}
+        }));
+    }
     Ok(content)
 }
 
@@ -623,6 +637,28 @@ mod tests {
         assert_eq!(value["model"], "sd_2.0_fast_discount_720p");
         assert_eq!(value["duration"], 5);
         assert_eq!(value["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn converts_openai_json_input_reference_to_global_content() {
+        let value = discount_request(
+            serde_json::json!({
+                "model": "sd_2.0_discount",
+                "prompt": "walk",
+                "input_reference": {"image_url": "https://example.com/ref.png"}
+            })
+            .as_object()
+            .unwrap(),
+            DiscountModel::parse("sd_2.0_discount").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(value["content"][1]["type"], "image_url");
+        assert_eq!(
+            value["content"][1]["image_url"]["url"],
+            "https://example.com/ref.png"
+        );
+        assert_eq!(value["content"][1]["role"], "reference_image");
     }
 
     #[test]

@@ -445,6 +445,19 @@ fn validate_name(name: Option<&str>) -> AppResult<()> {
 
 fn collect_asset_refs(value: &Value) -> AppResult<Vec<(String, AssetType)>> {
     let mut refs = Vec::new();
+    if let Some(url) = value.get("input_reference").and_then(input_reference_url) {
+        if url.starts_with(UPSTREAM_ASSET_URI_PREFIX) {
+            return Err(AppError::BadRequest(
+                "provider asset URIs are not accepted; use asset://asset_*".into(),
+            ));
+        }
+        if let Some(asset_id) = url.strip_prefix(ASSET_URI_PREFIX) {
+            if asset_id.is_empty() || asset_id.contains('/') || asset_id.contains(':') {
+                return Err(AppError::BadRequest("invalid asset URI".into()));
+            }
+            refs.push((asset_id.to_string(), AssetType::Image));
+        }
+    }
     let Some(content) = value.get("content").and_then(Value::as_array) else {
         return Ok(refs);
     };
@@ -486,6 +499,20 @@ fn rewrite_asset_refs(
     records: &HashMap<String, AssetRecord>,
     adapter: &dyn ProviderAdapter,
 ) -> AppResult<()> {
+    if let Some(url) = value
+        .get_mut("input_reference")
+        .and_then(input_reference_url_mut)
+    {
+        if let Some(asset_id) = url
+            .as_str()
+            .and_then(|value| value.strip_prefix(ASSET_URI_PREFIX))
+        {
+            let record = records.get(asset_id).ok_or(AppError::NotFound)?;
+            *url = Value::String(
+                adapter.format_asset_reference(AssetType::Image, &record.upstream_asset_id)?,
+            );
+        }
+    }
     let Some(content) = value.get_mut("content").and_then(Value::as_array_mut) else {
         return Ok(());
     };
@@ -517,6 +544,19 @@ fn rewrite_asset_refs(
             Value::String(adapter.format_asset_reference(asset_type, &record.upstream_asset_id)?);
     }
     Ok(())
+}
+
+fn input_reference_url(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get("image_url")?.as_str())
+}
+
+fn input_reference_url_mut(value: &mut Value) -> Option<&mut Value> {
+    if value.is_string() {
+        return Some(value);
+    }
+    value.as_object_mut()?.get_mut("image_url")
 }
 
 #[cfg(test)]
@@ -590,5 +630,19 @@ mod tests {
 
         assert_eq!(value["name"], "reference");
         assert_eq!(value["error"], "download failed");
+    }
+
+    #[test]
+    fn collects_asset_from_json_input_reference_object() {
+        let value = serde_json::json!({
+            "input_reference": {
+                "image_url": "asset://asset_reference"
+            }
+        });
+
+        assert_eq!(
+            collect_asset_refs(&value).unwrap(),
+            vec![("asset_reference".to_string(), AssetType::Image)]
+        );
     }
 }

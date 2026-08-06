@@ -1,3 +1,4 @@
+mod assets;
 mod audio;
 mod background;
 mod images;
@@ -5,6 +6,7 @@ mod multipart;
 mod realtime;
 mod videos;
 
+pub(crate) use assets::{openai_asset_detail, openai_assets_create};
 pub(crate) use audio::openai_audio_transcriptions;
 pub(crate) use background::response_terminal;
 pub(crate) use realtime::openai_realtime;

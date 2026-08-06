@@ -34,6 +34,7 @@ use crate::{
 };
 
 use super::{
+    assets::resolve_video_asset_request,
     content_type_header, json_string_field, log_relay_transport_failover,
     multipart::{
         multipart_boundary, multipart_text_fields, rewrite_multipart_model_field,
@@ -147,7 +148,7 @@ async fn relay_openai_video_create(
         crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
             .await?;
     let content_type_text = meta.content_type.to_str().unwrap_or("");
-    let upstream_body = if resolved.target_model == meta.model {
+    let model_body = if resolved.target_model == meta.model {
         body.clone()
     } else if content_type_text
         .to_ascii_lowercase()
@@ -157,6 +158,19 @@ async fn relay_openai_video_create(
     } else {
         rewrite_multipart_model_field(&body, content_type_text, &resolved.target_model)?
     };
+    let asset_resolution = if meta.is_json {
+        resolve_video_asset_request(&state, &auth, &resolved.target_model, model_body.clone())
+            .await?
+    } else {
+        None
+    };
+    let upstream_body = asset_resolution
+        .as_ref()
+        .map(|resolved| resolved.body.clone())
+        .unwrap_or(model_body);
+    let bound_asset_upstream = asset_resolution
+        .as_ref()
+        .map(|resolved| resolved.upstream.clone());
     let user_key_model_credit_account =
         auth.model_credit_account(&resolved.external_model).cloned();
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
@@ -166,15 +180,19 @@ async fn relay_openai_video_create(
 
     loop {
         let started = Instant::now();
-        let (protocol, upstream) = select_upstream_excluding(
-            &state,
-            VIDEO_CREATE_PATH,
-            &resolved.target_model,
-            resolved.target_channel_id,
-            None,
-            &attempted_upstreams,
-        )
-        .await?;
+        let (protocol, upstream) = if let Some(upstream) = bound_asset_upstream.clone() {
+            (crate::relay::selector::UpstreamProtocol::Openai, upstream)
+        } else {
+            select_upstream_excluding(
+                &state,
+                VIDEO_CREATE_PATH,
+                &resolved.target_model,
+                resolved.target_channel_id,
+                None,
+                &attempted_upstreams,
+            )
+            .await?
+        };
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         let price = state
             .billing
@@ -293,13 +311,14 @@ async fn relay_openai_video_create(
 
                 let error_body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &error_body);
-                if should_failover_upstream_failure(
-                    &ctx,
-                    &attempted_upstreams,
-                    failure.failoverable(),
-                    retryable_failovers,
-                )
-                .await
+                if bound_asset_upstream.is_none()
+                    && should_failover_upstream_failure(
+                        &ctx,
+                        &attempted_upstreams,
+                        failure.failoverable(),
+                        retryable_failovers,
+                    )
+                    .await
                 {
                     retryable_failovers += 1;
                     record_upstream_http_failure(&ctx, status, &failure, "upstream video failover")
@@ -327,13 +346,14 @@ async fn relay_openai_video_create(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_upstream_failure(
-                    &ctx,
-                    &attempted_upstreams,
-                    retryable,
-                    retryable_failovers,
-                )
-                .await
+                if bound_asset_upstream.is_none()
+                    && should_failover_upstream_failure(
+                        &ctx,
+                        &attempted_upstreams,
+                        retryable,
+                        retryable_failovers,
+                    )
+                    .await
                 {
                     retryable_failovers += 1;
                     record_upstream_transport_failure_for_failover(&ctx, err.to_string()).await;

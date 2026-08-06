@@ -60,35 +60,29 @@ python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_three
 
 ## OpenAI Video Smoke Test
 
-The OpenAI-compatible video smoke test lives in `smoke/test_openai_video.py`.
-It creates a video task, polls `GET /v1/videos/{id}` until the task is
-terminal, then downloads `GET /v1/videos/{id}/content` when the task succeeds.
+`smoke/test_openai_video.py` creates a task, polls it, and downloads the
+video. It calls a real provider and incurs charges. The required
+`NEOGATE_API_KEY` is a NeoGate user key, not an upstream key.
 
-Required:
-
-```bash
-NEOGATE_API_KEY=your_neogate_api_key
-```
-
-Optional:
+For GlobalAI OPC, confirm that the channel provider is `openai`, the endpoint
+host is `apillm.globalaiopc.com`, and `sd_2.0_fast_discount` or
+`sd_2.0_discount` is configured with pricing. Run from the repository root:
 
 ```bash
-NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
-NEOGATE_VIDEO_MODEL=sora-2
-NEOGATE_VIDEO_SIZE=1280x720
-NEOGATE_VIDEO_SECONDS=4
-NEOGATE_VIDEO_PROMPT='A calm five second shot of a glass teapot on a walnut table.'
-NEOGATE_VIDEO_EXTRA_JSON='{"resolution":"720p","ratio":"16:9"}'
+NEOGATE_API_KEY='your NeoGate user API key' \
+NEOGATE_BASE_URL='http://127.0.0.1:8080/v1' \
+NEOGATE_VIDEO_MODEL='sd_2.0_fast_discount' \
+NEOGATE_VIDEO_SIZE='1280x720' \
+NEOGATE_VIDEO_RESOLUTION='720p' \
+NEOGATE_VIDEO_RATIO='16:9' \
+NEOGATE_VIDEO_SECONDS='5' \
+NEOGATE_VIDEO_PROMPT='A cinematic tracking shot of a futuristic maglev train crossing a rainy neon city at night.' \
+python3 -m unittest -v backend.tests.smoke.test_openai_video
 ```
 
-Generated JSON snapshots and video content are saved under
-`tests/output/openai_video/`.
-
-Run the video smoke test from `backend/`:
-
-```bash
-python -m unittest tests.smoke.test_openai_video
-```
+GlobalAI OPC limits the fast model to `480p/720p`, the regular model to
+`480p/720p/1080p`, and duration to 4-15 seconds. Environment variables
+override `backend/.env`; output is saved under `tests/output/openai_video/`.
 
 ## OpenAI Audio Transcription Smoke Test
 

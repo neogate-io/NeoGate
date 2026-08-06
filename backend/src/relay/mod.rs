@@ -120,6 +120,8 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/images/variations",
             post(openai::openai_image_variations),
         )
+        .route("/v1/assets", post(openai::openai_assets_create))
+        .route("/v1/assets/{asset_id}", get(openai::openai_asset_detail))
         .route("/v1/videos", post(openai::openai_videos))
         .route(
             "/v1/videos/{video_id}/content",

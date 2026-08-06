@@ -325,6 +325,7 @@ impl Selector {
         secrets: &SecretStore,
         protocol: UpstreamProtocol,
         model: &str,
+        channel_id: Option<DbId>,
         matches: impl Fn(&ChannelCandidate) -> bool,
     ) -> AppResult<SelectedUpstream> {
         let snapshot = self.routing_snapshot(pool).await?;
@@ -338,7 +339,7 @@ impl Selector {
             &model_blocks,
             &[],
             None,
-            matches,
+            |channel| channel_id.is_none_or(|id| channel.id == id) && matches(channel),
         )
         .ok_or_else(|| {
             AppError::UpstreamUnavailable(format!(
@@ -349,6 +350,59 @@ impl Selector {
         let key = choose_key(channel, keys, model, now, &model_blocks, &[]).ok_or_else(|| {
             AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
         })?;
+        self.selected_upstream_from_candidate(secrets, channel, key)
+    }
+
+    pub(crate) async fn select_exact_endpoint(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        protocol: UpstreamProtocol,
+        model: &str,
+        endpoint_id: DbId,
+        channel_key_id: Option<DbId>,
+        credential_id: Option<DbId>,
+    ) -> AppResult<SelectedUpstream> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let channel = snapshot
+            .channels
+            .iter()
+            .find(|channel| channel.endpoint_id == endpoint_id && channel.protocol == protocol)
+            .ok_or_else(|| {
+                AppError::UpstreamUnavailable(
+                    "bound asset upstream endpoint is no longer available".to_string(),
+                )
+            })?;
+        let availability = ChannelAvailability {
+            protocol,
+            model,
+            now,
+            model_blocks: &model_blocks,
+            attempted: &[],
+            excluded_endpoint_ids: None,
+        };
+        if !channel_is_available(&snapshot, channel, &availability) {
+            return Err(AppError::UpstreamUnavailable(
+                "bound asset upstream endpoint is not available for this model".to_string(),
+            ));
+        }
+        let key = channel_keys(&snapshot, channel)
+            .iter()
+            .find(|key| {
+                if channel.use_credentials {
+                    credential_id.is_some_and(|id| key.credential_id == Some(id))
+                } else {
+                    channel_key_id.is_some_and(|id| key.id == id && key.credential_id.is_none())
+                }
+            })
+            .filter(|key| key_is_available(channel, key, model, now, &model_blocks))
+            .ok_or_else(|| {
+                AppError::UpstreamUnavailable(
+                    "bound asset upstream key is no longer available".to_string(),
+                )
+            })?;
         self.selected_upstream_from_candidate(secrets, channel, key)
     }
 

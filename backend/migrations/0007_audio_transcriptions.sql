@@ -61,3 +61,25 @@ WHERE code IN ('custom', 'newapi', 'sub2api');
 
 -- 新增模型时记录匹配到的参考价格模型。已有数据不回填。
 ALTER TABLE channel_model ADD COLUMN base_model TEXT;
+
+CREATE TABLE user_asset (
+    id BIGSERIAL PRIMARY KEY,
+    public_id TEXT NOT NULL UNIQUE,
+    project_id BIGINT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    asset_type TEXT NOT NULL CHECK (asset_type IN ('image', 'video', 'audio')),
+    source_url TEXT NOT NULL,
+    name TEXT,
+    channel_endpoint_id BIGINT REFERENCES channel_endpoint(id) ON DELETE SET NULL,
+    channel_key_id BIGINT REFERENCES channel_key(id) ON DELETE SET NULL,
+    credential_id BIGINT REFERENCES credential(id) ON DELETE SET NULL,
+    upstream_asset_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (channel_key_id IS NULL OR credential_id IS NULL)
+);
+
+CREATE INDEX idx_user_asset_project_created_id
+    ON user_asset(project_id, created_at DESC, id DESC);

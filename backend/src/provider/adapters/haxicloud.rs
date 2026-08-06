@@ -32,13 +32,11 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/asset-groups", get(proxy_get).post(proxy_post))
         .route("/v1/asset-groups/{id}", put(proxy_put).delete(proxy_delete))
-        .route("/v1/assets", post(proxy_post))
         .route("/v1/assets/upload", post(proxy_post))
         .route("/v1/assets/sync-upload", post(proxy_post))
         .route("/v1/assets/sync", post(proxy_post))
         .route("/v1/assets/importable", get(proxy_get))
         .route("/v1/assets/import", post(proxy_post))
-        .route("/v1/assets/{id}", get(proxy_get).delete(proxy_delete))
         .route("/v1/realperson/agreement", post(proxy_post))
         .route("/v1/realperson/session", post(proxy_post))
         .route("/v1/realperson/result", post(proxy_post))
@@ -97,6 +95,7 @@ async fn proxy(
             &state.secrets,
             UpstreamProtocol::Openai,
             ASSET_ROUTING_MODEL,
+            None,
             |channel| {
                 super::adapter_for_endpoint(
                     &channel.provider,

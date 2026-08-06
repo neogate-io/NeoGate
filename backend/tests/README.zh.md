@@ -57,34 +57,28 @@ python -m unittest tests.smoke.test_openai_image.test_responses_image_edit_three
 
 ## OpenAI 视频冒烟测试
 
-OpenAI 兼容视频冒烟测试位于 `smoke/test_openai_video.py`。测试会创建视频
-任务，轮询 `GET /v1/videos/{id}` 直到任务进入终态；成功后再下载
-`GET /v1/videos/{id}/content`。
+`smoke/test_openai_video.py` 会创建任务、轮询结果并下载视频。测试调用真实
+上游并产生费用；必填的 `NEOGATE_API_KEY` 是 NeoGate 用户 Key，不是上游 Key。
 
-必填：
-
-```bash
-NEOGATE_API_KEY=your_neogate_api_key
-```
-
-可选：
+测试 GlobalAI OPC 前，确认渠道 provider 为 `openai`，endpoint 主机为
+`apillm.globalaiopc.com`，并已配置 `sd_2.0_fast_discount` 或
+`sd_2.0_discount` 及对应价格。在仓库根目录运行：
 
 ```bash
-NEOGATE_BASE_URL=http://127.0.0.1:8080/v1
-NEOGATE_VIDEO_MODEL=sora-2
-NEOGATE_VIDEO_SIZE=1280x720
-NEOGATE_VIDEO_SECONDS=4
-NEOGATE_VIDEO_PROMPT='A calm five second shot of a glass teapot on a walnut table.'
-NEOGATE_VIDEO_EXTRA_JSON='{"resolution":"720p","ratio":"16:9"}'
+NEOGATE_API_KEY='你的 NeoGate 用户 API Key' \
+NEOGATE_BASE_URL='http://127.0.0.1:8080/v1' \
+NEOGATE_VIDEO_MODEL='sd_2.0_fast_discount' \
+NEOGATE_VIDEO_SIZE='1280x720' \
+NEOGATE_VIDEO_RESOLUTION='720p' \
+NEOGATE_VIDEO_RATIO='16:9' \
+NEOGATE_VIDEO_SECONDS='5' \
+NEOGATE_VIDEO_PROMPT='A cinematic tracking shot of a futuristic maglev train crossing a rainy neon city at night.' \
+python3 -m unittest -v backend.tests.smoke.test_openai_video
 ```
 
-生成的 JSON 快照和视频文件会保存到 `tests/output/openai_video/`。
-
-在 `backend/` 目录下运行视频冒烟测试：
-
-```bash
-python -m unittest tests.smoke.test_openai_video
-```
+GlobalAI OPC fast 模型支持 `480p/720p`，普通模型支持
+`480p/720p/1080p`，时长为 4 到 15 秒。环境变量优先于 `backend/.env`；
+测试结果保存在 `tests/output/openai_video/`。
 
 ## OpenAI 音频转写冒烟测试
 

@@ -130,6 +130,48 @@ pub(crate) struct PreparedResponseImageGenerationRequest {
     pub(crate) model: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssetType {
+    Image,
+    Video,
+    Audio,
+}
+
+impl AssetType {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "image" => Some(Self::Image),
+            "video" => Some(Self::Video),
+            "audio" => Some(Self::Audio),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Audio => "audio",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AssetCreateRequest {
+    pub(crate) asset_type: AssetType,
+    pub(crate) url: String,
+    pub(crate) name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedAsset {
+    pub(crate) upstream_asset_id: String,
+    pub(crate) asset_type: AssetType,
+    pub(crate) status: String,
+    pub(crate) name: Option<String>,
+    pub(crate) error_message: Option<String>,
+}
+
 pub(crate) trait ProviderAdapter: Sync {
     // Useful in adapter diagnostics and tests even when a call site only needs
     // the prepared upstream request.
@@ -207,6 +249,48 @@ pub(crate) trait ProviderAdapter: Sync {
         _status: &str,
     ) -> AppResult<Option<reqwest::Url>> {
         Ok(None)
+    }
+
+    fn supports_assets(&self, _model: &str) -> bool {
+        false
+    }
+
+    fn prepare_asset_create_request(
+        &self,
+        _upstream: &SelectedUpstream,
+        _model: &str,
+        _request: &AssetCreateRequest,
+    ) -> AppResult<PreparedUpstreamRequest> {
+        Err(crate::error::AppError::UpstreamUnavailable(
+            "upstream adapter does not support assets".to_string(),
+        ))
+    }
+
+    fn prepare_asset_detail_request(
+        &self,
+        _upstream: &SelectedUpstream,
+        _model: &str,
+        _upstream_asset_id: &str,
+    ) -> AppResult<PreparedUpstreamRequest> {
+        Err(crate::error::AppError::UpstreamUnavailable(
+            "upstream adapter does not support assets".to_string(),
+        ))
+    }
+
+    fn normalize_asset_response(&self, _body: Bytes) -> AppResult<NormalizedAsset> {
+        Err(crate::error::AppError::UpstreamUnavailable(
+            "upstream adapter does not support assets".to_string(),
+        ))
+    }
+
+    fn format_asset_reference(
+        &self,
+        _asset_type: AssetType,
+        _upstream_asset_id: &str,
+    ) -> AppResult<String> {
+        Err(crate::error::AppError::UpstreamUnavailable(
+            "upstream adapter does not support assets".to_string(),
+        ))
     }
 }
 

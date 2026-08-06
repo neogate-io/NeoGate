@@ -17,9 +17,9 @@ mod types;
 
 pub(crate) use registry::adapter_for_endpoint;
 pub(crate) use types::{
-    AdapterErrorDisposition, AdapterResponseMode, AnthropicCapabilities,
-    PreparedResponseImageGenerationRequest, PreparedUpstreamRequest, ProviderAdapter,
-    ProviderCapabilities, RelayRoute,
+    AdapterErrorDisposition, AdapterResponseMode, AnthropicCapabilities, AssetCreateRequest,
+    AssetType, NormalizedAsset, PreparedResponseImageGenerationRequest, PreparedUpstreamRequest,
+    ProviderAdapter, ProviderCapabilities, RelayRoute,
 };
 
 pub(crate) fn router() -> Router<Arc<AppState>> {

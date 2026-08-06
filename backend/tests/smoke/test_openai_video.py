@@ -174,7 +174,10 @@ def video_request_payload():
         "size": VIDEO_SIZE,
         "seconds": VIDEO_SECONDS,
     }
-    if VIDEO_MODEL.startswith("dreamina-seedance-"):
+    if VIDEO_MODEL.startswith("dreamina-seedance-") or VIDEO_MODEL in {
+        "sd_2.0_discount",
+        "sd_2.0_fast_discount",
+    }:
         payload.update(
             {
                 "ratio": VIDEO_RATIO or "16:9",

@@ -10,7 +10,10 @@ use crate::{
     },
 };
 
-use super::{AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute};
+use super::{
+    AdapterResponseMode, AssetCreateRequest, AssetType, NormalizedAsset, PreparedUpstreamRequest,
+    ProviderAdapter, RelayRoute,
+};
 
 pub(crate) static GLOBALAIOPC_ADAPTER: GlobalAiOpcAdapter = GlobalAiOpcAdapter;
 
@@ -92,6 +95,104 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
 
     fn prepares_video_request(&self, model: &str) -> bool {
         DiscountModel::parse(model).is_some()
+    }
+
+    fn supports_assets(&self, model: &str) -> bool {
+        DiscountModel::parse(model).is_some()
+    }
+
+    fn prepare_asset_create_request(
+        &self,
+        _upstream: &SelectedUpstream,
+        _model: &str,
+        request: &AssetCreateRequest,
+    ) -> AppResult<PreparedUpstreamRequest> {
+        let mut body = Map::new();
+        body.insert(
+            "assetType".to_string(),
+            Value::String(global_asset_type(request.asset_type).to_string()),
+        );
+        body.insert("url".to_string(), Value::String(request.url.clone()));
+        if let Some(name) = &request.name {
+            body.insert("name".to_string(), Value::String(name.clone()));
+        }
+        Ok(PreparedUpstreamRequest {
+            url: Self::video_base_path("/asset/seedance2/assetUpload"),
+            log_path: "/asset/seedance2/assetUpload".to_string(),
+            body: Bytes::from(serde_json::to_vec(&Value::Object(body))?),
+            extra_headers: HeaderMap::new(),
+            response_mode: AdapterResponseMode::Passthrough,
+        })
+    }
+
+    fn prepare_asset_detail_request(
+        &self,
+        _upstream: &SelectedUpstream,
+        _model: &str,
+        upstream_asset_id: &str,
+    ) -> AppResult<PreparedUpstreamRequest> {
+        Ok(PreparedUpstreamRequest {
+            url: Self::video_base_path("/asset/seedance2/assetDetail"),
+            log_path: "/asset/seedance2/assetDetail".to_string(),
+            body: Bytes::from(serde_json::to_vec(&serde_json::json!({
+                "assetId": upstream_asset_id,
+            }))?),
+            extra_headers: HeaderMap::new(),
+            response_mode: AdapterResponseMode::Passthrough,
+        })
+    }
+
+    fn normalize_asset_response(&self, body: Bytes) -> AppResult<NormalizedAsset> {
+        let value: Value = serde_json::from_slice(&body)?;
+        let object = value.as_object().ok_or_else(|| {
+            AppError::BadRequest("GlobalAI asset response must be an object".into())
+        })?;
+        let upstream_asset_id = object
+            .get("assetId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("GlobalAI asset response is missing assetId".into())
+            })?;
+        let asset_type = object
+            .get("assetType")
+            .and_then(Value::as_str)
+            .and_then(AssetType::parse)
+            .ok_or_else(|| {
+                AppError::BadRequest("GlobalAI asset response has invalid assetType".into())
+            })?;
+        let status = normalize_asset_status(
+            object
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("NONE"),
+        );
+        let error_message = object
+            .get("errorMessage")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        Ok(NormalizedAsset {
+            upstream_asset_id: upstream_asset_id.to_string(),
+            asset_type,
+            status,
+            name: object
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            error_message,
+        })
+    }
+
+    fn format_asset_reference(
+        &self,
+        _asset_type: AssetType,
+        upstream_asset_id: &str,
+    ) -> AppResult<String> {
+        if upstream_asset_id.trim().is_empty() {
+            return Err(AppError::BadRequest("upstream asset id is empty".into()));
+        }
+        Ok(format!("assetId://{upstream_asset_id}"))
     }
 
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
@@ -183,7 +284,7 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
         {
             object.insert("status".to_string(), Value::String(status));
         }
-        if let Some(total_tokens) = object.get("totalTokens").and_then(Value::as_i64) {
+        if let Some(total_tokens) = object.get("totalTokens").and_then(value_as_i64) {
             object.insert(
                 "usage".to_string(),
                 serde_json::json!({
@@ -237,6 +338,32 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
             ));
         }
         Ok(Some(url))
+    }
+}
+
+fn value_as_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str()?.trim().parse().ok())
+}
+
+fn global_asset_type(asset_type: AssetType) -> &'static str {
+    match asset_type {
+        AssetType::Image => "Image",
+        AssetType::Video => "Video",
+        AssetType::Audio => "Audio",
+    }
+}
+
+fn normalize_asset_status(status: &str) -> String {
+    match status.to_ascii_uppercase().as_str() {
+        "NONE" => "queued".to_string(),
+        "UPLOADING" | "PROCESSING" => "processing".to_string(),
+        "ACTIVE" => "active".to_string(),
+        "FAILED" => "failed".to_string(),
+        "EXPIRED" => "expired".to_string(),
+        "DELETED" => "deleted".to_string(),
+        _ => status.to_ascii_lowercase(),
     }
 }
 
@@ -400,6 +527,14 @@ fn validate_content(content: &[Value]) -> AppResult<()> {
                         "GlobalAI OPC video image/audio inputs do not support base64 URLs".into(),
                     ));
                 }
+                if let Some(asset_id) = value.strip_prefix("assetId://") {
+                    if asset_id.trim().is_empty() {
+                        return Err(AppError::BadRequest(
+                            "GlobalAI OPC asset reference must include an asset id".into(),
+                        ));
+                    }
+                    continue;
+                }
                 let url = reqwest::Url::parse(value).map_err(|_| {
                     AppError::BadRequest(
                         "GlobalAI OPC video inputs must use public http or https URLs".into(),
@@ -452,6 +587,23 @@ fn normalize_resolution(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn upstream() -> SelectedUpstream {
+        SelectedUpstream {
+            channel_id: 1,
+            channel_endpoint_id: 2,
+            channel_key_id: Some(3),
+            credential_id: None,
+            provider: "openai".into(),
+            channel_name: "globalaiopc".into(),
+            base_url: "http://apillm.globalaiopc.com/gw_llm_power".into(),
+            adapter_hint: None,
+            responses_chat_fallback: false,
+            secret: "test-key".into(),
+            account_id: None,
+            affinity: None,
+        }
+    }
+
     #[test]
     fn matches_only_globalaiopc_host() {
         assert!(matches_base_url(
@@ -474,6 +626,50 @@ mod tests {
     }
 
     #[test]
+    fn prepares_asset_create_requests_for_all_asset_types() {
+        for (asset_type, expected) in [
+            (AssetType::Image, "Image"),
+            (AssetType::Video, "Video"),
+            (AssetType::Audio, "Audio"),
+        ] {
+            let prepared = GLOBALAIOPC_ADAPTER
+                .prepare_asset_create_request(
+                    &upstream(),
+                    "sd_2.0_discount",
+                    &AssetCreateRequest {
+                        asset_type,
+                        url: "https://cdn.example.com/input".into(),
+                        name: Some("reference".into()),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                prepared.url,
+                "https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetUpload"
+            );
+            assert_eq!(prepared.log_path, "/asset/seedance2/assetUpload");
+            let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+            assert_eq!(body["assetType"], expected);
+            assert_eq!(body["url"], "https://cdn.example.com/input");
+            assert_eq!(body["name"], "reference");
+        }
+    }
+
+    #[test]
+    fn prepares_asset_detail_request() {
+        let prepared = GLOBALAIOPC_ADAPTER
+            .prepare_asset_detail_request(&upstream(), "sd_2.0_discount", "upstream-asset")
+            .unwrap();
+        assert_eq!(
+            prepared.url,
+            "https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetDetail"
+        );
+        assert_eq!(prepared.log_path, "/asset/seedance2/assetDetail");
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(body["assetId"], "upstream-asset");
+    }
+
+    #[test]
     fn normalizes_total_tokens_and_status() {
         let body = GLOBALAIOPC_ADAPTER
             .normalize_response_body(
@@ -484,6 +680,20 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["status"], "completed");
         assert_eq!(value["usage"]["total_tokens"], 123);
+    }
+
+    #[test]
+    fn normalizes_string_total_tokens_for_billing() {
+        let body = GLOBALAIOPC_ADAPTER
+            .normalize_response_body(
+                RelayRoute::Videos,
+                Bytes::from_static(br#"{"status":"completed","totalTokens":"40594"}"#),
+            )
+            .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["usage"]["input_tokens"], 40594);
+        assert_eq!(value["usage"]["output_tokens"], 0);
+        assert_eq!(value["usage"]["total_tokens"], 40594);
     }
 
     #[test]
@@ -537,12 +747,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_public_input_urls_and_fast_1080p() {
-        let non_public = serde_json::json!({
+    fn accepts_internal_asset_references_but_rejects_other_non_public_urls() {
+        let asset_reference = serde_json::json!({
             "model": "sd_2.0_discount",
             "content": [
                 {"type":"text", "text":"walk"},
                 {"type":"image_url", "role":"reference_image", "image_url":{"url":"assetId://asset-1"}}
+            ]
+        });
+        assert!(discount_request(
+            asset_reference.as_object().unwrap(),
+            DiscountModel::parse("sd_2.0_discount").unwrap(),
+        )
+        .is_ok());
+
+        let non_public = serde_json::json!({
+            "model": "sd_2.0_discount",
+            "content": [
+                {"type":"text", "text":"walk"},
+                {"type":"image_url", "role":"reference_image", "image_url":{"url":"ftp://example.com/image.png"}}
             ]
         });
         assert!(discount_request(
@@ -552,7 +775,10 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("public http or https"));
+    }
 
+    #[test]
+    fn rejects_fast_1080p() {
         let fast_1080p = serde_json::json!({
             "model": "sd_2.0_fast_discount",
             "resolution": "1080p",
@@ -563,6 +789,40 @@ mod tests {
             DiscountModel::parse("sd_2.0_fast_discount").unwrap()
         )
         .is_err());
+    }
+
+    #[test]
+    fn normalizes_asset_responses_and_formats_references() {
+        for (upstream, expected) in [
+            ("NONE", "queued"),
+            ("UPLOADING", "processing"),
+            ("PROCESSING", "processing"),
+            ("ACTIVE", "active"),
+            ("FAILED", "failed"),
+            ("EXPIRED", "expired"),
+            ("DELETED", "deleted"),
+        ] {
+            let normalized = GLOBALAIOPC_ADAPTER
+                .normalize_asset_response(Bytes::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "assetId": "upstream-asset",
+                        "assetType": "Image",
+                        "status": upstream,
+                        "errorMessage": "upload failed"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap();
+            assert_eq!(normalized.status, expected);
+            assert_eq!(normalized.asset_type, AssetType::Image);
+            assert_eq!(normalized.error_message.as_deref(), Some("upload failed"));
+        }
+        assert_eq!(
+            GLOBALAIOPC_ADAPTER
+                .format_asset_reference(AssetType::Video, "upstream-asset")
+                .unwrap(),
+            "assetId://upstream-asset"
+        );
     }
 
     #[test]

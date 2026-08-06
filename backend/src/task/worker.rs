@@ -11,7 +11,10 @@ use crate::{
     config::UPSTREAM_TIMEOUT,
     error::{reqwest_status, AppResult},
     provider::adapters::{adapter_for_endpoint, bailian_asr, RelayRoute},
-    relay::{forward_anthropic_bound, forward_openai_bound, selector::SelectedUpstream},
+    relay::{
+        forward_anthropic_bound, forward_openai_bound, forward_openai_video_task_bound,
+        selector::SelectedUpstream,
+    },
     AppState,
 };
 
@@ -187,7 +190,13 @@ async fn poll_task(state: &Arc<AppState>, task: UpstreamTask) -> AppResult<()> {
             UpstreamTaskType::OpenAiVideo => {
                 let path = format!("/v1/videos/{}", task.upstream_task_id);
                 poll_upstream_response(
-                    forward_openai_bound(state, &upstream, Method::GET, &path, None),
+                    forward_openai_video_task_bound(
+                        state,
+                        &upstream,
+                        Method::GET,
+                        &path,
+                        task.upstream_model.as_deref(),
+                    ),
                     task.id,
                     task.task_type,
                 )

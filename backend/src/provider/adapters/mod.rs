@@ -8,7 +8,7 @@ pub(crate) mod bailian;
 pub(crate) mod bailian_asr;
 mod compatible;
 mod doubao;
-#[cfg(feature = "adapter-haxicloud")]
+mod globalaiopc;
 mod haxicloud;
 mod jdcloud;
 mod newapi;
@@ -24,7 +24,5 @@ pub(crate) use types::{
 
 pub(crate) fn router() -> Router<Arc<AppState>> {
     let router = Router::new();
-    #[cfg(feature = "adapter-haxicloud")]
-    let router = router.merge(haxicloud::router());
-    router
+    router.merge(haxicloud::router())
 }

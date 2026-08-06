@@ -319,7 +319,6 @@ impl Selector {
         self.select_from_snapshot(&scope)
     }
 
-    #[cfg(feature = "adapter-haxicloud")]
     pub(crate) async fn select_matching_endpoint(
         &self,
         pool: &PgPool,

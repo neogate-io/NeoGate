@@ -146,6 +146,10 @@ impl ProviderAdapter for HaxicloudAdapter {
         "haxicloud"
     }
 
+    fn prepares_video_request(&self, _model: &str) -> bool {
+        true
+    }
+
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
         if route == RelayRoute::Videos {
             tasks_url(base_url)

@@ -244,6 +244,22 @@ pub(crate) async fn forward_openai_bound(
     forward_openai_bound_with_headers(state, upstream, method, path, body, &HeaderMap::new()).await
 }
 
+pub(crate) async fn forward_openai_video_task_bound(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    path: &str,
+    model: Option<&str>,
+) -> AppResult<reqwest::Response> {
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
+    let target = adapter.resolve_video_task_url(&upstream.base_url, path, model);
+    forward_openai_bound_to(state, upstream, method, None, &HeaderMap::new(), target).await
+}
+
 pub(crate) async fn forward_openai_bound_with_headers(
     state: &AppState,
     upstream: &SelectedUpstream,
@@ -257,7 +273,18 @@ pub(crate) async fn forward_openai_bound_with_headers(
         &upstream.base_url,
         upstream.adapter_hint.as_deref(),
     );
-    let (url, log_path) = adapter.resolve_bound_url(&upstream.base_url, path);
+    let target = adapter.resolve_bound_url(&upstream.base_url, path);
+    forward_openai_bound_to(state, upstream, method, body, headers, target).await
+}
+
+async fn forward_openai_bound_to(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    body: Option<Bytes>,
+    headers: &HeaderMap,
+    (url, log_path): (String, String),
+) -> AppResult<reqwest::Response> {
     send_upstream_request(upstream, UpstreamProtocol::Openai, &log_path, || {
         let mut request = state
             .http

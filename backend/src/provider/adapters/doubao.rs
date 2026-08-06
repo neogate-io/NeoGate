@@ -23,6 +23,10 @@ impl ProviderAdapter for DoubaoAdapter {
         "doubao"
     }
 
+    fn prepares_video_request(&self, _model: &str) -> bool {
+        true
+    }
+
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
         match route {
             RelayRoute::Videos => seedance_tasks_url(base_url),

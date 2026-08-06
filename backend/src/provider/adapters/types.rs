@@ -142,8 +142,21 @@ pub(crate) trait ProviderAdapter: Sync {
         (upstream_url(base_url, path), path.to_string())
     }
 
+    fn resolve_video_task_url(
+        &self,
+        base_url: &str,
+        path: &str,
+        _model: Option<&str>,
+    ) -> (String, String) {
+        self.resolve_bound_url(base_url, path)
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    fn prepares_video_request(&self, _model: &str) -> bool {
+        false
     }
 
     fn classify_http_error(
@@ -185,6 +198,15 @@ pub(crate) trait ProviderAdapter: Sync {
 
     fn normalize_response_body(&self, _route: RelayRoute, body: Bytes) -> AppResult<Bytes> {
         Ok(body)
+    }
+
+    fn video_content_url(
+        &self,
+        _model: Option<&str>,
+        _metadata: &serde_json::Value,
+        _status: &str,
+    ) -> AppResult<Option<reqwest::Url>> {
+        Ok(None)
     }
 }
 

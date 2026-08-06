@@ -61,13 +61,14 @@ pub(crate) use request::{
     RelayRequestParams,
 };
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext, StreamUsageParser};
-#[cfg(feature = "adapter-haxicloud")]
 pub(crate) use upstream::forward_openai_bound_with_headers;
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
     log_relay_upstream_failure, relay_upstream_error, upstream_url,
 };
-pub(crate) use upstream::{forward_anthropic_bound, forward_openai_bound};
+pub(crate) use upstream::{
+    forward_anthropic_bound, forward_openai_bound, forward_openai_video_task_bound,
+};
 use upstream_task::{UpstreamTask, UpstreamTaskType};
 
 const UPSTREAM_ERROR_BODY_READ_LIMIT: usize = 64 * 1024;

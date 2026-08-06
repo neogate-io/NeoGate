@@ -1,17 +1,21 @@
-#[cfg(feature = "adapter-haxicloud")]
+use super::globalaiopc;
 use super::haxicloud::{matches_base_url, HAXICLOUD_ADAPTER};
 use super::{
     bailian::BAILIAN_ADAPTER, compatible::COMPATIBLE_ADAPTER, doubao::DOUBAO_ADAPTER,
-    jdcloud::JDCLOUD_ADAPTER, newapi::NEWAPI_ADAPTER, ProviderAdapter,
+    globalaiopc::GLOBALAIOPC_ADAPTER, jdcloud::JDCLOUD_ADAPTER, newapi::NEWAPI_ADAPTER,
+    ProviderAdapter,
 };
 
 /// `hint` 优先于 `provider` 被用于选取 adapter，用于"openai 兼容"渠道等
 /// provider 字段已不携带适配信息的场景。
 pub(crate) fn adapter_for_endpoint(
     provider: &str,
-    _base_url: &str,
+    base_url: &str,
     hint: Option<&str>,
 ) -> &'static dyn ProviderAdapter {
+    if provider.eq_ignore_ascii_case("openai") && globalaiopc::matches_base_url(base_url) {
+        return &GLOBALAIOPC_ADAPTER;
+    }
     // hint 显式指定时优先使用；当前仅支持 "newapi"，未来可扩展。
     if hint
         .map(|h| h.eq_ignore_ascii_case("newapi"))
@@ -19,8 +23,7 @@ pub(crate) fn adapter_for_endpoint(
     {
         return &NEWAPI_ADAPTER;
     }
-    #[cfg(feature = "adapter-haxicloud")]
-    if provider.eq_ignore_ascii_case("custom") && matches_base_url(_base_url) {
+    if provider.eq_ignore_ascii_case("custom") && matches_base_url(base_url) {
         return &HAXICLOUD_ADAPTER;
     }
     if provider.eq_ignore_ascii_case("qwen") {
@@ -40,7 +43,29 @@ pub(crate) fn adapter_for_endpoint(
 mod tests {
     use super::*;
 
-    #[cfg(feature = "adapter-haxicloud")]
+    #[test]
+    fn selects_globalaiopc_only_for_exact_openai_host() {
+        assert_eq!(
+            adapter_for_endpoint("openai", "http://apillm.globalaiopc.com/gw_llm_power", None)
+                .name(),
+            "globalaiopc"
+        );
+        assert_eq!(
+            adapter_for_endpoint(
+                "openai",
+                "http://apillm.globalaiopc.com.example.com/gw_llm_power",
+                None
+            )
+            .name(),
+            "compatible"
+        );
+        assert_eq!(
+            adapter_for_endpoint("custom", "http://apillm.globalaiopc.com/gw_llm_power", None)
+                .name(),
+            "compatible"
+        );
+    }
+
     #[test]
     fn selects_haxicloud_only_for_matching_custom_host() {
         assert_eq!(
@@ -68,15 +93,6 @@ mod tests {
         assert_eq!(
             adapter_for_endpoint("openai", "https://example.com", Some("newapi")).name(),
             "newapi"
-        );
-    }
-
-    #[cfg(not(feature = "adapter-haxicloud"))]
-    #[test]
-    fn disabled_haxicloud_falls_back_to_compatible_adapter() {
-        assert_eq!(
-            adapter_for_endpoint("custom", "https://token.haxicloud.com", None).name(),
-            "compatible"
         );
     }
 }

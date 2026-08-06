@@ -1,12 +1,14 @@
 use std::{sync::Arc, time::Instant};
 
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::{header, HeaderMap, HeaderValue, Method},
     response::Response,
 };
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
+use futures_util::StreamExt;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -17,8 +19,8 @@ use crate::{
     provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_task_json_response, forward_openai_bound,
-        forward_openai_with_content_type, forward_prepared_openai, raw_upstream_response,
-        read_upstream_error_body, record_upstream_http_failure,
+        forward_openai_video_task_bound, forward_openai_with_content_type, forward_prepared_openai,
+        raw_upstream_response, read_upstream_error_body, record_upstream_http_failure,
         record_upstream_transport_failure_for_failover, release_empty_hold,
         reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
         response_from_bytes, rewrite_relay_body_model, selector::AttemptedUpstream,
@@ -69,7 +71,14 @@ pub(crate) async fn openai_video(
         upstream_task::fetch_task_for_auth(&state, &auth, UpstreamTaskType::OpenAiVideo, &video_id)
             .await?;
     let path = format!("/v1/videos/{video_id}");
-    let response = forward_openai_bound(&state, &upstream, Method::GET, &path, None).await?;
+    let response = forward_openai_video_task_bound(
+        &state,
+        &upstream,
+        Method::GET,
+        &path,
+        task.upstream_model.as_deref(),
+    )
+    .await?;
     finish_task_json_response(state, auth, task, response).await
 }
 
@@ -78,12 +87,53 @@ pub(crate) async fn openai_video_content(
     auth: UserAuth,
     Path(video_id): Path<String>,
 ) -> AppResult<Response> {
-    let (_task, upstream) =
+    let (task, upstream) =
         upstream_task::fetch_task_for_auth(&state, &auth, UpstreamTaskType::OpenAiVideo, &video_id)
             .await?;
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
+    if let Some(url) = adapter.video_content_url(
+        task.upstream_model.as_deref(),
+        &task.upstream_metadata,
+        &task.status,
+    )? {
+        return proxy_video_content_url(&state, url).await;
+    }
     let path = format!("/v1/videos/{video_id}/content");
     let response = forward_openai_bound(&state, &upstream, Method::GET, &path, None).await?;
     raw_upstream_response(response).await
+}
+
+async fn proxy_video_content_url(state: &AppState, url: reqwest::Url) -> AppResult<Response> {
+    let response = state.http.get(url).send().await?;
+    let status = reqwest_status(response.status());
+    if !status.is_success() {
+        return Err(AppError::UpstreamUnavailable(format!(
+            "video content CDN returned {}",
+            status.as_u16()
+        )));
+    }
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("video/mp4"));
+    let content_length = response.headers().get(header::CONTENT_LENGTH).cloned();
+    let stream = response
+        .bytes_stream()
+        .map(|result| result.map_err(std::io::Error::other));
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type);
+    if let Some(content_length) = content_length {
+        builder = builder.header(header::CONTENT_LENGTH, content_length);
+    }
+    builder
+        .body(Body::from_stream(stream))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
 }
 
 async fn relay_openai_video_create(
@@ -192,15 +242,26 @@ async fn relay_openai_video_create(
             &ctx.upstream.base_url,
             ctx.upstream.adapter_hint.as_deref(),
         );
-        let response = if meta.is_json || matches!(adapter.name(), "doubao" | "haxicloud") {
-            let prepared = adapter.prepare_openai_request(
+        let response = if meta.is_json || adapter.prepares_video_request(&resolved.target_model) {
+            let prepared = match adapter.prepare_openai_request(
                 &ctx.upstream,
                 protocol,
                 RelayRoute::Videos,
                 upstream_body.clone(),
                 &headers,
                 false,
-            )?;
+            ) {
+                Ok(prepared) => prepared,
+                Err(err) => {
+                    release_empty_hold(
+                        &ctx.state,
+                        ctx.hold,
+                        "video request rejected by upstream adapter",
+                    )
+                    .await;
+                    return Err(err);
+                }
+            };
             ctx.upstream_request_path = Some(prepared.log_path.clone());
             ctx.upstream_response_mode = Some(prepared.response_mode.as_str());
             forward_prepared_openai(&state, &ctx.upstream, protocol, &headers, prepared).await
@@ -404,13 +465,13 @@ fn json_video_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let model = required_json_string_field(&value, "model")?;
     Ok(VideoRequestMeta {
-        model,
+        model: model.clone(),
         request_params: RelayRequestParams::video(
             json_string_field(&value, "size"),
             positive_i64_field(&value, "seconds")
                 .or_else(|| positive_i64_field(&value, "duration")),
         ),
-        video_billing_input: video::json_video_billing_input(&value),
+        video_billing_input: video::json_video_billing_input(&value, Some(&model)),
         content_type,
         is_json: true,
     })

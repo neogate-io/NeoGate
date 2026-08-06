@@ -63,11 +63,12 @@ pub fn video_billing_input(
     }
 }
 
-pub fn json_video_billing_input(value: &Value) -> VideoBillingInput {
+pub fn json_video_billing_input(value: &Value, model: Option<&str>) -> VideoBillingInput {
+    let resolution = string_field(value, "resolution")
+        .or_else(|| string_field(value, "size"))
+        .or_else(|| model.and_then(model_resolution).map(str::to_string));
     video_billing_input(
-        string_field(value, "resolution")
-            .or_else(|| string_field(value, "size"))
-            .as_deref(),
+        resolution.as_deref(),
         positive_i64_field(value, "duration").or_else(|| positive_i64_field(value, "seconds")),
         json_has_video_input(value),
     )
@@ -317,6 +318,13 @@ fn normalize_resolution(value: Option<&str>) -> String {
     }
 }
 
+fn model_resolution(model: &str) -> Option<&'static str> {
+    let model = model.to_ascii_lowercase();
+    ["1080p", "720p", "480p"]
+        .into_iter()
+        .find(|resolution| model.ends_with(resolution))
+}
+
 fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
     if tokens <= 0 || price_micros <= 0 {
         return 0;
@@ -364,19 +372,29 @@ mod tests {
 
     #[test]
     fn defaults_resolution_and_duration() {
-        let input = json_video_billing_input(&json!({"model":"doubao-seedance-2.0"}));
+        let input = json_video_billing_input(&json!({"model":"doubao-seedance-2.0"}), None);
         assert_eq!(input.resolution, "480p");
         assert_eq!(input.duration_seconds, 5);
         assert!(!input.has_video_input);
     }
 
     #[test]
+    fn infers_resolution_from_full_model_code() {
+        let input =
+            json_video_billing_input(&json!({"duration": 5}), Some("provider-video-model-1080p"));
+        assert_eq!(input.resolution, "1080p");
+    }
+
+    #[test]
     fn detects_video_input_and_resolution_tier() {
-        let input = json_video_billing_input(&json!({
-            "resolution": "1280x720",
-            "duration": "8",
-            "content": [{"type":"video_url","video_url":{"url":"https://example.test/a.mp4"}}]
-        }));
+        let input = json_video_billing_input(
+            &json!({
+                "resolution": "1280x720",
+                "duration": "8",
+                "content": [{"type":"video_url","video_url":{"url":"https://example.test/a.mp4"}}]
+            }),
+            None,
+        );
         assert_eq!(input.resolution, "720p");
         assert_eq!(input.duration_seconds, 8);
         assert!(input.has_video_input);

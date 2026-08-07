@@ -86,7 +86,8 @@ const providerDisplayNames = computed(
 )
 
 function providerDisplayName(provider: string) {
-  return providerDisplayNames.value.get(provider) ?? provider
+  const displayName = providerDisplayNames.value.get(provider) ?? provider
+  return displayName.replace(/\s*兼容\s*$/, '')
 }
 
 const sortedPricingTemplates = computed(() => {

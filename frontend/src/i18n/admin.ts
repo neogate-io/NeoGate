@@ -300,7 +300,7 @@ export const adminMessages = {
     syncReferencePricesConfirmTitle: '同步参考价',
     syncReferencePricesConfirmIntro: '从 models.dev 拉取最新公开模型价格，同步到本地参考价库。',
     syncReferencePricesConfirmIntroCny:
-      '从本地人民币价格目录拉取最新模型价格，同步到本地参考价库。',
+      '从 Moligate 人民币价格目录拉取最新模型价格，同步到本地参考价库。',
     syncReferencePricesConfirmSafe: '这一步只更新参考数据，不会修改已配置的渠道价格。',
     syncReferencePricesConfirmApply: '需要使用参考价时，请在配置价格里点击“一键应用参考价”。',
     syncReferencePricesConfirmButton: '开始同步',
@@ -310,7 +310,7 @@ export const adminMessages = {
     referencePricesSourceUnavailable:
       '暂时无法连接 models.dev，参考价库未更新。请稍后重试，或检查服务器网络/TLS 配置。',
     referencePricesSourceUnavailableCny:
-      '暂时无法获取本地人民币价格目录，参考价库未更新。请稍后重试，或检查服务器网络/TLS 配置。',
+      '暂时无法获取 Moligate 人民币价格目录，参考价库未更新。请稍后重试，或检查服务器网络/TLS 配置。',
     versionCheck: '版本检查',
     versionCheckDescription: '从 GitHub Releases 获取 NeoGate 项目的最新发布版本。',
     versionNotChecked: '尚未检查',
@@ -952,7 +952,7 @@ export const adminMessages = {
     syncReferencePricesConfirmIntro:
       'Pull the latest public model prices from models.dev and sync them to the local reference catalog.',
     syncReferencePricesConfirmIntroCny:
-      'Pull the latest model prices from the local CNY pricing catalog and sync them to the local reference catalog.',
+      "Pull the latest model prices from Moligate's CNY pricing catalog and sync them to the local reference catalog.",
     syncReferencePricesConfirmSafe:
       'This only updates reference data. Configured channel prices will not be changed.',
     syncReferencePricesConfirmApply:
@@ -964,7 +964,7 @@ export const adminMessages = {
     referencePricesSourceUnavailable:
       'Could not reach models.dev, so the reference catalog was not updated. Try again later or check the server network/TLS configuration.',
     referencePricesSourceUnavailableCny:
-      'Could not fetch the local CNY pricing catalog, so the reference catalog was not updated. Try again later or check the server network/TLS configuration.',
+      "Could not fetch Moligate's CNY pricing catalog, so the reference catalog was not updated. Try again later or check the server network/TLS configuration.",
     versionCheck: 'Version check',
     versionCheckDescription: 'Fetch the latest NeoGate release from GitHub Releases.',
     versionNotChecked: 'Not checked',

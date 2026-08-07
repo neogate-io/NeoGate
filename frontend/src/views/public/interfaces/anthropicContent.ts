@@ -28,8 +28,15 @@ export function useAnthropicContent() {
     )
   )
 
+  // Picks the zh/en variant of the prompt text embedded in code samples.
+  const pickText = (zh: string, en: string) => (locale.value === 'zh-CN' ? zh : en)
+
   const quickStart = computed(() => {
     const apiKeyPlaceholder = locale.value === 'zh-CN' ? '<你的 API Key>' : '<your API key>'
+    const introPrompt = pickText(
+      `用一句话介绍 ${siteName.value}`,
+      `Introduce ${siteName.value} in one sentence`
+    )
     return `export BASE_URL="${siteOrigin.value}"
 export API_KEY="${apiKeyPlaceholder}"
 
@@ -41,7 +48,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
     "model": "claude-3-5-sonnet-latest",
     "max_tokens": 1024,
     "messages": [
-      { "role": "user", "content": "用一句话介绍 ${siteName.value}" }
+      { "role": "user", "content": "${introPrompt}" }
     ]
   }'`
   })
@@ -54,14 +61,15 @@ curl "$BASE_URL/anthropic/v1/messages" \\
   -d '{
     "model": "claude-3-5-sonnet-latest",
     "max_tokens": 1024,
-    "system": "你是一个简洁的技术助手。",
+    "system": "${pickText('你是一个简洁的技术助手。', 'You are a concise technical assistant.')}",
     "messages": [
-      { "role": "user", "content": "说明 ${siteName.value} 的 Anthropic 兼容接口如何鉴权" }
+      { "role": "user", "content": "${pickText(`说明 ${siteName.value} 的 Anthropic 兼容接口如何鉴权`, `Explain how ${siteName.value}'s Anthropic-compatible API authenticates requests`)}" }
     ]
   }'`
   )
 
-  const streamSample = `curl "$BASE_URL/anthropic/v1/messages" \\
+  const streamSample = computed(
+    () => `curl "$BASE_URL/anthropic/v1/messages" \\
   -H "x-api-key: $API_KEY" \\
   -H "anthropic-version: 2023-06-01" \\
   -H "Content-Type: application/json" \\
@@ -69,12 +77,14 @@ curl "$BASE_URL/anthropic/v1/messages" \\
     "model": "claude-3-5-sonnet-latest",
     "max_tokens": 1024,
     "messages": [
-      { "role": "user", "content": "连续输出 3 个要点" }
+      { "role": "user", "content": "${pickText('连续输出 3 个要点', 'List 3 key points')}" }
     ],
     "stream": true
   }'`
+  )
 
-  const batchCreate = `curl "$BASE_URL/v1/messages/batches" \\
+  const batchCreate = computed(
+    () => `curl "$BASE_URL/v1/messages/batches" \\
   -H "x-api-key: $API_KEY" \\
   -H "anthropic-version: 2023-06-01" \\
   -H "Content-Type: application/json" \\
@@ -86,12 +96,13 @@ curl "$BASE_URL/anthropic/v1/messages" \\
           "model": "claude-3-5-sonnet-latest",
           "max_tokens": 1024,
           "messages": [
-            { "role": "user", "content": "总结这段文本" }
+            { "role": "user", "content": "${pickText('总结这段文本', 'Summarize this text')}" }
           ]
         }
       }
     ]
   }'`
+  )
 
   const batchList = `curl "$BASE_URL/v1/messages/batches?limit=20" \\
   -H "x-api-key: $API_KEY" \\
@@ -125,10 +136,10 @@ curl "$BASE_URL/anthropic/v1/messages" \\
     { title: pickSampleTitle('创建消息', 'Messages'), code: messageSample.value }
   ])
   const streamSamples = computed<EndpointSample[]>(() => [
-    { title: pickSampleTitle('Messages 流式', 'Messages'), code: streamSample }
+    { title: pickSampleTitle('Messages 流式', 'Messages'), code: streamSample.value }
   ])
   const batchCreateSamples = computed<EndpointSample[]>(() => [
-    { title: pickSampleTitle('创建批量任务', 'Create Batch'), code: batchCreate }
+    { title: pickSampleTitle('创建批量任务', 'Create Batch'), code: batchCreate.value }
   ])
   const batchManageSamples = computed<EndpointSample[]>(() => [
     { title: pickSampleTitle('列出批量任务', 'List Batches'), code: batchList },

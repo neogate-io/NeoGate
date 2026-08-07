@@ -11,10 +11,24 @@ export const router = createRouter({
   scrollBehavior(to, _from, savedPosition) {
     if (savedPosition) return savedPosition
     if (to.hash) {
+      // Section components load asynchronously (defineAsyncComponent), so the
+      // hash target may not exist yet right after navigation. Wait briefly for
+      // it to mount; fall back to the top of the page if it never appears.
       return new Promise((resolve) => {
-        window.setTimeout(() => {
-          resolve({ el: to.hash, top: 96, behavior: 'smooth' })
-        }, 0)
+        let attempts = 0
+        const tryResolve = () => {
+          if (document.querySelector(to.hash)) {
+            resolve({ el: to.hash, top: 96, behavior: 'smooth' })
+            return
+          }
+          attempts += 1
+          if (attempts >= 20) {
+            resolve({ top: 0 })
+            return
+          }
+          window.setTimeout(tryResolve, 50)
+        }
+        tryResolve()
       })
     }
     return { top: 0 }
@@ -42,7 +56,7 @@ export const router = createRouter({
       path: '/payment/return',
       name: 'paymentReturn',
       component: () => import('../views/public/PaymentReturnView.vue'),
-      meta: { messageKey: 'paymentSettings' }
+      meta: { messageKey: 'paymentSettings', user: true }
     },
     {
       path: '/interfaces',

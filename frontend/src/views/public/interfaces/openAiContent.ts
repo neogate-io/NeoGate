@@ -27,8 +27,15 @@ export function useOpenAiContent() {
     )
   )
 
+  // Picks the zh/en variant of the prompt text embedded in code samples.
+  const pickText = (zh: string, en: string) => (locale.value === 'zh-CN' ? zh : en)
+
   const quickStart = computed(() => {
     const apiKeyPlaceholder = locale.value === 'zh-CN' ? '<你的 API Key>' : '<your API key>'
+    const introPrompt = pickText(
+      `用一句话介绍 ${siteName.value}`,
+      `Introduce ${siteName.value} in one sentence`
+    )
     return `export BASE_URL="${siteOrigin.value}"
 export API_KEY="${apiKeyPlaceholder}"
 
@@ -38,59 +45,68 @@ curl "$BASE_URL/v1/chat/completions" \\
   -d '{
     "model": "gpt-5.5",
     "messages": [
-      { "role": "user", "content": "用一句话介绍 ${siteName.value}" }
+      { "role": "user", "content": "${introPrompt}" }
     ]
   }'`
   })
 
-  const chatCompletionsStream = `curl "$BASE_URL/v1/chat/completions" \\
+  const chatCompletionsStream = computed(
+    () => `curl "$BASE_URL/v1/chat/completions" \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.5",
     "messages": [
-      { "role": "user", "content": "连续输出 3 个要点" }
+      { "role": "user", "content": "${pickText('连续输出 3 个要点', 'List 3 key points')}" }
     ],
     "stream": true
   }'`
+  )
 
-  const responsesCreate = `curl "$BASE_URL/v1/responses" \\
+  const responsesCreate = computed(
+    () => `curl "$BASE_URL/v1/responses" \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.5",
-    "input": "写一个 TypeScript 防抖函数",
+    "input": "${pickText('写一个 TypeScript 防抖函数', 'Write a TypeScript debounce function')}",
     "stream": false
   }'`
+  )
 
-  const responsesStream = `curl -N "$BASE_URL/v1/responses" \\
+  const responsesStream = computed(
+    () => `curl -N "$BASE_URL/v1/responses" \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.5",
-    "input": "连续输出 3 个排查 API 问题的步骤",
+    "input": "${pickText('连续输出 3 个排查 API 问题的步骤', 'List 3 steps to troubleshoot API issues')}",
     "stream": true
   }'`
+  )
 
-  const responseBackground = `curl "$BASE_URL/v1/responses" \\
+  const responseBackground = computed(
+    () => `curl "$BASE_URL/v1/responses" \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.5",
-    "input": "生成一份 500 字的接口迁移说明",
+    "input": "${pickText('生成一份 500 字的接口迁移说明', 'Write a 500-word API migration guide')}",
     "background": true,
     "store": true
   }'`
+  )
 
   const responseStreamRetrieve = `curl -N "$BASE_URL/v1/responses/resp_123?stream=true" \\
   -H "Authorization: Bearer $API_KEY"`
 
-  const responseImageGeneration = `curl "$BASE_URL/v1/responses" \\
+  const responseImageGeneration = computed(
+    () => `curl "$BASE_URL/v1/responses" \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.5",
-    "input": "生成一张赛博朋克风格的白猫坐在霓虹灯下的图片",
+    "input": "${pickText('生成一张赛博朋克风格的白猫坐在霓虹灯下的图片', 'Generate a cyberpunk-style image of a white cat sitting under neon lights')}",
     "image_format": "url",
     "tools": [
       {
@@ -103,6 +119,7 @@ curl "$BASE_URL/v1/chat/completions" \\
     "background": true,
     "store": true
   }'`
+  )
 
   const responseImageEdit = `IMG_B64="$(base64 < input.jpg | tr -d '\\n')"
 
@@ -288,7 +305,7 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="gpt-5.5",
     messages=[
-        {"role": "user", "content": "用一句话介绍 ${siteName.value}"}
+        {"role": "user", "content": "${pickText(`用一句话介绍 ${siteName.value}`, `Introduce ${siteName.value} in one sentence`)}"}
     ],
 )
 
@@ -307,7 +324,7 @@ const client = new OpenAI({
 
 const response = await client.responses.create({
   model: "gpt-5.5",
-  input: "写一个 TypeScript 防抖函数",
+  input: "${pickText('写一个 TypeScript 防抖函数', 'Write a TypeScript debounce function')}",
 });
 
 console.log(response.output_text);`
@@ -318,17 +335,17 @@ console.log(response.output_text);`
   const chatCompletionsSamples = computed<EndpointSample[]>(() => [
     {
       title: pickSampleTitle('Chat Completions 流式', 'Chat Completions Stream'),
-      code: chatCompletionsStream
+      code: chatCompletionsStream.value
     }
   ])
   const responsesCreateSamples = computed<EndpointSample[]>(() => [
-    { title: pickSampleTitle('创建 Response', 'Responses Create'), code: responsesCreate },
-    { title: pickSampleTitle('Responses 流式', 'Responses Stream'), code: responsesStream }
+    { title: pickSampleTitle('创建 Response', 'Responses Create'), code: responsesCreate.value },
+    { title: pickSampleTitle('Responses 流式', 'Responses Stream'), code: responsesStream.value }
   ])
   const backgroundResponseSamples = computed<EndpointSample[]>(() => [
     {
       title: pickSampleTitle('创建后台 Response', 'Create Background Response'),
-      code: responseBackground
+      code: responseBackground.value
     }
   ])
   const responseManageSamples = computed<EndpointSample[]>(() => [
@@ -353,7 +370,7 @@ console.log(response.output_text);`
   const imageAsyncSamples = computed<EndpointSample[]>(() => [
     {
       title: pickSampleTitle('后台文生图', 'Background Text to Image'),
-      code: responseImageGeneration
+      code: responseImageGeneration.value
     },
     {
       title: pickSampleTitle('后台图生图', 'Background Image to Image'),

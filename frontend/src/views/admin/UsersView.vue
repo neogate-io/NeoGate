@@ -34,6 +34,7 @@ import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useLocale } from '../../composables/useLocale'
+import { useLatestTask } from '../../composables/useLatestTask'
 import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { CreditBalance, User, UserGroup, UserKey, UserStatus } from '../../types/admin'
@@ -109,6 +110,7 @@ const userForm = reactive<UserForm>({
 const userKeysDialogVisible = ref(false)
 const userKeysLoading = ref(false)
 const selectedUserKeys = ref<UserKey[]>([])
+const userKeysTask = useLatestTask(userKeysLoading)
 const amountMajor = ref(DEFAULT_RECHARGE_AMOUNT)
 const {
   currentPage: usersCurrentPage,
@@ -302,7 +304,11 @@ async function openUserKeysDialog(row: User) {
   selectedUser.value = row
   userKeysDialogVisible.value = true
   selectedUserKeys.value = []
-  await withUserKeysLoading(loadSelectedUserKeys)
+  try {
+    await loadSelectedUserKeys()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
 }
 
 async function copyApiKey(row: UserKey) {
@@ -437,23 +443,19 @@ function exportUsers() {
 }
 
 async function loadSelectedUserKeys() {
-  if (!selectedUser.value) return
-  const page = await getUserKeys({
-    userId: selectedUser.value.id,
-    defaultProjectOnly: true,
-    limit: USER_KEY_DIALOG_LIMIT
-  })
-  selectedUserKeys.value = page.items
-}
-
-async function withUserKeysLoading(task: () => Promise<void>) {
-  await withLoading(userKeysLoading, async () => {
-    try {
-      await task()
-    } catch (err) {
-      ElMessage.error(readError(err))
+  const userId = selectedUser.value?.id
+  if (!userId) return
+  await userKeysTask.run(
+    () =>
+      getUserKeys({
+        userId,
+        defaultProjectOnly: true,
+        limit: USER_KEY_DIALOG_LIMIT
+      }),
+    (page) => {
+      if (selectedUser.value?.id === userId) selectedUserKeys.value = page.items
     }
-  })
+  )
 }
 
 async function loadUserGroups() {

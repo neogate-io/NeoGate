@@ -106,8 +106,9 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
         for i = 1, account_count do
           local list_key = KEYS[i]
           local total_key = KEYS[account_count + i]
-          local total = redis.call('GET', total_key)
-          if not total then
+          local total = tonumber(redis.call('GET', total_key))
+          -- total 不存在或为负（崩溃后 list/total 不同步）时，从 list 重建
+          if not total or total < 0 then
             local rebuilt = 0
             local items = redis.call('LRANGE', list_key, 0, -1)
             for _, item in ipairs(items) do
@@ -115,9 +116,9 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
               rebuilt = rebuilt + tonumber(segment_amount)
             end
             redis.call('SET', total_key, rebuilt)
-            total = tostring(rebuilt)
+            total = rebuilt
           end
-          available = available + tonumber(total)
+          available = available + total
         end
         if available < amount then
           return {}
@@ -162,8 +163,9 @@ static REDIS_AVAILABLE_CREDIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(||
         for i = 1, account_count do
           local list_key = KEYS[i]
           local total_key = KEYS[account_count + i]
-          local total = redis.call('GET', total_key)
-          if not total then
+          local total = tonumber(redis.call('GET', total_key))
+          -- total 不存在或为负时，从 list 重建
+          if not total or total < 0 then
             local rebuilt = 0
             local items = redis.call('LRANGE', list_key, 0, -1)
             for _, item in ipairs(items) do
@@ -171,9 +173,9 @@ static REDIS_AVAILABLE_CREDIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(||
               rebuilt = rebuilt + tonumber(segment_amount)
             end
             redis.call('SET', total_key, rebuilt)
-            total = tostring(rebuilt)
+            total = rebuilt
           end
-          available = available + tonumber(total)
+          available = available + total
         end
         return available
         "#,

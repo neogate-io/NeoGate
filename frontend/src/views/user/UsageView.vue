@@ -6,6 +6,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
+import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import {
   cacheWriteTokens,
@@ -18,6 +19,7 @@ import {
 
 const { locale, t } = useLocale()
 const { formatMoney } = useBillingCurrency()
+const { downloading: exporting, run: runDownload } = useDownloadTask()
 const DEFAULT_PAGE_SIZE = 20
 const loadingRowCount = 3
 const dateRange = ref<[Date, Date] | null>(null)
@@ -180,41 +182,43 @@ async function handleDateRangeChange() {
 }
 
 async function exportUsage() {
-  const exportPage = await getUserUsage(
-    1,
-    1000,
-    usageQueryRange.value.start,
-    usageQueryRange.value.end
-  )
-  const headers = [
-    t('time'),
-    t('model'),
-    t('inputShort'),
-    t('outputShort'),
-    t('tokens'),
-    t('cacheReadExport'),
-    t('cacheWriteShort'),
-    t('totalLatency'),
-    t('firstResponseLatency'),
-    t('throughput'),
-    t('cost'),
-    t('status')
-  ]
-  const rows = exportPage.items.map((row) => [
-    formatFullTime(row.created_at),
-    row.model || '',
-    row.input_tokens ?? '',
-    row.output_tokens ?? '',
-    row.total_tokens ?? '',
-    row.cache_in_tokens ?? '',
-    cacheWriteTokens(row),
-    formatDurationMs(row.latency_ms),
-    formatDurationMs(row.first_response_ms),
-    formatTokenRate(row.output_tokens_per_second, locale.value),
-    formatMoney(row.cost_micros, locale.value, 6),
-    statusLabel(row.status_code)
-  ])
-  downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
+  await runDownload(async () => {
+    const exportPage = await getUserUsage(
+      1,
+      1000,
+      usageQueryRange.value.start,
+      usageQueryRange.value.end
+    )
+    const headers = [
+      t('time'),
+      t('model'),
+      t('inputShort'),
+      t('outputShort'),
+      t('tokens'),
+      t('cacheReadExport'),
+      t('cacheWriteShort'),
+      t('totalLatency'),
+      t('firstResponseLatency'),
+      t('throughput'),
+      t('cost'),
+      t('status')
+    ]
+    const rows = exportPage.items.map((row) => [
+      formatFullTime(row.created_at),
+      row.model || '',
+      row.input_tokens ?? '',
+      row.output_tokens ?? '',
+      row.total_tokens ?? '',
+      row.cache_in_tokens ?? '',
+      cacheWriteTokens(row),
+      formatDurationMs(row.latency_ms),
+      formatDurationMs(row.first_response_ms),
+      formatTokenRate(row.output_tokens_per_second, locale.value),
+      formatMoney(row.cost_micros, locale.value, 6),
+      statusLabel(row.status_code)
+    ])
+    downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
+  })
 }
 </script>
 
@@ -235,7 +239,12 @@ async function exportUsage() {
             :end-placeholder="t('endTime')"
             @change="handleDateRangeChange"
           />
-          <el-button :icon="Download" :disabled="usagePage.items.length === 0" @click="exportUsage">
+          <el-button
+            :icon="Download"
+            :loading="exporting"
+            :disabled="usagePage.items.length === 0"
+            @click="exportUsage"
+          >
             {{ t('exportDetails') }}
           </el-button>
           <el-tooltip :content="t('refresh')" placement="top">

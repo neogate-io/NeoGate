@@ -473,7 +473,12 @@ fn task_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UpstreamTask> {
             "audio_transcription" => UpstreamTaskType::AudioTranscription,
             "neogate_response" => UpstreamTaskType::NeogateResponse,
             "anthropic_message_batch" => UpstreamTaskType::AnthropicMessageBatch,
-            other => return Err(AppError::BadRequest(format!("invalid task type: {other}"))),
+            // DB 中出现未知 task_type 是数据异常，不是客户端请求错误
+            other => {
+                return Err(AppError::Anyhow(anyhow::anyhow!(
+                    "unknown task type in db: {other}"
+                )))
+            }
         },
         upstream_task_id: row.try_get("upstream_task_id")?,
         user_id: row.try_get("user_id")?,

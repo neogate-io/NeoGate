@@ -48,6 +48,7 @@ use crate::{
 };
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+const X_ACCEL_BUFFERING: HeaderName = HeaderName::from_static("x-accel-buffering");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -148,10 +149,34 @@ fn api_router(config: &Config, state: Arc<AppState>) -> anyhow::Result<Router> {
     Ok(router(state)
         .layer(DefaultBodyLimit::max(config.relay.body_limit_bytes))
         .layer(cors_layer(config)?)
+        .layer(middleware::from_fn(add_sse_response_headers))
         .layer(middleware::from_fn_with_state(
             config.admin_token_secret.clone(),
             log_http_request,
         )))
+}
+
+async fn add_sse_response_headers(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let is_sse = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|media_type| media_type.trim() == "text/event-stream")
+        });
+    if is_sse {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        response
+            .headers_mut()
+            .insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
+    }
+    response
 }
 
 fn init_tracing() {
@@ -1206,5 +1231,57 @@ pub(crate) mod tests {
             sanitized,
             "provider=openai model=gpt-4.1 channel_id=7 status=502 tokens=128"
         );
+    }
+
+    #[tokio::test]
+    async fn sse_response_headers_disable_caching_and_proxy_buffering() {
+        let app = Router::new()
+            .route(
+                "/events",
+                get(|| async {
+                    (
+                        [(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")],
+                        "",
+                    )
+                }),
+            )
+            .layer(middleware::from_fn(add_sse_response_headers));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-cache"))
+        );
+        assert_eq!(
+            response.headers().get(&X_ACCEL_BUFFERING),
+            Some(&HeaderValue::from_static("no"))
+        );
+    }
+
+    #[tokio::test]
+    async fn non_sse_response_headers_are_unchanged() {
+        let app = Router::new()
+            .route(
+                "/json",
+                get(|| async { ([(header::CONTENT_TYPE, "application/json")], "{}") }),
+            )
+            .layer(middleware::from_fn(add_sse_response_headers));
+
+        let response = app
+            .oneshot(Request::builder().uri("/json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+        assert!(response.headers().get(&X_ACCEL_BUFFERING).is_none());
     }
 }

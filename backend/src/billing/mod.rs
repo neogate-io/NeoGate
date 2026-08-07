@@ -33,11 +33,23 @@ pub use metering::{
 };
 pub use token_estimate::{estimate_anthropic_input_tokens, estimate_claude_text_tokens};
 pub use types::{
-    BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
-    DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode, VideoPriceTier,
+    BillableUsage, BillingCharge, BillingChargeStatus, BillingMeter, CreditAccountId,
+    CreditAccountType, DebitHold, DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode,
+    VideoPriceTier,
 };
 
 pub const MICROS_PER_MAJOR_UNIT: i64 = 1_000_000;
+
+/// 将 token 数量按百万单价换算为微元，向上取整，i128 中间值防止溢出。
+/// metering.rs 和 video.rs 曾各自维护一份相同实现，统一到此处消除重复。
+pub(crate) fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
+    if tokens <= 0 || price_micros <= 0 {
+        return 0;
+    }
+    let product = (tokens as i128).saturating_mul(price_micros as i128);
+    let rounded = (product + MICROS_PER_MAJOR_UNIT as i128 - 1) / MICROS_PER_MAJOR_UNIT as i128;
+    i64::try_from(rounded).unwrap_or(i64::MAX)
+}
 pub const BILLABLE_PRICE_CONDITION: &str = r#"
 (
     (billing_meter = 'token'
@@ -231,29 +243,52 @@ impl Billing {
         recover_after: Duration,
     ) {
         let billing = self.clone();
+        // 用监督壳包裹：任务 panic 后自动重启，避免静默退出导致 stale allocation 永久积压。
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(interval.max(Duration::from_secs(1)));
             loop {
-                ticker.tick().await;
-                let Ok(recover_after) = chrono::Duration::from_std(recover_after) else {
-                    tracing::warn!("invalid credit allocation recovery window");
-                    continue;
-                };
-                let stale_before = Utc::now() - recover_after;
-                match billing.recover_stale_allocations(&pool, stale_before).await {
-                    Ok(summary) if summary.count > 0 => {
-                        tracing::info!(
-                            count = summary.count,
-                            recovered_micros = summary.recovered_micros,
-                            oldest_created_at = ?summary.oldest_created_at,
-                            oldest_age_seconds = summary.oldest_age_seconds,
-                            samples = ?summary.samples,
-                            truncated = summary.truncated,
-                            "recovered stale credit allocations"
-                        );
+                let billing = billing.clone();
+                let pool = pool.clone();
+                let result = tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(interval.max(Duration::from_secs(1)));
+                    loop {
+                        ticker.tick().await;
+                        let Ok(recover_after) = chrono::Duration::from_std(recover_after) else {
+                            tracing::warn!("invalid credit allocation recovery window");
+                            continue;
+                        };
+                        let stale_before = Utc::now() - recover_after;
+                        match billing.recover_stale_allocations(&pool, stale_before).await {
+                            Ok(summary) if summary.count > 0 => {
+                                tracing::info!(
+                                    count = summary.count,
+                                    recovered_micros = summary.recovered_micros,
+                                    oldest_created_at = ?summary.oldest_created_at,
+                                    oldest_age_seconds = summary.oldest_age_seconds,
+                                    samples = ?summary.samples,
+                                    truncated = summary.truncated,
+                                    "recovered stale credit allocations"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                tracing::warn!("failed to recover stale credit allocations: {err}")
+                            }
+                        }
                     }
-                    Ok(_) => {}
-                    Err(err) => tracing::warn!("failed to recover stale credit allocations: {err}"),
+                })
+                .await;
+                match result {
+                    Ok(()) => break, // 正常退出不重启
+                    Err(err) if err.is_panic() => {
+                        tracing::error!(
+                            "credit allocation recovery worker panicked; restarting: {err:?}"
+                        );
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Err(err) => {
+                        tracing::warn!("credit allocation recovery worker exited: {err:?}");
+                        break;
+                    }
                 }
             }
         });
@@ -378,8 +413,14 @@ impl Billing {
             }
         }
         let (cost_micros, status) = match usage {
-            Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
-            None => (hold.cost_when_usage_missing(), "usage_missing".to_string()),
+            Some(usage) => (
+                cost_for_billable_usage(usage, price),
+                BillingChargeStatus::Billed,
+            ),
+            None => (
+                hold.cost_when_usage_missing(),
+                BillingChargeStatus::UsageMissing,
+            ),
         };
         let cost_micros = cost_micros.max(0);
         let token_usage = usage.and_then(|usage| usage.token_usage);
@@ -437,7 +478,7 @@ impl Billing {
                 billable_units,
                 cost_micros: hold.estimated_micros,
                 status: if cost_micros > hold.estimated_micros {
-                    "undercharged".to_string()
+                    BillingChargeStatus::Undercharged
                 } else {
                     status
                 },
@@ -1219,7 +1260,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(charge.cost_micros, 40);
-        assert_eq!(charge.status, "usage_missing");
+        assert_eq!(charge.status, BillingChargeStatus::UsageMissing);
         assert_eq!(
             charge
                 .returned_parts

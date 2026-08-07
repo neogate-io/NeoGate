@@ -194,6 +194,17 @@ async fn fetch_key_candidates(pool: &PgPool) -> AppResult<HashMap<DbId, Vec<KeyC
     Ok(keys)
 }
 
+/// 将数据库协议字符串映射到 `UpstreamProtocol` 枚举。
+/// 三处重复的 match 统一到此处，后续新增协议只需改这一个函数。
+pub(super) fn parse_protocol(s: &str) -> AppResult<UpstreamProtocol> {
+    match s {
+        "openai" => Ok(UpstreamProtocol::Openai),
+        "openai_oauth" => Ok(UpstreamProtocol::OpenAiOauth),
+        "anthropic" => Ok(UpstreamProtocol::Anthropic),
+        other => Err(AppError::BadRequest(format!("invalid protocol: {other}"))),
+    }
+}
+
 async fn fetch_provider_plan_models(
     pool: &PgPool,
 ) -> AppResult<HashMap<(String, String), Vec<PlanModel>>> {
@@ -211,12 +222,7 @@ async fn fetch_provider_plan_models(
         let provider: String = row.try_get("provider")?;
         let plan_type: String = row.try_get("plan_type")?;
         let protocol: String = row.try_get("protocol")?;
-        let protocol = match protocol.as_str() {
-            "openai" => UpstreamProtocol::Openai,
-            "openai_oauth" => UpstreamProtocol::OpenAiOauth,
-            "anthropic" => UpstreamProtocol::Anthropic,
-            other => return Err(AppError::BadRequest(format!("invalid protocol: {other}"))),
-        };
+        let protocol = parse_protocol(&protocol)?;
         plans
             .entry((provider, plan_type))
             .or_default()
@@ -243,12 +249,7 @@ async fn fetch_model_blocks(pool: &PgPool) -> AppResult<HashMap<ModelBlockKey, D
     let mut blocks = HashMap::new();
     for row in rows {
         let protocol: String = row.try_get("protocol")?;
-        let protocol = match protocol.as_str() {
-            "openai" => UpstreamProtocol::Openai,
-            "openai_oauth" => UpstreamProtocol::OpenAiOauth,
-            "anthropic" => UpstreamProtocol::Anthropic,
-            other => return Err(AppError::BadRequest(format!("invalid protocol: {other}"))),
-        };
+        let protocol = parse_protocol(&protocol)?;
         let unavailable_until: DateTime<Utc> = row.try_get("unavailable_until")?;
         blocks.insert(
             ModelBlockKey {
@@ -271,12 +272,7 @@ fn channel_candidate_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelC
     Ok(ChannelCandidate {
         id: row.try_get("id")?,
         endpoint_id: row.try_get("endpoint_id")?,
-        protocol: match protocol.as_str() {
-            "openai" => UpstreamProtocol::Openai,
-            "openai_oauth" => UpstreamProtocol::OpenAiOauth,
-            "anthropic" => UpstreamProtocol::Anthropic,
-            other => return Err(AppError::BadRequest(format!("invalid protocol: {other}"))),
-        },
+        protocol: parse_protocol(&protocol)?,
         provider,
         name: row.try_get("name")?,
         base_url: row.try_get("base_url")?,

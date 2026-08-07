@@ -360,13 +360,14 @@ fn permanent_billing_error(err: &AppError) -> bool {
 }
 
 pub(crate) fn permanent_terminal_restore_error(err: &AppError) -> bool {
+    // AppError::Anyhow 是宽泛兜底类型，不归入永久错误——临时 DB/网络故障也会包在里面。
+    // 只有明确的业务层错误（格式错误、数据缺失）才视为永久失败放弃 hold。
     matches!(
         err,
         AppError::BadRequest(_)
             | AppError::BadRequestWithCode { .. }
             | AppError::NotFound
             | AppError::Json(_)
-            | AppError::Anyhow(_)
     )
 }
 
@@ -464,7 +465,10 @@ async fn transition_and_release_task_hold(
             if hold.transaction_id != expected {
                 // transaction_id 不匹配说明存在逻辑错误，回滚并以错误上报而非静默继续
                 if let Err(rb_err) = tx.rollback().await {
-                    tracing::warn!(task_id, "failed to rollback after transaction_id mismatch: {rb_err}");
+                    tracing::warn!(
+                        task_id,
+                        "failed to rollback after transaction_id mismatch: {rb_err}"
+                    );
                 }
                 return Err(AppError::Conflict(format!(
                     "async task hold transaction_id mismatch: expected {expected}, got {}",
@@ -576,7 +580,8 @@ mod tests {
         assert!(permanent_terminal_restore_error(&AppError::BadRequest(
             "missing channel key".to_string()
         )));
-        assert!(permanent_terminal_restore_error(&AppError::Anyhow(
+        // Anyhow 是宽泛兜底，不应视为永久——临时 DB/网络故障也会走这里
+        assert!(!permanent_terminal_restore_error(&AppError::Anyhow(
             anyhow::anyhow!("invalid encrypted secret")
         )));
         assert!(!permanent_terminal_restore_error(&AppError::Sqlx(

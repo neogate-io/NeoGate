@@ -335,6 +335,24 @@ mod tests {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingChargeStatus {
+    Billed,
+    UsageMissing,
+    Undercharged,
+}
+
+impl BillingChargeStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Billed => "billed",
+            Self::UsageMissing => "usage_missing",
+            Self::Undercharged => "undercharged",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BillingCharge {
     pub transaction_id: Uuid,
@@ -344,7 +362,7 @@ pub struct BillingCharge {
     pub billing_meter: BillingMeter,
     pub billable_units: i64,
     pub cost_micros: i64,
-    pub status: String,
+    pub status: BillingChargeStatus,
     pub parts: Vec<DebitPart>,
     pub returned_parts: Vec<DebitPart>,
 }

@@ -115,8 +115,28 @@ impl BillingOutbox {
         if process_outbox {
             for _ in 0..BILLING_PROCESS_WORKERS {
                 let process_worker = outbox.clone();
+                // 用监督壳包裹：worker panic 后记录 error 并自动重启，而非静默退出。
                 tokio::spawn(async move {
-                    process_worker.run_process_worker(flush_interval).await;
+                    loop {
+                        let worker = process_worker.clone();
+                        let result = tokio::spawn(async move {
+                            worker.run_process_worker(flush_interval).await;
+                        })
+                        .await;
+                        match result {
+                            Ok(()) => break, // 正常关机（channel 关闭等），不重启
+                            Err(err) if err.is_panic() => {
+                                tracing::error!(
+                                    "billing process worker panicked; restarting after delay: {err:?}"
+                                );
+                                time::sleep(Duration::from_millis(200)).await;
+                            }
+                            Err(err) => {
+                                tracing::warn!("billing process worker exited: {err:?}");
+                                break;
+                            }
+                        }
+                    }
                 });
             }
         }
@@ -308,14 +328,7 @@ impl BillingOutbox {
                     let Some(usage) = usage else {
                         break;
                     };
-                    let mut batch = vec![usage];
-                    while batch.len() < BILLING_BATCH_SIZE as usize {
-                        match receiver.try_recv() {
-                            Ok(usage) => batch.push(usage),
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => break,
-                        }
-                    }
+                    let batch = drain_batch_from_receiver(&mut receiver, usage, BILLING_BATCH_SIZE as usize);
 
                     match persist_billing_usages_with_retry(&self.pool, &batch).await {
                         Ok(()) => self.health.record_success(),
@@ -364,14 +377,8 @@ impl BillingOutbox {
 
     async fn run_retry_worker(self, mut receiver: mpsc::Receiver<UsageInsert>) {
         while let Some(usage) = receiver.recv().await {
-            let mut batch = vec![usage];
-            while batch.len() < BILLING_BATCH_SIZE as usize {
-                match receiver.try_recv() {
-                    Ok(usage) => batch.push(usage),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => break,
-                }
-            }
+            let batch =
+                drain_batch_from_receiver(&mut receiver, usage, BILLING_BATCH_SIZE as usize);
 
             let mut delay = BILLING_OUTBOX_BACKGROUND_RETRY_INITIAL_DELAY;
             let mut attempt = 0u32;
@@ -420,29 +427,26 @@ impl BillingOutbox {
 
 impl WorkerSlot {
     fn set(&self, sender: mpsc::Sender<UsageInsert>, handle: JoinHandle<()>) {
-        *self.sender.write().expect("billing outbox sender poisoned") = Some(sender);
-        *self
-            .handle
-            .write()
-            .expect("billing outbox worker handle poisoned") = Some(handle);
+        *self.sender.write().unwrap_or_else(|e| e.into_inner()) = Some(sender);
+        *self.handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     fn sender(&self) -> Option<mpsc::Sender<UsageInsert>> {
         self.sender
             .read()
-            .expect("billing outbox sender poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     async fn close_and_wait(&self) {
         self.sender
             .write()
-            .expect("billing outbox sender poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .take();
         let handle = self
             .handle
             .write()
-            .expect("billing outbox worker handle poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .take();
         if let Some(handle) = handle {
             let _ = handle.await;
@@ -452,27 +456,18 @@ impl WorkerSlot {
 
 impl BillingOutboxHealth {
     fn record_success(&self) {
-        *self
-            .failed_since
-            .write()
-            .expect("billing outbox health poisoned") = None;
+        *self.failed_since.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn record_failure(&self) {
-        let mut failed_since = self
-            .failed_since
-            .write()
-            .expect("billing outbox health poisoned");
+        let mut failed_since = self.failed_since.write().unwrap_or_else(|e| e.into_inner());
         if failed_since.is_none() {
             *failed_since = Some(Utc::now());
         }
     }
 
     fn status(&self) -> BillingOutboxWriteStatus {
-        let failed_since = *self
-            .failed_since
-            .read()
-            .expect("billing outbox health poisoned");
+        let failed_since = *self.failed_since.read().unwrap_or_else(|e| e.into_inner());
         BillingOutboxWriteStatus {
             healthy: failed_since.is_none(),
             failed_since,
@@ -555,6 +550,23 @@ async fn persist_billing_usages_with_retry(pool: &PgPool, usages: &[UsageInsert]
     Ok(())
 }
 
+/// run_worker / run_retry_worker 共用的批量收集辅助：先放入第一条，再尽量从 channel 排空，
+/// 上限 `max_size`。消除两个函数原来的重复 while + try_recv 逻辑。
+fn drain_batch_from_receiver<T>(
+    receiver: &mut mpsc::Receiver<T>,
+    first: T,
+    max_size: usize,
+) -> Vec<T> {
+    let mut batch = vec![first];
+    while batch.len() < max_size {
+        match receiver.try_recv() {
+            Ok(item) => batch.push(item),
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        }
+    }
+    batch
+}
+
 async fn persist_billing_usage(pool: &PgPool, usage: &UsageInsert) -> AppResult<()> {
     let Some(billing) = &usage.billing else {
         return Ok(());
@@ -607,14 +619,16 @@ async fn process_billing_outbox_batch(
 ) -> AppResult<u64> {
     let mut processed = 0;
     let mut remaining = limit.max(0);
-    let mut selected_ids = Vec::new();
+    // 不再跨 chunk 累积 selected_ids：
+    // - 成功处理的记录已被标记为 'processed'，被 WHERE status='pending' 自然过滤；
+    // - FOR UPDATE SKIP LOCKED 防止并发 worker 重复获取；
+    // - 失败记录的 attempts 递增，ORDER BY attempts ASC 让它们排在后面。
+    // 原来的累积方案在大批量时会产生最多 40×500=20000 条的 IN 子句，显著增加 PG 开销。
     while remaining > 0 {
         let chunk_limit = remaining.min(BILLING_PROCESS_CHUNK_SIZE);
-        let result =
-            process_billing_outbox_chunk(pool, activity, daily, chunk_limit, &selected_ids).await?;
+        let result = process_billing_outbox_chunk(pool, activity, daily, chunk_limit, &[]).await?;
         processed += result.processed;
         remaining -= result.selected as i64;
-        selected_ids.extend(result.selected_ids);
         if result.selected < chunk_limit as u64 {
             break;
         }
@@ -896,7 +910,7 @@ async fn record_billing_failure(pool: &PgPool, id: DbId, err: &AppError) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::billing::{BillingCharge, BillingMeter};
+    use crate::billing::{BillingCharge, BillingChargeStatus, BillingMeter};
 
     fn usage_with_billing(id: DbId) -> UsageInsert {
         UsageInsert {
@@ -930,7 +944,7 @@ mod tests {
                 billing_meter: BillingMeter::Token,
                 billable_units: 0,
                 cost_micros: 0,
-                status: "billed".to_string(),
+                status: BillingChargeStatus::Billed,
                 parts: Vec::new(),
                 returned_parts: Vec::new(),
             }),

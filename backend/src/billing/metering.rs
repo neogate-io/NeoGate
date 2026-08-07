@@ -1,8 +1,7 @@
 use serde_json::Value;
 
-use super::{BillableUsage, BillingMeter, Price, TokenUsage};
+use super::{micros_for_tokens, BillableUsage, BillingMeter, Price, TokenUsage};
 
-const TOKENS_PER_MILLION: i128 = 1_000_000;
 const DEFAULT_CACHE_READ_PRICE_DIVISOR: i64 = 10;
 const MAX_RESERVED_OUTPUT_TOKENS: i64 = 16_384;
 
@@ -91,17 +90,27 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
             .map_or(0, |token_usage| cost_for_usage(token_usage, price)),
         BillingMeter::Image => {
             let Some(unit_price) = price.unit_price_micros else {
-                tracing::error!("image billing requires unit_price_micros but none is set; charging zero");
+                tracing::error!(
+                    "image billing requires unit_price_micros but none is set; charging zero"
+                );
                 return 0;
             };
-            usage.billable_units.max(0).saturating_mul(unit_price.max(0))
+            usage
+                .billable_units
+                .max(0)
+                .saturating_mul(unit_price.max(0))
         }
         BillingMeter::Audio => {
             let Some(unit_price) = price.unit_price_micros else {
-                tracing::error!("audio billing requires unit_price_micros but none is set; charging zero");
+                tracing::error!(
+                    "audio billing requires unit_price_micros but none is set; charging zero"
+                );
                 return 0;
             };
-            usage.billable_units.max(0).saturating_mul(unit_price.max(0))
+            usage
+                .billable_units
+                .max(0)
+                .saturating_mul(unit_price.max(0))
         }
         BillingMeter::Video => {
             if let Some(token_usage) = usage.token_usage {
@@ -111,20 +120,13 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
                     tracing::error!("video unit billing requires unit_price_micros but none is set; charging zero");
                     return 0;
                 };
-                usage.billable_units.max(0).saturating_mul(unit_price.max(0))
+                usage
+                    .billable_units
+                    .max(0)
+                    .saturating_mul(unit_price.max(0))
             }
         }
     }
-}
-
-fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
-    if tokens <= 0 || price_micros <= 0 {
-        return 0;
-    }
-
-    let product = (tokens as i128).saturating_mul(price_micros as i128);
-    let rounded = (product + TOKENS_PER_MILLION - 1) / TOKENS_PER_MILLION;
-    i64::try_from(rounded).unwrap_or(i64::MAX)
 }
 
 fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {

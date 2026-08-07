@@ -210,7 +210,10 @@ pub(crate) async fn finish_task_json_response(
         match serde_json::from_slice::<Value>(&body) {
             Ok(mut value) => {
                 if task.task_type == UpstreamTaskType::OpenAiVideo {
-                    crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
+                    crate::billing::video::copy_neogate_metadata(
+                        &task.upstream_metadata,
+                        &mut value,
+                    );
                 }
                 let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
                 let usage = parse_usage_from_bytes(&body, false);
@@ -1245,6 +1248,11 @@ pub(crate) async fn enqueue_relay_usage(
             if let Err(retry_err) = state.billing_outbox.enqueue_or_retry(item).await {
                 tracing::error!("failed to queue relay billing retry: {retry_err}");
             }
+        }
+        // billing 分支必须独立持久化 key failure：billing_outbox 不写 channel_key 表，
+        // 而 cache_invalidator 仅更新内存 routing cache；若跳过此步，30s TTL 重载后冷却丢失。
+        if let Some(failure) = failure {
+            state.usage.enqueue_key_failure(failure);
         }
         return;
     }

@@ -20,6 +20,7 @@ import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
 import { useAsyncData } from '../composables/useAsyncData'
 import { useSiteBrand } from '../composables/useSiteBrand'
+import '../styles/admin.css'
 
 const { t } = useLocale()
 const { siteName, logoUrl } = useSiteBrand()

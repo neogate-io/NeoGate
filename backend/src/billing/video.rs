@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    BillableUsage, BillingMeter, Price, TokenUsage, VideoBillingMode, VideoPriceTier,
-    MICROS_PER_MAJOR_UNIT,
+    micros_for_tokens, BillableUsage, BillingMeter, Price, TokenUsage, VideoBillingMode,
+    VideoPriceTier,
 };
 use crate::error::{AppError, AppResult};
 
@@ -352,15 +352,6 @@ fn model_resolution(model: &str) -> Option<&'static str> {
     ["1080p", "720p", "480p"]
         .into_iter()
         .find(|resolution| model.ends_with(resolution))
-}
-
-fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
-    if tokens <= 0 || price_micros <= 0 {
-        return 0;
-    }
-    let product = (tokens as i128).saturating_mul(price_micros as i128);
-    let rounded = (product + MICROS_PER_MAJOR_UNIT as i128 - 1) / MICROS_PER_MAJOR_UNIT as i128;
-    i64::try_from(rounded).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]

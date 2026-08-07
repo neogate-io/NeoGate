@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
+import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import type { UsageRecord } from '../../types/admin'
 import {
@@ -49,7 +50,7 @@ const filters = reactive<UsageFilters>({
   query: '',
   status: 'all'
 })
-const exporting = ref(false)
+const { downloading: exporting, run: runDownload } = useDownloadTask()
 const {
   currentPage,
   pageSize,
@@ -470,16 +471,13 @@ async function handleSearch() {
 }
 
 async function exportUsage() {
-  exporting.value = true
-  try {
+  await runDownload(async () => {
     const result = await downloadAdminUsageCsv(usageBaseQuery.value)
     downloadBlob(
       result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`,
       result.blob
     )
-  } finally {
-    exporting.value = false
-  }
+  })
 }
 </script>
 

@@ -19,6 +19,7 @@ import {
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
+import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import { downloadBlob, formatNumber, toDateKey } from '../../utils/format'
 
@@ -70,7 +71,7 @@ const selectedProject = ref<ProjectUsageStatistics | null>(null)
 const selectedUser = ref<UserUsageStatistics | null>(null)
 const selectedModel = ref<ModelUsageStatistics | null>(null)
 const refinements = ref<DrilldownContext>({})
-const exporting = ref(false)
+const { downloading: exporting, run: runDownload } = useDownloadTask()
 
 const baseQuery = computed<UsageStatisticsQuery>(() => {
   const [start, end] = filters.dateRange ?? []
@@ -422,14 +423,11 @@ async function exportAttribution(scope: string | number | object) {
   if (typeof scope !== 'string') return
   const exportScope = exportScopeFromCommand(scope)
   if (!exportScope) return
-  exporting.value = true
-  try {
+  await runDownload(async () => {
     const query = scope === 'primary' ? baseQuery.value : detailQuery.value
     const result = await downloadAdminUsageStatisticsCsv(exportScope, query)
     downloadBlob(result.filename ?? `usage-statistics-${exportScope}.csv`, result.blob)
-  } finally {
-    exporting.value = false
-  }
+  })
 }
 
 function openUsageDetails(extra: DrilldownContext = {}) {

@@ -49,7 +49,7 @@ const filteredRows = computed(() => {
             <RouterLink
               v-if="row.anchor"
               class="interface-endpoint-link"
-              :to="`${linkPrefix}/${row.anchor}`"
+              :to="{ path: `${linkPrefix}/${row.anchor}`, hash: `#${row.endpointAnchor}` }"
             >
               {{ row.name }}
             </RouterLink>

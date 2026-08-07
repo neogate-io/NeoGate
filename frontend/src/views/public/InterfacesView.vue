@@ -115,7 +115,10 @@ watch(
   (path) => {
     if (path.startsWith('/interfaces/openai')) collapsedGroups.value.openai = false
     if (path.startsWith('/interfaces/anthropic')) collapsedGroups.value.anthropic = false
-  }
+  },
+  // immediate: a stored collapsed state must not hide the group containing the
+  // current page when landing on it directly.
+  { immediate: true }
 )
 
 function isSectionActive(path: string, level?: string) {

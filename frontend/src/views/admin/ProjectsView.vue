@@ -43,6 +43,7 @@ import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
+import { useLatestTask, type LatestTask } from '../../composables/useLatestTask'
 import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type {
@@ -174,6 +175,10 @@ const smartCandidateForm = reactive<ProjectModelCandidateForm>({
   enabled: true
 })
 const smartRouteCandidates = ref<ProjectModelCandidateForm[]>([])
+const membersTask = useLatestTask(membersLoading)
+const projectModelsTask = useLatestTask(projectModelsLoading)
+const ownerSearchTask = useLatestTask(ownerSearchLoading)
+const memberSearchTask = useLatestTask(memberUserSearchLoading)
 const {
   currentPage,
   pageSize,
@@ -339,7 +344,7 @@ function openEditDialog(row: Project) {
   })
   ownerOptions.value = []
   projectDialogVisible.value = true
-  void searchUserOptions(row.owner_email, ownerOptions, ownerSearchLoading)
+  void searchUserOptions(row.owner_email, ownerOptions, ownerSearchTask)
 }
 
 function openCreditDialog(row: Project) {
@@ -357,13 +362,11 @@ async function openMembersDialog(row: Project) {
     userId: null,
     role: 'member'
   })
-  await withLoading(membersLoading, async () => {
-    try {
-      await loadSelectedProjectMembers()
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
+  try {
+    await loadSelectedProjectMembers()
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
 }
 
 async function openModelsDialog(row: Project) {
@@ -373,28 +376,42 @@ async function openModelsDialog(row: Project) {
   selectedProjectModels.value = []
   resetProjectModelForm()
   resetSmartModelForm()
-  await withLoading(projectModelsLoading, async () => {
-    try {
-      await Promise.all([loadSelectedProjectModels(), loadProjectModelOptions()])
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
+  try {
+    await loadSelectedProjectModels(true)
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
 }
 
 async function loadSelectedProjectMembers() {
-  if (!selectedProject.value) return
-  selectedMembers.value = await getProjectMembers(selectedProject.value.id)
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  await membersTask.run(
+    () => getProjectMembers(projectId),
+    (members) => {
+      if (selectedProject.value?.id === projectId) selectedMembers.value = members
+    }
+  )
 }
 
-async function loadSelectedProjectModels() {
-  if (!selectedProject.value) return
-  selectedProjectModels.value = await getProjectModels(selectedProject.value.id)
-  hydrateSmartModelForm()
-}
-
-async function loadProjectModelOptions() {
-  channelOptions.value = await getChannels()
+async function loadSelectedProjectModels(includeOptions = false) {
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  await projectModelsTask.run(
+    async () => {
+      const [models, channels] = await Promise.all([
+        getProjectModels(projectId),
+        includeOptions ? getChannels() : Promise.resolve<Channel[] | null>(null)
+      ])
+      return { models, channels }
+    },
+    ({ models, channels }) => {
+      if (selectedProject.value?.id !== projectId) return
+      selectedProjectModels.value = models
+      if (channels) channelOptions.value = channels
+      hydrateSmartModelForm()
+    }
+  )
 }
 
 function resetProjectModelForm() {
@@ -816,28 +833,31 @@ async function copyApiKeyValue(value: string) {
   await copyTextWithMessage(value, t('apiKeyCopied'))
 }
 
-async function searchUserOptions(query: string, options: Ref<User[]>, loading: Ref<boolean>) {
+async function searchUserOptions(query: string, options: Ref<User[]>, task: LatestTask) {
   const search = query.trim()
   if (!search) {
+    task.invalidate()
     options.value = []
     return
   }
-  await withLoading(loading, async () => {
-    try {
-      const page = await getUsers({ search, limit: 20 })
-      options.value = page.items
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
+  try {
+    await task.run(
+      () => getUsers({ search, limit: 20 }),
+      (page) => {
+        options.value = page.items
+      }
+    )
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
 }
 
 function searchOwnerUsers(query: string) {
-  return searchUserOptions(query, ownerOptions, ownerSearchLoading)
+  return searchUserOptions(query, ownerOptions, ownerSearchTask)
 }
 
 async function searchMemberUsers(query: string) {
-  return searchUserOptions(query, memberUserOptions, memberUserSearchLoading)
+  return searchUserOptions(query, memberUserOptions, memberSearchTask)
 }
 
 async function submitAddProjectMember() {

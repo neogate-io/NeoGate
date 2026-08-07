@@ -825,6 +825,19 @@ impl Selector {
         channel_key_id: DbId,
         cooldown_until: DateTime<Utc>,
     ) {
+        // 先用读锁检查 key 是否存在：对于纯 credential 渠道，channel_key 不存在，
+        // 可以直接返回而无需持写锁或克隆 cache。
+        {
+            let cache = self.routing_cache.read().await;
+            let found = cache.keys.values().any(|keys| {
+                keys.iter()
+                    .any(|key| key.credential_id.is_none() && key.id == channel_key_id)
+            });
+            if !found {
+                return;
+            }
+        }
+        // key 存在才升级到写锁并执行克隆更新。
         let mut guard = self.routing_cache.write().await;
         let mut cache = (**guard).clone();
         for keys in cache.keys.values_mut() {

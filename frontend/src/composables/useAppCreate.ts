@@ -7,43 +7,46 @@ import {
   type CreateAppInput,
   type UpdateAppInput
 } from '../api/apps'
+import type { MessageKey } from '../i18n'
 import type { AppRecord, AppType } from '../types/admin'
 import { readError } from '../utils/errors'
+import { useLatestTask } from './useLatestTask'
 import { withLoading } from './useLoadingTask'
+import { useLocale } from './useLocale'
 
 export const appTypes = [
   {
     type: 'wecom',
-    label: '企业微信应用',
-    description: '接入企业微信自建应用，员工在企业微信里直接提问。',
+    labelKey: 'appTypeWecom',
+    descriptionKey: 'appTypeWecomDescription',
     iconUrl: '/icons/wecom.svg',
     enabled: true
   },
   {
     type: 'feishu',
-    label: '飞书应用',
-    description: '接入飞书应用事件订阅，在飞书会话中自动回复消息。',
+    labelKey: 'appTypeFeishu',
+    descriptionKey: 'appTypeFeishuDescription',
     iconUrl: '/icons/feishu.svg',
     enabled: true
   },
   {
     type: 'dingtalk',
-    label: '钉钉应用',
-    description: '接入钉钉机器人，用于群聊或单聊中的智能问答。',
+    labelKey: 'appTypeDingtalk',
+    descriptionKey: 'appTypeDingtalkDescription',
     iconUrl: '/icons/dingtalk.svg',
     enabled: true
   },
   {
     type: 'webhook',
-    label: 'Webhook 应用',
-    description: '给外部系统或脚本调用，用 AI 处理事件、告警和工单。',
+    labelKey: 'appTypeWebhook',
+    descriptionKey: 'appTypeWebhookDescription',
     iconUrl: '/icons/webhook.svg',
     enabled: true
   },
   {
     type: 'widget',
-    label: '网页组件应用',
-    description: '嵌入网站或内部页面，为访问者提供网页聊天入口。',
+    labelKey: 'appTypeWidget',
+    descriptionKey: 'appTypeWidgetDescription',
     iconUrl: '/icons/widget.svg',
     enabled: true
   }
@@ -52,48 +55,43 @@ export const appTypes = [
 export const usageScenarios = [
   {
     value: 'brief_qa',
-    label: '简短问答',
-    description: 'FAQ、轻量咨询',
+    labelKey: 'appScenarioBriefQa',
+    descriptionKey: 'appScenarioBriefQaDescription',
     contextTurns: 4,
     maxOutputTokens: 1024,
-    systemPrompt:
-      '你是一个简洁准确的问答助手。优先直接回答用户问题，避免冗长解释。遇到不确定的信息时，说明不确定并给出可执行的下一步建议。'
+    promptKey: 'appScenarioBriefQaPrompt'
   },
   {
     value: 'customer_support',
-    label: '客服助手',
-    description: '多轮追问、售前售后',
+    labelKey: 'appScenarioCustomerSupport',
+    descriptionKey: 'appScenarioCustomerSupportDescription',
     contextTurns: 8,
     maxOutputTokens: 1536,
-    systemPrompt:
-      '你是一个专业、耐心的客服助手。先理解用户诉求，再给出清晰步骤。回答要友好、具体、可执行；遇到账号、订单、付款等敏感问题时，引导用户联系人工处理。'
+    promptKey: 'appScenarioCustomerSupportPrompt'
   },
   {
     value: 'knowledge',
-    label: '内部知识助手',
-    description: '制度、文档、研发知识库',
+    labelKey: 'appScenarioKnowledge',
+    descriptionKey: 'appScenarioKnowledgeDescription',
     contextTurns: 10,
     maxOutputTokens: 2048,
-    systemPrompt:
-      '你是企业内部知识助手。根据已有知识和上下文回答问题，优先给出准确、结构清晰的结论。遇到缺少资料或不确定的问题时，明确说明不确定，不要编造。'
+    promptKey: 'appScenarioKnowledgePrompt'
   },
   {
     value: 'analysis',
-    label: '深度分析',
-    description: '报告总结、复杂推理',
+    labelKey: 'appScenarioAnalysis',
+    descriptionKey: 'appScenarioAnalysisDescription',
     contextTurns: 16,
     maxOutputTokens: 4096,
-    systemPrompt:
-      '你是一个严谨的分析助手。回答前先梳理问题目标和关键约束，再给出结构化分析、判断依据和建议。对不确定因素要明确标注，并给出可验证的后续步骤。'
+    promptKey: 'appScenarioAnalysisPrompt'
   },
   {
     value: 'notification',
-    label: '简短通知',
-    description: 'Webhook 推送、状态解释',
+    labelKey: 'appScenarioNotification',
+    descriptionKey: 'appScenarioNotificationDescription',
     contextTurns: 2,
     maxOutputTokens: 512,
-    systemPrompt:
-      '你是一个简短通知助手。根据输入内容生成简洁、清楚、适合即时消息阅读的回复。优先保留关键信息、状态、时间和下一步动作，避免长篇解释。'
+    promptKey: 'appScenarioNotificationPrompt'
   }
 ] as const
 
@@ -103,16 +101,18 @@ export function typeMeta(type: string) {
   return appTypes.find((item) => item.type === type) ?? appTypes[0]
 }
 
-export function typeLabel(type: string) {
-  return typeMeta(type).label
-}
-
 export function useAppCreate() {
+  const { t } = useLocale()
   const modelOptions = ref<AppModelOption[]>([])
   const saving = ref(false)
   const createdApp = ref<AppRecord | null>(null)
   const lastAutoSystemPrompt = ref('')
   const lastAutoModel = ref('')
+  const modelOptionsTask = useLatestTask()
+
+  function typeLabel(type: string) {
+    return t(typeMeta(type).labelKey as MessageKey)
+  }
 
   const form = reactive({
     step: 1,
@@ -145,15 +145,17 @@ export function useAppCreate() {
 
   const createDialogTitle = computed(() => {
     if (form.step === 3) {
-      return `${typeLabel(createdApp.value?.app_type ?? form.appType)}接入信息`
+      return t('appAccessInfoTitle', {
+        type: typeLabel(createdApp.value?.app_type ?? form.appType)
+      })
     }
-    return form.step === 2 ? `新建${typeLabel(form.appType)}` : '新建应用'
+    return form.step === 2 ? t('appCreateTitle', { type: typeLabel(form.appType) }) : t('appNew')
   })
   const selectedUsageScenario = computed(
     () => usageScenarios.find((item) => item.value === form.usageScenario) ?? usageScenarios[2]
   )
   const canApplyScenarioPrompt = computed(
-    () => form.systemPrompt !== selectedUsageScenario.value.systemPrompt
+    () => form.systemPrompt !== t(selectedUsageScenario.value.promptKey as MessageKey)
   )
   const createdEndpoint = computed(() => createdApp.value?.endpoint ?? null)
   const createdAccessUrls = computed(() => {
@@ -162,28 +164,27 @@ export function useAppCreate() {
     if (endpoint.endpoint_type === 'wecom') {
       return [
         {
-          label: '接收消息 URL',
+          label: t('appReceiveMessageUrl'),
           value: endpoint.callback_url,
-          helper: '复制到企业微信应用的接收消息 URL。Token 和 EncodingAESKey 使用刚才填写的值。'
+          helper: t('appReceiveMessageUrlHelp')
         }
       ]
     }
     if (endpoint.endpoint_type === 'feishu') {
       return [
         {
-          label: '事件订阅请求地址',
+          label: t('appEventSubscriptionUrl'),
           value: endpoint.callback_url,
-          helper:
-            '复制到飞书开发者后台 > 事件订阅 > 请求地址。Verification Token 和 Encrypt Key 使用刚才填写的值。'
+          helper: t('appEventSubscriptionUrlHelp')
         }
       ]
     }
     if (endpoint.endpoint_type === 'dingtalk') {
       return [
         {
-          label: '机器人消息接收地址',
+          label: t('appBotMessageUrl'),
           value: endpoint.callback_url,
-          helper: '复制到钉钉开发者后台的机器人消息接收地址，加签密钥使用刚才填写的值。'
+          helper: t('appBotMessageUrlHelp')
         }
       ]
     }
@@ -192,21 +193,21 @@ export function useAppCreate() {
         {
           label: 'Webhook URL',
           value: endpoint.invoke_url,
-          helper: '外部系统向这个地址发送请求。'
+          helper: t('appWebhookUrlHelp')
         }
       ]
     }
     if (endpoint.endpoint_type === 'widget') {
       return [
         {
-          label: '嵌入脚本',
+          label: t('appEmbedScript'),
           value: endpoint.widget_script_url,
-          helper: '把脚本地址加入允许域名下的页面。'
+          helper: t('appEmbedScriptHelp')
         },
         {
-          label: '消息接口',
+          label: t('appMessageEndpoint'),
           value: endpoint.invoke_url,
-          helper: '网页组件向这个地址发送消息。'
+          helper: t('appMessageEndpointHelp')
         }
       ]
     }
@@ -219,6 +220,7 @@ export function useAppCreate() {
   ) {
     const scenario = usageScenarios.find((item) => item.value === value)
     if (!scenario) return
+    const prompt = t(scenario.promptKey as MessageKey)
     form.contextTurns = scenario.contextTurns
     form.maxOutputTokens = scenario.maxOutputTokens
     if (
@@ -226,15 +228,16 @@ export function useAppCreate() {
       !form.systemPrompt.trim() ||
       form.systemPrompt === lastAutoSystemPrompt.value
     ) {
-      form.systemPrompt = scenario.systemPrompt
-      lastAutoSystemPrompt.value = scenario.systemPrompt
+      form.systemPrompt = prompt
+      lastAutoSystemPrompt.value = prompt
     }
     applyRecommendedModel(options.forcePrompt)
   }
 
   function applySelectedScenarioPrompt() {
-    form.systemPrompt = selectedUsageScenario.value.systemPrompt
-    lastAutoSystemPrompt.value = selectedUsageScenario.value.systemPrompt
+    const prompt = t(selectedUsageScenario.value.promptKey as MessageKey)
+    form.systemPrompt = prompt
+    lastAutoSystemPrompt.value = prompt
   }
 
   function recommendedModelForScenario() {
@@ -302,7 +305,7 @@ export function useAppCreate() {
 
   function selectType(type: AppType, enabled: boolean) {
     if (!enabled) {
-      ElMessage.info('该应用类型即将支持。')
+      ElMessage.info(t('appTypeComingSoon'))
       return
     }
     form.appType = type
@@ -430,8 +433,13 @@ export function useAppCreate() {
   }
 
   async function loadModelOptions(userKeyId?: number) {
-    modelOptions.value = await getAppModelOptions({ userKeyId })
-    if (!form.model) applyRecommendedModel(true)
+    return modelOptionsTask.run(
+      () => getAppModelOptions({ userKeyId }),
+      (options) => {
+        modelOptions.value = options
+        if (!form.model) applyRecommendedModel(true)
+      }
+    )
   }
 
   async function submitCreate(afterCreate?: () => Promise<void> | void) {
@@ -440,7 +448,7 @@ export function useAppCreate() {
         const app = await createApp(payload())
         createdApp.value = app
         form.step = 3
-        ElMessage.success('应用已创建。')
+        ElMessage.success(t('appCreated'))
         await afterCreate?.()
       } catch (err) {
         ElMessage.error(readError(err))

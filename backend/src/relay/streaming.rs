@@ -1,5 +1,9 @@
 use std::{
-    sync::Arc,
+    io,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -37,6 +41,30 @@ const MISSING_TERMINAL_STREAM_ERROR: &str = "upstream stream ended before termin
 const DOWNSTREAM_STREAM_ERROR_MESSAGE: &str =
     "The upstream response stream ended unexpectedly. Please retry the request.";
 const DOWNSTREAM_STREAM_KEEP_ALIVE: Bytes = Bytes::from_static(b": PING\n\n");
+const DOWNSTREAM_BODY_CHANNEL_CAPACITY: usize = 8;
+const DOWNSTREAM_SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum DownstreamTermination {
+    Active = 0,
+    Closed = 1,
+    Stalled = 2,
+}
+
+impl DownstreamTermination {
+    fn load(state: &AtomicU8) -> Self {
+        match state.load(Ordering::Acquire) {
+            2 => Self::Stalled,
+            1 => Self::Closed,
+            _ => Self::Active,
+        }
+    }
+
+    fn store(self, state: &AtomicU8) {
+        state.store(self as u8, Ordering::Release);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StreamFinishDisposition {
@@ -241,15 +269,19 @@ pub(crate) fn body_from_stream(
         downstream_keep_alive_deadline: stream_keep_alive_interval.map(|interval| now + interval),
         keep_alive_frames_sent: 0,
         first_response_ms: None,
+        first_output_ms: None,
+        last_upstream_activity_ms: None,
         last_chunk_ms: None,
         chunks_sent: 0,
         bytes_sent: 0,
         largest_chunk_bytes: 0,
+        downstream_termination: Arc::new(AtomicU8::new(DownstreamTermination::Active as u8)),
     };
-
-    Body::from_stream(futures_util::stream::unfold(Some(relay), move |relay| {
+    let downstream_termination = Arc::clone(&relay.downstream_termination);
+    let relay_poll_span = span.clone();
+    let relay_stream = futures_util::stream::unfold(Some(relay), move |relay| {
         // 克隆 span 并传给每次 poll 产生的 future，使 tracing 上下文字段在整个流生命周期内生效。
-        let span = span.clone();
+        let span = relay_poll_span.clone();
         async move {
             let mut relay = relay?;
             let next = match (
@@ -300,6 +332,7 @@ pub(crate) fn body_from_stream(
                     }
                     relay.observe_chunk(&chunk);
                     relay.usage.observe(&chunk);
+                    relay.observe_meaningful_output();
                     if rewritten.bare_error {
                         relay.log_normalized_bare_stream_error();
                         let _ = relay.finish_stream_success().await;
@@ -326,6 +359,7 @@ pub(crate) fn body_from_stream(
                         let chunk = rewritten.chunk;
                         relay.observe_chunk(&chunk);
                         relay.usage.observe(&chunk);
+                        relay.observe_meaningful_output();
                         if rewritten.bare_error {
                             relay.log_normalized_bare_stream_error();
                             let _ = relay.finish_stream_success().await;
@@ -341,7 +375,62 @@ pub(crate) fn body_from_stream(
             }
         }
         .instrument(span)
-    }))
+    })
+    .boxed();
+
+    buffered_response_body(
+        relay_stream,
+        downstream_termination,
+        span,
+        DOWNSTREAM_SEND_TIMEOUT,
+    )
+}
+
+fn buffered_response_body(
+    mut stream: futures_util::stream::BoxStream<'static, Result<Bytes, io::Error>>,
+    downstream_termination: Arc<AtomicU8>,
+    span: tracing::Span,
+    send_timeout: Duration,
+) -> Body {
+    let (sender, receiver) = tokio::sync::mpsc::channel(DOWNSTREAM_BODY_CHANNEL_CAPACITY);
+    tokio::spawn(
+        async move {
+            loop {
+                let item = tokio::select! {
+                    () = sender.closed() => {
+                        DownstreamTermination::Closed.store(&downstream_termination);
+                        break;
+                    }
+                    item = stream.next() => item,
+                };
+                let Some(item) = item else {
+                    break;
+                };
+                match tokio::time::timeout(send_timeout, sender.send(item)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => {
+                        DownstreamTermination::Closed.store(&downstream_termination);
+                        break;
+                    }
+                    Err(_) => {
+                        DownstreamTermination::Stalled.store(&downstream_termination);
+                        tracing::warn!(
+                            send_timeout_seconds = send_timeout.as_secs(),
+                            channel_capacity = DOWNSTREAM_BODY_CHANNEL_CAPACITY,
+                            "downstream response body remained blocked; cancelling upstream stream"
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+        .instrument(span),
+    );
+
+    Body::from_stream(futures_util::stream::unfold(
+        receiver,
+        |mut receiver| async move { receiver.recv().await.map(|item| (item, receiver)) },
+    ))
 }
 
 struct StreamingRelay {
@@ -360,17 +449,34 @@ struct StreamingRelay {
     downstream_keep_alive_deadline: Option<tokio::time::Instant>,
     keep_alive_frames_sent: u64,
     first_response_ms: Option<i64>,
+    first_output_ms: Option<i64>,
+    last_upstream_activity_ms: Option<i64>,
     last_chunk_ms: Option<i64>,
     chunks_sent: u64,
     bytes_sent: u64,
     largest_chunk_bytes: usize,
+    downstream_termination: Arc<AtomicU8>,
 }
 
 impl StreamingRelay {
     fn observe_upstream_activity(&mut self) {
+        if let Some(ctx) = self.ctx.as_ref() {
+            let elapsed_ms = ctx.started.elapsed().as_millis() as i64;
+            self.first_response_ms.get_or_insert(elapsed_ms);
+            self.last_upstream_activity_ms = Some(elapsed_ms);
+        }
         self.upstream_idle_deadline = self
             .stream_idle_timeout
             .map(|timeout| tokio::time::Instant::now() + timeout);
+    }
+
+    fn observe_meaningful_output(&mut self) {
+        if self.first_output_ms.is_some() || !self.usage.saw_meaningful_output() {
+            return;
+        }
+        if let Some(ctx) = self.ctx.as_ref() {
+            self.first_output_ms = Some(ctx.started.elapsed().as_millis() as i64);
+        }
     }
 
     fn observe_keep_alive(&mut self) {
@@ -426,7 +532,6 @@ impl StreamingRelay {
         };
         let elapsed_ms = ctx.started.elapsed().as_millis() as i64;
         let previous_chunk_ms = self.last_chunk_ms;
-        self.first_response_ms.get_or_insert(elapsed_ms);
         self.last_chunk_ms = Some(elapsed_ms);
         self.chunks_sent = self.chunks_sent.saturating_add(1);
         self.bytes_sent = self.bytes_sent.saturating_add(chunk.len() as u64);
@@ -518,6 +623,8 @@ impl StreamingRelay {
             status = self.status.as_u16(),
             stream_complete,
             first_response_ms = self.first_response_ms,
+            first_output_ms = self.first_output_ms,
+            last_upstream_activity_ms = self.last_upstream_activity_ms,
             last_chunk_ms = self.last_chunk_ms,
             chunks_sent = self.chunks_sent,
             bytes_sent = self.bytes_sent,
@@ -530,6 +637,8 @@ impl StreamingRelay {
             tracing::warn!(
                 status = self.status.as_u16(),
                 first_response_ms = self.first_response_ms,
+                first_output_ms = self.first_output_ms,
+                last_upstream_activity_ms = self.last_upstream_activity_ms,
                 last_chunk_ms = self.last_chunk_ms,
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
@@ -587,6 +696,8 @@ impl StreamingRelay {
                 request_tool_count = ?ctx.request_params.tool_count,
                 request_tool_choice = ?ctx.request_params.tool_choice,
                 first_response_ms = self.first_response_ms,
+                first_output_ms = self.first_output_ms,
+                last_upstream_activity_ms = self.last_upstream_activity_ms,
                 last_chunk_ms = self.last_chunk_ms,
                 chunks_sent = self.chunks_sent,
                 bytes_sent = self.bytes_sent,
@@ -668,7 +779,12 @@ impl StreamingRelay {
                 // 若在流提前结束前已观测到 usage 数据，按实际 token 结算而非全额释放，
                 // 避免上游已消耗 token 而用户零扣费的少扣场景。
                 if token_usage.is_some() {
-                    settle_successful_hold(&ctx, token_usage, "incomplete stream with partial usage").await
+                    settle_successful_hold(
+                        &ctx,
+                        token_usage,
+                        "incomplete stream with partial usage",
+                    )
+                    .await
                 } else {
                     release_empty_hold(&ctx.state, ctx.hold.clone(), "incomplete stream").await;
                     None
@@ -737,6 +853,8 @@ impl StreamingRelay {
             status = self.status.as_u16(),
             stream_complete,
             first_response_ms = self.first_response_ms,
+            first_output_ms = self.first_output_ms,
+            last_upstream_activity_ms = self.last_upstream_activity_ms,
             last_chunk_ms = self.last_chunk_ms,
             chunks_sent = self.chunks_sent,
             bytes_sent = self.bytes_sent,
@@ -1121,6 +1239,8 @@ impl Drop for StreamingRelay {
             (observed_token_usage, false)
         };
         let first_response_ms = self.first_response_ms;
+        let first_output_ms = self.first_output_ms;
+        let last_upstream_activity_ms = self.last_upstream_activity_ms;
         let last_chunk_ms = self.last_chunk_ms;
         let chunks_sent = self.chunks_sent;
         let bytes_sent = self.bytes_sent;
@@ -1145,6 +1265,19 @@ impl Drop for StreamingRelay {
         }
         let largest_chunk_bytes = self.largest_chunk_bytes;
         let keep_alive_frames_sent = self.keep_alive_frames_sent;
+        let downstream_termination = match DownstreamTermination::load(&self.downstream_termination)
+        {
+            DownstreamTermination::Stalled => DownstreamTermination::Stalled,
+            DownstreamTermination::Active | DownstreamTermination::Closed => {
+                DownstreamTermination::Closed
+            }
+        };
+        let dropped_summary = match downstream_termination {
+            DownstreamTermination::Stalled => "downstream stream stalled before completion",
+            DownstreamTermination::Active | DownstreamTermination::Closed => {
+                "downstream stream closed before completion"
+            }
+        };
         // 将 span 传入 spawn 的后台任务，使日志仍在请求 span 上下文中发出。
         let span = self.span.clone();
 
@@ -1154,6 +1287,8 @@ impl Drop for StreamingRelay {
                     tracing::debug!(
                         status = status.as_u16(),
                         first_response_ms,
+                        first_output_ms,
+                        last_upstream_activity_ms,
                         last_chunk_ms,
                         chunks_sent,
                         bytes_sent,
@@ -1161,12 +1296,15 @@ impl Drop for StreamingRelay {
                         keep_alive_frames_sent,
                         usage_estimated,
                         latency_ms = ctx.started.elapsed().as_millis() as i64,
-                        "downstream client closed relay stream after completed response"
+                        downstream_termination = ?downstream_termination,
+                        "downstream ended relay stream after completed upstream response"
                     );
                 } else {
                     tracing::warn!(
                         status = status.as_u16(),
                         first_response_ms,
+                        first_output_ms,
+                        last_upstream_activity_ms,
                         last_chunk_ms,
                         chunks_sent,
                         bytes_sent,
@@ -1175,7 +1313,8 @@ impl Drop for StreamingRelay {
                         usage_estimated_from_bytes,
                         estimated_output_tokens = token_usage.map(|usage| usage.output_tokens),
                         latency_ms = ctx.started.elapsed().as_millis() as i64,
-                        "downstream client closed relay stream before completion"
+                        downstream_termination = ?downstream_termination,
+                        "downstream ended relay stream before completion"
                     );
                 }
                 let billing = if status.is_success() {
@@ -1189,8 +1328,7 @@ impl Drop for StreamingRelay {
                 } else {
                     key_failure_from_context(&ctx, "upstream error".to_string()).await
                 };
-                let error_summary = (!stream_complete)
-                    .then(|| "downstream stream closed before completion".to_string());
+                let error_summary = (!stream_complete).then(|| dropped_summary.to_string());
                 let usage = usage_from_context(
                     &ctx,
                     Some(status.as_u16() as i32),
@@ -1290,6 +1428,10 @@ impl ResponseUsageParser {
         matches!(self, Self::Sse(parser) if parser.failed)
     }
 
+    fn saw_meaningful_output(&self) -> bool {
+        matches!(self, Self::Sse(parser) if parser.saw_meaningful_output)
+    }
+
     fn responses_terminal_usage_present(&self) -> bool {
         matches!(self, Self::Sse(parser) if parser.responses_terminal_usage_present)
     }
@@ -1379,6 +1521,7 @@ struct ParsedLine {
     responses_output_delta: Option<String>,
     responses_function_arguments_delta: Option<String>,
     responses_reasoning_delta: Option<String>,
+    meaningful_output: bool,
     completed: bool,
     failed: bool,
     done: bool,
@@ -1402,6 +1545,7 @@ pub(crate) struct StreamUsageParser {
     responses_output_text: String,
     responses_function_arguments: String,
     responses_reasoning: String,
+    saw_meaningful_output: bool,
 }
 
 impl StreamUsageParser {
@@ -1424,6 +1568,7 @@ impl StreamUsageParser {
             responses_output_text: String::new(),
             responses_function_arguments: String::new(),
             responses_reasoning: String::new(),
+            saw_meaningful_output: false,
         }
     }
 
@@ -1477,6 +1622,9 @@ impl StreamUsageParser {
     }
 
     fn observe_parsed_line(&mut self, parsed: ParsedLine) {
+        if parsed.meaningful_output {
+            self.saw_meaningful_output = true;
+        }
         if parsed.responses_terminal_usage_present {
             self.responses_terminal_usage_present = true;
         }
@@ -1557,6 +1705,10 @@ impl StreamUsageParser {
             .is_some_and(responses_event_is_terminal);
         let (responses_output_delta, responses_function_arguments_delta, responses_reasoning_delta) =
             responses_deltas_from_sse_data(data, data_type.as_deref());
+        let meaningful_output = sse_data_has_meaningful_output(data, data_type.as_deref());
+        // Reuse the parsed data type for terminal classification.
+        let completed = data_type.as_deref().is_some_and(stream_event_is_terminal);
+        let failed = data_type.as_deref().is_some_and(stream_event_is_failure);
         ParsedLine {
             responses_terminal_usage_present: responses_terminal && usage.is_some(),
             responses_terminal_response_id: responses_terminal
@@ -1568,8 +1720,9 @@ impl StreamUsageParser {
             responses_output_delta,
             responses_function_arguments_delta,
             responses_reasoning_delta,
-            completed: sse_data_has_terminal_type(data),
-            failed: sse_data_has_failure_type(data),
+            meaningful_output,
+            completed,
+            failed,
             ..Default::default()
         }
     }
@@ -1746,22 +1899,6 @@ fn stream_event_is_failure(event: &str) -> bool {
     matches!(event, "error" | "response.failed")
 }
 
-fn sse_data_has_terminal_type(data: &str) -> bool {
-    data.contains("message_stop") && sse_data_type_is(data, "message_stop")
-        || data.contains("response.completed") && sse_data_type_is(data, "response.completed")
-        || data.contains("response.done") && sse_data_type_is(data, "response.done")
-        || data.contains("response.incomplete") && sse_data_type_is(data, "response.incomplete")
-        || data.contains("response.failed") && sse_data_type_is(data, "response.failed")
-        || data.contains("response.cancelled") && sse_data_type_is(data, "response.cancelled")
-        || data.contains("response.canceled") && sse_data_type_is(data, "response.canceled")
-        || data.contains("\"error\"") && sse_data_type_is(data, "error")
-}
-
-fn sse_data_has_failure_type(data: &str) -> bool {
-    data.contains("response.failed") && sse_data_type_is(data, "response.failed")
-        || data.contains("\"error\"") && sse_data_type_is(data, "error")
-}
-
 fn sse_data_type_name(data: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(data).ok()?;
     value
@@ -1803,8 +1940,66 @@ fn responses_deltas_from_sse_data(
     }
 }
 
-fn sse_data_type_is(data: &str, expected: &str) -> bool {
-    sse_data_type_name(data).is_some_and(|type_| type_ == expected)
+fn sse_data_has_meaningful_output(data: &str, data_type: Option<&str>) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return false;
+    };
+
+    if matches!(
+        data_type,
+        Some(
+            "response.output_text.delta"
+                | "response.function_call_arguments.delta"
+                | "response.reasoning_summary_text.delta"
+                | "response.reasoning_text.delta"
+        )
+    ) && value
+        .get("delta")
+        .and_then(Value::as_str)
+        .is_some_and(|delta| !delta.is_empty())
+    {
+        return true;
+    }
+
+    if data_type == Some("content_block_delta") {
+        return value.get("delta").is_some_and(|delta| {
+            ["text", "thinking", "partial_json"]
+                .iter()
+                .any(|field| nonempty_json_string(delta.get(*field)))
+        });
+    }
+
+    value
+        .get("choices")
+        .and_then(Value::as_array)
+        .is_some_and(|choices| {
+            choices.iter().any(|choice| {
+                nonempty_json_string(choice.get("text"))
+                    || choice.get("delta").is_some_and(|delta| {
+                        ["content", "reasoning", "reasoning_content"]
+                            .iter()
+                            .any(|field| nonempty_json_string(delta.get(*field)))
+                            || delta
+                                .get("tool_calls")
+                                .and_then(Value::as_array)
+                                .is_some_and(|tool_calls| {
+                                    tool_calls.iter().any(|tool_call| {
+                                        nonempty_json_string(
+                                            tool_call
+                                                .get("function")
+                                                .and_then(|function| function.get("arguments")),
+                                        )
+                                    })
+                                })
+                    })
+            })
+        })
+}
+
+fn nonempty_json_string(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2691,6 +2886,81 @@ data: {"type":"ping"}
         assert_eq!(
             signal_summary(parser.last_event.as_deref(), parser.last_type.as_deref()).as_deref(),
             Some("event:ping data_type:ping")
+        );
+        assert!(!parser.saw_meaningful_output);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_split_anthropic_output_delta() {
+        let mut parser = StreamUsageParser::new(1024);
+
+        parser.observe(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"te");
+        assert!(!parser.saw_meaningful_output);
+
+        parser.observe(b"xt\":\"hello\"}}\n");
+        assert!(parser.saw_meaningful_output);
+    }
+
+    #[test]
+    fn stream_usage_parser_detects_openai_tool_argument_output() {
+        let mut parser = StreamUsageParser::new(2048);
+
+        parser.observe(b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n");
+
+        assert!(parser.saw_meaningful_output);
+    }
+
+    #[tokio::test]
+    async fn buffered_response_body_stops_when_downstream_closes() {
+        let termination = Arc::new(AtomicU8::new(DownstreamTermination::Active as u8));
+        let body = buffered_response_body(
+            futures_util::stream::pending().boxed(),
+            Arc::clone(&termination),
+            tracing::Span::none(),
+            Duration::from_secs(1),
+        );
+
+        drop(body);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while DownstreamTermination::load(&termination) == DownstreamTermination::Active {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("producer notices closed downstream");
+
+        assert_eq!(
+            DownstreamTermination::load(&termination),
+            DownstreamTermination::Closed
+        );
+    }
+
+    #[tokio::test]
+    async fn buffered_response_body_cancels_stream_after_sustained_backpressure() {
+        let termination = Arc::new(AtomicU8::new(DownstreamTermination::Active as u8));
+        let stream = futures_util::stream::repeat_with(|| {
+            Ok::<Bytes, io::Error>(Bytes::from_static(b"data: output\n\n"))
+        })
+        .boxed();
+        let body = buffered_response_body(
+            stream,
+            Arc::clone(&termination),
+            tracing::Span::none(),
+            Duration::from_millis(20),
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while DownstreamTermination::load(&termination) == DownstreamTermination::Active {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("producer detects sustained backpressure");
+        drop(body);
+
+        assert_eq!(
+            DownstreamTermination::load(&termination),
+            DownstreamTermination::Stalled
         );
     }
 

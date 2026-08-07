@@ -1,13 +1,26 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check } from '@element-plus/icons-vue'
+import { Check, Clock, Warning } from '@element-plus/icons-vue'
+import { getRechargeOrders, type PaymentOrder } from '../../api/recharge'
 import { useLocale } from '../../composables/useLocale'
+import { isAbortError } from '../../utils/async'
 import { formatDateTime } from '../../utils/format'
+import { paymentReturnState, pollPaymentOrder } from '../../utils/payment'
+import '../../styles/user.css'
 
 const route = useRoute()
 const router = useRouter()
-const { locale } = useLocale()
+const { locale, t } = useLocale()
+const order = ref<PaymentOrder | null>(null)
+const checking = ref(false)
+const checked = ref(false)
+const checkFailed = ref(false)
+let checkGeneration = 0
+let checkController: AbortController | null = null
+
+const MAX_CHECK_ATTEMPTS = 12
+const CHECK_INTERVAL_MS = 1500
 
 const queryValue = (keys: string[]) => {
   for (const key of keys) {
@@ -22,58 +35,133 @@ const queryValue = (keys: string[]) => {
   return ''
 }
 
-const orderNo = computed(
-  () => queryValue(['out_trade_no', 'order_no', 'orderNo', 'order_id', 'trade_no']) || '-'
+const returnedOrderNo = computed(() =>
+  queryValue(['out_trade_no', 'order_no', 'orderNo', 'order_id'])
 )
+const orderNo = computed(() => String(order.value?.order_no ?? (returnedOrderNo.value || '-')))
+
+const viewState = computed<'checking' | 'paid' | 'pending' | 'failed' | 'unknown' | 'error'>(() => {
+  if (checking.value) return 'checking'
+  if (checkFailed.value) return 'error'
+  return paymentReturnState(order.value)
+})
+
+const viewMessages = {
+  checking: ['paymentReturnChecking', 'paymentReturnCheckingHint'],
+  paid: ['paymentReturnPaid', 'paymentReturnPaidHint'],
+  pending: ['paymentReturnPending', 'paymentReturnPendingHint'],
+  failed: ['paymentReturnFailed', 'paymentReturnFailedHint'],
+  error: ['paymentReturnError', 'paymentReturnErrorHint'],
+  unknown: ['paymentReturnUnknown', 'paymentReturnUnknownHint']
+} as const
+const title = computed(() => t(viewMessages[viewState.value][0]))
+const hint = computed(() => t(viewMessages[viewState.value][1]))
 
 const payAmount = computed(() => {
-  const raw = queryValue(['money', 'amount', 'pay_amount', 'payAmount'])
-  const amount = Number(raw)
-  if (!Number.isFinite(amount) || amount <= 0) return '-'
-  return `¥${amount.toLocaleString(locale.value, {
+  if (!order.value) return '-'
+  const amount = order.value.payable_amount_minor / 100
+  return `${order.value.currency} ${amount.toLocaleString(locale.value, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })}`
 })
 
 const payTime = computed(() => {
-  const raw = queryValue(['pay_time', 'payTime', 'endtime', 'timestamp', 'time'])
-  const numeric = Number(raw)
-  const value =
-    Number.isFinite(numeric) && numeric > 0
-      ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric).toISOString()
-      : raw || new Date().toISOString()
-  return formatDateTime(value, locale.value)
+  const value = order.value?.paid_at ?? order.value?.updated_at
+  return value ? formatDateTime(value, locale.value) : '-'
 })
+
+async function verifyPayment() {
+  checkController?.abort()
+  const controller = new AbortController()
+  checkController = controller
+  const expectedOrderNo = returnedOrderNo.value
+  const generation = ++checkGeneration
+  order.value = null
+  checked.value = false
+  checkFailed.value = false
+
+  if (!expectedOrderNo) {
+    checking.value = false
+    checked.value = true
+    checkController = null
+    return
+  }
+
+  checking.value = true
+  try {
+    const result = await pollPaymentOrder(
+      expectedOrderNo,
+      (signal) => getRechargeOrders({ signal }),
+      {
+        attempts: MAX_CHECK_ATTEMPTS,
+        intervalMs: CHECK_INTERVAL_MS,
+        signal: controller.signal
+      }
+    )
+    if (generation === checkGeneration) order.value = result
+  } catch (error) {
+    if (isAbortError(error)) return
+    if (generation === checkGeneration) checkFailed.value = true
+  } finally {
+    if (generation === checkGeneration) {
+      checking.value = false
+      checked.value = true
+      checkController = null
+    }
+  }
+}
 
 function returnToUserHome() {
   router.push({ name: 'userOverview' })
 }
+
+onMounted(() => void verifyPayment())
+onBeforeUnmount(() => {
+  checkGeneration += 1
+  checkController?.abort()
+  checkController = null
+})
 </script>
 
 <template>
   <main class="payment-return-shell">
     <section class="payment-return-panel user-panel">
-      <div class="payment-return-icon">
-        <el-icon><Check /></el-icon>
+      <div class="payment-return-icon" :class="viewState">
+        <el-icon v-if="viewState === 'paid'"><Check /></el-icon>
+        <el-icon v-else-if="['failed', 'unknown', 'error'].includes(viewState)"
+          ><Warning
+        /></el-icon>
+        <el-icon v-else><Clock /></el-icon>
       </div>
-      <h1>支付成功</h1>
+      <h1>{{ title }}</h1>
+      <p class="payment-return-hint">{{ hint }}</p>
       <dl class="payment-return-details">
         <div>
-          <dt>订单号</dt>
+          <dt>{{ t('paymentOrderNo') }}</dt>
           <dd>{{ orderNo }}</dd>
         </div>
         <div>
-          <dt>支付金额</dt>
+          <dt>{{ t('paymentAmount') }}</dt>
           <dd>{{ payAmount }}</dd>
         </div>
         <div>
-          <dt>支付时间</dt>
+          <dt>{{ t('paymentTime') }}</dt>
           <dd>{{ payTime }}</dd>
         </div>
       </dl>
       <div class="payment-return-actions">
-        <el-button type="primary" size="large" @click="returnToUserHome">返回用户后台</el-button>
+        <el-button
+          v-if="checked && viewState !== 'paid'"
+          size="large"
+          :loading="checking"
+          @click="verifyPayment"
+        >
+          {{ t('paymentCheckAgain') }}
+        </el-button>
+        <el-button type="primary" size="large" @click="returnToUserHome">
+          {{ t('returnToUserHome') }}
+        </el-button>
       </div>
     </section>
   </main>
@@ -103,9 +191,28 @@ function returnToUserHome() {
   justify-content: center;
   width: 56px;
   border-radius: 14px;
+  background: #eef4fb;
+  color: #52708f;
+  font-size: 28px;
+}
+
+.payment-return-icon.paid {
   background: rgba(41, 157, 92, 0.12);
   color: #299d5c;
-  font-size: 28px;
+}
+
+.payment-return-icon.failed,
+.payment-return-icon.unknown,
+.payment-return-icon.error {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.payment-return-hint {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: -6px 0 4px;
+  max-width: 420px;
 }
 
 .payment-return-panel h1 {

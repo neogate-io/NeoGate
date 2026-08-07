@@ -1,4 +1,4 @@
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   streamChannelDiagnostic,
   type ChannelDiagnosticScope,
@@ -17,6 +17,7 @@ export function useChannelDiagnostics(onComplete?: () => Promise<void> | void) {
   const currentModel = ref('')
   const liveListRef = ref<HTMLElement | null>(null)
   const inProgress = computed(() => diagnosingChannelId.value !== null)
+  let abortController: AbortController | null = null
 
   function isChannelDiagnosing(channelId: number) {
     return diagnosingChannelId.value === channelId
@@ -38,27 +39,49 @@ export function useChannelDiagnostics(onComplete?: () => Promise<void> | void) {
     currentModel.value = ''
     dialogOpen.value = true
     diagnosingChannelId.value = row.id
+    const controller = new AbortController()
+    abortController = controller
     try {
-      report.value = await streamChannelDiagnostic(row.id, scope, (event) => {
-        if (event.type === 'model_started') {
-          currentModel.value = event.model
-        }
-        if (event.type === 'model_result') {
-          liveSteps.value.push(event)
-          currentModel.value = ''
-          void scrollLiveListToBottom()
-        }
-        if (event.type === 'finished') {
-          report.value = event.report
-        }
-      })
+      report.value = await streamChannelDiagnostic(
+        row.id,
+        scope,
+        (event) => {
+          if (event.type === 'model_started') {
+            currentModel.value = event.model
+          }
+          if (event.type === 'model_result') {
+            liveSteps.value.push(event)
+            currentModel.value = ''
+            void scrollLiveListToBottom()
+          }
+          if (event.type === 'finished') {
+            report.value = event.report
+          }
+        },
+        controller.signal
+      )
       await onComplete?.()
     } catch (err) {
+      if (controller.signal.aborted) return
       error.value = readError(err)
     } finally {
-      diagnosingChannelId.value = null
+      if (abortController === controller) {
+        abortController = null
+        diagnosingChannelId.value = null
+      }
     }
   }
+
+  function abort() {
+    abortController?.abort()
+    abortController = null
+    diagnosingChannelId.value = null
+  }
+
+  watch(dialogOpen, (open) => {
+    if (!open) abort()
+  })
+  onBeforeUnmount(abort)
 
   return {
     dialogOpen,

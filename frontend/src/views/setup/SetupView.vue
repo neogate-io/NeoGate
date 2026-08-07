@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -38,6 +38,7 @@ import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { setSiteBrand } from '../../composables/useSiteBrand'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
+import { abortableDelay, isAbortError } from '../../utils/async'
 import { majorToMicroAmount, microAmountToMajor } from '../../utils/format'
 import {
   ApiError,
@@ -77,6 +78,7 @@ const generatingTemplate = ref(false)
 const testingDatabase = ref(false)
 const waitingForRestart = ref(false)
 const restartWaitTimedOut = ref(false)
+let restartController: AbortController | null = null
 const status = ref<ServicePolicy | null>(null)
 const providers = ref<ProviderRecord[]>([])
 const envFile = ref('')
@@ -532,35 +534,45 @@ async function handleRuntimeSubmit() {
 }
 
 async function waitForRuntimeRestart() {
+  restartController?.abort()
+  const controller = new AbortController()
+  restartController = controller
   waitingForRestart.value = true
   restartWaitTimedOut.value = false
   const deadline = Date.now() + 120_000
-  while (Date.now() < deadline) {
-    await sleep(1500)
-    try {
-      const nextStatus = await getSetupStatus(true)
-      if (nextStatus.setup_completed) {
-        await router.replace('/login')
-        return
-      }
-      if (!nextStatus.bootstrap_required) {
-        status.value = nextStatus
-        envFile.value = ''
-        waitingForRestart.value = false
-        restartWaitTimedOut.value = false
-        providers.value = await getSetupProviders()
-        if (providerOptions.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providerOptions.value[0].code
+  try {
+    while (Date.now() < deadline) {
+      await abortableDelay(1500, controller.signal)
+      try {
+        const nextStatus = await getSetupStatus(true, { signal: controller.signal })
+        if (nextStatus.setup_completed) {
+          await router.replace('/login')
+          return
         }
-        applyProviderDefaults()
-        return
+        if (!nextStatus.bootstrap_required) {
+          status.value = nextStatus
+          envFile.value = ''
+          waitingForRestart.value = false
+          restartWaitTimedOut.value = false
+          providers.value = await getSetupProviders({ signal: controller.signal })
+          if (providerOptions.value.length > 0 && !selectedProvider.value) {
+            setupForm.provider = providerOptions.value[0].code
+          }
+          applyProviderDefaults()
+          return
+        }
+      } catch (error) {
+        if (isAbortError(error)) return
+        // The backend is expected to be temporarily unavailable while it restarts.
       }
-    } catch {
-      // The backend is expected to be temporarily unavailable while it restarts.
     }
+    waitingForRestart.value = false
+    restartWaitTimedOut.value = true
+  } catch (error) {
+    if (!isAbortError(error)) throw error
+  } finally {
+    if (restartController === controller) restartController = null
   }
-  waitingForRestart.value = false
-  restartWaitTimedOut.value = true
 }
 
 async function testDatabaseConnection() {
@@ -1084,11 +1096,11 @@ function isLoopbackUrl(value: string) {
   }
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
 onMounted(load)
+onBeforeUnmount(() => {
+  restartController?.abort()
+  restartController = null
+})
 </script>
 
 <template>

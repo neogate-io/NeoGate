@@ -18,6 +18,7 @@ import {
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
+import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import {
   downloadBlob,
@@ -51,7 +52,7 @@ const statisticsFilters = reactive<StatisticsFilters>({
 })
 const statisticsModelsPage = ref(1)
 const statisticsModelsPageSize = ref(20)
-const statisticsExporting = ref(false)
+const { downloading: statisticsExporting, run: runDownload } = useDownloadTask()
 const tokenTrendMode = ref<'total' | 'input' | 'output'>('total')
 const requestTrendMode = ref<'total' | 'errors' | 'errorRate'>('total')
 const performanceTrendMode = ref<'latency' | 'firstResponse' | 'throughput'>('latency')
@@ -424,13 +425,10 @@ async function applyTrendGranularity(
 }
 
 async function exportStatisticsTrend() {
-  statisticsExporting.value = true
-  try {
+  await runDownload(async () => {
     const result = await downloadAdminUsageStatisticsCsv('daily', statisticsBaseQuery.value)
     downloadBlob(result.filename ?? 'usage-statistics-trend.csv', result.blob)
-  } finally {
-    statisticsExporting.value = false
-  }
+  })
 }
 
 async function handleTopUserChartClick(params: unknown) {

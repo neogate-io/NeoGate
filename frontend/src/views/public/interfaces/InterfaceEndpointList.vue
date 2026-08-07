@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import CodeSampleCard from './CodeSampleCard.vue'
+import { endpointAnchorFor } from './endpointAnchor'
 
 type ParamRow = string[]
 
@@ -22,22 +23,13 @@ defineProps<{
 function methodClass(method: string) {
   return `interface-method--${method.split(/[\s/]/)[0].toLowerCase()}`
 }
-
-// Stable anchor id per endpoint card (e.g. 'post-v1-videos') so a card can be
-// linked directly via /interfaces/<group>/<sub>#<anchor>.
-function anchorFor(item: { method: string; path: string }) {
-  return `${item.method}-${item.path}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 </script>
 
 <template>
   <div class="interface-endpoint-list">
     <article
       v-for="item in items"
-      :id="anchorFor(item)"
+      :id="endpointAnchorFor(item)"
       :key="`${item.method}-${item.path}-${item.title}`"
     >
       <div class="interface-endpoint-heading">

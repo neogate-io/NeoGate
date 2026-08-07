@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 const localBackendOrigin = 'http://127.0.0.1:8080'
 const apiProxy = {
@@ -18,7 +20,14 @@ function isIgnorablePureAnnotationWarning(log: { code?: string; id?: string; mes
 }
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    Components({
+      dts: false,
+      directives: true,
+      resolvers: [ElementPlusResolver({ importStyle: 'css' })]
+    })
+  ],
   build: {
     rollupOptions: {
       onLog(level, log, defaultHandler) {
@@ -29,41 +38,6 @@ export default defineConfig({
       },
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/@element-plus/icons-vue')) {
-            return 'element-icons'
-          }
-          if (id.includes('node_modules/element-plus')) {
-            if (id.includes('/components/table/')) return 'element-table'
-            if (
-              id.includes('/components/dialog/') ||
-              id.includes('/components/message/') ||
-              id.includes('/components/message-box/') ||
-              id.includes('/components/loading/') ||
-              id.includes('/components/tooltip/')
-            ) {
-              return 'element-feedback'
-            }
-            if (
-              id.includes('/components/form/') ||
-              id.includes('/components/input/') ||
-              id.includes('/components/input-number/') ||
-              id.includes('/components/select/') ||
-              id.includes('/components/date-picker/') ||
-              id.includes('/components/switch/')
-            ) {
-              return 'element-form'
-            }
-            if (
-              id.includes('/components/button/') ||
-              id.includes('/components/menu/') ||
-              id.includes('/components/dropdown/') ||
-              id.includes('/components/pagination/') ||
-              id.includes('/components/segmented/')
-            ) {
-              return 'element-controls'
-            }
-            return 'element-core'
-          }
           if (
             id.includes('node_modules/vue') ||
             id.includes('node_modules/vue-router') ||

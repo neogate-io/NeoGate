@@ -975,6 +975,8 @@ pub(crate) async fn cleanup_orphaned_asset_directories(state: &AppState) -> AppR
             continue;
         }
         let date_dir = date_entry.path();
+        // 收集所有候选目录（过期的 resp_* 目录）后批量查询，避免 N+1 问题。
+        let mut candidates: Vec<(std::path::PathBuf, String)> = Vec::new();
         let mut task_entries = fs::read_dir(&date_dir).await?;
         while let Some(task_entry) = task_entries.next_entry().await? {
             let response_id = task_entry.file_name().to_string_lossy().to_string();
@@ -985,15 +987,27 @@ pub(crate) async fn cleanup_orphaned_asset_directories(state: &AppState) -> AppR
             if !older_than_asset_retention(metadata.modified().ok()) {
                 continue;
             }
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM task_upstream WHERE task_type = 'neogate_response' AND upstream_task_id = $1)",
+            candidates.push((task_entry.path(), response_id));
+        }
+        if !candidates.is_empty() {
+            // 单次批量查询替代逐个 SELECT EXISTS
+            let response_ids: Vec<&str> = candidates.iter().map(|(_, id)| id.as_str()).collect();
+            let existing: std::collections::HashSet<String> = sqlx::query_scalar(
+                "SELECT upstream_task_id
+                 FROM task_upstream
+                 WHERE task_type = 'neogate_response'
+                   AND upstream_task_id = ANY($1::TEXT[])",
             )
-            .bind(&response_id)
-            .fetch_one(&state.db.pool)
-            .await?;
-            if !exists {
-                remove_managed_tree(&task_entry.path()).await?;
-                deleted += 1;
+            .bind(&response_ids[..])
+            .fetch_all(&state.db.pool)
+            .await?
+            .into_iter()
+            .collect();
+            for (path, response_id) in candidates {
+                if !existing.contains(&response_id) {
+                    remove_managed_tree(&path).await?;
+                    deleted += 1;
+                }
             }
         }
         remove_empty_date_dir(&date_dir).await?;

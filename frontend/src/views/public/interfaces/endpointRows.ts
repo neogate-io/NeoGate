@@ -3,6 +3,8 @@
  * interfaces docs page. Both locales are rendered from these rows; the
  * composables map them to display rows via toEndpointDisplayRows().
  */
+import { endpointAnchorFor } from './endpointAnchor'
+
 export interface EndpointRow {
   name: string // Module name, English in both locales
   method: string
@@ -21,6 +23,8 @@ export interface EndpointDisplayRow {
   status: string
   supported: boolean
   anchor?: string
+  /** Deep-link target on the anchor's sub page (endpoint card id). */
+  endpointAnchor?: string
 }
 
 export function toEndpointDisplayRows(
@@ -48,7 +52,8 @@ export function toEndpointDisplayRows(
       description: isZh ? row.description.zh : row.description.en,
       status,
       supported: row.supported,
-      anchor: row.anchor
+      anchor: row.anchor,
+      endpointAnchor: row.anchor ? endpointAnchorFor(row) : undefined
     }
   })
 }

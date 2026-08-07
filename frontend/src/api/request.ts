@@ -65,6 +65,25 @@ export async function adminUploadRequest<T>(path: string, form: FormData, init: 
   }
 }
 
+export async function adminResponseRequest(path: string, init: RequestInit = {}) {
+  const auth = useAuthStore()
+  const headers = new Headers(init.headers)
+  if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
+
+  try {
+    const response = await fetch(path, { ...init, headers })
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      const error = readApiErrorPayload(data)
+      throw new ApiError(error?.message ?? response.statusText, response.status, error?.code)
+    }
+    return response
+  } catch (err) {
+    handleAuthFailure(err)
+    throw err
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}, token = ''): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('content-type', 'application/json')
@@ -91,6 +110,7 @@ function handleAuthFailure(err: unknown) {
   }
 
   const auth = useAuthStore()
+  if (!auth.isAuthed) return
   if (isPasswordChangeRequiredError(err) && auth.isUser) {
     auth.markPasswordChangeRequired()
     void router

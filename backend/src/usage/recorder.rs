@@ -86,7 +86,8 @@ pub struct UsageRecorder {
 }
 
 struct UsageItem {
-    usage: UsageInsert,
+    /// None 表示 failure-only 入队项（不写 usage 行），仅用于持久化 key failure。
+    usage: Option<UsageInsert>,
     failure: Option<KeyFailure>,
 }
 
@@ -114,7 +115,10 @@ impl UsageRecorder {
             return Ok(());
         };
 
-        let item = UsageItem { usage, failure };
+        let item = UsageItem {
+            usage: Some(usage),
+            failure,
+        };
         match sender.try_send(item) {
             Ok(()) => {}
             Err(TrySendError::Full(_item)) => {
@@ -125,6 +129,28 @@ impl UsageRecorder {
             }
         }
         Ok(())
+    }
+
+    /// billing 路径专用：仅持久化 key 冷却状态，不写 usage 行。
+    /// 避免 billing 分支因直接 return 而跳过 `flush_key_failures` 导致
+    /// `channel_key.cooldown_until` 只存在内存、routing cache TTL 到期后丢失。
+    pub fn enqueue_key_failure(&self, failure: KeyFailure) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let item = UsageItem {
+            usage: None,
+            failure: Some(failure),
+        };
+        match sender.try_send(item) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                tracing::warn!("relay usage queue is full; dropping key failure record");
+            }
+            Err(TrySendError::Closed(_)) => {
+                tracing::warn!("relay usage worker is closed; dropping key failure record");
+            }
+        }
     }
 }
 
@@ -147,7 +173,9 @@ async fn run_worker(
                         if let Some(failure) = item.failure {
                             insert_bounded_failure(&mut failures, failure);
                         }
-                        push_bounded_usage(&mut usages, item.usage);
+                        if let Some(usage) = item.usage {
+                            push_bounded_usage(&mut usages, usage);
+                        }
                         if usages.len() >= USAGE_BATCH_SIZE
                             || failures.len() >= KEY_BATCH_SIZE
                         {
@@ -592,7 +620,7 @@ fn coalesce_debit_parts(parts: &[DebitPart]) -> Vec<DebitPart> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::billing::{BillingMeter, TokenUsage};
+    use crate::billing::{BillingChargeStatus, BillingMeter, TokenUsage};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -605,7 +633,7 @@ pub(super) mod tests {
             billing_meter: BillingMeter::Token,
             billable_units: 30,
             cost_micros: 300,
-            status: "billed".to_string(),
+            status: BillingChargeStatus::Billed,
             parts: Vec::new(),
             returned_parts: Vec::new(),
         }
@@ -755,7 +783,7 @@ pub(super) mod tests {
             billing_meter: BillingMeter::Token,
             billable_units: 30,
             cost_micros: 300,
-            status: "billed".to_string(),
+            status: BillingChargeStatus::Billed,
             parts: Vec::new(),
             returned_parts: Vec::new(),
         });

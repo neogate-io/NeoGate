@@ -8,8 +8,8 @@ use super::{
     common::text_field_content_to_text,
     estimate_tokens,
     responses_common::{
-        drain_sse_lines, openai_response_message_item, openai_response_reasoning_item,
-        openai_response_usage, StreamingToolCall,
+        choice_usage_cached_tokens, drain_sse_lines, openai_response_message_item,
+        openai_response_reasoning_item, openai_response_usage, push_sse_event, StreamingToolCall,
     },
     stream::{finish_bridge_json, finish_bridge_stream, BridgeSseConverter},
 };
@@ -232,8 +232,19 @@ fn openai_chat_tool_call_to_response_function_call(call: &Value) -> Option<Value
 }
 
 fn openai_chat_usage_tokens(usage: Option<&Value>, field: &str) -> i64 {
+    // 部分 OpenAI 兼容上游用 input_tokens/output_tokens 别名，需回退匹配，
+    // 否则 token 记为 0 会退化为字节估算，与 chat→anthropic 路径口径不一致。
+    let alias = match field {
+        "prompt_tokens" => Some("input_tokens"),
+        "completion_tokens" => Some("output_tokens"),
+        _ => None,
+    };
     usage
-        .and_then(|usage| usage.get(field))
+        .and_then(|usage| {
+            usage
+                .get(field)
+                .or_else(|| alias.and_then(|alias| usage.get(alias)))
+        })
         .and_then(Value::as_i64)
         .unwrap_or(0)
 }
@@ -399,10 +410,12 @@ impl OpenAiChatSseToOpenAiResponse {
         };
         self.input_tokens = usage
             .get("prompt_tokens")
+            .or_else(|| usage.get("input_tokens"))
             .and_then(Value::as_i64)
             .unwrap_or(self.input_tokens);
         self.output_tokens = usage
             .get("completion_tokens")
+            .or_else(|| usage.get("output_tokens"))
             .and_then(Value::as_i64)
             .unwrap_or(self.output_tokens);
         self.cached_input_tokens = usage
@@ -899,11 +912,7 @@ impl OpenAiChatSseToOpenAiResponse {
     }
 
     fn push_event(&self, out: &mut Vec<u8>, event: &str, data: Value) {
-        out.extend_from_slice(b"event: ");
-        out.extend_from_slice(event.as_bytes());
-        out.extend_from_slice(b"\ndata: ");
-        serde_json::to_writer(&mut *out, &data).expect("serializing JSON value to Vec cannot fail");
-        out.extend_from_slice(b"\n\n");
+        push_sse_event(out, event, &data);
     }
 
     fn next_sequence_number(&mut self) -> i64 {
@@ -911,20 +920,6 @@ impl OpenAiChatSseToOpenAiResponse {
         self.sequence_number = self.sequence_number.saturating_add(1);
         sequence_number
     }
-}
-
-fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
-    value
-        .get("choices")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(|choice| {
-            choice
-                .get("usage")
-                .and_then(|usage| usage.get("cached_tokens"))
-                .and_then(Value::as_i64)
-        })
-        .find(|tokens| *tokens > 0)
 }
 
 fn reasoning_content(value: &Value) -> Option<&str> {
@@ -1051,6 +1046,30 @@ mod tests {
             "Structured reasoning"
         );
         assert_eq!(value["output"][1]["content"][0]["text"], "Answer");
+    }
+
+    #[test]
+    fn nonstream_preserves_openai_cached_tokens() {
+        // chat 格式的缓存 token 在 prompt_tokens_details.cached_tokens 下，
+        // 转换后必须映射到 input_tokens_details.cached_tokens，否则缓存输入被按全价计费。
+        let body = br#"{"id":"chatcmpl-1","choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":1000,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":800}}}"#;
+        let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["usage"]["input_tokens"], 1000);
+        assert_eq!(value["usage"]["output_tokens"], 20);
+        assert_eq!(value["usage"]["input_tokens_details"]["cached_tokens"], 800);
+    }
+
+    #[test]
+    fn nonstream_supports_input_output_token_aliases() {
+        // 部分兼容上游只给 input_tokens/output_tokens 别名，需正确读取而非归零。
+        let body = br#"{"id":"chatcmpl-1","choices":[{"message":{"content":"hi"}}],"usage":{"input_tokens":300,"output_tokens":40}}"#;
+        let converted = openai_chat_response_to_openai_response(body, "fallback").unwrap();
+        let value: Value = serde_json::from_slice(&converted).unwrap();
+
+        assert_eq!(value["usage"]["input_tokens"], 300);
+        assert_eq!(value["usage"]["output_tokens"], 40);
     }
 
     #[test]

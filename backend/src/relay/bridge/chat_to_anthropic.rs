@@ -859,25 +859,11 @@ fn openai_cached_input_tokens(
 }
 
 fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
-    value
-        .get("choices")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(|choice| {
-            choice
-                .get("usage")
-                .and_then(|usage| usage.get("cached_tokens"))
-                .and_then(Value::as_i64)
-        })
-        .find(|tokens| *tokens > 0)
+    super::responses_common::choice_usage_cached_tokens(value)
 }
 
 fn push_anthropic_sse(out: &mut Vec<u8>, event: &str, data: Value) {
-    out.extend_from_slice(b"event: ");
-    out.extend_from_slice(event.as_bytes());
-    out.extend_from_slice(b"\ndata: ");
-    serde_json::to_writer(&mut *out, &data).expect("serializing JSON value to Vec cannot fail");
-    out.extend_from_slice(b"\n\n");
+    super::responses_common::push_sse_event(out, event, &data);
 }
 
 #[cfg(test)]

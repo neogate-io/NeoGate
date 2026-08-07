@@ -316,8 +316,11 @@ fn json_has_video_input(value: &Value) -> bool {
     let Some(content) = value.get("content").and_then(Value::as_array) else {
         return false;
     };
+    // 需与适配器的 has_video_reference 口径一致（globalaiopc.rs）：适配器据此选择更贵的
+    // with_video 上游模型。若这里漏判 role==reference_video，会按无视频档位计费而少扣。
     content.iter().any(|item| {
         item.get("type").and_then(Value::as_str) == Some("video_url")
+            || item.get("role").and_then(Value::as_str) == Some("reference_video")
             || item.get("video_url").is_some()
     })
 }

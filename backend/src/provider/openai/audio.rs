@@ -283,33 +283,45 @@ pub(crate) async fn openai_audio_transcriptions(
     );
     state.task_wakeup.notify_one();
 
-    loop {
-        let task = upstream_task::fetch_task(
-            &state.db.pool,
-            auth.user_key_id,
-            UpstreamTaskType::AudioTranscription,
-            &submission.task_id,
-        )
-        .await?;
-        if task.terminal {
-            let elapsed_ms = started.elapsed().as_millis() as i64;
-            tracing::info!(
-                upstream_task_id = %submission.task_id,
-                channel_id = upstream.channel_id,
-                status = %task.status,
-                elapsed_ms,
-                "Alibaba ASR transcription request completed"
-            );
-            return task_response(
-                &task.upstream_metadata,
-                request.response_format,
-                &task.status,
-                response_language(&request).as_deref(),
-                &request.timestamp_granularities,
-            );
+    /// 单次同步轮询的最大等待时长（10 分钟）。上游若因卡死永不进入 terminal
+    /// 状态，此超时保证 HTTP 连接不会无限挂起。
+    const AUDIO_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+    tokio::time::timeout(AUDIO_POLL_TIMEOUT, async {
+        loop {
+            let task = upstream_task::fetch_task(
+                &state.db.pool,
+                auth.user_key_id,
+                UpstreamTaskType::AudioTranscription,
+                &submission.task_id,
+            )
+            .await?;
+            if task.terminal {
+                let elapsed_ms = started.elapsed().as_millis() as i64;
+                tracing::info!(
+                    upstream_task_id = %submission.task_id,
+                    channel_id = upstream.channel_id,
+                    status = %task.status,
+                    elapsed_ms,
+                    "Alibaba ASR transcription request completed"
+                );
+                return task_response(
+                    &task.upstream_metadata,
+                    request.response_format,
+                    &task.status,
+                    response_language(&request).as_deref(),
+                    &request.timestamp_granularities,
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(AppError::UpstreamUnavailable(
+            "audio transcription task did not complete within the polling timeout".to_string(),
+        ))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

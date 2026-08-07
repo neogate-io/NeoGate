@@ -211,10 +211,7 @@ impl ProviderAdapter for GlobalAiOpcAdapter {
         let Some(_) = model.and_then(DiscountModel::parse) else {
             return (upstream_url(base_url, path), path.to_string());
         };
-        let Some(id) = path
-            .strip_prefix("/v1/videos/")
-            .filter(|id| !id.is_empty() && !id.contains('/'))
-        else {
+        let Some(id) = super::openai_video_task_id(path) else {
             return (upstream_url(base_url, path), path.to_string());
         };
         (

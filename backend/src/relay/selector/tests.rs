@@ -107,6 +107,22 @@ async fn refreshed_credential_invalidation_is_targeted_and_stales_routing_cache(
 }
 
 #[tokio::test]
+async fn invalidate_bumps_routing_epoch_to_stale_concurrent_reload() {
+    // epoch 递增是 routing_snapshot 检测「加载期间被 invalidate」的依据。
+    let selector = Selector::with_cache_ttl(Duration::from_secs(30));
+    let before = selector.routing_epoch.load(Ordering::Acquire);
+    selector.invalidate().await;
+    let after_invalidate = selector.routing_epoch.load(Ordering::Acquire);
+    assert_eq!(after_invalidate, before + 1);
+
+    selector.invalidate_refreshed_credential(1).await;
+    assert_eq!(
+        selector.routing_epoch.load(Ordering::Acquire),
+        after_invalidate + 1
+    );
+}
+
+#[tokio::test]
 async fn selector_reports_affinity_miss_and_local_hit() {
     let selector = Selector::with_cache_ttl(Duration::from_secs(30));
     let channel = candidate("primary", 1, 1, vec!["gpt-5.6"]);

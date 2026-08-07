@@ -597,9 +597,37 @@ impl ImageStreamResultParser {
 
 impl Drop for ImageStreamRelay {
     fn drop(&mut self) {
-        if let Some(mut ctx) = self.ctx.take() {
-            ctx.release_request_permit();
-            tracing::warn!("image stream ended before completion; skipping image billing settle");
+        let Some(mut ctx) = self.ctx.take() else {
+            return;
+        };
+        ctx.release_request_permit();
+        let completed_count = self.results.finish();
+        let token_usage = self.usage.finish();
+        let status = self.status;
+        if let Some(image_count) = completed_count {
+            // 上游已完成至少一张图片，按实际完成数结算，避免服务方承担成本却零扣费
+            tracing::warn!(
+                image_count,
+                requested = self.image_count,
+                "image stream ended before completion; settling for already-generated images"
+            );
+            tokio::spawn(async move {
+                let billing =
+                    settle_image_hold(&ctx, image_count, token_usage, "abandoned image stream")
+                        .await;
+                let usage = crate::relay::usage_from_context(
+                    &ctx,
+                    Some(status.as_u16() as i32),
+                    None,
+                    None,
+                    token_usage,
+                    billing,
+                );
+                crate::relay::enqueue_relay_usage(&ctx.state, usage, None).await;
+            });
+        } else {
+            // 未检测到已完成图片，全额释放 hold
+            tracing::warn!("image stream ended before completion; no images generated; releasing hold");
             let state = ctx.state.clone();
             let hold = ctx.hold.clone();
             tokio::spawn(async move {

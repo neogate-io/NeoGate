@@ -665,8 +665,14 @@ impl StreamingRelay {
                 None
             }
             StreamFinishDisposition::MissingTerminal => {
-                release_empty_hold(&ctx.state, ctx.hold.clone(), "incomplete stream").await;
-                None
+                // 若在流提前结束前已观测到 usage 数据，按实际 token 结算而非全额释放，
+                // 避免上游已消耗 token 而用户零扣费的少扣场景。
+                if token_usage.is_some() {
+                    settle_successful_hold(&ctx, token_usage, "incomplete stream with partial usage").await
+                } else {
+                    release_empty_hold(&ctx.state, ctx.hold.clone(), "incomplete stream").await;
+                    None
+                }
             }
         };
         let error_summary = match disposition {

@@ -158,10 +158,7 @@ impl ProviderAdapter for HaxicloudAdapter {
     }
 
     fn resolve_bound_url(&self, base_url: &str, path: &str) -> (String, String) {
-        if let Some(id) = path
-            .strip_prefix("/v1/videos/")
-            .filter(|id| !id.is_empty() && !id.contains('/'))
-        {
+        if let Some(id) = super::openai_video_task_id(path) {
             return (
                 format!("{}/{}", tasks_url(base_url), id),
                 format!("{TASKS_PATH}/{id}"),
@@ -272,6 +269,27 @@ impl ProviderAdapter for HaxicloudAdapter {
             payload
                 .entry("output")
                 .or_insert_with(|| serde_json::json!({"video_url": url}));
+        }
+        // 保留上游用量字段，否则 OfficialToken 结算读不到 total_tokens 将零扣费。
+        // usage 可能位于 data.data 内层或 data 外层，优先原样保留。
+        if !payload.contains_key("usage") {
+            if let Some(usage) = data.get("usage").cloned() {
+                payload.insert("usage".to_string(), usage);
+            } else if let Some(total_tokens) = payload
+                .get("totalTokens")
+                .or_else(|| data.get("totalTokens"))
+                .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+            {
+                // 结算只识别 usage.total_tokens，将 camelCase totalTokens 归一化为 usage 对象
+                payload.insert(
+                    "usage".to_string(),
+                    serde_json::json!({
+                        "input_tokens": total_tokens,
+                        "output_tokens": 0,
+                        "total_tokens": total_tokens,
+                    }),
+                );
+            }
         }
         Ok(Bytes::from(serde_json::to_vec(&Value::Object(payload))?))
     }

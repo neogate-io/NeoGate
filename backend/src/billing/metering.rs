@@ -89,28 +89,29 @@ pub fn cost_for_billable_usage(usage: BillableUsage, price: &Price) -> i64 {
         BillingMeter::Token => usage
             .token_usage
             .map_or(0, |token_usage| cost_for_usage(token_usage, price)),
-        BillingMeter::Image => usage.billable_units.max(0).saturating_mul(
-            price
-                .unit_price_micros
-                .expect("unit billing requires unit_price_micros")
-                .max(0),
-        ),
-        BillingMeter::Audio => usage.billable_units.max(0).saturating_mul(
-            price
-                .unit_price_micros
-                .expect("audio unit billing requires unit_price_micros")
-                .max(0),
-        ),
+        BillingMeter::Image => {
+            let Some(unit_price) = price.unit_price_micros else {
+                tracing::error!("image billing requires unit_price_micros but none is set; charging zero");
+                return 0;
+            };
+            usage.billable_units.max(0).saturating_mul(unit_price.max(0))
+        }
+        BillingMeter::Audio => {
+            let Some(unit_price) = price.unit_price_micros else {
+                tracing::error!("audio billing requires unit_price_micros but none is set; charging zero");
+                return 0;
+            };
+            usage.billable_units.max(0).saturating_mul(unit_price.max(0))
+        }
         BillingMeter::Video => {
             if let Some(token_usage) = usage.token_usage {
                 cost_for_usage(token_usage, price)
             } else {
-                usage.billable_units.max(0).saturating_mul(
-                    price
-                        .unit_price_micros
-                        .expect("video unit billing requires unit_price_micros")
-                        .max(0),
-                )
+                let Some(unit_price) = price.unit_price_micros else {
+                    tracing::error!("video unit billing requires unit_price_micros but none is set; charging zero");
+                    return 0;
+                };
+                usage.billable_units.max(0).saturating_mul(unit_price.max(0))
             }
         }
     }

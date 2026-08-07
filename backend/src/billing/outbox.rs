@@ -28,6 +28,9 @@ const BILLING_OUTBOX_WRITE_ATTEMPTS: u32 = 7;
 const BILLING_OUTBOX_INITIAL_RETRY_DELAY: Duration = Duration::from_millis(50);
 const BILLING_OUTBOX_BACKGROUND_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const BILLING_OUTBOX_BACKGROUND_RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
+/// 后台 retry worker 的最大重试次数。超过后将整批记录逐条提交至 billing outbox
+/// 表（process worker 负责处理），避免单条损坏记录永久阻塞整个 retry batch。
+const BILLING_RETRY_WORKER_MAX_ATTEMPTS: u32 = 20;
 
 #[derive(Clone)]
 pub struct BillingOutbox {
@@ -371,6 +374,7 @@ impl BillingOutbox {
             }
 
             let mut delay = BILLING_OUTBOX_BACKGROUND_RETRY_INITIAL_DELAY;
+            let mut attempt = 0u32;
             loop {
                 match persist_billing_usages(&self.pool, &batch).await {
                     Ok(()) => {
@@ -379,8 +383,30 @@ impl BillingOutbox {
                     }
                     Err(err) => {
                         self.health.record_failure();
+                        attempt += 1;
+                        if attempt >= BILLING_RETRY_WORKER_MAX_ATTEMPTS {
+                            // 超过最大重试次数后逐条写入 billing outbox 表，由
+                            // process worker 再次处理，避免损坏记录永久阻塞整个 batch
+                            tracing::error!(
+                                count = batch.len(),
+                                attempt,
+                                "billing retry batch exceeded max attempts; falling back to per-record persist: {err}"
+                            );
+                            for item in &batch {
+                                if let Err(fb_err) =
+                                    persist_billing_usage_with_retry(&self.pool, item).await
+                                {
+                                    tracing::error!(
+                                        "failed to fall back per-record billing persist: {fb_err}"
+                                    );
+                                }
+                            }
+                            break;
+                        }
                         tracing::error!(
                             count = batch.len(),
+                            attempt,
+                            max_attempts = BILLING_RETRY_WORKER_MAX_ATTEMPTS,
                             "failed to persist durable billing batch in bounded background retry: {err}"
                         );
                         time::sleep(delay).await;
@@ -645,7 +671,9 @@ async fn process_billing_outbox_chunk(
             Ok(usage) => processed_usages.push(usage),
             Err(err) => {
                 let failed_id = record.id;
-                let _ = tx.rollback().await;
+                if let Err(rb_err) = tx.rollback().await {
+                    tracing::warn!(billing_id = %failed_id, "failed to rollback billing transaction: {rb_err}");
+                }
                 tracing::warn!(
                     billing_id = %failed_id,
                     selected,
@@ -669,7 +697,9 @@ async fn process_billing_outbox_chunk(
     }
     .await
     {
-        let _ = tx.rollback().await;
+        if let Err(rb_err) = tx.rollback().await {
+            tracing::warn!(selected, "failed to rollback billing transaction: {rb_err}");
+        }
         tracing::warn!(
             selected,
             "failed to process billing chunk; retrying selected records individually: {err}"

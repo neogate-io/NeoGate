@@ -103,11 +103,7 @@ fn seedance_task_url(base_url: &str, task_id: &str) -> String {
 }
 
 fn seedance_task_id_from_openai_video_path(path: &str) -> Option<&str> {
-    let task_id = path.strip_prefix("/v1/videos/")?;
-    if task_id.is_empty() || task_id.contains('/') {
-        return None;
-    }
-    Some(task_id)
+    super::openai_video_task_id(path)
 }
 
 fn openai_video_to_seedance(body: Bytes) -> AppResult<Bytes> {

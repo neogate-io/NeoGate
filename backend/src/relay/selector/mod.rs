@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{atomic::AtomicUsize, Arc, RwLock as StdRwLock},
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock as StdRwLock,
+    },
     time::{Duration, Instant},
 };
 
@@ -79,6 +82,10 @@ impl UpstreamProtocol {
 pub struct Selector {
     routing_cache: Arc<RwLock<Arc<RoutingCache>>>,
     reload_lock: Arc<Mutex<()>>,
+    /// 每次 invalidate 递增。routing_snapshot 在加载前捕获、写回前比对：若期间
+    /// 发生过 invalidate，则本次加载视为陈旧（loaded_at 置 None），下次强制重载。
+    /// 解决 reload 用陈旧 DB 数据覆盖 invalidate 意图的 TOCTOU 竞态。
+    routing_epoch: Arc<AtomicU64>,
     routing_cache_ttl: Duration,
     credential_runtime_secrets: RuntimeSecretCache,
     model_blocks: ModelBlockCache,
@@ -235,6 +242,7 @@ impl Selector {
         Self {
             routing_cache: Arc::new(RwLock::new(Arc::new(RoutingCache::default()))),
             reload_lock: Arc::new(Mutex::new(())),
+            routing_epoch: Arc::new(AtomicU64::new(0)),
             routing_cache_ttl,
             credential_runtime_secrets: RuntimeSecretCache::default(),
             model_blocks: ModelBlockCache::default(),
@@ -244,9 +252,13 @@ impl Selector {
 
     pub async fn invalidate(&self) {
         let mut cache = self.routing_cache.write().await;
+        // 在持写锁时递增 epoch，与 routing_snapshot 的写回串行化：
+        // 若 reload 在本次之前捕获了旧 epoch，其写回时会检测到不一致并作废。
+        self.routing_epoch.fetch_add(1, Ordering::AcqRel);
         let mut next = (**cache).clone();
         next.loaded_at = None;
         *cache = Arc::new(next);
+        drop(cache);
         self.credential_runtime_secrets.clear();
         self.model_blocks.clear_expired(Utc::now());
         self.responses_support.clear_expired(Utc::now());
@@ -293,6 +305,7 @@ impl Selector {
     pub async fn invalidate_refreshed_credential(&self, credential_id: DbId) {
         self.credential_runtime_secrets.remove(credential_id);
         let mut cache = self.routing_cache.write().await;
+        self.routing_epoch.fetch_add(1, Ordering::AcqRel);
         let mut next = (**cache).clone();
         next.loaded_at = None;
         *cache = Arc::new(next);
@@ -842,10 +855,19 @@ impl Selector {
             }
         }
 
-        let loaded = Arc::new(load_routing_cache(pool).await?);
+        // 在读 DB 前捕获 epoch。DB 读期间若发生 invalidate（不持 reload_lock，只持
+        // cache 写锁），本次加载可能已陈旧。
+        let epoch_before = self.routing_epoch.load(Ordering::Acquire);
+        let mut loaded = load_routing_cache(pool).await?;
         let mut cache = self.routing_cache.write().await;
-        *cache = loaded;
-        Ok(Arc::clone(&cache))
+        if self.routing_epoch.load(Ordering::Acquire) != epoch_before {
+            // 加载期间被 invalidate：仍存入作为当前可用值，但标记为非 fresh，
+            // 使下次 routing_snapshot 强制重载，不让陈旧数据抹除 invalidate 的意图。
+            loaded.loaded_at = None;
+        }
+        let loaded = Arc::new(loaded);
+        *cache = Arc::clone(&loaded);
+        Ok(loaded)
     }
 
     pub(crate) async fn has_alternate_channel_for_model(

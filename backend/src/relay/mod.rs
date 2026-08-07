@@ -207,36 +207,63 @@ pub(crate) async fn finish_task_json_response(
         "upstream async task bound response"
     );
     if status.is_success() {
-        if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
-            if task.task_type == UpstreamTaskType::OpenAiVideo {
-                crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
-            }
-            let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
-            let usage = parse_usage_from_bytes(&body, false);
-            upstream_task::update_task_from_upstream_value(
-                &state.db.pool,
-                upstream_task::UpstreamTaskUpdate {
-                    task_id: task.id,
-                    task_type: task.task_type,
-                    upstream_task_id: task.upstream_task_id.clone(),
-                    status: status_text,
-                    terminal,
-                    metadata: value,
-                    usage,
-                    poll_interval: crate::task::POLL_INTERVAL,
-                },
-            )
-            .await?;
-            if terminal {
-                task_billing::finalize_for_auth(
-                    &state,
-                    &auth,
-                    &task.upstream_task_id,
-                    task.task_type,
-                    usage,
-                    true,
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(mut value) => {
+                if task.task_type == UpstreamTaskType::OpenAiVideo {
+                    crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
+                }
+                let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
+                let usage = parse_usage_from_bytes(&body, false);
+                upstream_task::update_task_from_upstream_value(
+                    &state.db.pool,
+                    upstream_task::UpstreamTaskUpdate {
+                        task_id: task.id,
+                        task_type: task.task_type,
+                        upstream_task_id: task.upstream_task_id.clone(),
+                        status: status_text,
+                        terminal,
+                        metadata: value,
+                        usage,
+                        poll_interval: crate::task::POLL_INTERVAL,
+                    },
                 )
                 .await?;
+                if terminal {
+                    task_billing::finalize_for_auth(
+                        &state,
+                        &auth,
+                        &task.upstream_task_id,
+                        task.task_type,
+                        usage,
+                        true,
+                    )
+                    .await?;
+                }
+            }
+            Err(err) => {
+                // 成功响应体无法解析为 JSON：任务状态无法更新，billing hold 无法 finalize。
+                // 主动释放 hold 并返回错误，避免 hold 永久泄漏。
+                tracing::error!(
+                    task_id = task.id,
+                    ?task.task_type,
+                    upstream_task_id = %task.upstream_task_id,
+                    "failed to parse upstream task response body as JSON; releasing billing hold: {err}"
+                );
+                task_billing::release_task_hold_by_id(
+                    &state,
+                    task.id,
+                    "task response body JSON parse failed",
+                )
+                .await
+                .unwrap_or_else(|release_err| {
+                    tracing::warn!(
+                        task_id = task.id,
+                        "failed to release task billing hold after JSON parse failure: {release_err}"
+                    );
+                });
+                return Err(AppError::BadRequest(format!(
+                    "upstream task response is not valid JSON: {err}"
+                )));
             }
         }
     }

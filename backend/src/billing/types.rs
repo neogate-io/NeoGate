@@ -257,7 +257,6 @@ pub struct DebitPart {
     pub credit_account: CreditAccountId,
     pub allocation_id: DbId,
     pub amount_micros: i64,
-    pub(super) generation: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

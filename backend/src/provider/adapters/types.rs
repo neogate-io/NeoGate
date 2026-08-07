@@ -7,6 +7,13 @@ use crate::{
     relay::upstream_url,
 };
 
+/// 从 OpenAI 视频路由路径 `/v1/videos/{id}` 提取上游任务 id。
+/// 要求 id 非空且不含 `/`（即恰好一段），否则返回 None。多个视频适配器共用此逻辑。
+pub(crate) fn openai_video_task_id(path: &str) -> Option<&str> {
+    path.strip_prefix("/v1/videos/")
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // Keep the complete OpenAI-compatible route set in one place so provider
 // adapters can opt in without changing the shared trait surface.

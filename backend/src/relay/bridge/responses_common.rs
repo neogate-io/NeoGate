@@ -33,8 +33,26 @@ pub(super) fn openai_response_usage(
     input_tokens: i64,
     output_tokens: i64,
 ) -> Value {
+    // 兼容两条来源路径：Anthropic 原生用 cache_read_input_tokens；OpenAI chat
+    // 用 prompt_tokens_details.cached_tokens / prompt_cache_hit_tokens / cached_tokens。
+    // 只读前者会让 chat→responses 的缓存 token 归零，缓存输入被按全价重复计费。
     let cache_read = usage
-        .and_then(|usage| usage.get("cache_read_input_tokens"))
+        .and_then(|usage| {
+            usage
+                .get("cache_read_input_tokens")
+                .or_else(|| {
+                    usage
+                        .get("prompt_tokens_details")
+                        .and_then(|details| details.get("cached_tokens"))
+                })
+                .or_else(|| {
+                    usage
+                        .get("input_tokens_details")
+                        .and_then(|details| details.get("cached_tokens"))
+                })
+                .or_else(|| usage.get("prompt_cache_hit_tokens"))
+                .or_else(|| usage.get("cached_tokens"))
+        })
         .and_then(Value::as_i64)
         .unwrap_or(0);
     let cache_create = anthropic_cache_creation_tokens(usage);
@@ -48,6 +66,31 @@ pub(super) fn openai_response_usage(
         },
         "output_tokens_details": { "reasoning_tokens": 0 },
     })
+}
+
+/// 以 SSE 格式（`event: <event>\ndata: <json>\n\n`）写入一条事件。
+/// 多个桥接转换器共用此逻辑，避免各自重复实现。
+pub(super) fn push_sse_event(out: &mut Vec<u8>, event: &str, data: &Value) {
+    out.extend_from_slice(b"event: ");
+    out.extend_from_slice(event.as_bytes());
+    out.extend_from_slice(b"\ndata: ");
+    serde_json::to_writer(&mut *out, data).expect("serializing JSON value to Vec cannot fail");
+    out.extend_from_slice(b"\n\n");
+}
+
+/// 从 OpenAI 兼容响应的 choices[].usage.cached_tokens 提取首个正值缓存 token 数。
+pub(super) fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
+    value
+        .get("choices")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|choice| {
+            choice
+                .get("usage")
+                .and_then(|usage| usage.get("cached_tokens"))
+                .and_then(Value::as_i64)
+        })
+        .find(|tokens| *tokens > 0)
 }
 
 pub(super) fn drain_sse_lines(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {

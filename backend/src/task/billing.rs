@@ -461,7 +461,16 @@ async fn transition_and_release_task_hold(
     if let Some(hold_value) = hold_value {
         let hold: DebitHold = serde_json::from_value(hold_value)?;
         if let Some(expected) = expected_transaction_id {
-            debug_assert_eq!(hold.transaction_id, expected);
+            if hold.transaction_id != expected {
+                // transaction_id 不匹配说明存在逻辑错误，回滚并以错误上报而非静默继续
+                if let Err(rb_err) = tx.rollback().await {
+                    tracing::warn!(task_id, "failed to rollback after transaction_id mismatch: {rb_err}");
+                }
+                return Err(AppError::Conflict(format!(
+                    "async task hold transaction_id mismatch: expected {expected}, got {}",
+                    hold.transaction_id
+                )));
+            }
         }
         Billing::release_hold_in_transaction(&mut tx, &hold).await?;
     }

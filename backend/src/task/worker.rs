@@ -85,13 +85,28 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
             async move {
                 let task_id = task.id;
                 let task_type = task.task_type;
-                match poll_task(&state, task).await {
-                    Ok(()) => {}
-                    Err(err) => {
+                // tokio::spawn 隔离 panic：防止单个任务 panic unwind 整个
+                // for_each_concurrent，导致后台轮询协程静默终止不再处理任何任务。
+                // JoinHandle::await 将 panic 转换为 JoinError，不会向外传播。
+                let result = tokio::spawn({
+                    let state = Arc::clone(&state);
+                    async move { poll_task(&state, task).await }
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
                         tracing::warn!(
                             task_id,
                             ?task_type,
                             "failed to poll one upstream async task: {err}"
+                        );
+                    }
+                    Err(join_err) => {
+                        tracing::error!(
+                            task_id,
+                            ?task_type,
+                            "upstream async task poll panicked; task lease will expire and be retried: {join_err}"
                         );
                     }
                 }

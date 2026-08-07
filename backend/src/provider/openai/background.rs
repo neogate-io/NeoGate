@@ -235,7 +235,18 @@ pub(super) async fn create_background_response(
             "image_format=url or both is only supported for NeoGate async image tasks".to_string(),
         ));
     }
-    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
+    // reserve_credit 已扣减热额度；若并发限制失败必须显式释放 hold，
+    // 否则用户余额被锁至陈旧分配回收任务兜底（可能长达数分钟）。
+    let mut request_permit = Some(
+        match state.user_request_limiter.try_acquire(auth.user_id).await {
+            Ok(permit) => permit,
+            Err(err) => {
+                release_empty_hold(&state, hold, "background response concurrency rejection")
+                    .await;
+                return Err(err);
+            }
+        },
+    );
     let request_body_bytes = prepared.body.len();
     let request_input_tokens_estimate = crate::billing::estimate_input_tokens(&prepared.body);
     let response = forward_openai(

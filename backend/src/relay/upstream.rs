@@ -151,6 +151,14 @@ fn apply_openai_codex_passthrough_headers(
     }
 
     for &header in ANTHROPIC_CLI_PASSTHROUGH_HEADERS {
+        // 跳过已在 CODEX 循环中处理过的头（如 user-agent），避免 reqwest 追加语义
+        // 导致同一头被发送两次，某些上游/网关会因重复头拒绝或行为异常。
+        if CODEX_CLI_PASSTHROUGH_HEADERS
+            .iter()
+            .any(|&h| h.eq_ignore_ascii_case(header))
+        {
+            continue;
+        }
         if let Some(value) = headers.get(header) {
             request = request.header(header, value.clone());
         }

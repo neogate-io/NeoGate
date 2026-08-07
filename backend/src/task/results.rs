@@ -64,8 +64,8 @@ impl AnthropicResultsUsageParser {
             audio_input_tokens: None,
             audio_output_tokens: None,
         });
-        total.input_tokens += usage.input_tokens;
-        total.output_tokens += usage.output_tokens;
+        total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+        total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
     }
 }
 

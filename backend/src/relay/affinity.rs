@@ -126,8 +126,10 @@ impl ChannelAffinityCache {
             if entry.expires_at > now {
                 return Some((entry.target.clone(), ChannelAffinityStatus::Local));
             }
+            // drop(entry) 释放分片锁后 remove 存在 TOCTOU 窗口：另一线程可能在两步之间
+            // 插入新鲜条目而被误删。remove_if 在持锁下原子地校验后删除，消除该窗口。
             drop(entry);
-            self.entries.remove(key);
+            self.entries.remove_if(key, |_, e| e.expires_at <= now);
         }
 
         let redis = self.redis.as_ref()?;

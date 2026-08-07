@@ -431,7 +431,41 @@ fn validate_public_url(value: &str) -> AppResult<()> {
     {
         return Err(AppError::BadRequest("url must use a public host".into()));
     }
+    // 解析为 IP 地址后阻断私有/链路本地/回环范围，防止 SSRF：
+    //   - 169.254.169.254（AWS/GCP/Azure 实例元数据端点）
+    //   - 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16（RFC 1918 内网）
+    //   - fe80::/10（IPv6 链路本地）、fc00::/7（IPv6 唯一本地）
+    if let Ok(addr) = host.parse::<std::net::IpAddr>() {
+        if !is_globally_routable_ip(addr) {
+            return Err(AppError::BadRequest("url must use a public host".into()));
+        }
+    }
     Ok(())
+}
+
+/// 判断一个 IP 地址是否属于可公开路由的范围。
+/// 阻断环回、私有、链路本地、广播及文档用地址，防止 SSRF。
+fn is_globally_routable_ip(addr: std::net::IpAddr) -> bool {
+    match addr {
+        std::net::IpAddr::V4(v4) => {
+            // is_private():   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+            // is_link_local(): 169.254.0.0/16（含 AWS 元数据端点 169.254.169.254）
+            !v4.is_private()
+                && !v4.is_loopback()
+                && !v4.is_link_local()
+                && !v4.is_broadcast()
+                && !v4.is_unspecified()
+                && !v4.is_documentation()
+        }
+        std::net::IpAddr::V6(v6) => {
+            let octets = v6.octets();
+            // fe80::/10（链路本地）
+            let is_link_local = octets[0] == 0xfe && (octets[1] & 0xc0 == 0x80);
+            // fc00::/7（唯一本地，含 fd00::/8）
+            let is_unique_local = octets[0] & 0xfe == 0xfc;
+            !v6.is_loopback() && !v6.is_unspecified() && !is_link_local && !is_unique_local
+        }
+    }
 }
 
 fn validate_name(name: Option<&str>) -> AppResult<()> {

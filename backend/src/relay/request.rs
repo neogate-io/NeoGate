@@ -126,7 +126,7 @@ pub(crate) fn prepare_relay_body(
 
 pub(crate) fn rewrite_relay_body_model(
     body: Bytes,
-    kind: BodyKind,
+    _kind: BodyKind,
     target_model: &str,
 ) -> AppResult<Bytes> {
     let mut value: Value = serde_json::from_slice(&body)
@@ -138,13 +138,8 @@ pub(crate) fn rewrite_relay_body_model(
         return Err(AppError::BadRequest("model is required".to_string()));
     }
     object.insert("model".to_string(), Value::String(target_model.to_string()));
-    if matches!(
-        kind,
-        BodyKind::OpenaiResponses | BodyKind::OpenaiResponsesCompact
-    ) {
-        // Affinity keys include the requested model. The relay now routes on the target model,
-        // so downstream affinity must follow the body sent upstream.
-    }
+    // 注：affinity key 以原始别名生成，selector 在命中缓存时已用 target_model 重新
+    // 校验可用性（selector/mod.rs），不会路由到不支持该模型的上游，此处无需改写。
     Ok(Bytes::from(serde_json::to_vec(&value)?))
 }
 

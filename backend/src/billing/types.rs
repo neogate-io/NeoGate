@@ -191,7 +191,7 @@ pub struct TokenUsage {
 
 impl TokenUsage {
     pub fn total_tokens(self) -> i64 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 
@@ -300,7 +300,7 @@ fn default_charge_credit() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::DebitHold;
+    use super::{DebitHold, TokenUsage};
 
     #[test]
     fn deserializes_legacy_hold_without_usage_missing_fallback() {
@@ -317,6 +317,22 @@ mod tests {
         assert_eq!(hold.usage_missing_micros, None);
         assert!(hold.charge_credit);
         assert_eq!(hold.cost_when_usage_missing(), 123);
+    }
+
+    #[test]
+    fn token_total_saturates_on_overflow() {
+        let usage = TokenUsage {
+            input_tokens: i64::MAX,
+            output_tokens: 1,
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: None,
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        };
+        assert_eq!(usage.total_tokens(), i64::MAX);
     }
 }
 

@@ -1211,7 +1211,14 @@ pub(crate) async fn enqueue_relay_usage(
             .await;
     }
     if item.billing.is_some() {
-        state.billing_outbox.enqueue_or_retry(item);
+        if let Err(err) = state.billing_outbox.enqueue(&item).await {
+            tracing::error!(
+                "failed to persist durable relay billing event; retaining background retry: {err}"
+            );
+            if let Err(retry_err) = state.billing_outbox.enqueue_or_retry(item).await {
+                tracing::error!("failed to queue relay billing retry: {retry_err}");
+            }
+        }
         return;
     }
     if let Err(err) = state.usage.enqueue(item, failure).await {

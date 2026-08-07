@@ -922,6 +922,29 @@
   margin: 0 0 10px;
 }
 
+.interface-filter {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid var(--public-border-soft);
+  border-radius: 8px;
+  box-shadow: var(--public-shadow);
+  box-sizing: border-box;
+  color: var(--public-text);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+  outline: none;
+  padding: 9px 14px;
+  width: 100%;
+}
+
+.interface-filter:focus {
+  border-color: var(--brand-blue-border);
+}
+
+.interface-filter::placeholder {
+  color: #94a3b8;
+}
+
 .interface-table-wrap {
   background: rgba(255, 255, 255, 0.68);
   border: 1px solid var(--public-border-soft);

@@ -109,3 +109,10 @@ CREATE TABLE user_asset (
 
 CREATE INDEX idx_user_asset_project_created_id
     ON user_asset(project_id, created_at DESC, id DESC);
+
+DROP INDEX IF EXISTS idx_task_upstream_stale_held;
+
+CREATE INDEX idx_task_upstream_stale_held
+    ON task_upstream(updated_at ASC, id ASC)
+    WHERE terminal = TRUE
+      AND billing_status = 'held';

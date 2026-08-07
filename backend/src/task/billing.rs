@@ -5,10 +5,10 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{
-        video, BillableUsage, BillingAccounts, BillingMeter, CreditAccountId, DebitHold,
+        video, BillableUsage, Billing, BillingAccounts, BillingMeter, CreditAccountId, DebitHold,
         SettleRequest, TokenUsage, VideoBillingMode,
     },
-    error::AppResult,
+    error::{AppError, AppResult},
     id::DbId,
     relay::selector::SelectedUpstream,
     usage::UsageInsert,
@@ -59,7 +59,23 @@ pub(crate) async fn finalize_polled(
     upstream: SelectedUpstream,
     usage: Option<TokenUsage>,
 ) -> AppResult<()> {
-    let billing_context = upstream::billing_context(&state.db.pool, &task).await?;
+    let billing_context = match upstream::billing_context(&state.db.pool, &task).await {
+        Ok(context) => context,
+        Err(err) => {
+            if permanent_billing_error(&err) {
+                if let Some(hold) = upstream::held_billing_hold(&state.db.pool, task.id).await? {
+                    fail_settled_task_billing(
+                        state,
+                        task.id,
+                        hold,
+                        "async task billing context error",
+                    )
+                    .await?;
+                }
+            }
+            return Err(err);
+        }
+    };
     finalize_loaded(
         state,
         &task,
@@ -83,13 +99,20 @@ pub(crate) async fn release_task_hold_by_id(
     task_id: DbId,
     context: &str,
 ) -> AppResult<()> {
-    let Some(hold) =
-        upstream::mark_billing_status(&state.db.pool, task_id, "held", "released").await?
-    else {
+    transition_and_release_task_hold(state, task_id, "released", None).await?;
+    tracing::debug!(task_id, context, "released async task billing hold");
+    Ok(())
+}
+
+pub(crate) async fn fail_task_hold_by_id(
+    state: &AppState,
+    task_id: DbId,
+    context: &str,
+) -> AppResult<()> {
+    let Some(hold) = upstream::held_billing_hold(&state.db.pool, task_id).await? else {
         return Ok(());
     };
-    release_empty_hold(state, hold, context).await;
-    Ok(())
+    fail_settled_task_billing(state, task_id, hold, context).await
 }
 
 struct AsyncTaskBillingContext {
@@ -151,12 +174,54 @@ async fn finalize_loaded(
         || audio_seconds.is_some()
         || image_count.is_some()
         || settle_without_usage;
-    let target = if should_settle { "settled" } else { "released" };
-    let Some(hold) = upstream::mark_billing_status(&state.db.pool, task.id, "held", target).await?
-    else {
+    if !should_settle {
+        release_task_hold_by_id(state, task.id, "async task terminal without usage").await?;
+        if task.task_type == UpstreamTaskType::AudioTranscription {
+            let model = task.model.clone();
+            let upstream_model = task.upstream_model.clone().or_else(|| model.clone());
+            state
+                .usage
+                .enqueue(
+                    UsageInsert {
+                        user_id: billing_context.user_id,
+                        project_id: billing_context.project_id,
+                        user_key_id: billing_context.user_key_id,
+                        channel_id: upstream.channel_id,
+                        channel_key_id: upstream.channel_key_id,
+                        credential_id: upstream.credential_id,
+                        relay_trace_id: async_task_relay_trace_id(&task.upstream_metadata),
+                        relay_attempt: 1,
+                        relay_final: true,
+                        model,
+                        upstream_model,
+                        routing_phase: "relay".to_string(),
+                        routing: None,
+                        status_code: Some(502),
+                        streamed: false,
+                        latency_ms: async_task_latency_ms(task),
+                        first_response_ms: None,
+                        output_tokens_per_second: None,
+                        error_summary: task
+                            .upstream_metadata
+                            .pointer("/result/error")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned),
+                        token_usage: None,
+                        billing_meter: BillingMeter::Audio,
+                        billable_units: 0,
+                        billing: None,
+                    },
+                    None,
+                )
+                .await?;
+        }
+        return Ok(());
+    }
+
+    let Some(hold) = upstream::held_billing_hold(&state.db.pool, task.id).await? else {
         return Ok(());
     };
-    if should_settle {
+    {
         let Some(model) = task.model.as_deref() else {
             fail_settled_task_billing(state, task.id, hold, "async task missing model").await?;
             return Ok(());
@@ -177,13 +242,15 @@ async fn finalize_loaded(
             {
                 Ok(price) => price,
                 Err(err) => {
-                    fail_settled_task_billing(
-                        state,
-                        task.id,
-                        hold,
-                        "async task price lookup error",
-                    )
-                    .await?;
+                    if permanent_billing_error(&err) {
+                        fail_settled_task_billing(
+                            state,
+                            task.id,
+                            hold,
+                            "async task price lookup error",
+                        )
+                        .await?;
+                    }
                     return Err(err);
                 }
             };
@@ -230,18 +297,26 @@ async fn finalize_loaded(
                     hold: hold.clone(),
                     usage: billable_usage,
                     price: &price,
+                    allow_supplemental: false,
                 },
             )
             .await
         {
             Ok(billing) => billing,
             Err(err) => {
-                fail_settled_task_billing(state, task.id, hold, "async task billing settle error")
+                if permanent_billing_error(&err) {
+                    fail_settled_task_billing(
+                        state,
+                        task.id,
+                        hold,
+                        "async task billing settle error",
+                    )
                     .await?;
+                }
                 return Err(err);
             }
         };
-        state.billing_outbox.enqueue_or_retry(UsageInsert {
+        let usage_insert = UsageInsert {
             user_id: billing_context.user_id,
             project_id: billing_context.project_id,
             user_key_id: billing_context.user_key_id,
@@ -265,44 +340,34 @@ async fn finalize_loaded(
             billing_meter: billing.billing_meter,
             billable_units: billing.billable_units,
             billing: Some(billing),
-        });
-    } else {
-        release_empty_hold(state, hold, "async task terminal without usage").await;
-        if task.task_type == UpstreamTaskType::AudioTranscription {
-            let model = task.model.clone();
-            let upstream_model = task.upstream_model.clone().or_else(|| model.clone());
-            state.billing_outbox.enqueue_or_retry(UsageInsert {
-                user_id: billing_context.user_id,
-                project_id: billing_context.project_id,
-                user_key_id: billing_context.user_key_id,
-                channel_id: upstream.channel_id,
-                channel_key_id: upstream.channel_key_id,
-                credential_id: upstream.credential_id,
-                relay_trace_id: async_task_relay_trace_id(&task.upstream_metadata),
-                relay_attempt: 1,
-                relay_final: true,
-                model,
-                upstream_model,
-                routing_phase: "relay".to_string(),
-                routing: None,
-                status_code: Some(502),
-                streamed: false,
-                latency_ms: async_task_latency_ms(task),
-                first_response_ms: None,
-                output_tokens_per_second: None,
-                error_summary: task
-                    .upstream_metadata
-                    .pointer("/result/error")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                token_usage: None,
-                billing_meter: BillingMeter::Audio,
-                billable_units: 0,
-                billing: None,
-            });
-        }
+        };
+        state
+            .billing_outbox
+            .enqueue_task_durable(task.id, &usage_insert)
+            .await?;
     }
     Ok(())
+}
+
+fn permanent_billing_error(err: &AppError) -> bool {
+    matches!(
+        err,
+        AppError::BadRequest(_)
+            | AppError::BadRequestWithCode { .. }
+            | AppError::NotFound
+            | AppError::Json(_)
+    )
+}
+
+pub(crate) fn permanent_terminal_restore_error(err: &AppError) -> bool {
+    matches!(
+        err,
+        AppError::BadRequest(_)
+            | AppError::BadRequestWithCode { .. }
+            | AppError::NotFound
+            | AppError::Json(_)
+            | AppError::Anyhow(_)
+    )
 }
 
 fn completed_audio_seconds(task: &UpstreamTask) -> Option<i64> {
@@ -362,8 +427,8 @@ async fn fail_settled_task_billing(
     hold: DebitHold,
     context: &str,
 ) -> AppResult<()> {
-    let _ = upstream::mark_billing_status(&state.db.pool, task_id, "settled", "failed").await?;
-    release_empty_hold(state, hold, context).await;
+    transition_and_release_task_hold(state, task_id, "failed", Some(hold.transaction_id)).await?;
+    tracing::warn!(task_id, context, "abandoned async task billing hold");
     Ok(())
 }
 
@@ -371,18 +436,47 @@ fn openai_video_success_status(status: &str) -> bool {
     matches!(status, "completed" | "succeeded" | "success")
 }
 
-async fn release_empty_hold(state: &AppState, hold: DebitHold, context: &str) {
-    if let Err(err) = state.billing.release_hold(&state.db.pool, hold).await {
-        tracing::warn!("failed to release {context} hold: {err}");
+async fn transition_and_release_task_hold(
+    state: &AppState,
+    task_id: DbId,
+    target_status: &str,
+    expected_transaction_id: Option<Uuid>,
+) -> AppResult<bool> {
+    let mut tx = state.db.pool.begin().await?;
+    let row = sqlx::query(
+        "UPDATE task_upstream
+         SET billing_status = $2, updated_at = now()
+         WHERE id = $1 AND billing_status = 'held'
+         RETURNING billing_hold",
+    )
+    .bind(task_id)
+    .bind(target_status)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) = row else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+    let hold_value: Option<Value> = sqlx::Row::try_get(&row, "billing_hold")?;
+    if let Some(hold_value) = hold_value {
+        let hold: DebitHold = serde_json::from_value(hold_value)?;
+        if let Some(expected) = expected_transaction_id {
+            debug_assert_eq!(hold.transaction_id, expected);
+        }
+        Billing::release_hold_in_transaction(&mut tx, &hold).await?;
     }
+    tx.commit().await?;
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         async_task_relay_trace_id, async_task_started_at, completed_audio_seconds,
-        completed_image_count, openai_video_success_status,
+        completed_image_count, openai_video_success_status, permanent_billing_error,
+        permanent_terminal_restore_error,
     };
+    use crate::error::AppError;
     use crate::task::upstream::{UpstreamTask, UpstreamTaskType};
     use chrono::{TimeZone, Utc};
     use serde_json::json;
@@ -451,6 +545,34 @@ mod tests {
 
         assert_eq!(async_task_relay_trace_id(&metadata), None);
         assert_eq!(async_task_started_at(&metadata), None);
+    }
+
+    #[test]
+    fn only_permanent_billing_errors_abandon_async_task_hold() {
+        assert!(permanent_billing_error(&AppError::BadRequest(
+            "missing price".to_string()
+        )));
+        assert!(permanent_billing_error(&AppError::NotFound));
+        assert!(!permanent_billing_error(&AppError::Sqlx(
+            sqlx::Error::PoolTimedOut
+        )));
+        assert!(!permanent_billing_error(&AppError::UpstreamUnavailable(
+            "outbox unavailable".to_string()
+        )));
+    }
+
+    #[test]
+    fn terminal_restore_classifies_missing_upstream_as_permanent() {
+        assert!(permanent_terminal_restore_error(&AppError::NotFound));
+        assert!(permanent_terminal_restore_error(&AppError::BadRequest(
+            "missing channel key".to_string()
+        )));
+        assert!(permanent_terminal_restore_error(&AppError::Anyhow(
+            anyhow::anyhow!("invalid encrypted secret")
+        )));
+        assert!(!permanent_terminal_restore_error(&AppError::Sqlx(
+            sqlx::Error::PoolTimedOut
+        )));
     }
 
     #[test]

@@ -1209,6 +1209,7 @@ async fn finish_session(ctx: RealtimeContext, outcome: ProxyOutcome) {
                     hold: ctx.hold.clone(),
                     usage: Some(BillableUsage::audio_seconds(outcome.audio_seconds)),
                     price: &ctx.price,
+                    allow_supplemental: true,
                 },
             )
             .await
@@ -1294,7 +1295,12 @@ async fn finish_session(ctx: RealtimeContext, outcome: ProxyOutcome) {
         billing,
     };
     if usage.billing.is_some() {
-        ctx.state.billing_outbox.enqueue_or_retry(usage);
+        if let Err(err) = ctx.state.billing_outbox.enqueue(&usage).await {
+            tracing::error!("failed to persist realtime ASR billing event; queueing retry: {err}");
+            if let Err(retry_err) = ctx.state.billing_outbox.enqueue_or_retry(usage).await {
+                tracing::error!("failed to queue realtime ASR billing retry: {retry_err}");
+            }
+        }
     } else if let Err(err) = ctx.state.usage.enqueue(usage, None).await {
         tracing::warn!("failed to enqueue realtime ASR usage: {err}");
     }

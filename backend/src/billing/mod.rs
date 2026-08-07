@@ -108,6 +108,7 @@ pub struct SettleRequest<'a> {
     pub hold: DebitHold,
     pub usage: Option<BillableUsage>,
     pub price: &'a Price,
+    pub allow_supplemental: bool,
 }
 
 #[derive(Debug, Default)]
@@ -320,11 +321,16 @@ impl Billing {
     }
 
     pub async fn release_hold(&self, pool: &PgPool, hold: DebitHold) -> AppResult<()> {
-        if hold.parts.is_empty() {
-            return Ok(());
-        }
-
         let mut tx = pool.begin().await?;
+        Self::release_hold_in_transaction(&mut tx, &hold).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn release_hold_in_transaction(
+        tx: &mut Transaction<'_, Postgres>,
+        hold: &DebitHold,
+    ) -> AppResult<()> {
         for part in &hold.parts {
             if part.amount_micros <= 0 {
                 continue;
@@ -334,7 +340,7 @@ impl Billing {
             // already released at recovery time. Releasing again would fail the
             // capacity constraint and double-release reserved credit. Skip it —
             // the hold is already settled. See `flush_billing_part`.
-            if account::allocation_is_recovered(&mut tx, part.allocation_id).await? {
+            if account::allocation_is_recovered(tx, part.allocation_id).await? {
                 tracing::info!(
                     allocation_id = %part.allocation_id,
                     amount_micros = part.amount_micros,
@@ -342,11 +348,9 @@ impl Billing {
                 );
                 continue;
             }
-            account::decrement_reserved(&mut tx, &part.credit_account, part.amount_micros).await?;
-            account::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micros)
-                .await?;
+            account::decrement_reserved(tx, &part.credit_account, part.amount_micros).await?;
+            account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -360,7 +364,19 @@ impl Billing {
             hold,
             usage,
             price,
+            allow_supplemental,
         } = request;
+        if let Some(usage) = usage {
+            let requires_unit_price =
+                matches!(usage.meter, BillingMeter::Image | BillingMeter::Audio)
+                    || (usage.meter == BillingMeter::Video && usage.token_usage.is_none());
+            if requires_unit_price && price.unit_price_micros.is_none() {
+                return Err(AppError::BadRequest(format!(
+                    "unit price is required for {} billing",
+                    usage.meter.as_str()
+                )));
+            }
+        }
         let (cost_micros, status) = match usage {
             Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
             None => (hold.cost_when_usage_missing(), "usage_missing".to_string()),
@@ -386,7 +402,7 @@ impl Billing {
         }
 
         if cost_micros >= hold.estimated_micros {
-            if cost_micros > hold.estimated_micros {
+            if cost_micros > hold.estimated_micros && allow_supplemental {
                 let supplemental_micros = cost_micros - hold.estimated_micros;
                 match self.reserve(pool, accounts, supplemental_micros).await {
                     Ok(extra_hold) => {
@@ -923,7 +939,7 @@ async fn fetch_stale_allocations(
                    COALESCE(b.payload->'billing'->'parts', '[]'::jsonb) ||
                    COALESCE(b.payload->'billing'->'returned_parts', '[]'::jsonb)
                ) part
-               WHERE b.status IN ('pending', 'failed')
+               WHERE b.status = 'pending'
                  AND part->>'allocation_id' = credit_allocation.id::TEXT
            )
            AND NOT EXISTS (
@@ -1136,6 +1152,7 @@ mod tests {
                         audio_output_tokens: None,
                     })),
                     price: &token_price(),
+                    allow_supplemental: true,
                 },
             )
             .await
@@ -1195,6 +1212,7 @@ mod tests {
                     hold,
                     usage: None,
                     price: &token_price(),
+                    allow_supplemental: true,
                 },
             )
             .await

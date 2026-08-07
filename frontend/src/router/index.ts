@@ -1,6 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAdminServicePolicy, getSetupStatus, getUserServicePolicy } from '../api/policy'
 import { useAuthStore } from '../stores/auth'
+import {
+  anthropicSubSections,
+  openAiSubSections
+} from '../views/public/interfaces/interfacesSections'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -53,7 +57,7 @@ export const router = createRouter({
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/interfaces/openai/:sub(quick-start|text|text-async|images|images-async|videos|audio|embeddings|models|sdk)?',
+      path: `/interfaces/openai/:sub(${openAiSubSections.join('|')})?`,
       name: 'interfacesOpenAi',
       component: () => import('../views/public/InterfacesView.vue'),
       props: (route: { params: { sub?: string } }) => ({
@@ -63,7 +67,7 @@ export const router = createRouter({
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/interfaces/anthropic/:sub(quick-start|text|stream|batches|models)?',
+      path: `/interfaces/anthropic/:sub(${anthropicSubSections.join('|')})?`,
       name: 'interfacesAnthropic',
       component: () => import('../views/public/InterfacesView.vue'),
       props: (route: { params: { sub?: string } }) => ({

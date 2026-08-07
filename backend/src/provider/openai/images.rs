@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use axum::{
     body::Body,
@@ -318,11 +318,25 @@ async fn finish_image_relay(
         .get(header::CONTENT_TYPE)
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
-    let body = upstream_response.bytes().await?;
+    let body = match upstream_response.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            release_empty_hold(
+                &ctx.state,
+                ctx.hold.clone(),
+                "image response body read error",
+            )
+            .await;
+            return Err(err.into());
+        }
+    };
     ctx.release_request_permit();
-    let image_count = image_count_from_response_body(&body).ok_or_else(|| {
-        AppError::BadRequest("image response missing non-empty data array".to_string())
-    })?;
+    let Some(image_count) = image_count_from_response_body(&body) else {
+        release_empty_hold(&ctx.state, ctx.hold.clone(), "image response missing data").await;
+        return Err(AppError::BadRequest(
+            "image response missing non-empty data array".to_string(),
+        ));
+    };
     let token_usage = parse_usage_from_bytes(&body, false);
     let billing = settle_image_hold(&ctx, image_count, token_usage, "image relay").await;
     let usage = crate::relay::usage_from_context(
@@ -379,6 +393,7 @@ async fn finish_streamed_image_upstream(
         stream: upstream_response.bytes_stream().boxed(),
         image_count: requested_image_count,
         usage: crate::relay::StreamUsageParser::new(usage_buffer_limit_bytes),
+        results: ImageStreamResultParser::new(usage_buffer_limit_bytes, requested_image_count),
     };
     Response::builder()
         .status(status)
@@ -390,6 +405,7 @@ async fn finish_streamed_image_upstream(
                 match relay.stream.next().await {
                     Some(Ok(chunk)) => {
                         relay.usage.observe(&chunk);
+                        relay.results.observe(&chunk);
                         Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                     }
                     Some(Err(err)) => {
@@ -412,6 +428,7 @@ struct ImageStreamRelay {
     stream: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
     image_count: i64,
     usage: crate::relay::StreamUsageParser,
+    results: ImageStreamResultParser,
 }
 
 impl ImageStreamRelay {
@@ -421,8 +438,27 @@ impl ImageStreamRelay {
         };
         ctx.release_request_permit();
         let token_usage = self.usage.finish();
-        let billing =
-            settle_image_hold(&ctx, self.image_count, token_usage, "streamed image relay").await;
+        let billing = if let Some(actual_image_count) = self.results.finish() {
+            settle_image_hold(
+                &ctx,
+                actual_image_count,
+                token_usage,
+                "streamed image relay",
+            )
+            .await
+        } else {
+            tracing::warn!(
+                requested_image_count = self.image_count,
+                "image stream completed without a final image result; releasing hold"
+            );
+            release_empty_hold(
+                &ctx.state,
+                ctx.hold.clone(),
+                "streamed image response missing final result",
+            )
+            .await;
+            None
+        };
         let usage = crate::relay::usage_from_context(
             &ctx,
             Some(self.status.as_u16() as i32),
@@ -453,11 +489,122 @@ impl ImageStreamRelay {
     }
 }
 
+struct ImageStreamResultParser {
+    buffered: Vec<u8>,
+    completed_indexes: HashSet<i64>,
+    completed_without_index: i64,
+    limit_bytes: usize,
+    requested_image_count: i64,
+    skipping_oversized_line: bool,
+}
+
+impl ImageStreamResultParser {
+    fn new(limit_bytes: usize, requested_image_count: i64) -> Self {
+        Self {
+            buffered: Vec::new(),
+            completed_indexes: HashSet::new(),
+            completed_without_index: 0,
+            limit_bytes,
+            requested_image_count: requested_image_count.max(1),
+            skipping_oversized_line: false,
+        }
+    }
+
+    fn observe(&mut self, chunk: &[u8]) {
+        if self.skipping_oversized_line {
+            if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.skipping_oversized_line = false;
+                self.observe(&chunk[offset + 1..]);
+            }
+            return;
+        }
+        if self.buffered.len().saturating_add(chunk.len()) > self.limit_bytes {
+            self.buffered.clear();
+            if let Some(offset) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.observe(&chunk[offset + 1..]);
+            } else {
+                self.skipping_oversized_line = true;
+            }
+            return;
+        }
+        self.buffered.extend_from_slice(chunk);
+        let mut consumed = 0;
+        while let Some(offset) = self.buffered[consumed..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let end = consumed + offset;
+            let line = self.buffered[consumed..end].to_vec();
+            self.observe_line(&line);
+            consumed = end + 1;
+        }
+        if consumed > 0 {
+            self.buffered.drain(..consumed);
+        }
+    }
+
+    fn observe_line(&mut self, line: &[u8]) {
+        let Ok(line) = std::str::from_utf8(line) else {
+            return;
+        };
+        let Some(data) = line.trim_end_matches('\r').strip_prefix("data:") else {
+            return;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("image_generation.completed") {
+            return;
+        }
+        if let Some(count) = value
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|items| items.len() as i64)
+            .filter(|count| *count > 0)
+        {
+            self.completed_without_index = self.completed_without_index.max(count);
+            return;
+        }
+        if let Some(index) = value.get("output_index").and_then(Value::as_i64) {
+            if index >= 0 {
+                self.completed_indexes.insert(index);
+            }
+            return;
+        }
+        if value.get("b64_json").and_then(Value::as_str).is_some()
+            || value.get("url").and_then(Value::as_str).is_some()
+            || value.get("result").and_then(Value::as_str).is_some()
+        {
+            self.completed_without_index = self.completed_without_index.saturating_add(1);
+        }
+    }
+
+    fn finish(&mut self) -> Option<i64> {
+        if !self.buffered.is_empty() {
+            let line = std::mem::take(&mut self.buffered);
+            self.observe_line(&line);
+        }
+        let completed = (self.completed_indexes.len() as i64)
+            .saturating_add(self.completed_without_index)
+            .min(self.requested_image_count);
+        (completed > 0).then_some(completed)
+    }
+}
+
 impl Drop for ImageStreamRelay {
     fn drop(&mut self) {
-        if let Some(ctx) = self.ctx.as_mut() {
+        if let Some(mut ctx) = self.ctx.take() {
             ctx.release_request_permit();
             tracing::warn!("image stream ended before completion; skipping image billing settle");
+            let state = ctx.state.clone();
+            let hold = ctx.hold.clone();
+            tokio::spawn(async move {
+                release_empty_hold(&state, hold, "abandoned image stream").await;
+            });
         }
     }
 }
@@ -485,6 +632,7 @@ async fn settle_image_hold(
                 hold: ctx.hold.clone(),
                 usage: Some(BillableUsage::image_with_usage(image_count, token_usage)),
                 price: &ctx.price,
+                allow_supplemental: true,
             },
         )
         .await
@@ -492,6 +640,7 @@ async fn settle_image_hold(
         Ok(billing) => Some(billing),
         Err(err) => {
             tracing::warn!("failed to settle {context} hold: {err}");
+            release_empty_hold(&ctx.state, ctx.hold.clone(), context).await;
             None
         }
     }
@@ -784,6 +933,47 @@ mod tests {
             Some(2)
         );
         assert_eq!(image_count_from_response_body(br#"{"data":[]}"#), None);
+    }
+
+    #[test]
+    fn streamed_image_results_count_completed_outputs_only() {
+        let mut parser = ImageStreamResultParser::new(4096, 2);
+        parser.observe(
+            br#"data: {"type":"image_generation.partial_image","output_index":0,"b64_json":"preview"}
+"#,
+        );
+        parser.observe(br#"data: {"type":"image_generation.compl"#);
+        parser.observe(
+            br#"eted","output_index":0,"b64_json":"first"}
+data: {"type":"image_generation.completed","output_index":0,"b64_json":"duplicate"}
+data: {"type":"image_generation.completed","output_index":1,"b64_json":"second"}
+"#,
+        );
+
+        assert_eq!(parser.finish(), Some(2));
+    }
+
+    #[test]
+    fn streamed_image_results_require_a_completed_result() {
+        let mut parser = ImageStreamResultParser::new(1024, 1);
+        parser.observe(
+            br#"data: {"type":"image_generation.partial_image","output_index":0,"b64_json":"preview"}
+data: [DONE]
+"#,
+        );
+
+        assert_eq!(parser.finish(), None);
+    }
+
+    #[test]
+    fn streamed_image_result_count_is_capped_by_request() {
+        let mut parser = ImageStreamResultParser::new(2048, 2);
+        parser.observe(
+            br#"data: {"type":"image_generation.completed","data":[{"b64_json":"a"},{"b64_json":"b"},{"b64_json":"c"}]}
+"#,
+        );
+
+        assert_eq!(parser.finish(), Some(2));
     }
 
     #[test]

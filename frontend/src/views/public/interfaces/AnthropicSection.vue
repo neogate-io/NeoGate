@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useLocale } from '../../../composables/useLocale'
 import InterfaceEndpointList from './InterfaceEndpointList.vue'
+import EndpointOverviewTable from './EndpointOverviewTable.vue'
 import CodeSampleCard from './CodeSampleCard.vue'
 import { useAnthropicContent } from './anthropicContent'
 
@@ -8,8 +8,7 @@ defineProps<{
   sub?: string
 }>()
 
-const { locale } = useLocale()
-const { content, quickStart, isSupportedStatus, endpointDescription } = useAnthropicContent()
+const { content, quickStart, anthropicEndpoints } = useAnthropicContent()
 </script>
 
 <template>
@@ -25,47 +24,12 @@ const { content, quickStart, isSupportedStatus, endpointDescription } = useAnthr
           <code>{{ value }}</code>
         </article>
       </div>
-      <div class="interface-table-wrap">
-        <table class="interface-table">
-          <thead>
-            <tr>
-              <th v-for="header in content.endpointHeaders" :key="header">{{ header }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="[name, method, path, , status, anchor] in content.anthropicEndpoints"
-              :key="`${name}-${method}-${path}`"
-            >
-              <td>
-                <RouterLink
-                  v-if="anchor"
-                  class="interface-endpoint-link"
-                  :to="`/interfaces/anthropic/${anchor}`"
-                >
-                  {{ name }}
-                </RouterLink>
-                <template v-else>{{ name }}</template>
-              </td>
-              <td>
-                <span class="interface-method">{{ method }}</span>
-              </td>
-              <td>
-                <code>{{ path }}</code>
-              </td>
-              <td>{{ endpointDescription(name, method, path) }}</td>
-              <td>
-                <span
-                  class="interface-status"
-                  :class="{ 'interface-status--muted': !isSupportedStatus(status) }"
-                >
-                  {{ status }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <EndpointOverviewTable
+        :headers="content.endpointHeaders"
+        :rows="anthropicEndpoints"
+        link-prefix="/interfaces/anthropic"
+        :search-placeholder="content.endpointSearchPlaceholder"
+      />
     </template>
 
     <section v-if="sub === 'quick-start'" id="anthropic-quick-start" class="docs-subsection">
@@ -83,8 +47,8 @@ const { content, quickStart, isSupportedStatus, endpointDescription } = useAnthr
       <InterfaceEndpointList
         :items="content.anthropicMessageInterfaces"
         :field-headers="content.paramFieldHeaders"
-        :request-title="locale.startsWith('zh') ? '请求参数' : 'Request parameters'"
-        :response-title="locale.startsWith('zh') ? '响应字段' : 'Response fields'"
+        :request-title="content.requestParamsTitle"
+        :response-title="content.responseParamsTitle"
       />
     </section>
 
@@ -96,8 +60,8 @@ const { content, quickStart, isSupportedStatus, endpointDescription } = useAnthr
       <InterfaceEndpointList
         :items="content.anthropicStreamInterfaces"
         :field-headers="content.paramFieldHeaders"
-        :request-title="locale.startsWith('zh') ? '请求参数' : 'Request parameters'"
-        :response-title="locale.startsWith('zh') ? '响应字段' : 'Response fields'"
+        :request-title="content.requestParamsTitle"
+        :response-title="content.responseParamsTitle"
       />
     </section>
 
@@ -109,8 +73,8 @@ const { content, quickStart, isSupportedStatus, endpointDescription } = useAnthr
       <InterfaceEndpointList
         :items="content.anthropicBatchInterfaces"
         :field-headers="content.paramFieldHeaders"
-        :request-title="locale.startsWith('zh') ? '请求参数' : 'Request parameters'"
-        :response-title="locale.startsWith('zh') ? '响应字段' : 'Response fields'"
+        :request-title="content.requestParamsTitle"
+        :response-title="content.responseParamsTitle"
       />
       <div class="docs-check-list">
         <article v-for="[title, text] in content.batchItems" :key="title" class="docs-check-item">
@@ -128,8 +92,8 @@ const { content, quickStart, isSupportedStatus, endpointDescription } = useAnthr
       <InterfaceEndpointList
         :items="content.anthropicModelsInterfaces"
         :field-headers="content.paramFieldHeaders"
-        :request-title="locale.startsWith('zh') ? '请求参数' : 'Request parameters'"
-        :response-title="locale.startsWith('zh') ? '响应字段' : 'Response fields'"
+        :request-title="content.requestParamsTitle"
+        :response-title="content.responseParamsTitle"
       />
       <div class="docs-check-list">
         <article

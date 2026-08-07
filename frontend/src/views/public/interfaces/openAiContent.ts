@@ -1,6 +1,7 @@
 import { computed } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import { useSiteBrand } from '../../../composables/useSiteBrand'
+import { openAiEndpointRows, toEndpointDisplayRows } from './endpointRows'
 
 export interface EndpointSample {
   title: string
@@ -18,119 +19,13 @@ export function useOpenAiContent() {
 
   const openAiBaseUrl = computed(() => `${siteOrigin.value}/v1`)
 
-  function isSupportedStatus(status: string) {
-    return status.startsWith('已支持') || status.startsWith('Supported')
-  }
-
-  function endpointDescription(name: string, method: string, path: string) {
-    const isZh = locale.value === 'zh-CN'
-    const key = `${method} ${path}`
-
-    const zhDescriptions: Record<string, string> = {
-      'GET /v1/models': '列出当前 API Key 可调用的模型。',
-      'GET /v1/models/{model}': '查询单个模型详情。',
-      'DELETE /v1/models/{model}': '删除或取消可删除模型。',
-      'POST /v1/chat/completions': '创建 Chat Completions 文本生成。',
-      'GET /v1/chat/completions/{completion_id}': '查询已保存的 Chat Completion。',
-      'GET /v1/chat/completions/{completion_id}/messages': '列出已保存对话的消息。',
-      'PATCH /v1/chat/completions/{completion_id}': '更新已保存对话的元数据。',
-      'DELETE /v1/chat/completions/{completion_id}': '删除已保存的 Chat Completion。',
-      'POST /v1/responses': '创建 Responses 文本、多模态或后台任务。',
-      'GET /v1/responses/{response_id}': '查询 Response 结果或恢复流式读取。',
-      'DELETE /v1/responses/{response_id}': '删除已保存的 Response。',
-      'POST /v1/responses/{response_id}/cancel': '取消后台 Response 任务。',
-      'GET /v1/responses/{response_id}/input_items': '列出 Response 的输入项。',
-      'POST /v1/images/generations': '根据提示词生成图片。',
-      'POST /v1/images/edits': '编辑上传图片或进行图生图。',
-      'POST /v1/images/variations': '基于输入图片生成变体。',
-      'POST /v1/videos': '创建视频生成任务。',
-      'GET /v1/videos': '列出视频任务。',
-      'GET /v1/videos/{video_id}': '查询视频任务状态。',
-      'DELETE /v1/videos/{video_id}': '删除视频任务。',
-      'GET /v1/videos/{video_id}/content': '下载生成完成的视频文件。',
-      'POST /v1/videos/edits': '编辑已有视频。',
-      'POST /v1/videos/extensions': '扩展已有视频时长或内容。',
-      'POST /v1/videos/{video_id}/remix': '基于已有视频重新生成版本。',
-      'POST /v1/assets': '通过公网 URL 创建可复用的图片、视频或音频素材。',
-      'GET /v1/assets/{asset_id}': '查询并刷新素材处理状态。',
-      'POST /v1/embeddings': '创建文本向量嵌入。',
-      'POST /v1/audio/speech': '将文本转换为语音。',
-      'POST /v1/audio/transcriptions': '将音频转写为文本。',
-      'POST /v1/audio/translations': '将音频翻译为文本。',
-      'POST /v1/moderations': '对输入内容进行安全审核。',
-      'POST /v1/files': '上传文件资源。',
-      'GET /v1/files': '列出已上传文件。',
-      'GET /v1/files/{file_id}': '查询文件元数据。',
-      'DELETE /v1/files/{file_id}': '删除文件。',
-      'GET /v1/files/{file_id}/content': '下载文件内容。',
-      'POST /v1/uploads': '创建分片上传会话。',
-      'POST /v1/uploads/{upload_id}/parts': '上传一个文件分片。',
-      'POST /v1/uploads/{upload_id}/complete': '完成分片上传。',
-      'POST /v1/uploads/{upload_id}/cancel': '取消分片上传。',
-      'POST /v1/batches': '创建 OpenAI 批量任务。',
-      'GET /v1/batches': '列出批量任务。',
-      'GET /v1/batches/{batch_id}': '查询批量任务。',
-      'POST /v1/batches/{batch_id}/cancel': '取消批量任务。',
-      'POST /v1/fine_tuning/jobs': '创建微调任务。',
-      'GET /v1/fine_tuning/jobs': '列出微调任务。',
-      'GET /v1/fine_tuning/jobs/{fine_tuning_job_id}': '查询微调任务。',
-      'POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel': '取消微调任务。',
-      'GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/events': '列出微调事件。',
-      'GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints': '列出微调检查点。',
-      'POST /v1/vector_stores': '创建向量库。',
-      'GET /v1/vector_stores': '列出向量库。',
-      'GET/PATCH/DELETE /v1/vector_stores/{vector_store_id}': '查询、更新或删除向量库。',
-      'POST/GET /v1/vector_stores/{vector_store_id}/files': '添加或列出向量库文件。',
-      'GET/DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}': '查询或移除向量库文件。',
-      'POST /v1/vector_stores/{vector_store_id}/file_batches': '创建向量库文件批处理。',
-      'GET/POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}':
-        '查询或取消文件批处理。',
-      'GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files':
-        '列出批处理中的文件。',
-      'POST /v1/vector_stores/{vector_store_id}/search': '检索向量库内容。',
-      'POST /v1/threads': '创建 Assistants 线程。',
-      'GET/PATCH/DELETE /v1/threads/{thread_id}': '查询、更新或删除线程。',
-      'POST/GET /v1/threads/{thread_id}/messages': '创建或列出线程消息。',
-      'GET/PATCH/DELETE /v1/threads/{thread_id}/messages/{message_id}':
-        '查询、更新或删除线程消息。',
-      'POST/GET /v1/threads/{thread_id}/runs': '创建或列出线程运行。',
-      'GET/PATCH /v1/threads/{thread_id}/runs/{run_id}': '查询或更新线程运行。',
-      'POST /v1/threads/{thread_id}/runs/{run_id}/cancel': '取消线程运行。',
-      'POST /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs': '提交工具调用结果。',
-      'POST /v1/realtime/sessions': '创建实时语音/多模态会话。',
-      'POST /v1/realtime/transcription_sessions': '创建实时转写会话。',
-      'GET /v1/realtime?model=…':
-        '建立实时语音识别 WebSocket 会话（当前对接 qwen3-asr-flash-realtime，按音频时长计费）。',
-      'POST/GET /v1/evals': '创建或列出评测。',
-      'GET/PATCH/DELETE /v1/evals/{eval_id}': '查询、更新或删除评测。',
-      'POST/GET /v1/evals/{eval_id}/runs': '创建或列出评测运行。',
-      'GET/DELETE /v1/evals/{eval_id}/runs/{run_id}': '查询或删除评测运行。'
-    }
-
-    const enDescriptions: Record<string, string> = {
-      'GET /v1/models': 'List models callable by the current API key.',
-      'GET /v1/models/{model}': 'Retrieve a single model.',
-      'DELETE /v1/models/{model}': 'Delete or cancel a deletable model.',
-      'POST /v1/chat/completions': 'Create Chat Completions text generation.',
-      'POST /v1/responses': 'Create Responses text, multimodal, or background tasks.',
-      'POST /v1/images/generations': 'Generate images from prompts.',
-      'POST /v1/images/edits': 'Edit uploaded images or image inputs.',
-      'POST /v1/images/variations': 'Create variations from an input image.',
-      'POST /v1/videos': 'Create a video generation task.',
-      'GET /v1/videos/{video_id}': 'Retrieve video task status.',
-      'GET /v1/videos/{video_id}/content': 'Download completed video content.',
-      'POST /v1/assets': 'Create a reusable image, video, or audio asset from a public URL.',
-      'GET /v1/assets/{asset_id}': 'Retrieve and refresh asset processing status.',
-      'POST /v1/embeddings': 'Create text embeddings.',
-      'POST /v1/audio/transcriptions': 'Transcribe uploaded audio to text.',
-      'GET /v1/realtime?model=…':
-        'Open a realtime speech-transcription WebSocket session (currently backed by qwen3-asr-flash-realtime, billed per audio second).',
-      'POST /v1/moderations': 'Moderate input content.'
-    }
-
-    const fallback = isZh ? `${name} 接口功能。` : `${name} endpoint operation.`
-    return (isZh ? zhDescriptions : enDescriptions)[key] ?? fallback
-  }
+  const openAiEndpoints = computed(() =>
+    toEndpointDisplayRows(
+      openAiEndpointRows,
+      locale.value === 'zh-CN' ? 'zh' : 'en',
+      siteName.value
+    )
+  )
 
   const quickStart = computed(() => {
     const apiKeyPlaceholder = locale.value === 'zh-CN' ? '<你的 API Key>' : '<your API key>'
@@ -143,7 +38,7 @@ curl "$BASE_URL/v1/chat/completions" \\
   -d '{
     "model": "gpt-5.5",
     "messages": [
-      { "role": "user", "content": "用一句话介绍 NeoGate" }
+      { "role": "user", "content": "用一句话介绍 ${siteName.value}" }
     ]
   }'`
   })
@@ -356,17 +251,19 @@ JSON`
   -F "model=fun-asr-flash-2026-06-15" \\
   -F "response_format=json"`
 
-  const embeddingsSample = `curl "$BASE_URL/v1/embeddings" \\
+  const embeddingsSample = computed(
+    () => `curl "$BASE_URL/v1/embeddings" \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "text-embedding-3-small",
     "input": [
-      "NeoGate routes OpenAI-compatible API requests.",
+      "${siteName.value} routes OpenAI-compatible API requests.",
       "Embeddings can be used for search and retrieval."
     ],
     "encoding_format": "float"
   }'`
+  )
 
   const modelsSample = `curl "$BASE_URL/v1/models" \\
   -H "Authorization: Bearer $API_KEY"`
@@ -384,14 +281,14 @@ JSON`
     () => `from openai import OpenAI
 
 client = OpenAI(
-    api_key="YOUR_NEOGATE_API_KEY",
+    api_key="YOUR_API_KEY",
     base_url="${openAiBaseUrl.value}",
 )
 
 response = client.chat.completions.create(
     model="gpt-5.5",
     messages=[
-        {"role": "user", "content": "用一句话介绍 NeoGate"}
+        {"role": "user", "content": "用一句话介绍 ${siteName.value}"}
     ],
 )
 
@@ -404,7 +301,7 @@ print(response.choices[0].message.content)`
     () => `import OpenAI from "openai";
 
 const client = new OpenAI({
-  apiKey: "YOUR_NEOGATE_API_KEY",
+  apiKey: "YOUR_API_KEY",
   baseURL: "${openAiBaseUrl.value}",
 });
 
@@ -447,25 +344,30 @@ console.log(response.output_text);`
     { title: 'Retrieve Stream', code: responseStreamRetrieve },
     { title: 'Cancel Response', code: responseCancel }
   ]
-  const videoCreateSamples: EndpointSample[] = [
+  const videoCreateSamples = computed<EndpointSample[]>(() => [
     { title: 'Create Video', code: videoCreate },
     { title: 'Create Video With Reference', code: videoCreateWithReference },
-    { title: 'Create Video With Two Assets (NeoGate Extension)', code: videoCreateWithAssets }
-  ]
+    {
+      title: `Create Video With Two Assets (${siteName.value} Extension)`,
+      code: videoCreateWithAssets
+    }
+  ])
   const videoRetrieveSamples: EndpointSample[] = [
     { title: 'Retrieve Video', code: videoRetrieve },
     { title: 'Download Video Content', code: videoContent }
   ]
-  const assetCreateSamples: EndpointSample[] = [
-    { title: 'Create Asset (NeoGate Extension)', code: assetCreate }
-  ]
-  const assetRetrieveSamples: EndpointSample[] = [
-    { title: 'Retrieve Asset (NeoGate Extension)', code: assetRetrieve }
-  ]
+  const assetCreateSamples = computed<EndpointSample[]>(() => [
+    { title: `Create Asset (${siteName.value} Extension)`, code: assetCreate }
+  ])
+  const assetRetrieveSamples = computed<EndpointSample[]>(() => [
+    { title: `Retrieve Asset (${siteName.value} Extension)`, code: assetRetrieve }
+  ])
   const audioSamples: EndpointSample[] = [
     { title: 'Audio Transcription', code: audioTranscription }
   ]
-  const embeddingsSamples: EndpointSample[] = [{ title: 'Embeddings', code: embeddingsSample }]
+  const embeddingsSamples = computed<EndpointSample[]>(() => [
+    { title: 'Embeddings', code: embeddingsSample.value }
+  ])
   const modelsSamples: EndpointSample[] = [{ title: 'Models', code: modelsSample }]
 
   const content = computed(() => {
@@ -510,8 +412,12 @@ console.log(response.output_text);`
           ['GET', `${openAiBaseUrl.value}/videos/{video_id}/content`, '下载视频内容']
         ],
         openAiAssetPaths: [
-          ['POST', openAiBaseUrl.value + '/assets', '创建素材（NeoGate 扩展）'],
-          ['GET', openAiBaseUrl.value + '/assets/{asset_id}', '查询素材状态（NeoGate 扩展）']
+          ['POST', openAiBaseUrl.value + '/assets', `创建素材（${siteName.value} 扩展）`],
+          [
+            'GET',
+            openAiBaseUrl.value + '/assets/{asset_id}',
+            `查询素材状态（${siteName.value} 扩展）`
+          ]
         ],
         openAiAudioPaths: [
           ['POST', `${openAiBaseUrl.value}/audio/transcriptions`, '将音频转写为文本']
@@ -678,7 +584,7 @@ console.log(response.output_text);`
               ['tools[].type', '"image_generation"', '启用图片生成工具。'],
               ['tools[].action', 'generate | edit | auto', '编辑输入图片时设置为 edit。'],
               ['background', 'boolean，必填 true', '创建后台任务。'],
-              ['image_format', 'base64 | url | both', 'NeoGate 扩展，控制图片结果格式。']
+              ['image_format', 'base64 | url | both', `${siteName.value} 扩展，控制图片结果格式。`]
             ],
             responseFields: [
               ['id', 'string', 'Response ID。'],
@@ -694,23 +600,31 @@ console.log(response.output_text);`
             title: 'Videos Create',
             method: 'POST',
             path: `${openAiBaseUrl.value}/videos`,
-            description: '创建视频生成任务；支持 OpenAI 单参考图输入及 NeoGate 多素材扩展。',
+            description: `创建视频生成任务；支持 OpenAI 单参考图输入及 ${siteName.value} 多素材扩展。`,
             requestParams: [
               ['model', 'string，必填', '视频模型，例如 sora-2。'],
               ['prompt', 'string，必填', '视频内容描述。'],
               ['input_reference', 'file | object', '可选参考图。'],
-              ['content[]', 'array', 'NeoGate 扩展。传入一个或多个图片、视频或音频参考素材。'],
+              [
+                'content[]',
+                'array',
+                `${siteName.value} 扩展。传入一个或多个图片、视频或音频参考素材。`
+              ],
               ['size', 'string', '视频尺寸。'],
-              ['seconds / duration', 'string | number', '视频时长；duration 为 NeoGate 扩展别名。'],
+              [
+                'seconds / duration',
+                'string | number',
+                `视频时长；duration 为 ${siteName.value} 扩展别名。`
+              ],
               [
                 'ratio / resolution',
                 'string',
-                'NeoGate 扩展。宽高比和输出清晰度；可用值以模型能力为准。'
+                `${siteName.value} 扩展。宽高比和输出清晰度；可用值以模型能力为准。`
               ],
               [
                 'generate_audio',
                 'boolean',
-                'NeoGate 扩展。请求生成随视频音频；是否支持取决于模型。'
+                `${siteName.value} 扩展。请求生成随视频音频；是否支持取决于模型。`
               ]
             ],
             responseFields: [
@@ -719,7 +633,7 @@ console.log(response.output_text);`
               ['progress', 'number', '任务进度。'],
               ['error', 'object | null', '失败信息。']
             ],
-            samples: videoCreateSamples
+            samples: videoCreateSamples.value
           },
           {
             title: 'Videos Retrieve / Content',
@@ -753,14 +667,14 @@ console.log(response.output_text);`
               ['name', 'string', '可选名称，最多 50 个 Unicode 字符。']
             ],
             responseFields: [
-              ['id', 'string', 'NeoGate 素材 ID，格式为 asset_*。'],
+              ['id', 'string', `${siteName.value} 素材 ID，格式为 asset_*。`],
               ['type', 'string', '素材类型。'],
               ['url', 'string', '创建时提交的公网 URL。'],
               ['name', 'string | null', '素材名称。'],
               ['status', 'string', 'processing、active、failed、expired 或 deleted。'],
               ['error', 'string', '仅在失败时返回。']
             ],
-            samples: assetCreateSamples
+            samples: assetCreateSamples.value
           },
           {
             title: 'Assets Retrieve',
@@ -769,11 +683,11 @@ console.log(response.output_text);`
             description: '查询素材并刷新处理状态；素材访问按当前项目隔离。',
             requestParams: [['asset_id', 'string，必填', '创建素材返回的 asset_* ID。']],
             responseFields: [
-              ['id', 'string', 'NeoGate 素材 ID。'],
+              ['id', 'string', `${siteName.value} 素材 ID。`],
               ['status', 'string', 'processing、active、failed、expired 或 deleted。'],
               ['error', 'string', '仅在失败时返回。']
             ],
-            samples: assetRetrieveSamples
+            samples: assetRetrieveSamples.value
           }
         ],
         openAiAudioInterfaces: [
@@ -828,7 +742,7 @@ console.log(response.output_text);`
               ['data[].embedding', 'number[]', '向量数组。'],
               ['usage', 'object', 'Token 用量。']
             ],
-            samples: embeddingsSamples
+            samples: embeddingsSamples.value
           }
         ],
         openAiModelsInterfaces: [
@@ -854,7 +768,7 @@ console.log(response.output_text);`
           ],
           [
             '创建任务',
-            '调用 /v1/videos 创建任务。单参考图可使用 input_reference；多参考素材使用 NeoGate 扩展 content[]。'
+            `调用 /v1/videos 创建任务。单参考图可使用 input_reference；多参考素材使用 ${siteName.value} 扩展 content[]。`
           ],
           ['查询状态', '通过 /v1/videos/{video_id} 查询任务状态、进度和失败原因。'],
           ['下载内容', '任务完成后调用 /v1/videos/{video_id}/content 下载 MP4 文件。']
@@ -862,7 +776,7 @@ console.log(response.output_text);`
         videoNotes: [
           [
             '参考图上传',
-            'OpenAI 兼容模式使用 multipart/form-data 的 input_reference 上传一张图片；NeoGate 扩展可在 JSON content[] 中引用公网 URL 或 asset://asset_*。'
+            `OpenAI 兼容模式使用 multipart/form-data 的 input_reference 上传一张图片；${siteName.value} 扩展可在 JSON content[] 中引用公网 URL 或 asset://asset_*。`
           ],
           [
             '多参考素材',
@@ -881,361 +795,10 @@ console.log(response.output_text);`
         openAiIntro: `接口统一使用 Bearer Token 认证。Base URL 填写 ${siteName.value} 的 /v1 地址。下表包含 OpenAI 兼容接口和 ${siteName.value} 扩展接口；扩展能力会在状态列或说明中明确标注。`,
         openAiAuthItems: [
           ['Base URL', openAiBaseUrl.value],
-          ['认证头', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
+          ['认证头', 'Authorization: Bearer YOUR_API_KEY'],
           ['Content-Type', 'application/json；图片、视频和音频上传接口使用 multipart/form-data']
         ],
-        openAiEndpoints: [
-          ['Models', 'GET', '/v1/models', '-', '已支持', 'models'],
-          ['Models', 'GET', '/v1/models/{model}', 'model', '已支持', 'models'],
-          ['Models', 'DELETE', '/v1/models/{model}', 'model', '暂未支持'],
-          [
-            'Chat Completions',
-            'POST',
-            '/v1/chat/completions',
-            'model, messages, stream',
-            '已支持',
-            'text'
-          ],
-          [
-            'Chat Completions',
-            'GET',
-            '/v1/chat/completions/{completion_id}',
-            'completion_id',
-            '暂未支持'
-          ],
-          [
-            'Chat Completions',
-            'GET',
-            '/v1/chat/completions/{completion_id}/messages',
-            'completion_id',
-            '暂未支持'
-          ],
-          [
-            'Chat Completions',
-            'PATCH',
-            '/v1/chat/completions/{completion_id}',
-            'completion_id, metadata',
-            '暂未支持'
-          ],
-          [
-            'Chat Completions',
-            'DELETE',
-            '/v1/chat/completions/{completion_id}',
-            'completion_id',
-            '暂未支持'
-          ],
-          [
-            'Responses',
-            'POST',
-            '/v1/responses',
-            'model, input, stream, background, store',
-            '已支持',
-            'text'
-          ],
-          [
-            'Responses',
-            'GET',
-            '/v1/responses/{response_id}',
-            'response_id, stream, starting_after',
-            '已支持（后台任务）',
-            'text-async'
-          ],
-          ['Responses', 'DELETE', '/v1/responses/{response_id}', 'response_id', '暂未支持'],
-          [
-            'Responses',
-            'POST',
-            '/v1/responses/{response_id}/cancel',
-            'response_id',
-            '已支持（后台任务）',
-            'text-async'
-          ],
-          [
-            'Responses',
-            'GET',
-            '/v1/responses/{response_id}/input_items',
-            'response_id, limit, after',
-            '已支持（后台任务）'
-          ],
-          [
-            'Images',
-            'POST',
-            '/v1/images/generations',
-            'model, prompt, size, quality, n, stream, partial_images',
-            '已支持（含流式）',
-            'images'
-          ],
-          [
-            'Images',
-            'POST',
-            '/v1/images/edits',
-            'model, image/image[] or images, prompt, mask, size, n, stream, partial_images',
-            '已支持（含流式）',
-            'images'
-          ],
-          [
-            'Images',
-            'POST',
-            '/v1/images/variations',
-            'model=dall-e-2, image, size, n',
-            '已支持',
-            'images'
-          ],
-          [
-            'Videos',
-            'POST',
-            '/v1/videos',
-            'model, prompt, input_reference/content, size, seconds',
-            '已支持（含 NeoGate 多素材扩展）',
-            'videos'
-          ],
-          [
-            'Assets',
-            'POST',
-            '/v1/assets',
-            'model, type, url, name',
-            '已支持（NeoGate 扩展）',
-            'videos'
-          ],
-          [
-            'Assets',
-            'GET',
-            '/v1/assets/{asset_id}',
-            'asset_id',
-            '已支持（NeoGate 扩展）',
-            'videos'
-          ],
-          ['Videos', 'GET', '/v1/videos', 'limit, after, order', '暂未支持'],
-          ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', '已支持', 'videos'],
-          ['Videos', 'DELETE', '/v1/videos/{video_id}', 'video_id', '暂未支持'],
-          ['Videos', 'GET', '/v1/videos/{video_id}/content', 'video_id', '已支持', 'videos'],
-          ['Videos', 'POST', '/v1/videos/edits', 'prompt, video.id', '暂未支持'],
-          ['Videos', 'POST', '/v1/videos/extensions', 'prompt, seconds, video.id', '暂未支持'],
-          ['Videos', 'POST', '/v1/videos/{video_id}/remix', 'video_id, prompt', '暂未支持'],
-          [
-            'Embeddings',
-            'POST',
-            '/v1/embeddings',
-            'model, input, dimensions, encoding_format',
-            '已支持',
-            'embeddings'
-          ],
-          ['Audio', 'POST', '/v1/audio/speech', 'model, input, voice, response_format', '暂未支持'],
-          [
-            'Audio',
-            'POST',
-            '/v1/audio/transcriptions',
-            'model, file, language, response_format',
-            '已支持',
-            'audio'
-          ],
-          ['Audio', 'POST', '/v1/audio/translations', 'model, file, response_format', '暂未支持'],
-          ['Moderations', 'POST', '/v1/moderations', 'model, input', '已支持'],
-          ['Files', 'POST', '/v1/files', 'file, purpose', '暂未支持'],
-          ['Files', 'GET', '/v1/files', 'purpose, limit, after', '暂未支持'],
-          ['Files', 'GET', '/v1/files/{file_id}', 'file_id', '暂未支持'],
-          ['Files', 'DELETE', '/v1/files/{file_id}', 'file_id', '暂未支持'],
-          ['Files', 'GET', '/v1/files/{file_id}/content', 'file_id', '暂未支持'],
-          ['Uploads', 'POST', '/v1/uploads', 'purpose, filename, bytes, mime_type', '暂未支持'],
-          ['Uploads', 'POST', '/v1/uploads/{upload_id}/parts', 'upload_id, data', '暂未支持'],
-          [
-            'Uploads',
-            'POST',
-            '/v1/uploads/{upload_id}/complete',
-            'upload_id, part_ids',
-            '暂未支持'
-          ],
-          ['Uploads', 'POST', '/v1/uploads/{upload_id}/cancel', 'upload_id', '暂未支持'],
-          [
-            'Batches',
-            'POST',
-            '/v1/batches',
-            'input_file_id, endpoint, completion_window',
-            '暂未支持'
-          ],
-          ['Batches', 'GET', '/v1/batches', 'limit, after', '暂未支持'],
-          ['Batches', 'GET', '/v1/batches/{batch_id}', 'batch_id', '暂未支持'],
-          ['Batches', 'POST', '/v1/batches/{batch_id}/cancel', 'batch_id', '暂未支持'],
-          [
-            'Fine-tuning',
-            'POST',
-            '/v1/fine_tuning/jobs',
-            'model, training_file, validation_file, hyperparameters',
-            '暂未支持'
-          ],
-          ['Fine-tuning', 'GET', '/v1/fine_tuning/jobs', 'limit, after', '暂未支持'],
-          [
-            'Fine-tuning',
-            'GET',
-            '/v1/fine_tuning/jobs/{fine_tuning_job_id}',
-            'fine_tuning_job_id',
-            '暂未支持'
-          ],
-          [
-            'Fine-tuning',
-            'POST',
-            '/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel',
-            'fine_tuning_job_id',
-            '暂未支持'
-          ],
-          [
-            'Fine-tuning',
-            'GET',
-            '/v1/fine_tuning/jobs/{fine_tuning_job_id}/events',
-            'fine_tuning_job_id, limit, after',
-            '暂未支持'
-          ],
-          [
-            'Fine-tuning',
-            'GET',
-            '/v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints',
-            'fine_tuning_job_id',
-            '暂未支持'
-          ],
-          [
-            'Vector Stores',
-            'POST',
-            '/v1/vector_stores',
-            'name, file_ids, expires_after',
-            '暂未支持'
-          ],
-          ['Vector Stores', 'GET', '/v1/vector_stores', 'limit, after, before', '暂未支持'],
-          [
-            'Vector Stores',
-            'GET/PATCH/DELETE',
-            '/v1/vector_stores/{vector_store_id}',
-            'vector_store_id',
-            '暂未支持'
-          ],
-          [
-            'Vector Store Files',
-            'POST/GET',
-            '/v1/vector_stores/{vector_store_id}/files',
-            'vector_store_id, file_id',
-            '暂未支持'
-          ],
-          [
-            'Vector Store Files',
-            'GET/DELETE',
-            '/v1/vector_stores/{vector_store_id}/files/{file_id}',
-            'vector_store_id, file_id',
-            '暂未支持'
-          ],
-          [
-            'Vector Store File Batches',
-            'POST/GET',
-            '/v1/vector_stores/{vector_store_id}/file_batches',
-            'vector_store_id, file_ids',
-            '暂未支持'
-          ],
-          [
-            'Vector Store File Batches',
-            'GET/POST',
-            '/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}',
-            'vector_store_id, batch_id',
-            '暂未支持'
-          ],
-          [
-            'Assistants',
-            'POST/GET',
-            '/v1/assistants',
-            'model, instructions, tools, metadata',
-            '暂未支持'
-          ],
-          [
-            'Assistants',
-            'GET/PATCH/DELETE',
-            '/v1/assistants/{assistant_id}',
-            'assistant_id',
-            '暂未支持'
-          ],
-          ['Threads', 'POST', '/v1/threads', 'messages, metadata, tool_resources', '暂未支持'],
-          ['Threads', 'GET/PATCH/DELETE', '/v1/threads/{thread_id}', 'thread_id', '暂未支持'],
-          [
-            'Thread Messages',
-            'POST/GET',
-            '/v1/threads/{thread_id}/messages',
-            'thread_id, role, content',
-            '暂未支持'
-          ],
-          [
-            'Thread Messages',
-            'GET/PATCH/DELETE',
-            '/v1/threads/{thread_id}/messages/{message_id}',
-            'thread_id, message_id',
-            '暂未支持'
-          ],
-          [
-            'Thread Runs',
-            'POST/GET',
-            '/v1/threads/{thread_id}/runs',
-            'thread_id, assistant_id, model',
-            '暂未支持'
-          ],
-          [
-            'Thread Runs',
-            'GET/PATCH',
-            '/v1/threads/{thread_id}/runs/{run_id}',
-            'thread_id, run_id',
-            '暂未支持'
-          ],
-          [
-            'Thread Runs',
-            'POST',
-            '/v1/threads/{thread_id}/runs/{run_id}/cancel',
-            'thread_id, run_id',
-            '暂未支持'
-          ],
-          [
-            'Thread Runs',
-            'POST',
-            '/v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs',
-            'thread_id, run_id, tool_outputs',
-            '暂未支持'
-          ],
-          [
-            'Realtime',
-            'POST',
-            '/v1/realtime/sessions',
-            'model, voice, modalities, instructions',
-            '暂未支持'
-          ],
-          [
-            'Realtime',
-            'POST',
-            '/v1/realtime/transcription_sessions',
-            'input_audio_format, input_audio_transcription',
-            '暂未支持'
-          ],
-          [
-            'Realtime',
-            'GET (WebSocket)',
-            '/v1/realtime?model=…',
-            'model (query)；wss 升级后按 OpenAI 官方 Realtime 转写协议收发（transcription_session.update、input_audio_buffer.append、delta/completed 事件），当前对接阿里云 qwen3-asr-flash-realtime 实时转写，按音频时长计费',
-            '已支持'
-          ],
-          [
-            'Evals',
-            'POST/GET',
-            '/v1/evals',
-            'name, data_source_config, testing_criteria',
-            '暂未支持'
-          ],
-          ['Evals', 'GET/PATCH/DELETE', '/v1/evals/{eval_id}', 'eval_id', '暂未支持'],
-          [
-            'Eval Runs',
-            'POST/GET',
-            '/v1/evals/{eval_id}/runs',
-            'eval_id, data_source, model',
-            '暂未支持'
-          ],
-          [
-            'Eval Runs',
-            'GET/DELETE',
-            '/v1/evals/{eval_id}/runs/{run_id}',
-            'eval_id, run_id',
-            '暂未支持'
-          ]
-        ],
+        endpointSearchPlaceholder: '筛选接口…',
         openAiText:
           'Chat Completions 与 Responses 均按 OpenAI 官方请求体转发。本节展示同步和流式文本生成。流式输出会以 text/event-stream 持续返回增量内容，适合边生成边展示。Chat Completions 的 stored completion 查询、更新、删除暂未支持。',
         requestParamsTitle: '调用参数',
@@ -1370,8 +933,7 @@ console.log(response.output_text);`
             'stream=true 时返回 partial image、completed、error 等事件。'
           ]
         ],
-        openAiImageAsync:
-          '图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。NeoGate 扩展支持通过 image_format 控制异步图片结果返回 base64 或 URL。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。',
+        openAiImageAsync: `图片后台任务通过 Responses 的 image_generation 工具创建，而不是 Images API 自身的后台任务。${siteName.value} 扩展支持通过 image_format 控制异步图片结果返回 base64 或 URL。可用于文生图异步和图生图异步，创建后使用 Responses 查询、恢复流式结果或取消。`,
         imageAsyncRequestParams: [
           [
             'model',
@@ -1448,7 +1010,7 @@ console.log(response.output_text);`
           [
             'content[]',
             'array',
-            'NeoGate 扩展。使用 image_url、video_url 或 audio_url 传多个公网 URL 或 asset://asset_* 引用，并通过 role 指定用途。'
+            `${siteName.value} 扩展。使用 image_url、video_url 或 audio_url 传多个公网 URL 或 asset://asset_* 引用，并通过 role 指定用途。`
           ],
           [
             'size',
@@ -1460,10 +1022,18 @@ console.log(response.output_text);`
             'string | number',
             '视频时长，例如 4、8 或 12 秒；可用时长以模型和上游为准。'
           ],
-          ['duration', 'integer', 'NeoGate 扩展。seconds 的别名；可用范围以模型和渠道为准。'],
-          ['ratio', 'string', 'NeoGate 扩展。输出宽高比，例如 16:9、9:16 或 1:1。'],
-          ['resolution', 'string', 'NeoGate 扩展。输出清晰度，例如 480p、720p 或 1080p。'],
-          ['generate_audio', 'boolean', 'NeoGate 扩展。为支持的模型请求同步生成音频。'],
+          [
+            'duration',
+            'integer',
+            `${siteName.value} 扩展。seconds 的别名；可用范围以模型和渠道为准。`
+          ],
+          ['ratio', 'string', `${siteName.value} 扩展。输出宽高比，例如 16:9、9:16 或 1:1。`],
+          [
+            'resolution',
+            'string',
+            `${siteName.value} 扩展。输出清晰度，例如 480p、720p 或 1080p。`
+          ],
+          ['generate_audio', 'boolean', `${siteName.value} 扩展。为支持的模型请求同步生成音频。`],
           ['video.id', 'string', '编辑或扩展视频时引用已完成的视频 ID。'],
           ['after / limit / order', 'string | number', '列表接口分页和排序参数；当前暂未支持。']
         ],
@@ -1526,11 +1096,11 @@ console.log(response.output_text);`
         ['GET', `${openAiBaseUrl.value}/videos/{video_id}/content`, 'Download video content']
       ],
       openAiAssetPaths: [
-        ['POST', openAiBaseUrl.value + '/assets', 'Create asset (NeoGate extension)'],
+        ['POST', openAiBaseUrl.value + '/assets', `Create asset (${siteName.value} extension)`],
         [
           'GET',
           openAiBaseUrl.value + '/assets/{asset_id}',
-          'Retrieve asset status (NeoGate extension)'
+          `Retrieve asset status (${siteName.value} extension)`
         ]
       ],
       openAiAudioPaths: [
@@ -1705,7 +1275,7 @@ console.log(response.output_text);`
             [
               'image_format',
               'base64 | url | both',
-              'NeoGate extension controlling image result format.'
+              `${siteName.value} extension controlling image result format.`
             ]
           ],
           responseFields: [
@@ -1722,8 +1292,7 @@ console.log(response.output_text);`
           title: 'Videos Create',
           method: 'POST',
           path: `${openAiBaseUrl.value}/videos`,
-          description:
-            'Create a video generation task with an OpenAI-compatible single image or NeoGate multi-asset extensions.',
+          description: `Create a video generation task with an OpenAI-compatible single image or ${siteName.value} multi-asset extensions.`,
           requestParams: [
             ['model', 'string, required', 'Video model, such as sora-2.'],
             ['prompt', 'string, required', 'Video description.'],
@@ -1731,23 +1300,23 @@ console.log(response.output_text);`
             [
               'content[]',
               'array',
-              'NeoGate extension for one or more image, video, or audio references.'
+              `${siteName.value} extension for one or more image, video, or audio references.`
             ],
             ['size', 'string', 'Video size.'],
             [
               'seconds / duration',
               'string | number',
-              'Video duration; duration is a NeoGate extension alias.'
+              `Video duration; duration is a ${siteName.value} extension alias.`
             ],
             [
               'ratio / resolution',
               'string',
-              'NeoGate extensions for aspect ratio and output resolution. Available values depend on the model.'
+              `${siteName.value} extensions for aspect ratio and output resolution. Available values depend on the model.`
             ],
             [
               'generate_audio',
               'boolean',
-              'NeoGate extension requesting generated audio when supported by the model.'
+              `${siteName.value} extension requesting generated audio when supported by the model.`
             ]
           ],
           responseFields: [
@@ -1756,7 +1325,7 @@ console.log(response.output_text);`
             ['progress', 'number', 'Task progress.'],
             ['error', 'object | null', 'Failure information.']
           ],
-          samples: videoCreateSamples
+          samples: videoCreateSamples.value
         },
         {
           title: 'Videos Retrieve / Content',
@@ -1794,14 +1363,14 @@ console.log(response.output_text);`
             ['name', 'string', 'Optional name, limited to 50 Unicode characters.']
           ],
           responseFields: [
-            ['id', 'string', 'NeoGate asset ID in asset_* format.'],
+            ['id', 'string', `${siteName.value} asset ID in asset_* format.`],
             ['type', 'string', 'Asset type.'],
             ['url', 'string', 'Public URL submitted during creation.'],
             ['name', 'string | null', 'Asset name.'],
             ['status', 'string', 'processing, active, failed, expired, or deleted.'],
             ['error', 'string', 'Returned only when processing fails.']
           ],
-          samples: assetCreateSamples
+          samples: assetCreateSamples.value
         },
         {
           title: 'Assets Retrieve',
@@ -1813,11 +1382,11 @@ console.log(response.output_text);`
             ['asset_id', 'string, required', 'The asset_* ID returned by asset creation.']
           ],
           responseFields: [
-            ['id', 'string', 'NeoGate asset ID.'],
+            ['id', 'string', `${siteName.value} asset ID.`],
             ['status', 'string', 'processing, active, failed, expired, or deleted.'],
             ['error', 'string', 'Returned only when processing fails.']
           ],
-          samples: assetRetrieveSamples
+          samples: assetRetrieveSamples.value
         }
       ],
       openAiAudioInterfaces: [
@@ -1876,7 +1445,7 @@ console.log(response.output_text);`
             ['data[].embedding', 'number[]', 'Embedding vector.'],
             ['usage', 'object', 'Token usage.']
           ],
-          samples: embeddingsSamples
+          samples: embeddingsSamples.value
         }
       ],
       openAiModelsInterfaces: [
@@ -1902,7 +1471,7 @@ console.log(response.output_text);`
         ],
         [
           'Create task',
-          'Call /v1/videos. Use input_reference for one image or the NeoGate content[] extension for multiple references.'
+          `Call /v1/videos. Use input_reference for one image or the ${siteName.value} content[] extension for multiple references.`
         ],
         [
           'Check status',
@@ -1916,7 +1485,7 @@ console.log(response.output_text);`
       videoNotes: [
         [
           'Reference upload',
-          'OpenAI-compatible requests upload one image through multipart input_reference. NeoGate JSON requests can use public URLs or asset://asset_* references in content[].'
+          `OpenAI-compatible requests upload one image through multipart input_reference. ${siteName.value} JSON requests can use public URLs or asset://asset_* references in content[].`
         ],
         [
           'Multiple references',
@@ -1935,376 +1504,13 @@ console.log(response.output_text);`
       openAiIntro: `All APIs use Bearer Token auth. Set the Base URL to the ${siteName.value} /v1 URL. The table includes OpenAI-compatible APIs and ${siteName.value} extensions; extensions are explicitly identified in the status or description.`,
       openAiAuthItems: [
         ['Base URL', openAiBaseUrl.value],
-        ['Auth header', 'Authorization: Bearer YOUR_NEOGATE_API_KEY'],
+        ['Auth header', 'Authorization: Bearer YOUR_API_KEY'],
         [
           'Content-Type',
           'application/json; image, video, and audio upload APIs use multipart/form-data'
         ]
       ],
-      openAiEndpoints: [
-        ['Models', 'GET', '/v1/models', '-', 'Supported', 'models'],
-        ['Models', 'GET', '/v1/models/{model}', 'model', 'Supported', 'models'],
-        ['Models', 'DELETE', '/v1/models/{model}', 'model', 'Not supported'],
-        [
-          'Chat Completions',
-          'POST',
-          '/v1/chat/completions',
-          'model, messages, stream',
-          'Supported',
-          'text'
-        ],
-        [
-          'Chat Completions',
-          'GET',
-          '/v1/chat/completions/{completion_id}',
-          'completion_id',
-          'Not supported'
-        ],
-        [
-          'Chat Completions',
-          'GET',
-          '/v1/chat/completions/{completion_id}/messages',
-          'completion_id',
-          'Not supported'
-        ],
-        [
-          'Chat Completions',
-          'PATCH',
-          '/v1/chat/completions/{completion_id}',
-          'completion_id, metadata',
-          'Not supported'
-        ],
-        [
-          'Chat Completions',
-          'DELETE',
-          '/v1/chat/completions/{completion_id}',
-          'completion_id',
-          'Not supported'
-        ],
-        [
-          'Responses',
-          'POST',
-          '/v1/responses',
-          'model, input, stream, background, store',
-          'Supported',
-          'text'
-        ],
-        [
-          'Responses',
-          'GET',
-          '/v1/responses/{response_id}',
-          'response_id, stream, starting_after',
-          'Supported (background tasks)',
-          'text-async'
-        ],
-        ['Responses', 'DELETE', '/v1/responses/{response_id}', 'response_id', 'Not supported'],
-        [
-          'Responses',
-          'POST',
-          '/v1/responses/{response_id}/cancel',
-          'response_id',
-          'Supported (background tasks)',
-          'text-async'
-        ],
-        [
-          'Responses',
-          'GET',
-          '/v1/responses/{response_id}/input_items',
-          'response_id, limit, after',
-          'Supported (background tasks)'
-        ],
-        [
-          'Images',
-          'POST',
-          '/v1/images/generations',
-          'model, prompt, size, quality, n, stream, partial_images',
-          'Supported (streaming)',
-          'images'
-        ],
-        [
-          'Images',
-          'POST',
-          '/v1/images/edits',
-          'model, image/image[] or images, prompt, mask, size, n, stream, partial_images',
-          'Supported (streaming)',
-          'images'
-        ],
-        [
-          'Images',
-          'POST',
-          '/v1/images/variations',
-          'model=dall-e-2, image, size, n',
-          'Supported',
-          'images'
-        ],
-        [
-          'Videos',
-          'POST',
-          '/v1/videos',
-          'model, prompt, input_reference/content, size, seconds',
-          'Supported (including NeoGate multi-asset extensions)',
-          'videos'
-        ],
-        [
-          'Assets',
-          'POST',
-          '/v1/assets',
-          'model, type, url, name',
-          'Supported (NeoGate extension)',
-          'videos'
-        ],
-        [
-          'Assets',
-          'GET',
-          '/v1/assets/{asset_id}',
-          'asset_id',
-          'Supported (NeoGate extension)',
-          'videos'
-        ],
-        ['Videos', 'GET', '/v1/videos', 'limit, after, order', 'Not supported'],
-        ['Videos', 'GET', '/v1/videos/{video_id}', 'video_id', 'Supported', 'videos'],
-        ['Videos', 'DELETE', '/v1/videos/{video_id}', 'video_id', 'Not supported'],
-        ['Videos', 'GET', '/v1/videos/{video_id}/content', 'video_id', 'Supported', 'videos'],
-        ['Videos', 'POST', '/v1/videos/edits', 'prompt, video.id', 'Not supported'],
-        ['Videos', 'POST', '/v1/videos/extensions', 'prompt, seconds, video.id', 'Not supported'],
-        ['Videos', 'POST', '/v1/videos/{video_id}/remix', 'video_id, prompt', 'Not supported'],
-        [
-          'Embeddings',
-          'POST',
-          '/v1/embeddings',
-          'model, input, dimensions, encoding_format',
-          'Supported',
-          'embeddings'
-        ],
-        [
-          'Audio',
-          'POST',
-          '/v1/audio/speech',
-          'model, input, voice, response_format',
-          'Not supported'
-        ],
-        [
-          'Audio',
-          'POST',
-          '/v1/audio/transcriptions',
-          'model, file, language, response_format',
-          'Supported',
-          'audio'
-        ],
-        [
-          'Audio',
-          'POST',
-          '/v1/audio/translations',
-          'model, file, response_format',
-          'Not supported'
-        ],
-        ['Moderations', 'POST', '/v1/moderations', 'model, input', 'Supported'],
-        ['Files', 'POST', '/v1/files', 'file, purpose', 'Not supported'],
-        ['Files', 'GET', '/v1/files', 'purpose, limit, after', 'Not supported'],
-        ['Files', 'GET', '/v1/files/{file_id}', 'file_id', 'Not supported'],
-        ['Files', 'DELETE', '/v1/files/{file_id}', 'file_id', 'Not supported'],
-        ['Files', 'GET', '/v1/files/{file_id}/content', 'file_id', 'Not supported'],
-        ['Uploads', 'POST', '/v1/uploads', 'purpose, filename, bytes, mime_type', 'Not supported'],
-        ['Uploads', 'POST', '/v1/uploads/{upload_id}/parts', 'upload_id, data', 'Not supported'],
-        [
-          'Uploads',
-          'POST',
-          '/v1/uploads/{upload_id}/complete',
-          'upload_id, part_ids',
-          'Not supported'
-        ],
-        ['Uploads', 'POST', '/v1/uploads/{upload_id}/cancel', 'upload_id', 'Not supported'],
-        [
-          'Batches',
-          'POST',
-          '/v1/batches',
-          'input_file_id, endpoint, completion_window',
-          'Not supported'
-        ],
-        ['Batches', 'GET', '/v1/batches', 'limit, after', 'Not supported'],
-        ['Batches', 'GET', '/v1/batches/{batch_id}', 'batch_id', 'Not supported'],
-        ['Batches', 'POST', '/v1/batches/{batch_id}/cancel', 'batch_id', 'Not supported'],
-        [
-          'Fine-tuning',
-          'POST',
-          '/v1/fine_tuning/jobs',
-          'model, training_file, validation_file, hyperparameters',
-          'Not supported'
-        ],
-        ['Fine-tuning', 'GET', '/v1/fine_tuning/jobs', 'limit, after', 'Not supported'],
-        [
-          'Fine-tuning',
-          'GET',
-          '/v1/fine_tuning/jobs/{fine_tuning_job_id}',
-          'fine_tuning_job_id',
-          'Not supported'
-        ],
-        [
-          'Fine-tuning',
-          'POST',
-          '/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel',
-          'fine_tuning_job_id',
-          'Not supported'
-        ],
-        [
-          'Fine-tuning',
-          'GET',
-          '/v1/fine_tuning/jobs/{fine_tuning_job_id}/events',
-          'fine_tuning_job_id, limit, after',
-          'Not supported'
-        ],
-        [
-          'Fine-tuning',
-          'GET',
-          '/v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints',
-          'fine_tuning_job_id',
-          'Not supported'
-        ],
-        [
-          'Vector Stores',
-          'POST',
-          '/v1/vector_stores',
-          'name, file_ids, expires_after',
-          'Not supported'
-        ],
-        ['Vector Stores', 'GET', '/v1/vector_stores', 'limit, after, before', 'Not supported'],
-        [
-          'Vector Stores',
-          'GET/PATCH/DELETE',
-          '/v1/vector_stores/{vector_store_id}',
-          'vector_store_id',
-          'Not supported'
-        ],
-        [
-          'Vector Store Files',
-          'POST/GET',
-          '/v1/vector_stores/{vector_store_id}/files',
-          'vector_store_id, file_id',
-          'Not supported'
-        ],
-        [
-          'Vector Store Files',
-          'GET/DELETE',
-          '/v1/vector_stores/{vector_store_id}/files/{file_id}',
-          'vector_store_id, file_id',
-          'Not supported'
-        ],
-        [
-          'Vector Store File Batches',
-          'POST/GET',
-          '/v1/vector_stores/{vector_store_id}/file_batches',
-          'vector_store_id, file_ids',
-          'Not supported'
-        ],
-        [
-          'Vector Store File Batches',
-          'GET/POST',
-          '/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}',
-          'vector_store_id, batch_id',
-          'Not supported'
-        ],
-        [
-          'Assistants',
-          'POST/GET',
-          '/v1/assistants',
-          'model, instructions, tools, metadata',
-          'Not supported'
-        ],
-        [
-          'Assistants',
-          'GET/PATCH/DELETE',
-          '/v1/assistants/{assistant_id}',
-          'assistant_id',
-          'Not supported'
-        ],
-        ['Threads', 'POST', '/v1/threads', 'messages, metadata, tool_resources', 'Not supported'],
-        ['Threads', 'GET/PATCH/DELETE', '/v1/threads/{thread_id}', 'thread_id', 'Not supported'],
-        [
-          'Thread Messages',
-          'POST/GET',
-          '/v1/threads/{thread_id}/messages',
-          'thread_id, role, content',
-          'Not supported'
-        ],
-        [
-          'Thread Messages',
-          'GET/PATCH/DELETE',
-          '/v1/threads/{thread_id}/messages/{message_id}',
-          'thread_id, message_id',
-          'Not supported'
-        ],
-        [
-          'Thread Runs',
-          'POST/GET',
-          '/v1/threads/{thread_id}/runs',
-          'thread_id, assistant_id, model',
-          'Not supported'
-        ],
-        [
-          'Thread Runs',
-          'GET/PATCH',
-          '/v1/threads/{thread_id}/runs/{run_id}',
-          'thread_id, run_id',
-          'Not supported'
-        ],
-        [
-          'Thread Runs',
-          'POST',
-          '/v1/threads/{thread_id}/runs/{run_id}/cancel',
-          'thread_id, run_id',
-          'Not supported'
-        ],
-        [
-          'Thread Runs',
-          'POST',
-          '/v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs',
-          'thread_id, run_id, tool_outputs',
-          'Not supported'
-        ],
-        [
-          'Realtime',
-          'POST',
-          '/v1/realtime/sessions',
-          'model, voice, modalities, instructions',
-          'Not supported'
-        ],
-        [
-          'Realtime',
-          'POST',
-          '/v1/realtime/transcription_sessions',
-          'input_audio_format, input_audio_transcription',
-          'Not supported'
-        ],
-        [
-          'Realtime',
-          'GET (WebSocket)',
-          '/v1/realtime?model=…',
-          'model (query); after the wss upgrade, speak the official OpenAI Realtime transcription protocol (transcription_session.update, input_audio_buffer.append, delta/completed events). Currently relays to Alibaba qwen3-asr-flash-realtime, billed per audio second',
-          'Supported'
-        ],
-        [
-          'Evals',
-          'POST/GET',
-          '/v1/evals',
-          'name, data_source_config, testing_criteria',
-          'Not supported'
-        ],
-        ['Evals', 'GET/PATCH/DELETE', '/v1/evals/{eval_id}', 'eval_id', 'Not supported'],
-        [
-          'Eval Runs',
-          'POST/GET',
-          '/v1/evals/{eval_id}/runs',
-          'eval_id, data_source, model',
-          'Not supported'
-        ],
-        [
-          'Eval Runs',
-          'GET/DELETE',
-          '/v1/evals/{eval_id}/runs/{run_id}',
-          'eval_id, run_id',
-          'Not supported'
-        ]
-      ],
+      endpointSearchPlaceholder: 'Filter endpoints…',
       openAiText:
         'Chat Completions and Responses are forwarded with the official OpenAI request body. This section shows synchronous and streaming text generation. Streaming returns incremental content over text/event-stream, which is useful when the UI should render while the model is still generating. Stored Chat Completion retrieve, update, message listing, and delete are not currently supported.',
       requestParamsTitle: 'Request parameters',
@@ -2507,8 +1713,7 @@ console.log(response.output_text);`
           'With stream=true, events include partial image, completed, and error states.'
         ]
       ],
-      openAiImageAsync:
-        'Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. NeoGate extends the request with image_format so async image results can return base64 or a URL. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.',
+      openAiImageAsync: `Background image tasks are created through the Responses image_generation tool, not through a background mode on the Images API itself. ${siteName.value} extends the request with image_format so async image results can return base64 or a URL. Use it for async text-to-image and image-to-image, then retrieve, resume streaming, or cancel through Responses.`,
       imageAsyncRequestParams: [
         [
           'model',
@@ -2625,7 +1830,7 @@ console.log(response.output_text);`
         [
           'content[]',
           'array',
-          'NeoGate extension using image_url, video_url, or audio_url for multiple public URLs or asset://asset_* references, with role describing each input.'
+          `${siteName.value} extension using image_url, video_url, or audio_url for multiple public URLs or asset://asset_* references, with role describing each input.`
         ],
         [
           'size',
@@ -2640,18 +1845,22 @@ console.log(response.output_text);`
         [
           'duration',
           'integer',
-          'NeoGate extension and alias for seconds. Available range depends on the model and channel.'
+          `${siteName.value} extension and alias for seconds. Available range depends on the model and channel.`
         ],
-        ['ratio', 'string', 'NeoGate extension for aspect ratio, such as 16:9, 9:16, or 1:1.'],
+        [
+          'ratio',
+          'string',
+          `${siteName.value} extension for aspect ratio, such as 16:9, 9:16, or 1:1.`
+        ],
         [
           'resolution',
           'string',
-          'NeoGate extension for output resolution, such as 480p, 720p, or 1080p.'
+          `${siteName.value} extension for output resolution, such as 480p, 720p, or 1080p.`
         ],
         [
           'generate_audio',
           'boolean',
-          'NeoGate extension requesting synchronized audio from supported models.'
+          `${siteName.value} extension requesting synchronized audio from supported models.`
         ],
         ['video.id', 'string', 'Completed video ID used by edit or extension requests.'],
         [
@@ -2706,7 +1915,6 @@ console.log(response.output_text);`
     python,
     nodeInstall,
     node,
-    isSupportedStatus,
-    endpointDescription
+    openAiEndpoints
   }
 }

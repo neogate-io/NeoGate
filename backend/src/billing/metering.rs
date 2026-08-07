@@ -183,14 +183,24 @@ fn parse_usage_from_json(value: &Value) -> Option<TokenUsage> {
         .get("cache_creation")
         .and_then(|details| details.get("ephemeral_1h_input_tokens"))
         .and_then(Value::as_i64);
-    let cache_creation_input_tokens = usage
-        .get("cache_creation_input_tokens")
-        .or_else(|| input_details.and_then(|details| details.get("cached_creation_tokens")))
-        .and_then(Value::as_i64)
-        .or_else(|| {
-            let total = cache_creation_5m.unwrap_or(0) + cache_creation_1h.unwrap_or(0);
-            (total > 0).then_some(total)
-        });
+    let cache_creation_input_tokens = [
+        usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_i64),
+        input_details
+            .and_then(|details| details.get("cached_creation_tokens"))
+            .and_then(Value::as_i64),
+        input_details
+            .and_then(|details| details.get("cache_write_tokens"))
+            .and_then(Value::as_i64),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .or_else(|| {
+        let total = cache_creation_5m.unwrap_or(0) + cache_creation_1h.unwrap_or(0);
+        (total > 0).then_some(total)
+    });
 
     Some(TokenUsage {
         input_tokens,
@@ -479,6 +489,16 @@ mod tests {
         assert_eq!(usage.output_tokens, 93);
         assert_eq!(usage.cached_input_tokens, Some(96_640));
         assert_eq!(usage.reasoning_output_tokens, Some(11));
+    }
+
+    #[test]
+    fn parses_responses_cache_write_tokens_using_larger_compatible_field() {
+        let usage = parse_usage_from_sse_data(
+            r#"{"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_creation_tokens":7,"cache_write_tokens":12}}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(usage.cache_creation_input_tokens, Some(12));
     }
 
     #[test]

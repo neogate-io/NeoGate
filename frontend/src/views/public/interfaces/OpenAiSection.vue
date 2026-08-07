@@ -3,6 +3,7 @@ import { DocumentCopy } from '@element-plus/icons-vue'
 import { useLocale } from '../../../composables/useLocale'
 import { useCopyText } from '../../../composables/usePublicPage'
 import InterfaceEndpointList from './InterfaceEndpointList.vue'
+import EndpointOverviewTable from './EndpointOverviewTable.vue'
 import CodeSampleCard from './CodeSampleCard.vue'
 import { useOpenAiContent } from './openAiContent'
 
@@ -12,16 +13,8 @@ defineProps<{
 
 const { t } = useLocale()
 const copyDocText = useCopyText()
-const {
-  content,
-  quickStart,
-  pythonInstall,
-  python,
-  nodeInstall,
-  node,
-  isSupportedStatus,
-  endpointDescription
-} = useOpenAiContent()
+const { content, quickStart, pythonInstall, python, nodeInstall, node, openAiEndpoints } =
+  useOpenAiContent()
 </script>
 
 <template>
@@ -37,47 +30,12 @@ const {
           <code>{{ value }}</code>
         </article>
       </div>
-      <div class="interface-table-wrap">
-        <table class="interface-table">
-          <thead>
-            <tr>
-              <th v-for="header in content.endpointHeaders" :key="header">{{ header }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="[name, method, path, , status, anchor] in content.openAiEndpoints"
-              :key="`${name}-${method}-${path}`"
-            >
-              <td>
-                <RouterLink
-                  v-if="anchor"
-                  class="interface-endpoint-link"
-                  :to="`/interfaces/openai/${anchor}`"
-                >
-                  {{ name }}
-                </RouterLink>
-                <template v-else>{{ name }}</template>
-              </td>
-              <td>
-                <span class="interface-method">{{ method }}</span>
-              </td>
-              <td>
-                <code>{{ path }}</code>
-              </td>
-              <td>{{ endpointDescription(name, method, path) }}</td>
-              <td>
-                <span
-                  class="interface-status"
-                  :class="{ 'interface-status--muted': !isSupportedStatus(status) }"
-                >
-                  {{ status }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <EndpointOverviewTable
+        :headers="content.endpointHeaders"
+        :rows="openAiEndpoints"
+        link-prefix="/interfaces/openai"
+        :search-placeholder="content.endpointSearchPlaceholder"
+      />
     </template>
 
     <section v-if="sub === 'quick-start'" id="openai-quick-start" class="docs-subsection">

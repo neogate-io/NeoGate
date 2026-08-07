@@ -112,14 +112,13 @@ async fn poll_due_tasks(state: &Arc<AppState>) -> AppResult<()> {
             }
         })
         .await;
-    release_stale_terminal_holds(state).await?;
+    finalize_terminal_holds(state).await?;
     Ok(())
 }
 
-async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
-    let stale_window =
-        ChronoDuration::from_std(state.config.billing.credit_allocation_recovery_after)
-            .unwrap_or_else(|_| ChronoDuration::seconds(900));
+async fn finalize_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
+    let stale_window = ChronoDuration::from_std(super::POLL_INTERVAL)
+        .unwrap_or_else(|_| ChronoDuration::seconds(30));
     let stale_before = Utc::now() - stale_window;
     let tasks = upstream::fetch_stale_terminal_held_tasks(
         &state.db.pool,
@@ -127,8 +126,37 @@ async fn release_stale_terminal_holds(state: &Arc<AppState>) -> AppResult<()> {
         state.config.task.upstream_poll_batch_size,
     )
     .await?;
-    for task in tasks {
-        task_billing::release_task_hold_by_id(state, task.id, "stale terminal async task").await?;
+    for pending in tasks {
+        let task = pending.task;
+        let upstream = match task.selected_upstream(&state.db.pool, &state.secrets).await {
+            Ok(upstream) => upstream,
+            Err(err) => {
+                if task_billing::permanent_terminal_restore_error(&err) {
+                    if let Err(release_err) = task_billing::fail_task_hold_by_id(
+                        state,
+                        task.id,
+                        "terminal task upstream restore failure",
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            task_id = task.id,
+                            "failed to abandon unrecoverable terminal task hold: {release_err}"
+                        );
+                    }
+                    continue;
+                }
+                tracing::warn!(
+                    task_id = task.id,
+                    "failed to restore terminal task upstream for billing retry: {err}"
+                );
+                continue;
+            }
+        };
+        if let Err(err) = task_billing::finalize_polled(state, task, upstream, pending.usage).await
+        {
+            tracing::warn!("failed to retry terminal async task billing: {err}");
+        }
     }
     Ok(())
 }

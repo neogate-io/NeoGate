@@ -7,11 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use tokio::{
-    sync::mpsc::{
-        self,
-        error::{TryRecvError, TrySendError},
-        Receiver,
-    },
+    sync::mpsc::{self, error::TryRecvError, Receiver},
     task::JoinHandle,
     time,
 };
@@ -152,61 +148,128 @@ impl BillingOutbox {
         }
     }
 
-    fn enqueue_retry(&self, usage: UsageInsert) {
+    /// Atomically persists an async task's billing intent and transitions the
+    /// task out of `held`. A crash can therefore leave either both operations
+    /// committed or neither operation committed.
+    pub async fn enqueue_task_durable(
+        &self,
+        task_id: DbId,
+        usage: &UsageInsert,
+    ) -> AppResult<bool> {
+        let Some(billing) = &usage.billing else {
+            return Ok(false);
+        };
+        let payload = serde_json::to_value(usage)?;
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO billing (transaction_id, payload)
+             VALUES ($1, $2)
+             ON CONFLICT (transaction_id) DO NOTHING
+             RETURNING id",
+        )
+        .bind(billing.transaction_id)
+        .bind(&payload)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if inserted.is_none() {
+            let existing_payload: serde_json::Value = sqlx::query_scalar(
+                "SELECT payload
+                 FROM billing
+                 WHERE transaction_id = $1
+                 FOR UPDATE",
+            )
+            .bind(billing.transaction_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if existing_payload != payload {
+                tx.rollback().await?;
+                return Err(AppError::Conflict(
+                    "billing transaction payload does not match the existing record".to_string(),
+                ));
+            }
+        }
+        let updated = sqlx::query(
+            "UPDATE task_upstream
+             SET billing_status = 'settled', updated_at = now()
+             WHERE id = $1 AND billing_status = 'held'
+             RETURNING billing_hold",
+        )
+        .bind(task_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = updated {
+            let hold_value: Option<serde_json::Value> = row.try_get("billing_hold")?;
+            let hold = hold_value
+                .map(serde_json::from_value::<crate::billing::DebitHold>)
+                .transpose()?
+                .ok_or_else(|| {
+                    AppError::Conflict("async task billing hold is missing".to_string())
+                })?;
+            if hold.transaction_id != billing.transaction_id {
+                tx.rollback().await?;
+                return Err(AppError::Conflict(
+                    "async task hold transaction does not match billing transaction".to_string(),
+                ));
+            }
+        } else {
+            let status: Option<String> = sqlx::query_scalar(
+                "SELECT billing_status
+                 FROM task_upstream
+                 WHERE id = $1
+                 FOR UPDATE",
+            )
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if status.as_deref() == Some("settled") {
+                tx.commit().await?;
+                self.health.record_success();
+                return Ok(false);
+            }
+            tx.rollback().await?;
+            return Err(match status {
+                Some(status) => AppError::Conflict(format!(
+                    "async task billing status is {status}; expected held or settled"
+                )),
+                None => AppError::NotFound,
+            });
+        }
+        tx.commit().await?;
+        self.health.record_success();
+        Ok(true)
+    }
+
+    async fn enqueue_retry(&self, usage: UsageInsert) -> AppResult<()> {
         if usage.billing.is_none() {
-            return;
+            return Ok(());
         }
 
         let sender = self.retry_worker.sender();
         let Some(sender) = sender else {
             self.health.record_failure();
-            tracing::error!(
-                "billing outbox retry queue is unavailable; dropping in-memory billing retry"
-            );
-            return;
+            return Err(AppError::UpstreamUnavailable(
+                "billing outbox retry queue is unavailable".to_string(),
+            ));
         };
-
-        match sender.try_send(usage) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.health.record_failure();
-                tracing::error!(
-                    "billing outbox retry queue is full; dropping in-memory billing retry"
-                );
-            }
-            Err(TrySendError::Closed(_)) => {
-                self.health.record_failure();
-                tracing::error!(
-                    "billing outbox retry queue is closed; dropping in-memory billing retry"
-                );
-            }
-        }
+        sender.send(usage).await.map_err(|_| {
+            self.health.record_failure();
+            AppError::UpstreamUnavailable("billing outbox retry queue is closed".to_string())
+        })
     }
 
-    pub fn enqueue_or_retry(&self, usage: UsageInsert) {
+    pub async fn enqueue_or_retry(&self, usage: UsageInsert) -> AppResult<()> {
         if usage.billing.is_none() {
-            return;
+            return Ok(());
         }
 
         let sender = self.worker.sender();
         let Some(sender) = sender else {
-            self.enqueue_retry(usage);
-            return;
+            return self.enqueue_retry(usage).await;
         };
-
-        match sender.try_send(usage) {
-            Ok(()) => {}
-            Err(TrySendError::Full(usage)) => {
-                self.health.record_failure();
-                tracing::warn!("billing outbox queue is full; queueing bounded background retry");
-                self.enqueue_retry(usage);
-            }
-            Err(TrySendError::Closed(usage)) => {
-                self.health.record_failure();
-                tracing::warn!("billing outbox queue is closed; queueing bounded background retry");
-                self.enqueue_retry(usage);
-            }
-        }
+        sender.send(usage).await.map_err(|_| {
+            self.health.record_failure();
+            AppError::UpstreamUnavailable("billing outbox queue is closed".to_string())
+        })
     }
 
     pub async fn flush_pending(&self, timeout: Duration, process_outbox: bool) {
@@ -260,7 +323,9 @@ impl BillingOutbox {
                                 "failed to persist relay billing usage batch from queue; queueing bounded background retry: {err}"
                             );
                             for usage in batch {
-                                self.enqueue_retry(usage);
+                                if let Err(err) = self.enqueue_retry(usage).await {
+                                    tracing::error!("failed to enqueue durable billing retry: {err}");
+                                }
                             }
                         }
                     }
@@ -843,10 +908,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_outbox_without_workers_drops_to_retry_without_panicking() {
+    async fn new_outbox_without_workers_reports_unavailable_queue() {
         let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
         let outbox = BillingOutbox::new(pool);
-        outbox.enqueue_or_retry(usage_with_billing(1));
+        assert!(outbox
+            .enqueue_or_retry(usage_with_billing(1))
+            .await
+            .is_err());
 
         assert!(outbox
             .worker

@@ -1,6 +1,7 @@
 import { computed } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import { useSiteBrand } from '../../../composables/useSiteBrand'
+import { anthropicEndpointRows, toEndpointDisplayRows } from './endpointRows'
 
 export interface EndpointSample {
   title: string
@@ -19,53 +20,13 @@ export function useAnthropicContent() {
   const anthropicBaseUrl = computed(() => `${siteOrigin.value}/anthropic`)
   const anthropicBatchBaseUrl = computed(() => `${siteOrigin.value}/v1`)
 
-  function isSupportedStatus(status: string) {
-    return status.startsWith('已支持') || status.startsWith('Supported')
-  }
-
-  function endpointDescription(name: string, method: string, path: string) {
-    const isZh = locale.value === 'zh-CN'
-    const key = `${method} ${path}`
-
-    const zhDescriptions: Record<string, string> = {
-      'POST /v1/messages': '创建 Anthropic Messages 文本生成。',
-      'POST /v1/messages/count_tokens': '预估 Messages 请求的 token 数。',
-      'POST /v1/messages/batches': '创建 Message Batch 批量任务。',
-      'GET /v1/messages/batches': '列出 Message Batch 批量任务。',
-      'GET /v1/messages/batches/{message_batch_id}': '查询单个批量任务状态。',
-      'POST /v1/messages/batches/{message_batch_id}/cancel': '取消批量任务。',
-      'DELETE /v1/messages/batches/{message_batch_id}': '删除批量任务。',
-      'GET /v1/messages/batches/{message_batch_id}/results': '读取批量任务结果。',
-      'GET /v1/models': '列出 Anthropic 官方模型。',
-      'GET /v1/models/{model_id}': '查询单个 Anthropic 官方模型。',
-      'POST /v1/files': '上传文件资源。',
-      'GET /v1/files': '列出文件资源。',
-      'GET /v1/files/{file_id}': '查询文件元数据。',
-      'DELETE /v1/files/{file_id}': '删除文件资源。',
-      'GET /v1/files/{file_id}/content': '下载文件内容。'
-    }
-
-    const enDescriptions: Record<string, string> = {
-      'POST /v1/messages': 'Create Anthropic Messages text generation.',
-      'POST /v1/messages/count_tokens': 'Estimate token count for a Messages request.',
-      'POST /v1/messages/batches': 'Create a Message Batch task.',
-      'GET /v1/messages/batches': 'List Message Batch tasks.',
-      'GET /v1/messages/batches/{message_batch_id}': 'Retrieve a single batch task.',
-      'POST /v1/messages/batches/{message_batch_id}/cancel': 'Cancel a batch task.',
-      'DELETE /v1/messages/batches/{message_batch_id}': 'Delete a batch task.',
-      'GET /v1/messages/batches/{message_batch_id}/results': 'Read batch task results.',
-      'GET /v1/models': 'List official Anthropic models.',
-      'GET /v1/models/{model_id}': 'Retrieve an official Anthropic model.',
-      'POST /v1/files': 'Upload a file resource.',
-      'GET /v1/files': 'List file resources.',
-      'GET /v1/files/{file_id}': 'Retrieve file metadata.',
-      'DELETE /v1/files/{file_id}': 'Delete a file resource.',
-      'GET /v1/files/{file_id}/content': 'Download file content.'
-    }
-
-    const fallback = isZh ? `${name} 接口功能。` : `${name} endpoint operation.`
-    return (isZh ? zhDescriptions : enDescriptions)[key] ?? fallback
-  }
+  const anthropicEndpoints = computed(() =>
+    toEndpointDisplayRows(
+      anthropicEndpointRows,
+      locale.value === 'zh-CN' ? 'zh' : 'en',
+      siteName.value
+    )
+  )
 
   const quickStart = computed(() => {
     const apiKeyPlaceholder = locale.value === 'zh-CN' ? '<你的 API Key>' : '<your API key>'
@@ -80,12 +41,13 @@ curl "$BASE_URL/anthropic/v1/messages" \\
     "model": "claude-3-5-sonnet-latest",
     "max_tokens": 1024,
     "messages": [
-      { "role": "user", "content": "用一句话介绍 NeoGate" }
+      { "role": "user", "content": "用一句话介绍 ${siteName.value}" }
     ]
   }'`
   })
 
-  const messageSample = `curl "$BASE_URL/anthropic/v1/messages" \\
+  const messageSample = computed(
+    () => `curl "$BASE_URL/anthropic/v1/messages" \\
   -H "x-api-key: $API_KEY" \\
   -H "anthropic-version: 2023-06-01" \\
   -H "Content-Type: application/json" \\
@@ -94,9 +56,10 @@ curl "$BASE_URL/anthropic/v1/messages" \\
     "max_tokens": 1024,
     "system": "你是一个简洁的技术助手。",
     "messages": [
-      { "role": "user", "content": "说明 NeoGate 的 Anthropic 兼容接口如何鉴权" }
+      { "role": "user", "content": "说明 ${siteName.value} 的 Anthropic 兼容接口如何鉴权" }
     ]
   }'`
+  )
 
   const streamSample = `curl "$BASE_URL/anthropic/v1/messages" \\
   -H "x-api-key: $API_KEY" \\
@@ -156,7 +119,9 @@ curl "$BASE_URL/anthropic/v1/messages" \\
   -H "x-api-key: $API_KEY" \\
   -H "anthropic-version: 2023-06-01"`
 
-  const messageSamples: EndpointSample[] = [{ title: 'Messages', code: messageSample }]
+  const messageSamples = computed<EndpointSample[]>(() => [
+    { title: 'Messages', code: messageSample.value }
+  ])
   const streamSamples: EndpointSample[] = [{ title: 'Messages', code: streamSample }]
   const batchCreateSamples: EndpointSample[] = [{ title: 'Create Batch', code: batchCreate }]
   const batchManageSamples: EndpointSample[] = [
@@ -227,7 +192,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
               ['stop_reason', 'string | null', '停止原因。'],
               ['usage', 'object', 'Token 用量。']
             ],
-            samples: messageSamples
+            samples: messageSamples.value
           }
         ],
         anthropicStreamInterfaces: [
@@ -325,93 +290,23 @@ curl "$BASE_URL/anthropic/v1/messages" \\
           ['查询任务状态', '通过批量任务 ID 查询 processing_status、结果计数和过期时间。'],
           ['获取结果', '任务结束后下载 results，每行对应一条 custom_id 的处理结果。']
         ],
-        anthropicModelsText:
-          'Anthropic 官方 Models API 路径为 /v1/models 与 /v1/models/{model_id}，NeoGate 已在 /anthropic 前缀下提供，官方 SDK 的 models.list() / models.retrieve() 可直接使用。旧路径 /anthropic/v1/messages/models 仍保留以兼容既有调用方。',
+        anthropicModelsText: `Anthropic 官方 Models API 路径为 /v1/models 与 /v1/models/{model_id}，${siteName.value} 已在 /anthropic 前缀下提供，官方 SDK 的 models.list() / models.retrieve() 可直接使用。旧路径 /anthropic/v1/messages/models 仍保留以兼容既有调用方。`,
         anthropicModelItems: [
           ['模型标识', '返回的 id 可直接作为 /v1/messages 的 model 参数。'],
           ['权限过滤', '列表会按当前 API Key 权限和后台启用渠道过滤。']
         ],
         paramFieldHeaders: ['参数', '类型', '说明'],
         endpointHeaders: ['模块', '方法', '官方路径', '接口说明', '状态'],
+        requestParamsTitle: '请求参数',
+        responseParamsTitle: '响应字段',
+        endpointSearchPlaceholder: '筛选接口…',
         anthropicIntro: `Anthropic 兼容接口使用 x-api-key 认证。下表仅列 Anthropic 官方 API 路径；${siteName.value} 的接入 Base URL、兼容扩展路径和示例在各小节中说明。`,
         anthropicAuthItems: [
           ['Messages Base URL', anthropicBaseUrl.value],
           ['Message Batches Base URL', anthropicBatchBaseUrl.value],
-          ['认证头', 'x-api-key: YOUR_NEOGATE_API_KEY'],
+          ['认证头', 'x-api-key: YOUR_API_KEY'],
           ['版本头', 'anthropic-version: 2023-06-01'],
           ['Beta 头', 'anthropic-beta 可按需透传']
-        ],
-        anthropicEndpoints: [
-          [
-            'Messages',
-            'POST',
-            '/v1/messages',
-            'model, max_tokens, messages, system, tools, stream',
-            '已支持',
-            'text'
-          ],
-          [
-            'Messages',
-            'POST',
-            '/v1/messages/count_tokens',
-            'model, messages, system, tools',
-            '已支持'
-          ],
-          [
-            'Message Batches',
-            'POST',
-            '/v1/messages/batches',
-            'requests[].custom_id, requests[].params',
-            '已支持',
-            'batches'
-          ],
-          [
-            'Message Batches',
-            'GET',
-            '/v1/messages/batches',
-            'limit, before_id, after_id',
-            '已支持',
-            'batches'
-          ],
-          [
-            'Message Batches',
-            'GET',
-            '/v1/messages/batches/{message_batch_id}',
-            'message_batch_id',
-            '已支持',
-            'batches'
-          ],
-          [
-            'Message Batches',
-            'POST',
-            '/v1/messages/batches/{message_batch_id}/cancel',
-            'message_batch_id',
-            '已支持',
-            'batches'
-          ],
-          [
-            'Message Batches',
-            'DELETE',
-            '/v1/messages/batches/{message_batch_id}',
-            'message_batch_id',
-            '已支持',
-            'batches'
-          ],
-          [
-            'Message Batches',
-            'GET',
-            '/v1/messages/batches/{message_batch_id}/results',
-            'message_batch_id',
-            '已支持',
-            'batches'
-          ],
-          ['Models', 'GET', '/v1/models', 'limit, before_id, after_id', '已支持', 'models'],
-          ['Models', 'GET', '/v1/models/{model_id}', 'model_id', '已支持', 'models'],
-          ['Files', 'POST', '/v1/files', 'file, purpose, anthropic-beta', '暂未支持'],
-          ['Files', 'GET', '/v1/files', 'limit, before_id, after_id', '暂未支持'],
-          ['Files', 'GET', '/v1/files/{file_id}', 'file_id', '暂未支持'],
-          ['Files', 'DELETE', '/v1/files/{file_id}', 'file_id', '暂未支持'],
-          ['Files', 'GET', '/v1/files/{file_id}/content', 'file_id', '暂未支持']
         ],
         anthropicText:
           'Messages 按 Anthropic 官方请求体转发。网关会按 model 路由到 Anthropic 或可桥接的 OpenAI 协议上游；system、tools、tool_choice、thinking、metadata、stop_sequences、temperature、top_p、top_k、stream 等字段会按兼容规则透传或转换。',
@@ -457,7 +352,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
           [
             'results_url',
             'string | null',
-            '上游返回的结果地址；NeoGate 通过 results 接口读取结果。'
+            `上游返回的结果地址；${siteName.value} 通过 results 接口读取结果。`
           ]
         ],
         modelsResponseParams: [
@@ -529,7 +424,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
             ['stop_reason', 'string | null', 'Stop reason.'],
             ['usage', 'object', 'Token usage.']
           ],
-          samples: messageSamples
+          samples: messageSamples.value
         }
       ],
       anthropicStreamInterfaces: [
@@ -630,8 +525,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
           'After completion, download results where each line maps to a custom_id result.'
         ]
       ],
-      anthropicModelsText:
-        'The official Anthropic Models API paths are /v1/models and /v1/models/{model_id}. NeoGate now serves both under the /anthropic prefix, so the official SDK models.list() / models.retrieve() work directly. The legacy /anthropic/v1/messages/models path is kept for backward compatibility.',
+      anthropicModelsText: `The official Anthropic Models API paths are /v1/models and /v1/models/{model_id}. ${siteName.value} now serves both under the /anthropic prefix, so the official SDK models.list() / models.retrieve() work directly. The legacy /anthropic/v1/messages/models path is kept for backward compatibility.`,
       anthropicModelItems: [
         ['Model IDs', 'Returned ids can be used directly as the model parameter for /v1/messages.'],
         [
@@ -641,85 +535,16 @@ curl "$BASE_URL/anthropic/v1/messages" \\
       ],
       paramFieldHeaders: ['Parameter', 'Type', 'Description'],
       endpointHeaders: ['Module', 'Method', 'Official path', 'Description', 'Status'],
+      requestParamsTitle: 'Request parameters',
+      responseParamsTitle: 'Response fields',
+      endpointSearchPlaceholder: 'Filter endpoints…',
       anthropicIntro: `Anthropic-compatible APIs use x-api-key auth. The table lists only official Anthropic API paths; ${siteName.value} Base URLs, compatibility extension paths, and runnable examples are described in each section.`,
       anthropicAuthItems: [
         ['Messages Base URL', anthropicBaseUrl.value],
         ['Message Batches Base URL', anthropicBatchBaseUrl.value],
-        ['Auth header', 'x-api-key: YOUR_NEOGATE_API_KEY'],
+        ['Auth header', 'x-api-key: YOUR_API_KEY'],
         ['Version header', 'anthropic-version: 2023-06-01'],
         ['Beta header', 'anthropic-beta is passed through when supplied']
-      ],
-      anthropicEndpoints: [
-        [
-          'Messages',
-          'POST',
-          '/v1/messages',
-          'model, max_tokens, messages, system, tools, stream',
-          'Supported',
-          'text'
-        ],
-        [
-          'Messages',
-          'POST',
-          '/v1/messages/count_tokens',
-          'model, messages, system, tools',
-          'Supported'
-        ],
-        [
-          'Message Batches',
-          'POST',
-          '/v1/messages/batches',
-          'requests[].custom_id, requests[].params',
-          'Supported',
-          'batches'
-        ],
-        [
-          'Message Batches',
-          'GET',
-          '/v1/messages/batches',
-          'limit, before_id, after_id',
-          'Supported',
-          'batches'
-        ],
-        [
-          'Message Batches',
-          'GET',
-          '/v1/messages/batches/{message_batch_id}',
-          'message_batch_id',
-          'Supported',
-          'batches'
-        ],
-        [
-          'Message Batches',
-          'POST',
-          '/v1/messages/batches/{message_batch_id}/cancel',
-          'message_batch_id',
-          'Supported',
-          'batches'
-        ],
-        [
-          'Message Batches',
-          'DELETE',
-          '/v1/messages/batches/{message_batch_id}',
-          'message_batch_id',
-          'Supported',
-          'batches'
-        ],
-        [
-          'Message Batches',
-          'GET',
-          '/v1/messages/batches/{message_batch_id}/results',
-          'message_batch_id',
-          'Supported',
-          'batches'
-        ],
-        ['Models', 'GET', '/v1/models', 'limit, before_id, after_id', 'Supported', 'models'],
-        ['Models', 'GET', '/v1/models/{model_id}', 'model_id', 'Supported', 'models'],
-        ['Files', 'POST', '/v1/files', 'file, purpose, anthropic-beta', 'Not supported'],
-        ['Files', 'GET', '/v1/files', 'limit, before_id, after_id', 'Not supported'],
-        ['Files', 'GET', '/v1/files/{file_id}', 'file_id', 'Not supported'],
-        ['Files', 'DELETE', '/v1/files/{file_id}', 'file_id', 'Not supported'],
-        ['Files', 'GET', '/v1/files/{file_id}/content', 'file_id', 'Not supported']
       ],
       anthropicText:
         'Messages are forwarded with the official Anthropic request body. The gateway routes by model to Anthropic or bridgeable OpenAI-protocol upstreams; system, tools, tool_choice, thinking, metadata, stop_sequences, temperature, top_p, top_k, and stream are passed through or converted by compatibility rules.',
@@ -755,8 +580,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
       ],
       streamText:
         'Set stream to true to receive a text/event-stream response. The gateway preserves Anthropic event shapes such as message_start, content_block_delta, message_delta, and message_stop, and records final usage.',
-      batchText:
-        'Message Batches support create, list, retrieve, cancel, delete, and results. Each create request entry must include custom_id and params; params uses the Messages request body. Batch tasks require a key-backed Anthropic upstream that can be tracked persistently; NeoGate follows terminal state and settles usage when results are readable.',
+      batchText: `Message Batches support create, list, retrieve, cancel, delete, and results. Each create request entry must include custom_id and params; params uses the Messages request body. Batch tasks require a key-backed Anthropic upstream that can be tracked persistently; ${siteName.value} follows terminal state and settles usage when results are readable.`,
       batchRequestParams: [
         ['requests', 'array', 'Required. Batch request entries.'],
         [
@@ -781,7 +605,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
         [
           'results_url',
           'string | null',
-          'Upstream results URL; NeoGate reads results through the results endpoint.'
+          `Upstream results URL; ${siteName.value} reads results through the results endpoint.`
         ]
       ],
       modelsResponseParams: [
@@ -795,7 +619,6 @@ curl "$BASE_URL/anthropic/v1/messages" \\
   return {
     content,
     quickStart,
-    isSupportedStatus,
-    endpointDescription
+    anthropicEndpoints
   }
 }

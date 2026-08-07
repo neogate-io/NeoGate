@@ -14,9 +14,9 @@ use tracing::Instrument as _;
 use crate::{
     auth::UserAuth,
     billing::{
-        estimate_claude_text_tokens, estimate_output_tokens_from_bytes_sent, parse_usage_from_bytes,
-        parse_usage_from_sse_data, BillableUsage, BillingAccounts, BillingCharge, CreditAccountId,
-        DebitHold, Price, SettleRequest, TokenUsage,
+        estimate_claude_text_tokens, estimate_output_tokens_from_bytes_sent,
+        parse_usage_from_bytes, parse_usage_from_sse_data, BillableUsage, BillingAccounts,
+        BillingCharge, CreditAccountId, DebitHold, Price, SettleRequest, TokenUsage,
     },
     config::{STREAM_IDLE_TIMEOUT, STREAM_KEEP_ALIVE_INTERVAL},
     project::models::UsageRoutingSnapshot,
@@ -564,9 +564,12 @@ impl StreamingRelay {
                 observed_input_tokens = ?observed_token_usage.map(|usage| usage.input_tokens),
                 observed_output_tokens = ?observed_token_usage.map(|usage| usage.output_tokens),
                 observed_cached_input_tokens = ?observed_token_usage.and_then(|usage| usage.cached_input_tokens),
+                observed_cache_creation_input_tokens = ?observed_token_usage.and_then(|usage| usage.cache_creation_input_tokens),
                 observed_reasoning_output_tokens = ?observed_token_usage.and_then(|usage| usage.reasoning_output_tokens),
                 estimated_input_tokens = token_usage.map(|usage| usage.input_tokens),
                 estimated_output_tokens = token_usage.map(|usage| usage.output_tokens),
+                estimated_cached_input_tokens = ?token_usage.and_then(|usage| usage.cached_input_tokens),
+                estimated_cache_creation_input_tokens = ?token_usage.and_then(|usage| usage.cache_creation_input_tokens),
                 estimated_reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens),
                 "completed Responses stream did not provide meaningful token usage"
             );
@@ -970,6 +973,7 @@ async fn settle_successful_hold(
                 hold: ctx.hold.clone(),
                 usage: token_usage.map(BillableUsage::token),
                 price: &ctx.price,
+                allow_supplemental: true,
             },
         )
         .await
@@ -977,6 +981,7 @@ async fn settle_successful_hold(
         Ok(billing) => Some(billing),
         Err(err) => {
             tracing::warn!("failed to settle {context} hold: {err}");
+            release_empty_hold(&ctx.state, ctx.hold.clone(), context).await;
             None
         }
     }
@@ -1162,8 +1167,7 @@ impl Drop for StreamingRelay {
                         largest_chunk_bytes,
                         keep_alive_frames_sent,
                         usage_estimated_from_bytes,
-                        estimated_output_tokens =
-                            token_usage.map(|usage| usage.output_tokens),
+                        estimated_output_tokens = token_usage.map(|usage| usage.output_tokens),
                         latency_ms = ctx.started.elapsed().as_millis() as i64,
                         "downstream client closed relay stream before completion"
                     );
@@ -1637,24 +1641,35 @@ fn responses_usage_with_estimate(
     input_tokens_estimate: i64,
     output: ResponsesOutputEstimate,
 ) -> (Option<TokenUsage>, bool) {
-    if token_usage_state(observed) == TokenUsageState::Present || output.output_tokens <= 0 {
+    if output.output_tokens <= 0 {
         return (observed, false);
     }
-    (
-        Some(TokenUsage {
-            input_tokens: input_tokens_estimate.max(0),
-            output_tokens: output.output_tokens,
-            cached_input_tokens: None,
-            cache_creation_input_tokens: None,
-            cache_creation_input_tokens_5m: None,
-            cache_creation_input_tokens_1h: None,
-            reasoning_output_tokens: (output.reasoning_tokens > 0)
-                .then_some(output.reasoning_tokens),
-            audio_input_tokens: None,
-            audio_output_tokens: None,
-        }),
-        true,
-    )
+    let mut usage = observed.unwrap_or(TokenUsage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_creation_input_tokens_5m: None,
+        cache_creation_input_tokens_1h: None,
+        reasoning_output_tokens: None,
+        audio_input_tokens: None,
+        audio_output_tokens: None,
+    });
+    let estimate_input = usage.input_tokens <= 0;
+    let estimate_output = usage.output_tokens <= 0;
+    if !estimate_input && !estimate_output {
+        return (Some(usage), false);
+    }
+    if estimate_input {
+        usage.input_tokens = input_tokens_estimate.max(0);
+    }
+    if estimate_output {
+        usage.output_tokens = output.output_tokens;
+        if usage.reasoning_output_tokens.unwrap_or(0) <= 0 && output.reasoning_tokens > 0 {
+            usage.reasoning_output_tokens = Some(output.reasoning_tokens);
+        }
+    }
+    (Some(usage), true)
 }
 
 fn merge_token_usage(current: &mut TokenUsage, incoming: TokenUsage) {
@@ -1662,21 +1677,37 @@ fn merge_token_usage(current: &mut TokenUsage, incoming: TokenUsage) {
     // Merge fields so the later partial update cannot discard previously reported usage.
     current.input_tokens = current.input_tokens.max(incoming.input_tokens);
     current.output_tokens = current.output_tokens.max(incoming.output_tokens);
-    current.cached_input_tokens = incoming.cached_input_tokens.or(current.cached_input_tokens);
-    current.cache_creation_input_tokens = incoming
-        .cache_creation_input_tokens
-        .or(current.cache_creation_input_tokens);
-    current.cache_creation_input_tokens_5m = incoming
-        .cache_creation_input_tokens_5m
-        .or(current.cache_creation_input_tokens_5m);
-    current.cache_creation_input_tokens_1h = incoming
-        .cache_creation_input_tokens_1h
-        .or(current.cache_creation_input_tokens_1h);
-    current.reasoning_output_tokens = incoming
-        .reasoning_output_tokens
-        .or(current.reasoning_output_tokens);
-    current.audio_input_tokens = incoming.audio_input_tokens.or(current.audio_input_tokens);
-    current.audio_output_tokens = incoming.audio_output_tokens.or(current.audio_output_tokens);
+    merge_optional_usage(
+        &mut current.cached_input_tokens,
+        incoming.cached_input_tokens,
+    );
+    merge_optional_usage(
+        &mut current.cache_creation_input_tokens,
+        incoming.cache_creation_input_tokens,
+    );
+    merge_optional_usage(
+        &mut current.cache_creation_input_tokens_5m,
+        incoming.cache_creation_input_tokens_5m,
+    );
+    merge_optional_usage(
+        &mut current.cache_creation_input_tokens_1h,
+        incoming.cache_creation_input_tokens_1h,
+    );
+    merge_optional_usage(
+        &mut current.reasoning_output_tokens,
+        incoming.reasoning_output_tokens,
+    );
+    merge_optional_usage(&mut current.audio_input_tokens, incoming.audio_input_tokens);
+    merge_optional_usage(
+        &mut current.audio_output_tokens,
+        incoming.audio_output_tokens,
+    );
+}
+
+fn merge_optional_usage(current: &mut Option<i64>, incoming: Option<i64>) {
+    if let Some(incoming) = incoming {
+        *current = Some(current.map_or(incoming, |current| current.max(incoming)));
+    }
 }
 
 fn stream_event_is_terminal(event: &str) -> bool {
@@ -2437,6 +2468,85 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":0,"output
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.cached_input_tokens, Some(50));
         assert_eq!(usage.reasoning_output_tokens, Some(5));
+    }
+
+    #[test]
+    fn responses_usage_estimate_preserves_observed_cache_details() {
+        let observed = Some(TokenUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_input_tokens: Some(80),
+            cache_creation_input_tokens: Some(12),
+            cache_creation_input_tokens_5m: Some(12),
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: Some(0),
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        });
+
+        let (usage, estimated) = responses_usage_with_estimate(
+            observed,
+            321,
+            ResponsesOutputEstimate {
+                output_tokens: 20,
+                reasoning_tokens: 5,
+            },
+        );
+
+        assert!(estimated);
+        let usage = usage.expect("estimated usage");
+        assert_eq!(usage.input_tokens, 321);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cached_input_tokens, Some(80));
+        assert_eq!(usage.cache_creation_input_tokens, Some(12));
+        assert_eq!(usage.cache_creation_input_tokens_5m, Some(12));
+        assert_eq!(usage.reasoning_output_tokens, Some(5));
+    }
+
+    #[test]
+    fn responses_usage_estimate_fills_only_missing_totals() {
+        let observed = Some(TokenUsage {
+            input_tokens: 321,
+            output_tokens: 0,
+            cached_input_tokens: Some(80),
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: None,
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        });
+
+        let (usage, estimated) = responses_usage_with_estimate(
+            observed,
+            999,
+            ResponsesOutputEstimate {
+                output_tokens: 20,
+                reasoning_tokens: 5,
+            },
+        );
+
+        assert!(estimated);
+        let usage = usage.expect("partially estimated usage");
+        assert_eq!(usage.input_tokens, 321);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cached_input_tokens, Some(80));
+        assert_eq!(usage.reasoning_output_tokens, Some(5));
+    }
+
+    #[test]
+    fn stream_usage_parser_does_not_replace_nonzero_details_with_zeroes() {
+        let mut parser = StreamUsageParser::new(2048);
+
+        parser.observe(
+            br#"data: {"type":"response.created","response":{"usage":{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":80,"cached_creation_tokens":12}}}}
+data: {"type":"response.completed","response":{"usage":{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":0,"cached_creation_tokens":0}}}}
+"#,
+        );
+
+        let usage = parser.finish().expect("merged usage");
+        assert_eq!(usage.cached_input_tokens, Some(80));
+        assert_eq!(usage.cache_creation_input_tokens, Some(12));
     }
 
     #[test]

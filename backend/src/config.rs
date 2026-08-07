@@ -309,7 +309,9 @@ impl Config {
             redis_key_prefix: "neogate".to_string(),
             billing: BillingConfig {
                 credit_prefetch_micros: 100_000,
-                credit_allocation_recovery_after: Duration::from_secs(300),
+                // Must exceed the longest synchronous upstream request. Async
+                // tasks are protected separately by task_upstream.billing_hold.
+                credit_allocation_recovery_after: Duration::from_secs(900),
                 credit_allocation_recovery_interval: Duration::from_secs(30),
                 default_output_tokens: 16_384,
             },

@@ -201,22 +201,37 @@ pub fn settlement_usage_and_price(
             ))
         }
         VideoBillingMode::PerSecond => Some((
-            BillableUsage::video_seconds(metadata.duration_seconds),
+            BillableUsage::video_seconds(
+                provider_video_duration_seconds(upstream_metadata)
+                    .unwrap_or(metadata.duration_seconds)
+                    .min(metadata.duration_seconds),
+            ),
             video_settlement_price(BillingMeter::Video, metadata.price_micros),
         )),
     }
 }
 
 pub fn total_tokens_from_metadata(value: &Value) -> Option<i64> {
-    value
-        .get("usage")
-        .or_else(|| {
-            value
-                .get("response")
-                .and_then(|response| response.get("usage"))
-        })
-        .and_then(|usage| usage.get("total_tokens"))
+    let usage = value.get("usage").or_else(|| {
+        value
+            .get("response")
+            .and_then(|response| response.get("usage"))
+    })?;
+    usage
+        .get("total_tokens")
         .and_then(value_as_positive_i64)
+        .or_else(|| {
+            let input = usage
+                .get("input_tokens")
+                .or_else(|| usage.get("prompt_tokens"))
+                .and_then(value_as_non_negative_i64)?;
+            let output = usage
+                .get("output_tokens")
+                .or_else(|| usage.get("completion_tokens"))
+                .and_then(value_as_non_negative_i64)?;
+            let total = input.saturating_add(output);
+            (total > 0).then_some(total)
+        })
 }
 
 pub fn provider_video_duration_seconds(value: &Value) -> Option<i64> {
@@ -284,6 +299,17 @@ fn value_as_positive_i64(value: &Value) -> Option<i64> {
                 .and_then(|text| text.trim().parse::<i64>().ok())
         })
         .filter(|value| *value > 0)
+}
+
+fn value_as_non_negative_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|text| text.trim().parse::<i64>().ok())
+        })
+        .filter(|value| *value >= 0)
 }
 
 fn json_has_video_input(value: &Value) -> bool {
@@ -525,5 +551,34 @@ mod tests {
 
         let value = serde_json::json!({"seconds": "4"});
         assert_eq!(provider_video_duration_seconds(&value), Some(4));
+    }
+
+    #[test]
+    fn totals_separate_video_token_fields_when_total_is_missing() {
+        let value = json!({"usage": {"input_tokens": 120, "output_tokens": 30}});
+        assert_eq!(total_tokens_from_metadata(&value), Some(150));
+    }
+
+    #[test]
+    fn per_second_settlement_prefers_bounded_actual_duration() {
+        let metadata = VideoBillingMetadata {
+            mode: VideoBillingMode::PerSecond,
+            resolution: "720p".to_string(),
+            duration_seconds: 10,
+            has_video_input: false,
+            price_micros: 100,
+            estimated_tokens_per_second: None,
+            estimated_tokens: None,
+            estimated_micros: 1_000,
+        };
+        let (usage, _) =
+            settlement_usage_and_price(&metadata, &json!({"usage": {"output_video_duration": 7}}))
+                .unwrap();
+        assert_eq!(usage.billable_units, 7);
+
+        let (usage, _) =
+            settlement_usage_and_price(&metadata, &json!({"usage": {"output_video_duration": 20}}))
+                .unwrap();
+        assert_eq!(usage.billable_units, 10);
     }
 }

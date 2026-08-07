@@ -175,20 +175,24 @@ pub(crate) async fn release_task_claim(
     Ok(())
 }
 
+pub(crate) struct TerminalHeldTask {
+    pub task: UpstreamTask,
+    pub usage: Option<TokenUsage>,
+}
+
 pub(crate) async fn fetch_stale_terminal_held_tasks(
     pool: &PgPool,
     stale_before: DateTime<Utc>,
     limit: i64,
-) -> AppResult<Vec<UpstreamTask>> {
+) -> AppResult<Vec<TerminalHeldTask>> {
     let rows = sqlx::query(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
-               upstream_base_url, adapter_hint, status, terminal, upstream_metadata, created_at
+               upstream_base_url, adapter_hint, status, terminal, upstream_metadata, usage_summary, created_at
         FROM task_upstream
         WHERE terminal = TRUE
           AND billing_status = 'held'
-          AND usage_summary = '{}'::JSONB
           AND updated_at <= $1
         ORDER BY updated_at ASC, id ASC
         LIMIT $2
@@ -198,7 +202,14 @@ pub(crate) async fn fetch_stale_terminal_held_tasks(
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(task_from_row).collect()
+    rows.iter()
+        .map(|row| {
+            let task = task_from_row(row)?;
+            let summary: UsageSummary = serde_json::from_value(row.try_get("usage_summary")?)?;
+            let usage = summary.token_usage();
+            Ok(TerminalHeldTask { task, usage })
+        })
+        .collect()
 }
 
 pub(crate) async fn list_tasks_for_auth(
@@ -430,25 +441,16 @@ pub(crate) async fn update_task_from_upstream_value(
     Ok(())
 }
 
-pub(crate) async fn mark_billing_status(
+pub(crate) async fn held_billing_hold(
     pool: &PgPool,
     task_id: DbId,
-    from_status: &str,
-    to_status: &str,
 ) -> AppResult<Option<DebitHold>> {
     let row = sqlx::query(
-        r#"
-        UPDATE task_upstream
-        SET billing_status = $3,
-            updated_at = now()
-        WHERE id = $1
-          AND billing_status = $2
-        RETURNING billing_hold
-        "#,
+        "SELECT billing_hold
+         FROM task_upstream
+         WHERE id = $1 AND billing_status = 'held'",
     )
     .bind(task_id)
-    .bind(from_status)
-    .bind(to_status)
     .fetch_optional(pool)
     .await?;
     let Some(row) = row else {

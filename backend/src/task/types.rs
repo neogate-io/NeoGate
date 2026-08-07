@@ -84,6 +84,13 @@ pub(crate) struct UsageSummary {
     pub(crate) input_tokens: Option<i64>,
     pub(crate) output_tokens: Option<i64>,
     pub(crate) total_tokens: Option<i64>,
+    pub(crate) cached_input_tokens: Option<i64>,
+    pub(crate) cache_creation_input_tokens: Option<i64>,
+    pub(crate) cache_creation_input_tokens_5m: Option<i64>,
+    pub(crate) cache_creation_input_tokens_1h: Option<i64>,
+    pub(crate) reasoning_output_tokens: Option<i64>,
+    pub(crate) audio_input_tokens: Option<i64>,
+    pub(crate) audio_output_tokens: Option<i64>,
 }
 
 impl UsageSummary {
@@ -92,7 +99,28 @@ impl UsageSummary {
             input_tokens: Some(usage.input_tokens),
             output_tokens: Some(usage.output_tokens),
             total_tokens: Some(usage.total_tokens()),
+            cached_input_tokens: usage.cached_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_creation_input_tokens_5m: usage.cache_creation_input_tokens_5m,
+            cache_creation_input_tokens_1h: usage.cache_creation_input_tokens_1h,
+            reasoning_output_tokens: usage.reasoning_output_tokens,
+            audio_input_tokens: usage.audio_input_tokens,
+            audio_output_tokens: usage.audio_output_tokens,
         }
+    }
+
+    pub(crate) fn token_usage(&self) -> Option<TokenUsage> {
+        Some(TokenUsage {
+            input_tokens: self.input_tokens?,
+            output_tokens: self.output_tokens?,
+            cached_input_tokens: self.cached_input_tokens,
+            cache_creation_input_tokens: self.cache_creation_input_tokens,
+            cache_creation_input_tokens_5m: self.cache_creation_input_tokens_5m,
+            cache_creation_input_tokens_1h: self.cache_creation_input_tokens_1h,
+            reasoning_output_tokens: self.reasoning_output_tokens,
+            audio_input_tokens: self.audio_input_tokens,
+            audio_output_tokens: self.audio_output_tokens,
+        })
     }
 
     pub(crate) fn value_from_usage(usage: Option<TokenUsage>) -> serde_json::Result<Value> {
@@ -115,21 +143,53 @@ mod tests {
 
     #[test]
     fn usage_summary_value_contains_token_totals() {
-        let value = UsageSummary::value_from_usage(Some(TokenUsage {
+        let usage = TokenUsage {
             input_tokens: 3,
             output_tokens: 5,
-            cached_input_tokens: None,
-            cache_creation_input_tokens: None,
-            cache_creation_input_tokens_5m: None,
-            cache_creation_input_tokens_1h: None,
-            reasoning_output_tokens: None,
-            audio_input_tokens: None,
-            audio_output_tokens: None,
-        }))
-        .unwrap();
+            cached_input_tokens: Some(2),
+            cache_creation_input_tokens: Some(1),
+            cache_creation_input_tokens_5m: Some(4),
+            cache_creation_input_tokens_1h: Some(6),
+            reasoning_output_tokens: Some(7),
+            audio_input_tokens: Some(8),
+            audio_output_tokens: Some(9),
+        };
+        let value = UsageSummary::value_from_usage(Some(usage)).unwrap();
 
         assert_eq!(value["input_tokens"], 3);
         assert_eq!(value["output_tokens"], 5);
         assert_eq!(value["total_tokens"], 8);
+        assert_eq!(value["cached_input_tokens"], 2);
+        assert_eq!(value["reasoning_output_tokens"], 7);
+
+        let summary: UsageSummary = serde_json::from_value(value).unwrap();
+        let restored = summary.token_usage().unwrap();
+        assert_eq!(restored.input_tokens, usage.input_tokens);
+        assert_eq!(restored.output_tokens, usage.output_tokens);
+        assert_eq!(restored.cached_input_tokens, usage.cached_input_tokens);
+        assert_eq!(
+            restored.cache_creation_input_tokens_1h,
+            usage.cache_creation_input_tokens_1h
+        );
+        assert_eq!(
+            restored.reasoning_output_tokens,
+            usage.reasoning_output_tokens
+        );
+        assert_eq!(restored.audio_output_tokens, usage.audio_output_tokens);
+    }
+
+    #[test]
+    fn legacy_usage_summary_restores_basic_token_totals() {
+        let summary: UsageSummary = serde_json::from_value(json!({
+            "input_tokens": 11,
+            "output_tokens": 13,
+            "total_tokens": 24
+        }))
+        .unwrap();
+
+        let usage = summary.token_usage().unwrap();
+        assert_eq!(usage.input_tokens, 11);
+        assert_eq!(usage.output_tokens, 13);
+        assert_eq!(usage.cached_input_tokens, None);
     }
 }

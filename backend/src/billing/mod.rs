@@ -27,8 +27,8 @@ pub mod video;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
 pub use metering::{
-    cost_for_billable_usage, estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes,
-    parse_usage_from_sse_data,
+    cost_for_billable_usage, estimate_input_tokens, estimate_output_tokens_from_bytes_sent,
+    estimated_cost_micros, parse_usage_from_bytes, parse_usage_from_sse_data,
 };
 pub use token_estimate::{estimate_anthropic_input_tokens, estimate_claude_text_tokens};
 pub use types::{

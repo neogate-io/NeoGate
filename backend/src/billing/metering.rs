@@ -5,8 +5,25 @@ use super::{BillableUsage, BillingMeter, Price, TokenUsage};
 const TOKENS_PER_MILLION: i128 = 1_000_000;
 const DEFAULT_CACHE_READ_PRICE_DIVISOR: i64 = 10;
 
+/// 预留额度时按请求体字节数粗估 input tokens（约每 4 字节 1 token）。
+///
+/// 该估算仅用于转发前的悲观预留（hold），不参与真实结算。带大量工具定义的
+/// 请求体（如 27 个工具 + 长上下文）会让 body.len()/4 远高于上游真实计费的
+/// input tokens，导致 hold 过大、后续请求因余额不足被拒。这里对估算加一个
+/// 上限，避免单次预留被字节数粗估无限放大；真实用量仍以上游回传的 usage 为准。
 pub fn estimate_input_tokens(body: &[u8]) -> i64 {
-    ((body.len() as i64) + 3) / 4
+    const MAX_ESTIMATED_INPUT_TOKENS: i64 = 400_000;
+    (((body.len() as i64) + 3) / 4).min(MAX_ESTIMATED_INPUT_TOKENS)
+}
+
+/// 当下游断流导致上游未返回 usage 时，根据已向下游发送的字节数估算 output tokens。
+///
+/// SSE 流的每个 chunk 除了 token 内容还包含大量 JSON framing（字段名、id、model 等），
+/// 实测平均约每个 output token 对应 150 字节的流量。此估算用于替代按 hold 全额扣款，
+/// 即使存在误差也远比全额扣款对用户更公平。
+pub fn estimate_output_tokens_from_bytes_sent(bytes_sent: u64) -> i64 {
+    const AVG_BYTES_PER_OUTPUT_TOKEN: u64 = 150;
+    (bytes_sent / AVG_BYTES_PER_OUTPUT_TOKEN) as i64
 }
 
 pub fn estimated_cost_micros(input_tokens: i64, output_tokens: i64, price: &Price) -> i64 {

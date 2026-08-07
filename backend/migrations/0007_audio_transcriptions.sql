@@ -62,6 +62,32 @@ WHERE code IN ('custom', 'newapi', 'sub2api');
 -- 新增模型时记录匹配到的参考价格模型。已有数据不回填。
 ALTER TABLE channel_model ADD COLUMN base_model TEXT;
 
+-- 移除约束名中残留的货币单位指向（usd），改为中性命名。
+-- 列名已在 0005_provider_cleanup.sql 中完成重命名，此处补齐遗漏的约束名。
+ALTER TABLE payment
+    RENAME CONSTRAINT payment_amount_micro_usd_check TO payment_amount_micros_check;
+
+ALTER TABLE pricing_template
+    RENAME CONSTRAINT pricing_template_input_price_usd_micros_check TO pricing_template_input_price_micros_check;
+ALTER TABLE pricing_template
+    RENAME CONSTRAINT pricing_template_output_price_usd_micros_check TO pricing_template_output_price_micros_check;
+ALTER TABLE pricing_template
+    RENAME CONSTRAINT pricing_template_cache_read_price_usd_micros_check TO pricing_template_cache_read_price_micros_check;
+ALTER TABLE pricing_template
+    RENAME CONSTRAINT pricing_template_cache_write_price_usd_micros_check TO pricing_template_cache_write_price_micros_check;
+ALTER TABLE pricing_template
+    RENAME CONSTRAINT pricing_template_unit_price_usd_micros_check TO pricing_template_unit_price_micros_check;
+
+ALTER TABLE credit_allocation
+    RENAME CONSTRAINT credit_allocation_amount_micro_usd_check TO credit_allocation_amount_micros_check;
+ALTER TABLE credit_allocation
+    RENAME CONSTRAINT credit_allocation_consumed_micro_usd_check TO credit_allocation_consumed_micros_check;
+ALTER TABLE credit_allocation
+    RENAME CONSTRAINT credit_allocation_returned_micro_usd_check TO credit_allocation_returned_micros_check;
+
+ALTER TABLE usage_daily
+    RENAME CONSTRAINT usage_daily_cost_micro_usd_check TO usage_daily_cost_micros_check;
+
 CREATE TABLE user_asset (
     id BIGSERIAL PRIMARY KEY,
     public_id TEXT NOT NULL UNIQUE,

@@ -14,9 +14,9 @@ use tracing::Instrument as _;
 use crate::{
     auth::UserAuth,
     billing::{
-        estimate_claude_text_tokens, parse_usage_from_bytes, parse_usage_from_sse_data,
-        BillableUsage, BillingAccounts, BillingCharge, CreditAccountId, DebitHold, Price,
-        SettleRequest, TokenUsage,
+        estimate_claude_text_tokens, estimate_output_tokens_from_bytes_sent, parse_usage_from_bytes,
+        parse_usage_from_sse_data, BillableUsage, BillingAccounts, BillingCharge, CreditAccountId,
+        DebitHold, Price, SettleRequest, TokenUsage,
     },
     config::{STREAM_IDLE_TIMEOUT, STREAM_KEEP_ALIVE_INTERVAL},
     project::models::UsageRoutingSnapshot,
@@ -1096,7 +1096,7 @@ impl Drop for StreamingRelay {
         let stream_complete = self.usage.response_complete();
         let observed_token_usage = self.usage.finish();
         let responses_output_estimate = self.usage.estimated_responses_output();
-        let (token_usage, usage_estimated) = if ctx.path == "/v1/responses"
+        let (mut token_usage, usage_estimated) = if ctx.path == "/v1/responses"
             && ctx.streamed
             && status.is_success()
             && stream_complete
@@ -1113,6 +1113,25 @@ impl Drop for StreamingRelay {
         let last_chunk_ms = self.last_chunk_ms;
         let chunks_sent = self.chunks_sent;
         let bytes_sent = self.bytes_sent;
+        // 下游客户端提前断流会让上游来不及回传终末 usage 事件（token_usage 为 None）。
+        // 若此时仍按 hold 全额结算，会把「悲观预留」（含默认 max_tokens 上限）整笔扣给用户。
+        // 只要本次已向下游发出过内容，就按已发送字节估算一份 usage，让 settle 走真实计费分支，
+        // 用估算的 output tokens 替代 hold 上限。仅在成功状态且确有输出时才估算。
+        let usage_estimated_from_bytes =
+            token_usage.is_none() && status.is_success() && bytes_sent > 0;
+        if usage_estimated_from_bytes {
+            token_usage = Some(TokenUsage {
+                input_tokens: ctx.request_input_tokens_estimate.max(0),
+                output_tokens: estimate_output_tokens_from_bytes_sent(bytes_sent),
+                cached_input_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_creation_input_tokens_5m: None,
+                cache_creation_input_tokens_1h: None,
+                reasoning_output_tokens: None,
+                audio_input_tokens: None,
+                audio_output_tokens: None,
+            });
+        }
         let largest_chunk_bytes = self.largest_chunk_bytes;
         let keep_alive_frames_sent = self.keep_alive_frames_sent;
         // 将 span 传入 spawn 的后台任务，使日志仍在请求 span 上下文中发出。
@@ -1142,6 +1161,9 @@ impl Drop for StreamingRelay {
                         bytes_sent,
                         largest_chunk_bytes,
                         keep_alive_frames_sent,
+                        usage_estimated_from_bytes,
+                        estimated_output_tokens =
+                            token_usage.map(|usage| usage.output_tokens),
                         latency_ms = ctx.started.elapsed().as_millis() as i64,
                         "downstream client closed relay stream before completion"
                     );

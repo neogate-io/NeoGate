@@ -4,6 +4,16 @@ use super::{BillableUsage, BillingMeter, Price, TokenUsage};
 
 const TOKENS_PER_MILLION: i128 = 1_000_000;
 const DEFAULT_CACHE_READ_PRICE_DIVISOR: i64 = 10;
+const MAX_RESERVED_OUTPUT_TOKENS: i64 = 16_384;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TokenReservationEstimate {
+    pub input_tokens: i64,
+    pub requested_output_tokens: i64,
+    pub reserved_output_tokens: i64,
+    pub estimated_micros: i64,
+    pub usage_missing_micros: i64,
+}
 
 /// 预留额度时按请求体字节数粗估 input tokens（约每 4 字节 1 token）。
 ///
@@ -29,6 +39,23 @@ pub fn estimate_output_tokens_from_bytes_sent(bytes_sent: u64) -> i64 {
 pub fn estimated_cost_micros(input_tokens: i64, output_tokens: i64, price: &Price) -> i64 {
     micros_for_tokens(input_tokens, price.input_price_micros)
         .saturating_add(micros_for_tokens(output_tokens, price.output_price_micros))
+}
+
+pub(crate) fn estimate_token_reservation(
+    body: &[u8],
+    requested_output_tokens: i64,
+    price: &Price,
+) -> TokenReservationEstimate {
+    let input_tokens = estimate_input_tokens(body);
+    let requested_output_tokens = requested_output_tokens.max(0);
+    let reserved_output_tokens = requested_output_tokens.min(MAX_RESERVED_OUTPUT_TOKENS);
+    TokenReservationEstimate {
+        input_tokens,
+        requested_output_tokens,
+        reserved_output_tokens,
+        estimated_micros: estimated_cost_micros(input_tokens, reserved_output_tokens, price),
+        usage_missing_micros: estimated_cost_micros(input_tokens, 0, price),
+    }
 }
 
 pub fn cost_for_usage(usage: TokenUsage, price: &Price) -> i64 {
@@ -302,6 +329,28 @@ mod tests {
             1_370_000
         );
         assert_eq!(estimated_cost_micros(1, 0, &price), 1);
+    }
+
+    #[test]
+    fn token_reservation_caps_output_without_changing_requested_value() {
+        let price = Price {
+            input_price_micros: 1_000_000,
+            output_price_micros: 2_000_000,
+            cache_read_price_micros: None,
+            cache_write_price_micros: None,
+            billing_meter: BillingMeter::Token,
+            unit_price_micros: None,
+            video_billing_mode: None,
+            video_price_tiers: Vec::new(),
+        };
+
+        let estimate = estimate_token_reservation(b"12345678", 1_000_000, &price);
+
+        assert_eq!(estimate.input_tokens, 2);
+        assert_eq!(estimate.requested_output_tokens, 1_000_000);
+        assert_eq!(estimate.reserved_output_tokens, 16_384);
+        assert_eq!(estimate.usage_missing_micros, 2);
+        assert_eq!(estimate.estimated_micros, 32_770);
     }
 
     #[test]

@@ -264,13 +264,60 @@ pub struct DebitPart {
 pub struct DebitHold {
     pub transaction_id: Uuid,
     pub estimated_micros: i64,
+    /// Amount charged when a successful token response has no usable usage data.
+    /// `None` preserves full-estimate fallback for legacy and unit-billed holds.
+    #[serde(default)]
+    pub usage_missing_micros: Option<i64>,
     pub parts: Vec<DebitPart>,
     #[serde(default = "default_charge_credit")]
     pub charge_credit: bool,
 }
 
+impl DebitHold {
+    pub(crate) fn new(estimated_micros: i64, parts: Vec<DebitPart>, charge_credit: bool) -> Self {
+        Self {
+            transaction_id: Uuid::new_v4(),
+            estimated_micros,
+            usage_missing_micros: None,
+            parts,
+            charge_credit,
+        }
+    }
+
+    pub(crate) fn with_usage_missing_fallback(mut self, amount_micros: i64) -> Self {
+        self.usage_missing_micros = Some(amount_micros.max(0));
+        self
+    }
+
+    pub(crate) fn cost_when_usage_missing(&self) -> i64 {
+        self.usage_missing_micros.unwrap_or(self.estimated_micros)
+    }
+}
+
 fn default_charge_credit() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DebitHold;
+
+    #[test]
+    fn deserializes_legacy_hold_without_usage_missing_fallback() {
+        let hold: DebitHold = serde_json::from_str(
+            r#"{
+                "transaction_id":"00000000-0000-0000-0000-000000000001",
+                "estimated_micros":123,
+                "parts":[]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(hold.estimated_micros, 123);
+        assert_eq!(hold.usage_missing_micros, None);
+        assert!(hold.charge_credit);
+        assert_eq!(hold.cost_when_usage_missing(), 123);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

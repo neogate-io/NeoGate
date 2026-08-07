@@ -37,7 +37,7 @@ pub(super) struct CreateBackgroundResponseRequest {
     pub(super) target_model: String,
     pub(super) target_channel_id: Option<i64>,
     pub(super) routing: Option<UsageRoutingSnapshot>,
-    pub(super) output_tokens: i64,
+    pub(super) requested_output_tokens: i64,
     pub(super) request_params: RelayRequestParams,
     pub(super) channel_affinity_key: Option<ChannelAffinityKey>,
 }
@@ -53,7 +53,7 @@ pub(super) async fn create_background_response(
         target_model,
         target_channel_id,
         routing,
-        output_tokens,
+        requested_output_tokens,
         request_params,
         channel_affinity_key,
     } = req;
@@ -225,7 +225,7 @@ pub(super) async fn create_background_response(
         &auth,
         user_key_model_credit_account.as_ref(),
         &prepared.body,
-        output_tokens,
+        requested_output_tokens,
         &price,
     )
     .await?;

@@ -368,7 +368,7 @@ async fn relay_openai(
     let PreparedRelayBody {
         body,
         meta,
-        output_tokens,
+        requested_output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
     let routing_context = project_model_request_context(&body);
     let resolved = crate::project::models::resolve_project_model_with_context(
@@ -403,7 +403,7 @@ async fn relay_openai(
                 target_model: resolved.target_model,
                 target_channel_id: resolved.target_channel_id,
                 routing: resolved.routing,
-                output_tokens,
+                requested_output_tokens,
                 request_params: meta.request_params,
                 channel_affinity_key: meta.channel_affinity_key,
             },
@@ -489,7 +489,7 @@ async fn relay_openai(
                 &auth,
                 user_key_model_credit_account.as_ref(),
                 &upstream_body,
-                output_tokens,
+                requested_output_tokens,
                 &price,
             )
             .await?

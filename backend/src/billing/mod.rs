@@ -26,9 +26,10 @@ mod types;
 pub mod video;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
+pub(crate) use metering::estimate_token_reservation;
 pub use metering::{
     cost_for_billable_usage, estimate_input_tokens, estimate_output_tokens_from_bytes_sent,
-    estimated_cost_micros, parse_usage_from_bytes, parse_usage_from_sse_data,
+    parse_usage_from_bytes, parse_usage_from_sse_data,
 };
 pub use token_estimate::{estimate_anthropic_input_tokens, estimate_claude_text_tokens};
 pub use types::{
@@ -278,12 +279,7 @@ impl Billing {
         estimated_micros: i64,
     ) -> AppResult<DebitHold> {
         if estimated_micros <= 0 {
-            return Ok(DebitHold {
-                transaction_id: Uuid::new_v4(),
-                estimated_micros: 0,
-                parts: Vec::new(),
-                charge_credit: true,
-            });
+            return Ok(DebitHold::new(0, Vec::new(), true));
         }
 
         let credit_accounts = ordered_credit_accounts(accounts);
@@ -292,12 +288,7 @@ impl Billing {
             .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         {
-            return Ok(DebitHold {
-                transaction_id: Uuid::new_v4(),
-                estimated_micros,
-                parts,
-                charge_credit: true,
-            });
+            return Ok(DebitHold::new(estimated_micros, parts, true));
         }
 
         let lock_id = prefetch_lock_index(accounts, self.prefetch_locks.len());
@@ -308,12 +299,7 @@ impl Billing {
             .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         {
-            return Ok(DebitHold {
-                transaction_id: Uuid::new_v4(),
-                estimated_micros,
-                parts,
-                charge_credit: true,
-            });
+            return Ok(DebitHold::new(estimated_micros, parts, true));
         }
 
         self.prefetch(pool, accounts, estimated_micros).await?;
@@ -330,12 +316,7 @@ impl Billing {
             });
         };
 
-        Ok(DebitHold {
-            transaction_id: Uuid::new_v4(),
-            estimated_micros,
-            parts,
-            charge_credit: true,
-        })
+        Ok(DebitHold::new(estimated_micros, parts, true))
     }
 
     pub async fn release_hold(&self, pool: &PgPool, hold: DebitHold) -> AppResult<()> {
@@ -382,7 +363,7 @@ impl Billing {
         } = request;
         let (cost_micros, status) = match usage {
             Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
-            None => (hold.estimated_micros, "usage_missing".to_string()),
+            None => (hold.cost_when_usage_missing(), "usage_missing".to_string()),
         };
         let cost_micros = cost_micros.max(0);
         let token_usage = usage.and_then(|usage| usage.token_usage);
@@ -1182,5 +1163,52 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn settle_uses_input_only_fallback_when_token_usage_is_missing() {
+        let billing = Billing::new_memory(Duration::from_secs(60), 32, 100, 100);
+        let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
+        let user_key_credit_account = credit_account(10);
+        let project_credit_account = credit_account(20);
+
+        billing
+            .hot
+            .credit_allocation(user_key_credit_account.clone(), 101, 100)
+            .await
+            .unwrap();
+        let mut hold = billing
+            .reserve(
+                &pool,
+                billing_accounts(&user_key_credit_account, &project_credit_account),
+                100,
+            )
+            .await
+            .unwrap();
+        hold = hold.with_usage_missing_fallback(40);
+
+        let charge = billing
+            .settle(
+                &pool,
+                SettleRequest {
+                    accounts: billing_accounts(&user_key_credit_account, &project_credit_account),
+                    hold,
+                    usage: None,
+                    price: &token_price(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(charge.cost_micros, 40);
+        assert_eq!(charge.status, "usage_missing");
+        assert_eq!(
+            charge
+                .returned_parts
+                .iter()
+                .map(|part| part.amount_micros)
+                .sum::<i64>(),
+            60
+        );
     }
 }

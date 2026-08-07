@@ -34,8 +34,8 @@ use crate::provider::{anthropic, openai};
 use crate::{
     auth::UserAuth,
     billing::{
-        estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes, BillingAccounts,
-        BillingCharge, DebitHold, Price, TokenUsage,
+        estimate_token_reservation, parse_usage_from_bytes, BillingAccounts, BillingCharge,
+        DebitHold, Price, TokenUsage,
     },
     cache::InvalidationEvent,
     error::{reqwest_status, AppError, AppResult},
@@ -1122,20 +1122,22 @@ pub(crate) async fn reserve_credit(
     auth: &UserAuth,
     user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,
     body: &[u8],
-    output_tokens: i64,
+    requested_output_tokens: i64,
     price: &Price,
 ) -> AppResult<DebitHold> {
-    let input_tokens = estimate_input_tokens(body);
-    let estimated = estimated_cost_micros(input_tokens, output_tokens, price);
-    if !policy::credit_required(state).await? {
-        return Ok(DebitHold {
-            transaction_id: Uuid::new_v4(),
-            estimated_micros: estimated,
-            parts: Vec::new(),
-            charge_credit: false,
-        });
+    let estimate = estimate_token_reservation(body, requested_output_tokens, price);
+    if estimate.reserved_output_tokens != estimate.requested_output_tokens {
+        tracing::debug!(
+            requested_output_tokens = estimate.requested_output_tokens,
+            reserved_output_tokens = estimate.reserved_output_tokens,
+            "capped output tokens used for billing reservation"
+        );
     }
-    state
+    if !policy::credit_required(state).await? {
+        return Ok(DebitHold::new(estimate.estimated_micros, Vec::new(), false)
+            .with_usage_missing_fallback(estimate.usage_missing_micros));
+    }
+    let hold = state
         .billing
         .reserve(
             &state.db.pool,
@@ -1147,9 +1149,10 @@ pub(crate) async fn reserve_credit(
                 user_key_credit_account: &auth.user_key_credit_account,
                 project_credit_account: &auth.project_credit_account,
             },
-            estimated,
+            estimate.estimated_micros,
         )
-        .await
+        .await?;
+    Ok(hold.with_usage_missing_fallback(estimate.usage_missing_micros))
 }
 
 pub(crate) async fn reserve_billable_credit(
@@ -1160,12 +1163,7 @@ pub(crate) async fn reserve_billable_credit(
 ) -> AppResult<DebitHold> {
     let estimated = estimated_micros.max(0);
     if !policy::credit_required(state).await? {
-        return Ok(DebitHold {
-            transaction_id: Uuid::new_v4(),
-            estimated_micros: estimated,
-            parts: Vec::new(),
-            charge_credit: false,
-        });
+        return Ok(DebitHold::new(estimated, Vec::new(), false));
     }
     state
         .billing

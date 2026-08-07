@@ -62,7 +62,7 @@ pub(crate) async fn anthropic_messages(
     let PreparedRelayBody {
         body,
         meta,
-        output_tokens,
+        requested_output_tokens,
     } = prepare_relay_body(
         body,
         BodyKind::Anthropic,
@@ -138,7 +138,7 @@ pub(crate) async fn anthropic_messages(
             &auth,
             user_key_model_credit_account.as_ref(),
             &upstream_body,
-            output_tokens,
+            requested_output_tokens,
             &price,
         )
         .await?;

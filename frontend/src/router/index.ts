@@ -53,17 +53,23 @@ export const router = createRouter({
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/interfaces/openai',
+      path: '/interfaces/openai/:sub(quick-start|text|text-async|images|images-async|videos|audio|embeddings|models|sdk)?',
       name: 'interfacesOpenAi',
       component: () => import('../views/public/InterfacesView.vue'),
-      props: { section: 'openai' },
+      props: (route: { params: { sub?: string } }) => ({
+        section: 'openai',
+        sub: route.params.sub
+      }),
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/interfaces/anthropic',
+      path: '/interfaces/anthropic/:sub(quick-start|text|stream|batches|models)?',
       name: 'interfacesAnthropic',
       component: () => import('../views/public/InterfacesView.vue'),
-      props: { section: 'anthropic' },
+      props: (route: { params: { sub?: string } }) => ({
+        section: 'anthropic',
+        sub: route.params.sub
+      }),
       meta: { messageKey: 'interfaces' }
     },
     {
@@ -190,7 +196,10 @@ export const router = createRouter({
           path: 'statistics',
           name: 'statistics',
           component: () => import('../views/admin/StatisticsView.vue'),
-          meta: { messageKey: 'consumptionOverview', subtitleKey: 'adminConsumptionOverviewSubtitle' }
+          meta: {
+            messageKey: 'consumptionOverview',
+            subtitleKey: 'adminConsumptionOverviewSubtitle'
+          }
         },
         {
           path: 'cost-attribution',
@@ -242,6 +251,17 @@ export const router = createRouter({
 })
 
 let setupCompleted = false
+
+// Legacy subsection anchors (/interfaces/openai#openai-text) now live on their
+// own pages; redirect them before any other navigation guard runs.
+router.beforeEach((to) => {
+  for (const prefix of ['openai', 'anthropic'] as const) {
+    const base = `/interfaces/${prefix}`
+    if (to.path === base && to.hash.startsWith(`#${prefix}-`)) {
+      return { path: `${base}/${to.hash.slice(prefix.length + 2)}`, replace: true }
+    }
+  }
+})
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()

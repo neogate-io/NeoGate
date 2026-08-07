@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PublicHeader from '../../components/common/PublicHeader.vue'
 import BeforeStartSection from './interfaces/BeforeStartSection.vue'
@@ -12,6 +12,7 @@ import { useSiteBrand } from '../../composables/useSiteBrand'
 
 const props = defineProps<{
   section?: 'before-start' | 'openai' | 'anthropic' | 'errors' | 'billing'
+  sub?: string
 }>()
 
 const { locale } = useLocale()
@@ -82,22 +83,22 @@ const pageContent = computed(() => {
 const sectionRoutes = [
   ['before-start', '/interfaces/before-start'],
   ['openai', '/interfaces/openai'],
-  ['openai-quick-start', '/interfaces/openai#openai-quick-start'],
-  ['openai-text', '/interfaces/openai#openai-text'],
-  ['openai-text-async', '/interfaces/openai#openai-text-async'],
-  ['openai-images', '/interfaces/openai#openai-images'],
-  ['openai-images-async', '/interfaces/openai#openai-images-async'],
-  ['openai-videos', '/interfaces/openai#openai-videos'],
-  ['openai-audio', '/interfaces/openai#openai-audio'],
-  ['openai-embeddings', '/interfaces/openai#openai-embeddings'],
-  ['openai-models', '/interfaces/openai#openai-models'],
-  ['openai-sdk', '/interfaces/openai#openai-sdk'],
+  ['openai-quick-start', '/interfaces/openai/quick-start'],
+  ['openai-text', '/interfaces/openai/text'],
+  ['openai-text-async', '/interfaces/openai/text-async'],
+  ['openai-images', '/interfaces/openai/images'],
+  ['openai-images-async', '/interfaces/openai/images-async'],
+  ['openai-videos', '/interfaces/openai/videos'],
+  ['openai-audio', '/interfaces/openai/audio'],
+  ['openai-embeddings', '/interfaces/openai/embeddings'],
+  ['openai-models', '/interfaces/openai/models'],
+  ['openai-sdk', '/interfaces/openai/sdk'],
   ['anthropic', '/interfaces/anthropic'],
-  ['anthropic-quick-start', '/interfaces/anthropic#anthropic-quick-start'],
-  ['anthropic-text', '/interfaces/anthropic#anthropic-text'],
-  ['anthropic-stream', '/interfaces/anthropic#anthropic-stream'],
-  ['anthropic-batches', '/interfaces/anthropic#anthropic-batches'],
-  ['anthropic-models', '/interfaces/anthropic#anthropic-models'],
+  ['anthropic-quick-start', '/interfaces/anthropic/quick-start'],
+  ['anthropic-text', '/interfaces/anthropic/text'],
+  ['anthropic-stream', '/interfaces/anthropic/stream'],
+  ['anthropic-batches', '/interfaces/anthropic/batches'],
+  ['anthropic-models', '/interfaces/anthropic/models'],
   ['errors', '/interfaces/errors'],
   ['billing', '/interfaces/billing']
 ] as const
@@ -106,11 +107,55 @@ function routeForSection(id: string) {
   return sectionRoutes.find(([sectionId]) => sectionId === id)?.[1] ?? '/interfaces/before-start'
 }
 
+// Sidebar groups with sub entries (OpenAI / Anthropic) are collapsible. The
+// group containing the current route starts expanded, the other collapsed.
+const collapsedGroups = ref<Record<string, boolean>>({
+  openai: !route.path.startsWith('/interfaces/openai'),
+  anthropic: !route.path.startsWith('/interfaces/anthropic')
+})
+
+function toggleGroup(id: string) {
+  collapsedGroups.value[id] = !collapsedGroups.value[id]
+}
+
+// Clicking the group title while already on its page toggles the sub entries
+// instead of navigating again.
+function onGroupClick(id: string, event: MouseEvent) {
+  if (route.path === routeForSection(id)) {
+    event.preventDefault()
+    toggleGroup(id)
+  }
+}
+
+watch(
+  () => route.path,
+  (path) => {
+    if (path.startsWith('/interfaces/openai')) collapsedGroups.value.openai = false
+    if (path.startsWith('/interfaces/anthropic')) collapsedGroups.value.anthropic = false
+  }
+)
+
+const menuGroups = computed(() => {
+  const groups: Array<{
+    id: string
+    label: string
+    children: Array<{ id: string; label: string }>
+  }> = []
+  for (const [id, label, , level] of pageContent.value.menu) {
+    if (level === 'sub') {
+      groups[groups.length - 1]?.children.push({ id, label })
+    } else {
+      groups.push({ id, label, children: [] })
+    }
+  }
+  return groups
+})
+
 function isSectionActive(id: string, level?: string) {
   const target = routeForSection(id)
-  const [path, hash] = target.split('#')
-  if (level === 'sub') return route.path === path && route.hash === `#${hash}`
-  return route.path === path
+  if (level === 'sub') return route.path === target
+  // Group headers stay highlighted while on one of their sub pages.
+  return route.path === target || route.path.startsWith(`${target}/`)
 }
 </script>
 
@@ -128,24 +173,44 @@ function isSectionActive(id: string, level?: string) {
         <aside class="docs-sidebar">
           <h2>{{ pageContent.menuTitle }}</h2>
           <nav>
-            <RouterLink
-              v-for="[id, label, , level] in pageContent.menu"
-              :key="id"
-              :class="{
-                'docs-sidebar-sub-link': level === 'sub',
-                'docs-sidebar-active-link': isSectionActive(id, level)
-              }"
-              :to="routeForSection(id)"
-            >
-              {{ label }}
-            </RouterLink>
+            <template v-for="group in menuGroups" :key="group.id">
+              <div class="docs-sidebar-group">
+                <RouterLink
+                  :class="{ 'docs-sidebar-active-link': isSectionActive(group.id) }"
+                  :to="routeForSection(group.id)"
+                  @click="onGroupClick(group.id, $event)"
+                >
+                  {{ group.label }}
+                </RouterLink>
+                <button
+                  v-if="group.children.length"
+                  type="button"
+                  class="docs-sidebar-group-toggle"
+                  :aria-expanded="!collapsedGroups[group.id]"
+                  :aria-label="group.label"
+                  @click="toggleGroup(group.id)"
+                />
+              </div>
+              <RouterLink
+                v-for="child in group.children"
+                v-show="!collapsedGroups[group.id]"
+                :key="child.id"
+                :class="{
+                  'docs-sidebar-sub-link': true,
+                  'docs-sidebar-active-link': isSectionActive(child.id, 'sub')
+                }"
+                :to="routeForSection(child.id)"
+              >
+                {{ child.label }}
+              </RouterLink>
+            </template>
           </nav>
         </aside>
 
         <div class="docs-content">
           <BeforeStartSection v-if="currentSection === 'before-start'" />
-          <OpenAiSection v-else-if="currentSection === 'openai'" />
-          <AnthropicSection v-else-if="currentSection === 'anthropic'" />
+          <OpenAiSection v-else-if="currentSection === 'openai'" :sub="sub" />
+          <AnthropicSection v-else-if="currentSection === 'anthropic'" :sub="sub" />
           <ErrorsSection v-else-if="currentSection === 'errors'" />
           <BillingSection v-else-if="currentSection === 'billing'" />
         </div>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CodeSampleCard from './CodeSampleCard.vue'
+
 type ParamRow = string[]
 
 defineProps<{
@@ -9,6 +11,7 @@ defineProps<{
     description?: string
     requestParams?: ParamRow[]
     responseFields?: ParamRow[]
+    samples?: Array<{ title: string; code: string }>
   }>
   requestTitle: string
   responseTitle: string
@@ -20,7 +23,7 @@ defineProps<{
   <div class="interface-endpoint-list">
     <article v-for="item in items" :key="`${item.method}-${item.path}-${item.title}`">
       <div class="interface-endpoint-heading">
-        <h3>{{ item.title }}</h3>
+        <h4>{{ item.title }}</h4>
         <div class="interface-endpoint-url">
           <span class="interface-method">{{ item.method }}</span>
           <code>{{ item.path }}</code>
@@ -29,7 +32,7 @@ defineProps<{
       </div>
 
       <div v-if="item.requestParams?.length" class="docs-params-table-wrap">
-        <h4>{{ requestTitle }}</h4>
+        <h5>{{ requestTitle }}</h5>
         <table class="docs-params-table">
           <thead>
             <tr>
@@ -49,7 +52,7 @@ defineProps<{
       </div>
 
       <div v-if="item.responseFields?.length" class="docs-params-table-wrap">
-        <h4>{{ responseTitle }}</h4>
+        <h5>{{ responseTitle }}</h5>
         <table class="docs-params-table">
           <thead>
             <tr>
@@ -67,6 +70,13 @@ defineProps<{
           </tbody>
         </table>
       </div>
+
+      <CodeSampleCard
+        v-for="sample in item.samples"
+        :key="sample.title"
+        :title="sample.title"
+        :code="sample.code"
+      />
     </article>
   </div>
 </template>

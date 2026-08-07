@@ -166,124 +166,101 @@ const {
   data: primaryProjects,
   loading: primaryProjectsLoading,
   reload: reloadPrimaryProjects
-} = useAsyncData(
-  () => {
-    if (primaryDimension.value !== 'project') return Promise.resolve(emptyPage<ProjectUsageStatistics>())
-    return getAdminUsageStatisticsProjects({
-      ...baseQuery.value,
-      page: primaryPage.value,
-      limit: primaryPageSize.value
-    })
-  },
-  emptyPage<ProjectUsageStatistics>()
-)
+} = useAsyncData(() => {
+  if (primaryDimension.value !== 'project')
+    return Promise.resolve(emptyPage<ProjectUsageStatistics>())
+  return getAdminUsageStatisticsProjects({
+    ...baseQuery.value,
+    page: primaryPage.value,
+    limit: primaryPageSize.value
+  })
+}, emptyPage<ProjectUsageStatistics>())
 
 const {
   data: primaryUsers,
   loading: primaryUsersLoading,
   reload: reloadPrimaryUsers
-} = useAsyncData(
-  () => {
-    if (primaryDimension.value !== 'user') return Promise.resolve(emptyPage<UserUsageStatistics>())
-    return getAdminUsageStatisticsUsers({
-      ...baseQuery.value,
-      page: primaryPage.value,
-      limit: primaryPageSize.value
-    })
-  },
-  emptyPage<UserUsageStatistics>()
-)
+} = useAsyncData(() => {
+  if (primaryDimension.value !== 'user') return Promise.resolve(emptyPage<UserUsageStatistics>())
+  return getAdminUsageStatisticsUsers({
+    ...baseQuery.value,
+    page: primaryPage.value,
+    limit: primaryPageSize.value
+  })
+}, emptyPage<UserUsageStatistics>())
 
 const {
   data: primaryModels,
   loading: primaryModelsLoading,
   reload: reloadPrimaryModels
-} = useAsyncData(
-  () => {
-    if (primaryDimension.value !== 'model') return Promise.resolve(emptyPage<ModelUsageStatistics>())
-    return getAdminUsageStatisticsModels({
-      ...baseQuery.value,
-      page: primaryPage.value,
-      limit: primaryPageSize.value
-    })
-  },
-  emptyPage<ModelUsageStatistics>()
-)
+} = useAsyncData(() => {
+  if (primaryDimension.value !== 'model') return Promise.resolve(emptyPage<ModelUsageStatistics>())
+  return getAdminUsageStatisticsModels({
+    ...baseQuery.value,
+    page: primaryPage.value,
+    limit: primaryPageSize.value
+  })
+}, emptyPage<ModelUsageStatistics>())
 
 const {
   data: detailProjects,
   loading: detailProjectsLoading,
   reload: reloadDetailProjects
-} = useAsyncData(
-  () => {
-    if (!hasSelection.value || !detailTabs.value.includes('projects')) {
-      return Promise.resolve(emptyPage<ProjectUsageStatistics>())
-    }
-    return getAdminUsageStatisticsProjects({
-      ...detailQuery.value,
-      page: detailProjectsPage.value,
-      limit: detailProjectsPageSize.value
-    })
-  },
-  emptyPage<ProjectUsageStatistics>()
-)
+} = useAsyncData(() => {
+  if (!hasSelection.value || !detailTabs.value.includes('projects')) {
+    return Promise.resolve(emptyPage<ProjectUsageStatistics>())
+  }
+  return getAdminUsageStatisticsProjects({
+    ...detailQuery.value,
+    page: detailProjectsPage.value,
+    limit: detailProjectsPageSize.value
+  })
+}, emptyPage<ProjectUsageStatistics>())
 
 const {
   data: detailUsers,
   loading: detailUsersLoading,
   reload: reloadDetailUsers
-} = useAsyncData(
-  () => {
-    if (!hasSelection.value || !detailTabs.value.includes('users')) {
-      return Promise.resolve(emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>())
-    }
-    const query = {
-      ...detailQuery.value,
-      page: detailUsersPage.value,
-      limit: detailUsersPageSize.value
-    }
-    if (detailQuery.value.project_id != null) {
-      return getAdminUsageStatisticsProjectMembers(query)
-    }
-    return getAdminUsageStatisticsUsers(query)
-  },
-  emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>()
-)
+} = useAsyncData(() => {
+  if (!hasSelection.value || !detailTabs.value.includes('users')) {
+    return Promise.resolve(emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>())
+  }
+  const query = {
+    ...detailQuery.value,
+    page: detailUsersPage.value,
+    limit: detailUsersPageSize.value
+  }
+  if (detailQuery.value.project_id != null) {
+    return getAdminUsageStatisticsProjectMembers(query)
+  }
+  return getAdminUsageStatisticsUsers(query)
+}, emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>())
 
 const {
   data: detailModels,
   loading: detailModelsLoading,
   reload: reloadDetailModels
-} = useAsyncData(
-  () => {
-    if (!hasSelection.value || !detailTabs.value.includes('models')) {
-      return Promise.resolve(emptyPage<ModelUsageStatistics>())
-    }
-    return getAdminUsageStatisticsModels({
-      ...detailQuery.value,
-      page: detailModelsPage.value,
-      limit: detailModelsPageSize.value
-    })
-  },
-  emptyPage<ModelUsageStatistics>()
-)
+} = useAsyncData(() => {
+  if (!hasSelection.value || !detailTabs.value.includes('models')) {
+    return Promise.resolve(emptyPage<ModelUsageStatistics>())
+  }
+  return getAdminUsageStatisticsModels({
+    ...detailQuery.value,
+    page: detailModelsPage.value,
+    limit: detailModelsPageSize.value
+  })
+}, emptyPage<ModelUsageStatistics>())
 const {
   data: attributionOptions,
   loading: attributionOptionsLoading,
   reload: reloadAttributionOptions
-} = useAsyncData(
-  () => getAdminUsageStatisticsOptions(baseQuery.value),
-  { models: [], users: [] }
-)
+} = useAsyncData(() => getAdminUsageStatisticsOptions(baseQuery.value), { models: [], users: [] })
 
 const primaryLoading = computed(
   () => primaryProjectsLoading.value || primaryUsersLoading.value || primaryModelsLoading.value
 )
 const detailLoading = computed(
-  () =>
-    detailProjectsLoading.value ||
-    detailUsersLoading.value ||
-    detailModelsLoading.value
+  () => detailProjectsLoading.value || detailUsersLoading.value || detailModelsLoading.value
 )
 const loading = computed(
   () => primaryLoading.value || detailLoading.value || attributionOptionsLoading.value
@@ -532,11 +509,15 @@ function resetDetailPages() {
 
 function syncSelectedFromPrimary() {
   if (primaryDimension.value === 'project' && selectedProject.value?.project_id != null) {
-    const next = primaryProjects.value.items.find((item) => item.project_id === selectedProject.value?.project_id)
+    const next = primaryProjects.value.items.find(
+      (item) => item.project_id === selectedProject.value?.project_id
+    )
     if (next) selectedProject.value = next
   }
   if (primaryDimension.value === 'user' && selectedUser.value?.user_id != null) {
-    const next = primaryUsers.value.items.find((item) => item.user_id === selectedUser.value?.user_id)
+    const next = primaryUsers.value.items.find(
+      (item) => item.user_id === selectedUser.value?.user_id
+    )
     if (next) selectedUser.value = next
   }
   if (primaryDimension.value === 'model' && selectedModel.value) {
@@ -558,7 +539,8 @@ function exportScopeFromCommand(command: string): UsageStatisticsExportScope | n
   }
   if (command === 'detail') {
     if (detailTab.value === 'projects') return 'projects'
-    if (detailTab.value === 'users') return detailQuery.value.project_id != null ? 'project_members' : 'users'
+    if (detailTab.value === 'users')
+      return detailQuery.value.project_id != null ? 'project_members' : 'users'
     return 'models'
   }
   return null
@@ -677,7 +659,13 @@ function successRate(success: number, total: number) {
               />
             </el-select>
           </label>
-          <el-button class="admin-action-button" type="primary" native-type="submit" :icon="Search" :loading="loading">
+          <el-button
+            class="admin-action-button"
+            type="primary"
+            native-type="submit"
+            :icon="Search"
+            :loading="loading"
+          >
             {{ t('search') }}
           </el-button>
         </div>
@@ -688,7 +676,9 @@ function successRate(success: number, total: number) {
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="primary">{{ t('exportCurrentSummary') }}</el-dropdown-item>
+                <el-dropdown-item command="primary">{{
+                  t('exportCurrentSummary')
+                }}</el-dropdown-item>
                 <el-dropdown-item command="detail" :disabled="!hasSelection">
                   {{ t('exportCurrentDrilldown') }}
                 </el-dropdown-item>
@@ -715,13 +705,22 @@ function successRate(success: number, total: number) {
           <small>{{ t('defaultSortByCost') }}</small>
         </header>
         <div class="attribution-tabs">
-          <el-button :class="{ 'is-active': primaryDimension === 'project' }" @click="changePrimaryDimension('project')">
+          <el-button
+            :class="{ 'is-active': primaryDimension === 'project' }"
+            @click="changePrimaryDimension('project')"
+          >
             {{ t('projectSummary') }}
           </el-button>
-          <el-button :class="{ 'is-active': primaryDimension === 'user' }" @click="changePrimaryDimension('user')">
+          <el-button
+            :class="{ 'is-active': primaryDimension === 'user' }"
+            @click="changePrimaryDimension('user')"
+          >
             {{ t('userSummary') }}
           </el-button>
-          <el-button :class="{ 'is-active': primaryDimension === 'model' }" @click="changePrimaryDimension('model')">
+          <el-button
+            :class="{ 'is-active': primaryDimension === 'model' }"
+            @click="changePrimaryDimension('model')"
+          >
             {{ t('modelSummary') }}
           </el-button>
         </div>
@@ -751,7 +750,9 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+            <template #default="{ row }">{{
+              successRate(row.success_count, row.request_count)
+            }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
@@ -761,7 +762,12 @@ function successRate(success: number, total: number) {
           </el-table-column>
           <el-table-column min-width="90" align="right">
             <template #default="{ row }">
-              <el-button class="icon-only-action" :aria-label="t('viewDrilldown')" :icon="ArrowRight" @click.stop="selectProject(row)" />
+              <el-button
+                class="icon-only-action"
+                :aria-label="t('viewDrilldown')"
+                :icon="ArrowRight"
+                @click.stop="selectProject(row)"
+              />
             </template>
           </el-table-column>
           <template #empty>
@@ -794,7 +800,9 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+            <template #default="{ row }">{{
+              successRate(row.success_count, row.request_count)
+            }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
@@ -804,7 +812,12 @@ function successRate(success: number, total: number) {
           </el-table-column>
           <el-table-column min-width="90" align="right">
             <template #default="{ row }">
-              <el-button class="icon-only-action" :aria-label="t('viewDrilldown')" :icon="ArrowRight" @click.stop="selectUser(row)" />
+              <el-button
+                class="icon-only-action"
+                :aria-label="t('viewDrilldown')"
+                :icon="ArrowRight"
+                @click.stop="selectUser(row)"
+              />
             </template>
           </el-table-column>
           <template #empty>
@@ -826,7 +839,9 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">
               <div class="attribution-primary-cell">
                 <strong>{{ modelDisplay(row) }}</strong>
-                <span v-if="row.channel_id != null">#{{ row.channel_id }} / {{ billingMeterLabel(row.billing_meter) }}</span>
+                <span v-if="row.channel_id != null"
+                  >#{{ row.channel_id }} / {{ billingMeterLabel(row.billing_meter) }}</span
+                >
               </div>
             </template>
           </el-table-column>
@@ -837,7 +852,9 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+            <template #default="{ row }">{{
+              successRate(row.success_count, row.request_count)
+            }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
@@ -847,7 +864,12 @@ function successRate(success: number, total: number) {
           </el-table-column>
           <el-table-column min-width="90" align="right">
             <template #default="{ row }">
-              <el-button class="icon-only-action" :aria-label="t('viewDrilldown')" :icon="ArrowRight" @click.stop="selectModel(row)" />
+              <el-button
+                class="icon-only-action"
+                :aria-label="t('viewDrilldown')"
+                :icon="ArrowRight"
+                @click.stop="selectModel(row)"
+              />
             </template>
           </el-table-column>
           <template #empty>
@@ -876,24 +898,49 @@ function successRate(success: number, total: number) {
             <el-button class="admin-action-button" :icon="Tickets" @click="openUsageDetails()">
               {{ t('viewUsageDetails') }}
             </el-button>
-            <el-button class="icon-only-action" :aria-label="t('clearSelection')" :icon="Close" @click="clearSelection" />
+            <el-button
+              class="icon-only-action"
+              :aria-label="t('clearSelection')"
+              :icon="Close"
+              @click="clearSelection"
+            />
           </div>
         </header>
 
         <div class="attribution-context-bar">
           <span v-if="selectedContext.project_id != null" class="attribution-context-chip">
-            {{ t('project') }}: {{ selectedContext.project_name || `#${selectedContext.project_id}` }}
-            <button v-if="refinements.project_id != null" type="button" @click="clearRefinement('project_id')">x</button>
+            {{ t('project') }}:
+            {{ selectedContext.project_name || `#${selectedContext.project_id}` }}
+            <button
+              v-if="refinements.project_id != null"
+              type="button"
+              @click="clearRefinement('project_id')"
+            >
+              x
+            </button>
           </span>
           <span v-if="selectedContext.user_id != null" class="attribution-context-chip">
             {{ t('userSearch') }}: {{ selectedContext.user_name || `#${selectedContext.user_id}` }}
-            <button v-if="refinements.user_id != null" type="button" @click="clearRefinement('user_id')">x</button>
+            <button
+              v-if="refinements.user_id != null"
+              type="button"
+              @click="clearRefinement('user_id')"
+            >
+              x
+            </button>
           </span>
           <span v-if="selectedContext.model" class="attribution-context-chip">
             {{ t('model') }}: {{ selectedContext.channel_name || '-' }}/{{ selectedContext.model }}
-            <button v-if="refinements.model" type="button" @click="clearRefinement('model')">x</button>
+            <button v-if="refinements.model" type="button" @click="clearRefinement('model')">
+              x
+            </button>
           </span>
-          <el-button v-if="Object.keys(refinements).length" class="attribution-clear-context" text @click="clearRefinement()">
+          <el-button
+            v-if="Object.keys(refinements).length"
+            class="attribution-clear-context"
+            text
+            @click="clearRefinement()"
+          >
             {{ t('clearDrilldownFilters') }}
           </el-button>
         </div>
@@ -933,14 +980,22 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+            <template #default="{ row }">{{
+              successRate(row.success_count, row.request_count)
+            }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
-              <el-button class="admin-action-button" :icon="Tickets" @click.stop="openUsageDetails({ project_id: row.project_id, project_name: row.project_name })">
+              <el-button
+                class="admin-action-button"
+                :icon="Tickets"
+                @click.stop="
+                  openUsageDetails({ project_id: row.project_id, project_name: row.project_name })
+                "
+              >
                 {{ t('details') }}
               </el-button>
             </template>
@@ -974,14 +1029,22 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+            <template #default="{ row }">{{
+              successRate(row.success_count, row.request_count)
+            }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
           </el-table-column>
           <el-table-column min-width="130" align="right">
             <template #default="{ row }">
-              <el-button class="admin-action-button" :icon="Tickets" @click.stop="openUsageDetails({ user_id: row.user_id, user_name: row.user_display_name })">
+              <el-button
+                class="admin-action-button"
+                :icon="Tickets"
+                @click.stop="
+                  openUsageDetails({ user_id: row.user_id, user_name: row.user_display_name })
+                "
+              >
                 {{ t('details') }}
               </el-button>
             </template>
@@ -1004,7 +1067,9 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">
               <div class="attribution-primary-cell">
                 <strong>{{ modelDisplay(row) }}</strong>
-                <span v-if="row.channel_id != null">#{{ row.channel_id }} / {{ billingMeterLabel(row.billing_meter) }}</span>
+                <span v-if="row.channel_id != null"
+                  >#{{ row.channel_id }} / {{ billingMeterLabel(row.billing_meter) }}</span
+                >
               </div>
             </template>
           </el-table-column>
@@ -1015,7 +1080,9 @@ function successRate(success: number, total: number) {
             <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
           </el-table-column>
           <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{ successRate(row.success_count, row.request_count) }}</template>
+            <template #default="{ row }">{{
+              successRate(row.success_count, row.request_count)
+            }}</template>
           </el-table-column>
           <el-table-column :label="t('tokens')" min-width="120" align="right">
             <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
@@ -1025,7 +1092,14 @@ function successRate(success: number, total: number) {
               <el-button
                 class="admin-action-button"
                 :icon="Tickets"
-                @click.stop="openUsageDetails({ model: row.model, channel_id: row.channel_id, channel_name: row.channel_name, billing_meter: row.billing_meter })"
+                @click.stop="
+                  openUsageDetails({
+                    model: row.model,
+                    channel_id: row.channel_id,
+                    channel_name: row.channel_name,
+                    billing_meter: row.billing_meter
+                  })
+                "
               >
                 {{ t('details') }}
               </el-button>

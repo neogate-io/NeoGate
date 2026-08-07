@@ -10,11 +10,7 @@ import {
 
 export type { BillingCurrency }
 
-export {
-  majorToMicroAmount,
-  microAmountToMajor,
-  MICRO_UNITS_PER_CURRENCY
-} from '../utils/format'
+export { majorToMicroAmount, microAmountToMajor, MICRO_UNITS_PER_CURRENCY } from '../utils/format'
 
 export function currencySymbol(currency: BillingCurrency) {
   return currency === 'CNY' ? '¥' : '$'

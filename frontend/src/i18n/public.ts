@@ -37,7 +37,8 @@ export const publicMessages = {
     runtimeConfigurationDescription:
       '填写数据库、站点名称和公网地址，NeoGate 会先验证配置，完成向导后再写入环境变量。',
     siteConfiguration: '站点信息',
-    siteConfigurationDescription: '设置后台显示名称、服务对外访问地址，以及初始化后固定的基础计费货币。',
+    siteConfigurationDescription:
+      '设置后台显示名称、服务对外访问地址，以及初始化后固定的基础计费货币。',
     databaseConfiguration: '数据库连接',
     databaseConfigurationDescription:
       '配置 NeoGate 使用的 PostgreSQL 数据库，并在保存前测试连通性。',
@@ -475,7 +476,8 @@ export const publicMessages = {
       'The database user does not have enough permissions. Grant connection and table creation permissions.',
     databaseUnavailable:
       'The database is temporarily unavailable. Try again later or check whether it is still starting.',
-    databaseUserNotFound: 'The database user does not exist. Check whether the user has been created.',
+    databaseUserNotFound:
+      'The database user does not exist. Check whether the user has been created.',
     databaseAuthenticationFailed:
       'Database authentication failed. Check the database user and password.',
     databaseConnectionFailed:

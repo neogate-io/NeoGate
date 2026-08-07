@@ -13,9 +13,7 @@ export function useChannelDiagnostics(onComplete?: () => Promise<void> | void) {
   const error = ref('')
   const channel = ref<Channel | null>(null)
   const diagnosingChannelId = ref<number | null>(null)
-  const liveSteps = ref<Array<Extract<ChannelDiagnosticStreamEvent, { type: 'model_result' }>>>(
-    []
-  )
+  const liveSteps = ref<Array<Extract<ChannelDiagnosticStreamEvent, { type: 'model_result' }>>>([])
   const currentModel = ref('')
   const liveListRef = ref<HTMLElement | null>(null)
   const inProgress = computed(() => diagnosingChannelId.value !== null)

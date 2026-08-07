@@ -117,7 +117,10 @@ watch(
   locale,
   (next, prev) => {
     if (status.value?.billing_currency) return
-    if ((prev === 'zh-CN' && bootstrapForm.billingCurrency === 'CNY') || (prev === 'en-US' && bootstrapForm.billingCurrency === 'USD')) {
+    if (
+      (prev === 'zh-CN' && bootstrapForm.billingCurrency === 'CNY') ||
+      (prev === 'en-US' && bootstrapForm.billingCurrency === 'USD')
+    ) {
       bootstrapForm.billingCurrency = next === 'zh-CN' ? 'CNY' : 'USD'
     }
   },
@@ -211,10 +214,10 @@ const setupPaymentDescription = computed(() =>
   paymentForm.enabled ? t('setupPaymentEnabledHint') : t('setupPaymentDisabledHint')
 )
 const shouldConfigureSmtp = computed(() => setupForm.registrationEnabled)
-const shouldShowPaymentStep = computed(() => setupForm.serviceMode === 'paid' && paymentForm.enabled)
-const shouldConfigurePayment = computed(
-  () => shouldShowPaymentStep.value && includePayment.value
+const shouldShowPaymentStep = computed(
+  () => setupForm.serviceMode === 'paid' && paymentForm.enabled
 )
+const shouldConfigurePayment = computed(() => shouldShowPaymentStep.value && includePayment.value)
 const setupFinishModeTitle = computed(() =>
   setupForm.serviceMode === 'paid' ? t('setupFinishPaidMode') : t('setupFinishInternalMode')
 )
@@ -331,7 +334,9 @@ const setupSteps = computed(() => {
       key: 'runtime',
       title: t('setupStepRuntime'),
       description: t('setupStepRuntimeDescription'),
-      done: status.value ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value : false,
+      done: status.value
+        ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value
+        : false,
       active: Boolean(status.value?.bootstrap_required) || reviewingRuntimeConfig.value
     },
     ...businessSetupSteps.value.map((step) => ({
@@ -701,18 +706,17 @@ async function submitSetup() {
             }))
           : [],
         smtp: shouldConfigureSmtp.value && smtpForm.enabled ? smtpPayload() : null,
-        payment:
-          shouldConfigurePayment.value
-              ? {
-                payment_enabled: true,
-                zpay_api_url: paymentForm.apiUrl,
-                zpay_merchant_id: paymentForm.merchantId || null,
-                zpay_secret_key: paymentForm.secretKey || null,
-                clear_zpay_secret_key: false,
-                zpay_default_pay_type: paymentForm.payType,
-                zpay_site_name: paymentForm.siteName
-              }
-            : null
+        payment: shouldConfigurePayment.value
+          ? {
+              payment_enabled: true,
+              zpay_api_url: paymentForm.apiUrl,
+              zpay_merchant_id: paymentForm.merchantId || null,
+              zpay_secret_key: paymentForm.secretKey || null,
+              clear_zpay_secret_key: false,
+              zpay_default_pay_type: paymentForm.payType,
+              zpay_site_name: paymentForm.siteName
+            }
+          : null
       })
       setSiteBrand({
         site_name: completedStatus.site_name || bootstrapForm.siteName,
@@ -883,10 +887,7 @@ async function sendSmtpTestEmail() {
 }
 
 function readReferenceSyncError(err: unknown) {
-  if (
-    err instanceof ApiError &&
-    err.code === 'pricing_reference_source_unavailable'
-  ) {
+  if (err instanceof ApiError && err.code === 'pricing_reference_source_unavailable') {
     return t('referencePricesSourceUnavailable')
   }
 
@@ -1637,7 +1638,9 @@ onMounted(load)
 
             <section class="setup-finish-mode-card">
               <span class="setup-finish-mode-icon">
-                <el-icon><CreditCard v-if="setupForm.serviceMode === 'paid'" /><Briefcase v-else /></el-icon>
+                <el-icon
+                  ><CreditCard v-if="setupForm.serviceMode === 'paid'" /><Briefcase v-else
+                /></el-icon>
               </span>
               <div class="setup-finish-mode-copy">
                 <span class="setup-finish-eyebrow">{{ t('serviceMode') }}</span>
@@ -1651,7 +1654,11 @@ onMounted(load)
             </section>
 
             <div class="setup-finish-addon-list">
-              <div v-for="item in setupFinishAddonItems" :key="item.key" class="setup-finish-addon-row">
+              <div
+                v-for="item in setupFinishAddonItems"
+                :key="item.key"
+                class="setup-finish-addon-row"
+              >
                 <span class="setup-finish-addon-icon">
                   <el-icon><component :is="item.icon" /></el-icon>
                 </span>

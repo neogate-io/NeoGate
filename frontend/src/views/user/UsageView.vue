@@ -58,12 +58,7 @@ const usageInitialLoading = computed(() => !usageLoaded.value)
 const hasUsagePagination = computed(
   () => currentPage.value > 1 || Boolean(usagePage.value.has_more)
 )
-const {
-  resetAndReload,
-  nextPage,
-  previousPage,
-  handlePageSizeChange
-} = useCursorPageActions(
+const { resetAndReload, nextPage, previousPage, handlePageSizeChange } = useCursorPageActions(
   { pageSize, reset: resetCursorPagination, goToNext, goToPrevious },
   () => usagePage.value,
   reload
@@ -148,7 +143,11 @@ function routingRuleText(ruleId: string) {
 }
 
 function routingRulesText(row: (typeof usagePage.value.items)[number]) {
-  return row.routing?.matched_rule_ids.map(routingRuleText).join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  return (
+    row.routing?.matched_rule_ids
+      .map(routingRuleText)
+      .join(locale.value === 'zh-CN' ? '；' : '; ') || ''
+  )
 }
 
 function routingCandidatesText(row: (typeof usagePage.value.items)[number]) {
@@ -254,11 +253,7 @@ async function exportUsage() {
           <span>{{ t('cost') }}</span>
           <span>{{ t('actions') }}</span>
         </div>
-        <details
-          v-for="row in usagePage.items"
-          :key="row.id"
-          class="usage-row"
-        >
+        <details v-for="row in usagePage.items" :key="row.id" class="usage-row">
           <summary @click.prevent>
             <span class="usage-time">{{ formatFullTime(row.created_at) }}</span>
             <span class="usage-model-cell">
@@ -278,7 +273,9 @@ async function exportUsage() {
             <span class="usage-latency-cell">
               <span class="usage-latency-pills">
                 <b>{{ formatDurationMs(row.latency_ms) }}</b>
-                <b v-if="row.first_response_ms != null">{{ formatDurationMs(row.first_response_ms) }}</b>
+                <b v-if="row.first_response_ms != null">{{
+                  formatDurationMs(row.first_response_ms)
+                }}</b>
               </span>
               <small>
                 {{ row.streamed ? t('streamShortLabel') : t('nonStreamShortLabel') }}
@@ -399,7 +396,9 @@ async function exportUsage() {
                 </div>
                 <div>
                   <dt>{{ t('billingStatus') }}</dt>
-                  <dd><span class="usage-detail-tag">{{ row.billing_status || '-' }}</span></dd>
+                  <dd>
+                    <span class="usage-detail-tag">{{ row.billing_status || '-' }}</span>
+                  </dd>
                 </div>
               </dl>
             </section>

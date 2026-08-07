@@ -56,7 +56,11 @@ export function readPasswordChangeError(
   if (err instanceof ApiError && err.code === 'password_min_length') {
     return t('passwordMinLength')
   }
-  if (options.sameAsCurrentKey && err instanceof ApiError && err.code === 'password_same_as_current') {
+  if (
+    options.sameAsCurrentKey &&
+    err instanceof ApiError &&
+    err.code === 'password_same_as_current'
+  ) {
     return t(options.sameAsCurrentKey)
   }
   return options.fallback === 'readError'

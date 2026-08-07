@@ -171,7 +171,7 @@ export const userMessages = {
     noApiKeys: '暂无 API 密钥',
     apiKeysInternalEmptyHint:
       '当前为内部模式，API 密钥由管理员在项目中分配。请联系管理员将你添加为项目成员。',
-    apiKeyOrJson: '输入API Key',
+    apiKeyOrJson: '输入API Key'
   },
   'en-US': {
     overview: 'Overview',
@@ -244,7 +244,8 @@ export const userMessages = {
     routingReason_fallback_no_candidate:
       'No available candidate in this tier, so the fallback model was used',
     routingReason_missing_context: 'Request context was unavailable, so the default tier was used',
-    routingReason_complex_signal: 'The request matched complex-task signals, so advanced tier was used',
+    routingReason_complex_signal:
+      'The request matched complex-task signals, so advanced tier was used',
     routingReason_medium_signal:
       'The request matched tool, structured, or medium-complexity signals, so standard tier was used',
     routingReason_simple_signal: 'The request looked simple, so simple tier was used',
@@ -347,6 +348,6 @@ export const userMessages = {
     noApiKeys: 'No API keys',
     apiKeysInternalEmptyHint:
       'In internal mode, API keys are assigned by admins through projects. Ask an admin to add you as a project member.',
-    apiKeyOrJson: 'Enter API key',
-  },
+    apiKeyOrJson: 'Enter API key'
+  }
 } satisfies LocaleMessages

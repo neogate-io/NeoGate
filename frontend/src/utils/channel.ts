@@ -4,9 +4,12 @@ export type ChannelProviderOption = {
   value: ChannelProvider
   label: string
   defaultName: string
-  defaultEndpoints: Record<EndpointProtocol, {
-    baseUrl: string
-  }>
+  defaultEndpoints: Record<
+    EndpointProtocol,
+    {
+      baseUrl: string
+    }
+  >
 }
 
 export const comfyUIOption: ChannelProviderOption = {
@@ -44,10 +47,7 @@ export function sortProvidersForDisplay(providers: ProviderRecord[]) {
   return moveComfyUiLast(providers, (provider) => provider.code)
 }
 
-export function findProviderOption(
-  provider: ChannelProvider,
-  providers: ChannelProviderOption[]
-) {
+export function findProviderOption(provider: ChannelProvider, providers: ChannelProviderOption[]) {
   return providers.find((option) => option.value === provider)
 }
 

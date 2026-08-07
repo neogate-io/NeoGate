@@ -100,5 +100,4 @@ function handleError() {
   object-fit: contain;
   width: 18px;
 }
-
 </style>

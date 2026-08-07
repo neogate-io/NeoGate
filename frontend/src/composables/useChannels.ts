@@ -330,8 +330,7 @@ export function useChannels(t: Translate) {
 
         const selectableModels = mergeModelLists(models, existingModels)
         fetchedModels.value = selectableModels
-        selectedFetchedModels.value =
-          shouldKeepAllSelected ? selectableModels : existingModels
+        selectedFetchedModels.value = shouldKeepAllSelected ? selectableModels : existingModels
         syncSelectedModelsToInput()
         modelPickerDialogOpen.value = true
         if (models.length === 0) {

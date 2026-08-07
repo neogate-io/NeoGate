@@ -11,7 +11,11 @@ import { ElColorPicker } from 'element-plus/es/components/color-picker/index'
 import { ElCollapse, ElCollapseItem } from 'element-plus/es/components/collapse/index'
 import { ElDescriptions, ElDescriptionsItem } from 'element-plus/es/components/descriptions/index'
 import { ElDrawer } from 'element-plus/es/components/drawer/index'
-import { ElDropdown, ElDropdownItem, ElDropdownMenu } from 'element-plus/es/components/dropdown/index'
+import {
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu
+} from 'element-plus/es/components/dropdown/index'
 import { ElEmpty } from 'element-plus/es/components/empty/index'
 import { ElForm, ElFormItem } from 'element-plus/es/components/form/index'
 import { ElIcon } from 'element-plus/es/components/icon/index'

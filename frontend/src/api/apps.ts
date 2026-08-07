@@ -71,13 +71,15 @@ export function testApp(id: number) {
   })
 }
 
-export function getAppRunLogs(filters: {
-  appId?: number
-  endpointId?: number
-  status?: string
-  search?: string
-  limit?: number
-} = {}) {
+export function getAppRunLogs(
+  filters: {
+    appId?: number
+    endpointId?: number
+    status?: string
+    search?: string
+    limit?: number
+  } = {}
+) {
   const searchParams = new URLSearchParams()
   if (filters.appId != null) searchParams.set('app_id', String(filters.appId))
   if (filters.endpointId != null) searchParams.set('endpoint_id', String(filters.endpointId))

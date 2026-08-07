@@ -120,9 +120,7 @@ function logStatusType(status: AppRunLog['status']) {
               <div>
                 <dt>密钥</dt>
                 <dd>
-                  {{
-                    app.endpoint.secrets_set.length ? app.endpoint.secrets_set.join(', ') : '-'
-                  }}
+                  {{ app.endpoint.secrets_set.length ? app.endpoint.secrets_set.join(', ') : '-' }}
                 </dd>
               </div>
             </dl>

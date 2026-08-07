@@ -24,13 +24,16 @@ export function getRechargeOrders() {
 }
 
 export function createRechargeOrder(amountMicros: number, payType: PayType, returnUrl: string) {
-  return userRequest<{ order: PaymentOrder; checkout_url?: string | null }>('/api/user/recharge/orders', {
-    method: 'POST',
-    body: JSON.stringify({
-      provider: 'zpay',
-      amount_micros: amountMicros,
-      pay_type: payType,
-      return_url: returnUrl
-    })
-  })
+  return userRequest<{ order: PaymentOrder; checkout_url?: string | null }>(
+    '/api/user/recharge/orders',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        provider: 'zpay',
+        amount_micros: amountMicros,
+        pay_type: payType,
+        return_url: returnUrl
+      })
+    }
+  )
 }

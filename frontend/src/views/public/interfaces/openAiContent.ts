@@ -313,68 +313,115 @@ const response = await client.responses.create({
 console.log(response.output_text);`
   )
 
-  const chatCompletionsSamples: EndpointSample[] = [
-    { title: 'Chat Completions Stream', code: chatCompletionsStream }
-  ]
-  const responsesCreateSamples: EndpointSample[] = [
-    { title: 'Responses Create', code: responsesCreate },
-    { title: 'Responses Stream', code: responsesStream }
-  ]
-  const backgroundResponseSamples: EndpointSample[] = [
-    { title: 'Create Background Response', code: responseBackground }
-  ]
-  const responseManageSamples: EndpointSample[] = [
-    { title: 'Retrieve Response', code: responseRetrieve },
-    { title: 'Retrieve Stream', code: responseStreamRetrieve },
-    { title: 'Cancel Response', code: responseCancel }
-  ]
-  const imageGenerationsSamples: EndpointSample[] = [
-    { title: 'Generations', code: imageGeneration },
-    { title: 'Generations Stream', code: imageGenerationStream }
-  ]
-  const imageEditsSamples: EndpointSample[] = [
-    { title: 'Edits', code: imageEdit },
-    { title: 'Edits Stream', code: imageEditStream }
-  ]
-  const imageVariationsSamples: EndpointSample[] = [{ title: 'Variations', code: imageVariation }]
-  const imageAsyncSamples: EndpointSample[] = [
-    { title: 'Background Text to Image', code: responseImageGeneration },
-    { title: 'Background Image to Image', code: responseImageEdit },
-    { title: 'Retrieve Response', code: responseRetrieve },
-    { title: 'Retrieve Stream', code: responseStreamRetrieve },
-    { title: 'Cancel Response', code: responseCancel }
-  ]
-  const videoCreateSamples = computed<EndpointSample[]>(() => [
-    { title: 'Create Video', code: videoCreate },
-    { title: 'Create Video With Reference', code: videoCreateWithReference },
+  const pickSampleTitle = (zh: string, en: string) => (locale.value === 'zh-CN' ? zh : en)
+
+  const chatCompletionsSamples = computed<EndpointSample[]>(() => [
     {
-      title: `Create Video With Two Assets (${siteName.value} Extension)`,
-      code: videoCreateWithAssets
+      title: pickSampleTitle('Chat Completions 流式', 'Chat Completions Stream'),
+      code: chatCompletionsStream
     }
   ])
-  const videoRetrieveSamples: EndpointSample[] = [
-    { title: 'Retrieve Video', code: videoRetrieve },
-    { title: 'Download Video Content', code: videoContent }
-  ]
-  const assetCreateSamples = computed<EndpointSample[]>(() => [
-    { title: `Create Asset (${siteName.value} Extension)`, code: assetCreate }
+  const responsesCreateSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('创建 Response', 'Responses Create'), code: responsesCreate },
+    { title: pickSampleTitle('Responses 流式', 'Responses Stream'), code: responsesStream }
   ])
-  const assetRetrieveSamples = computed<EndpointSample[]>(() => [
-    { title: `Retrieve Asset (${siteName.value} Extension)`, code: assetRetrieve }
+  const backgroundResponseSamples = computed<EndpointSample[]>(() => [
+    {
+      title: pickSampleTitle('创建后台 Response', 'Create Background Response'),
+      code: responseBackground
+    }
   ])
-  const audioSamples: EndpointSample[] = [
-    { title: 'Audio Transcription', code: audioTranscription }
-  ]
+  const responseManageSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('查询 Response', 'Retrieve Response'), code: responseRetrieve },
+    { title: pickSampleTitle('恢复流式读取', 'Retrieve Stream'), code: responseStreamRetrieve },
+    { title: pickSampleTitle('取消 Response', 'Cancel Response'), code: responseCancel }
+  ])
+  const imageGenerationsSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('生成图片', 'Generations'), code: imageGeneration },
+    {
+      title: pickSampleTitle('生成图片（流式）', 'Generations Stream'),
+      code: imageGenerationStream
+    }
+  ])
+  const imageEditsSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('编辑图片', 'Edits'), code: imageEdit },
+    { title: pickSampleTitle('编辑图片（流式）', 'Edits Stream'), code: imageEditStream }
+  ])
+  const imageVariationsSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('图片变体', 'Variations'), code: imageVariation }
+  ])
+  const imageAsyncSamples = computed<EndpointSample[]>(() => [
+    {
+      title: pickSampleTitle('后台文生图', 'Background Text to Image'),
+      code: responseImageGeneration
+    },
+    {
+      title: pickSampleTitle('后台图生图', 'Background Image to Image'),
+      code: responseImageEdit
+    },
+    { title: pickSampleTitle('查询 Response', 'Retrieve Response'), code: responseRetrieve },
+    { title: pickSampleTitle('恢复流式读取', 'Retrieve Stream'), code: responseStreamRetrieve },
+    { title: pickSampleTitle('取消 Response', 'Cancel Response'), code: responseCancel }
+  ])
+  const videoCreateSamples = computed<EndpointSample[]>(() => {
+    const zh = locale.value === 'zh-CN'
+    return [
+      { title: zh ? '创建视频' : 'Create Video', code: videoCreate },
+      {
+        title: zh ? '创建视频（参考图）' : 'Create Video With Reference',
+        code: videoCreateWithReference
+      },
+      {
+        title: zh
+          ? `创建视频（两个素材，${siteName.value} 扩展）`
+          : `Create Video With Two Assets (${siteName.value} Extension)`,
+        code: videoCreateWithAssets
+      }
+    ]
+  })
+  const videoRetrieveSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('查询视频', 'Retrieve Video'), code: videoRetrieve },
+    { title: pickSampleTitle('下载视频内容', 'Download Video Content'), code: videoContent }
+  ])
+  const assetCreateSamples = computed<EndpointSample[]>(() => {
+    const zh = locale.value === 'zh-CN'
+    return [
+      {
+        title: zh
+          ? `创建素材（${siteName.value} 扩展）`
+          : `Create Asset (${siteName.value} Extension)`,
+        code: assetCreate
+      }
+    ]
+  })
+  const assetRetrieveSamples = computed<EndpointSample[]>(() => {
+    const zh = locale.value === 'zh-CN'
+    return [
+      {
+        title: zh
+          ? `查询素材（${siteName.value} 扩展）`
+          : `Retrieve Asset (${siteName.value} Extension)`,
+        code: assetRetrieve
+      }
+    ]
+  })
+  const audioSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('音频转写', 'Audio Transcription'), code: audioTranscription }
+  ])
   const embeddingsSamples = computed<EndpointSample[]>(() => [
-    { title: 'Embeddings', code: embeddingsSample.value }
+    { title: pickSampleTitle('向量嵌入', 'Embeddings'), code: embeddingsSample.value }
   ])
-  const modelsSamples: EndpointSample[] = [{ title: 'Models', code: modelsSample }]
+  const modelsSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('模型列表', 'Models'), code: modelsSample }
+  ])
 
   const content = computed(() => {
     if (locale.value === 'zh-CN') {
       return {
         openAiTitle: '2. OpenAI 兼容接口',
         openAiQuickStartTitle: '2.1 快速开始',
+        openAiQuickStartIntro:
+          '用一次最小的 curl 调用完成接入验证：设置 BASE_URL 和 API_KEY 后即可直接运行，后续示例都沿用这两个环境变量。',
         openAiTextTitle: '2.2 文本生成',
         openAiTextAsyncTitle: '2.3 文本生成（异步）',
         openAiImageTitle: '2.4 图片生成',
@@ -383,7 +430,9 @@ console.log(response.output_text);`
         openAiAudioTitle: '2.7 音频转写',
         openAiEmbeddingsTitle: '2.8 向量嵌入',
         openAiModelsTitle: '2.9 模型列表',
+        openAiModelsIntro: '查询当前 API Key 可调用的模型列表，或获取单个模型的详情。',
         openAiSdkTitle: '2.10 SDK 示例',
+        openAiSdkIntro: '官方 OpenAI SDK 可直接接入，只需把 baseURL 指向网关地址并使用网关颁发的 API Key。',
         urlPathsTitle: 'URL 路径',
         openAiTextPaths: [
           ['POST', `${openAiBaseUrl.value}/chat/completions`, 'Chat Completions'],
@@ -446,10 +495,10 @@ console.log(response.output_text);`
               ['choices[].delta.content', 'string', '流式增量文本片段。'],
               ['usage', 'object | null', 'Token 用量。']
             ],
-            samples: chatCompletionsSamples
+            samples: chatCompletionsSamples.value
           },
           {
-            title: 'Responses Create',
+            title: '创建 Response',
             method: 'POST',
             path: `${openAiBaseUrl.value}/responses`,
             description: '使用 input 格式创建 Responses 文本生成。',
@@ -467,12 +516,12 @@ console.log(response.output_text);`
               ['output[].content[].text', 'string', '文本输出内容。'],
               ['usage', 'object | null', 'Token 用量。']
             ],
-            samples: responsesCreateSamples
+            samples: responsesCreateSamples.value
           }
         ],
         openAiTextAsyncInterfaces: [
           {
-            title: 'Create Background Response',
+            title: '创建后台 Response',
             method: 'POST',
             path: `${openAiBaseUrl.value}/responses`,
             description: '创建后台文本任务。',
@@ -487,10 +536,10 @@ console.log(response.output_text);`
               ['status', 'string', 'queued、in_progress、completed、failed 等状态。'],
               ['background', 'boolean', '是否为后台任务。']
             ],
-            samples: backgroundResponseSamples
+            samples: backgroundResponseSamples.value
           },
           {
-            title: 'Retrieve / Stream / Cancel Response',
+            title: '查询 / 流式 / 取消 Response',
             method: 'GET / POST',
             path: `${openAiBaseUrl.value}/responses/{response_id}`,
             description: '查询后台任务、追加 ?stream=true 恢复流式读取，或调用 /cancel 取消任务。',
@@ -504,12 +553,12 @@ console.log(response.output_text);`
               ['error', 'object | null', '失败时的错误信息。'],
               ['usage', 'object | null', '终态用量。']
             ],
-            samples: responseManageSamples
+            samples: responseManageSamples.value
           }
         ],
         openAiImageInterfaces: [
           {
-            title: 'Images Generations',
+            title: '图片生成',
             method: 'POST',
             path: `${openAiBaseUrl.value}/images/generations`,
             description: '根据 prompt 生成图片。',
@@ -525,10 +574,10 @@ console.log(response.output_text);`
               ['data[].b64_json / url', 'string', '图片内容或 URL。'],
               ['usage', 'object', '图片生成用量。']
             ],
-            samples: imageGenerationsSamples
+            samples: imageGenerationsSamples.value
           },
           {
-            title: 'Images Edits',
+            title: '图片编辑',
             method: 'POST',
             path: `${openAiBaseUrl.value}/images/edits`,
             description:
@@ -550,10 +599,10 @@ console.log(response.output_text);`
               ['data[]', 'array', '编辑图片结果。'],
               ['data[].b64_json / url', 'string', '图片内容或 URL。']
             ],
-            samples: imageEditsSamples
+            samples: imageEditsSamples.value
           },
           {
-            title: 'Images Variations',
+            title: '图片变体',
             method: 'POST',
             path: `${openAiBaseUrl.value}/images/variations`,
             description: '基于输入图片生成变体；官方接口仅支持 dall-e-2。',
@@ -568,12 +617,12 @@ console.log(response.output_text);`
               ['data[]', 'array', '变体图片结果。'],
               ['data[].b64_json / url', 'string', '图片内容或 URL。']
             ],
-            samples: imageVariationsSamples
+            samples: imageVariationsSamples.value
           }
         ],
         openAiImageAsyncInterfaces: [
           {
-            title: 'Responses Image Task',
+            title: 'Responses 图片任务',
             method: 'POST',
             path: `${openAiBaseUrl.value}/responses`,
             description:
@@ -592,12 +641,12 @@ console.log(response.output_text);`
               ['output[].result', 'string', 'Base64 图片内容。'],
               ['output[].url', 'string', 'URL 图片结果。']
             ],
-            samples: imageAsyncSamples
+            samples: imageAsyncSamples.value
           }
         ],
         openAiVideoInterfaces: [
           {
-            title: 'Videos Create',
+            title: '创建视频',
             method: 'POST',
             path: `${openAiBaseUrl.value}/videos`,
             description: `创建视频生成任务；支持 OpenAI 单参考图输入及 ${siteName.value} 多素材扩展。`,
@@ -636,7 +685,7 @@ console.log(response.output_text);`
             samples: videoCreateSamples.value
           },
           {
-            title: 'Videos Retrieve / Content',
+            title: '查询视频 / 下载内容',
             method: 'GET',
             path: `${openAiBaseUrl.value}/videos/{video_id}`,
             description: '查询视频任务；使用 /content 下载完成后的 MP4。',
@@ -646,12 +695,12 @@ console.log(response.output_text);`
               ['completed_at', 'integer | null', '完成时间。'],
               ['content', 'binary', '/content 返回视频文件。']
             ],
-            samples: videoRetrieveSamples
+            samples: videoRetrieveSamples.value
           }
         ],
         openAiAssetInterfaces: [
           {
-            title: 'Assets Create',
+            title: '创建素材',
             method: 'POST',
             path: openAiBaseUrl.value + '/assets',
             description:
@@ -677,7 +726,7 @@ console.log(response.output_text);`
             samples: assetCreateSamples.value
           },
           {
-            title: 'Assets Retrieve',
+            title: '查询素材',
             method: 'GET',
             path: openAiBaseUrl.value + '/assets/{asset_id}',
             description: '查询素材并刷新处理状态；素材访问按当前项目隔离。',
@@ -692,7 +741,7 @@ console.log(response.output_text);`
         ],
         openAiAudioInterfaces: [
           {
-            title: 'Audio Transcriptions',
+            title: '音频转写',
             method: 'POST',
             path: `${openAiBaseUrl.value}/audio/transcriptions`,
             description: '上传音频并返回转写文本。',
@@ -723,12 +772,12 @@ console.log(response.output_text);`
               ['segments / words', 'array', 'verbose_json 中的句段和词级时间戳。'],
               ['usage', 'object', '按音频秒数计费的用量。']
             ],
-            samples: audioSamples
+            samples: audioSamples.value
           }
         ],
         openAiEmbeddingsInterfaces: [
           {
-            title: 'Embeddings',
+            title: '向量嵌入',
             method: 'POST',
             path: `${openAiBaseUrl.value}/embeddings`,
             description: '创建文本向量。',
@@ -747,7 +796,7 @@ console.log(response.output_text);`
         ],
         openAiModelsInterfaces: [
           {
-            title: 'Models',
+            title: '模型列表',
             method: 'GET',
             path: `${openAiBaseUrl.value}/models`,
             description: '获取当前 API Key 可调用的模型列表。',
@@ -757,7 +806,7 @@ console.log(response.output_text);`
               ['data[].id', 'string', '模型 ID。'],
               ['data[].owned_by', 'string', '模型来源。']
             ],
-            samples: modelsSamples
+            samples: modelsSamples.value
           }
         ],
         videoWorkflowTitle: '视频生成流程',
@@ -1059,6 +1108,8 @@ console.log(response.output_text);`
     return {
       openAiTitle: '2. OpenAI-compatible APIs',
       openAiQuickStartTitle: '2.1 Quick start',
+      openAiQuickStartIntro:
+        'Verify your setup with a minimal curl call: set BASE_URL and API_KEY, then run it directly. Later examples reuse these two environment variables.',
       openAiTextTitle: '2.2 Text generation',
       openAiTextAsyncTitle: '2.3 Text generation async',
       openAiImageTitle: '2.4 Images',
@@ -1067,7 +1118,10 @@ console.log(response.output_text);`
       openAiAudioTitle: '2.7 Audio transcription',
       openAiEmbeddingsTitle: '2.8 Embeddings',
       openAiModelsTitle: '2.9 Models',
+      openAiModelsIntro: 'List the models callable by the current API key, or retrieve a single model.',
       openAiSdkTitle: '2.10 SDK examples',
+      openAiSdkIntro:
+        'The official OpenAI SDKs work out of the box: point baseURL at the gateway and use a gateway-issued API key.',
       urlPathsTitle: 'URL paths',
       openAiTextPaths: [
         ['POST', `${openAiBaseUrl.value}/chat/completions`, 'Chat Completions'],
@@ -1130,7 +1184,7 @@ console.log(response.output_text);`
             ['choices[].delta.content', 'string', 'Streaming text delta.'],
             ['usage', 'object | null', 'Token usage.']
           ],
-          samples: chatCompletionsSamples
+          samples: chatCompletionsSamples.value
         },
         {
           title: 'Responses Create',
@@ -1155,7 +1209,7 @@ console.log(response.output_text);`
             ['output[].content[].text', 'string', 'Text output.'],
             ['usage', 'object | null', 'Token usage.']
           ],
-          samples: responsesCreateSamples
+          samples: responsesCreateSamples.value
         }
       ],
       openAiTextAsyncInterfaces: [
@@ -1175,7 +1229,7 @@ console.log(response.output_text);`
             ['status', 'string', 'queued, in_progress, completed, failed, and related states.'],
             ['background', 'boolean', 'Whether this is a background task.']
           ],
-          samples: backgroundResponseSamples
+          samples: backgroundResponseSamples.value
         },
         {
           title: 'Retrieve / Stream / Cancel Response',
@@ -1192,7 +1246,7 @@ console.log(response.output_text);`
             ['error', 'object | null', 'Failure information.'],
             ['usage', 'object | null', 'Final usage.']
           ],
-          samples: responseManageSamples
+          samples: responseManageSamples.value
         }
       ],
       openAiImageInterfaces: [
@@ -1213,7 +1267,7 @@ console.log(response.output_text);`
             ['data[].b64_json / url', 'string', 'Image content or URL.'],
             ['usage', 'object', 'Image generation usage.']
           ],
-          samples: imageGenerationsSamples
+          samples: imageGenerationsSamples.value
         },
         {
           title: 'Images Edits',
@@ -1238,7 +1292,7 @@ console.log(response.output_text);`
             ['data[]', 'array', 'Edited image results.'],
             ['data[].b64_json / url', 'string', 'Image content or URL.']
           ],
-          samples: imageEditsSamples
+          samples: imageEditsSamples.value
         },
         {
           title: 'Images Variations',
@@ -1256,7 +1310,7 @@ console.log(response.output_text);`
             ['data[]', 'array', 'Variation image results.'],
             ['data[].b64_json / url', 'string', 'Image content or URL.']
           ],
-          samples: imageVariationsSamples
+          samples: imageVariationsSamples.value
         }
       ],
       openAiImageAsyncInterfaces: [
@@ -1284,7 +1338,7 @@ console.log(response.output_text);`
             ['output[].result', 'string', 'Base64 image content.'],
             ['output[].url', 'string', 'URL image result.']
           ],
-          samples: imageAsyncSamples
+          samples: imageAsyncSamples.value
         }
       ],
       openAiVideoInterfaces: [
@@ -1338,7 +1392,7 @@ console.log(response.output_text);`
             ['completed_at', 'integer | null', 'Completion timestamp.'],
             ['content', 'binary', '/content returns the video file.']
           ],
-          samples: videoRetrieveSamples
+          samples: videoRetrieveSamples.value
         }
       ],
       openAiAssetInterfaces: [
@@ -1426,7 +1480,7 @@ console.log(response.output_text);`
             ['segments / words', 'array', 'Segment and word timestamps in verbose_json.'],
             ['usage', 'object', 'Usage measured in audio seconds.']
           ],
-          samples: audioSamples
+          samples: audioSamples.value
         }
       ],
       openAiEmbeddingsInterfaces: [
@@ -1460,7 +1514,7 @@ console.log(response.output_text);`
             ['data[].id', 'string', 'Model ID.'],
             ['data[].owned_by', 'string', 'Model owner.']
           ],
-          samples: modelsSamples
+          samples: modelsSamples.value
         }
       ],
       videoWorkflowTitle: 'Video workflow',

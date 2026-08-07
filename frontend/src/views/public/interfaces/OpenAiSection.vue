@@ -41,6 +41,7 @@ const { content, quickStart, pythonInstall, python, nodeInstall, node, openAiEnd
     <section v-if="sub === 'quick-start'" id="openai-quick-start" class="docs-subsection">
       <div class="docs-section-heading docs-subsection-heading">
         <h2>{{ content.openAiQuickStartTitle }}</h2>
+        <p>{{ content.openAiQuickStartIntro }}</p>
       </div>
       <CodeSampleCard title="curl" :code="quickStart" default-open />
     </section>
@@ -164,6 +165,7 @@ const { content, quickStart, pythonInstall, python, nodeInstall, node, openAiEnd
     <section v-if="sub === 'models'" id="openai-models" class="docs-subsection">
       <div class="docs-section-heading docs-subsection-heading">
         <h2>{{ content.openAiModelsTitle }}</h2>
+        <p>{{ content.openAiModelsIntro }}</p>
       </div>
       <InterfaceEndpointList
         :items="content.openAiModelsInterfaces"
@@ -176,6 +178,7 @@ const { content, quickStart, pythonInstall, python, nodeInstall, node, openAiEnd
     <section v-if="sub === 'sdk'" id="openai-sdk" class="docs-subsection">
       <div class="docs-section-heading docs-subsection-heading">
         <h2>{{ content.openAiSdkTitle }}</h2>
+        <p>{{ content.openAiSdkIntro }}</p>
       </div>
       <article class="docs-step-card">
         <el-tabs>

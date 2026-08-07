@@ -35,6 +35,7 @@ const { content, quickStart, anthropicEndpoints } = useAnthropicContent()
     <section v-if="sub === 'quick-start'" id="anthropic-quick-start" class="docs-subsection">
       <div class="docs-section-heading docs-subsection-heading">
         <h2>{{ content.anthropicQuickStartTitle }}</h2>
+        <p>{{ content.anthropicQuickStartIntro }}</p>
       </div>
       <CodeSampleCard title="curl" :code="quickStart" default-open />
     </section>

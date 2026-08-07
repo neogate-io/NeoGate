@@ -123,6 +123,31 @@ function isSectionActive(path: string, level?: string) {
   // Group headers stay highlighted while on one of their sub pages.
   return route.path === path || route.path.startsWith(`${path}/`)
 }
+
+// Flat ordered page list (group pages followed by their sub pages) drives the
+// previous/next pager at the bottom of the content column.
+const flatPages = computed(() => {
+  const isZh = locale.value === 'zh-CN'
+  return interfacesMenu.flatMap((entry) => [
+    { path: entry.path, label: isZh ? entry.label.zh : entry.label.en },
+    ...(entry.children ?? []).map((child) => ({
+      path: child.path,
+      label: isZh ? child.label.zh : child.label.en
+    }))
+  ])
+})
+
+const pager = computed(() => {
+  const index = flatPages.value.findIndex((page) => page.path === route.path)
+  return {
+    prev: index > 0 ? flatPages.value[index - 1] : null,
+    next: index >= 0 && index < flatPages.value.length - 1 ? flatPages.value[index + 1] : null
+  }
+})
+
+const pagerLabels = computed(() =>
+  locale.value === 'zh-CN' ? { prev: '上一页', next: '下一页' } : { prev: 'Previous', next: 'Next' }
+)
 </script>
 
 <template>
@@ -179,6 +204,17 @@ function isSectionActive(path: string, level?: string) {
           <AnthropicSection v-else-if="currentSection === 'anthropic'" :sub="sub" />
           <ErrorsSection v-else-if="currentSection === 'errors'" />
           <BillingSection v-else-if="currentSection === 'billing'" />
+
+          <nav v-if="pager.prev || pager.next" class="docs-pager" aria-label="Pagination">
+            <RouterLink v-if="pager.prev" class="docs-pager-link" :to="pager.prev.path">
+              <span>← {{ pagerLabels.prev }}</span>
+              <strong>{{ pager.prev.label }}</strong>
+            </RouterLink>
+            <RouterLink v-if="pager.next" class="docs-pager-link docs-pager-next" :to="pager.next.path">
+              <span>{{ pagerLabels.next }} →</span>
+              <strong>{{ pager.next.label }}</strong>
+            </RouterLink>
+          </nav>
         </div>
       </div>
     </main>

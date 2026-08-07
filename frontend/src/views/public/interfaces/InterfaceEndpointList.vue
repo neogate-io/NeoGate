@@ -17,15 +17,33 @@ defineProps<{
   responseTitle: string
   fieldHeaders: string[]
 }>()
+
+// Color-codes the method badge by the leading HTTP verb (GET/POST/DELETE/…).
+function methodClass(method: string) {
+  return `interface-method--${method.split(/[\s/]/)[0].toLowerCase()}`
+}
+
+// Stable anchor id per endpoint card (e.g. 'post-v1-videos') so a card can be
+// linked directly via /interfaces/<group>/<sub>#<anchor>.
+function anchorFor(item: { method: string; path: string }) {
+  return `${item.method}-${item.path}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
 </script>
 
 <template>
   <div class="interface-endpoint-list">
-    <article v-for="item in items" :key="`${item.method}-${item.path}-${item.title}`">
+    <article
+      v-for="item in items"
+      :id="anchorFor(item)"
+      :key="`${item.method}-${item.path}-${item.title}`"
+    >
       <div class="interface-endpoint-heading">
         <h4>{{ item.title }}</h4>
         <div class="interface-endpoint-url">
-          <span class="interface-method">{{ item.method }}</span>
+          <span class="interface-method" :class="methodClass(item.method)">{{ item.method }}</span>
           <code>{{ item.path }}</code>
         </div>
         <p v-if="item.description">{{ item.description }}</p>

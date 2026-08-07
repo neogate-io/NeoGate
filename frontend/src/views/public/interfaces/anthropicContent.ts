@@ -119,25 +119,37 @@ curl "$BASE_URL/anthropic/v1/messages" \\
   -H "x-api-key: $API_KEY" \\
   -H "anthropic-version: 2023-06-01"`
 
+  const pickSampleTitle = (zh: string, en: string) => (locale.value === 'zh-CN' ? zh : en)
+
   const messageSamples = computed<EndpointSample[]>(() => [
-    { title: 'Messages', code: messageSample.value }
+    { title: pickSampleTitle('创建消息', 'Messages'), code: messageSample.value }
   ])
-  const streamSamples: EndpointSample[] = [{ title: 'Messages', code: streamSample }]
-  const batchCreateSamples: EndpointSample[] = [{ title: 'Create Batch', code: batchCreate }]
-  const batchManageSamples: EndpointSample[] = [
-    { title: 'List Batches', code: batchList },
-    { title: 'Retrieve Batch', code: batchRetrieve },
-    { title: 'Cancel Batch', code: batchCancel },
-    { title: 'Delete Batch', code: batchDelete }
-  ]
-  const batchResultsSamples: EndpointSample[] = [{ title: 'Batch Results', code: batchResults }]
-  const modelsSamples: EndpointSample[] = [{ title: 'Models', code: modelsSample }]
+  const streamSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('Messages 流式', 'Messages'), code: streamSample }
+  ])
+  const batchCreateSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('创建批量任务', 'Create Batch'), code: batchCreate }
+  ])
+  const batchManageSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('列出批量任务', 'List Batches'), code: batchList },
+    { title: pickSampleTitle('查询批量任务', 'Retrieve Batch'), code: batchRetrieve },
+    { title: pickSampleTitle('取消批量任务', 'Cancel Batch'), code: batchCancel },
+    { title: pickSampleTitle('删除批量任务', 'Delete Batch'), code: batchDelete }
+  ])
+  const batchResultsSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('批量任务结果', 'Batch Results'), code: batchResults }
+  ])
+  const modelsSamples = computed<EndpointSample[]>(() => [
+    { title: pickSampleTitle('模型列表', 'Models'), code: modelsSample }
+  ])
 
   const content = computed(() => {
     if (locale.value === 'zh-CN') {
       return {
         anthropicTitle: '3. Anthropic 兼容接口',
         anthropicQuickStartTitle: '3.1 快速开始',
+        anthropicQuickStartIntro:
+          '用一次最小的 curl 调用完成接入验证：Anthropic 兼容接口使用 x-api-key 请求头认证，后续示例都沿用 BASE_URL 和 API_KEY 环境变量。',
         anthropicTextTitle: '3.2 文本生成',
         anthropicStreamTitle: '3.3 流式输出',
         anthropicBatchesTitle: '3.4 批量任务',
@@ -197,7 +209,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
         ],
         anthropicStreamInterfaces: [
           {
-            title: 'Messages Stream',
+            title: 'Messages 流式',
             method: 'POST',
             path: `${anthropicBaseUrl.value}/v1/messages`,
             description: 'stream=true 时返回 Anthropic SSE 事件。',
@@ -213,12 +225,12 @@ curl "$BASE_URL/anthropic/v1/messages" \\
               ['message_delta', 'event', '消息状态和用量增量。'],
               ['message_stop', 'event', '消息结束事件。']
             ],
-            samples: streamSamples
+            samples: streamSamples.value
           }
         ],
         anthropicBatchInterfaces: [
           {
-            title: 'Create Batch',
+            title: '创建批量任务',
             method: 'POST',
             path: `${anthropicBatchBaseUrl.value}/messages/batches`,
             description: '创建 Message Batch。',
@@ -232,10 +244,10 @@ curl "$BASE_URL/anthropic/v1/messages" \\
               ['processing_status', 'string', '任务状态。'],
               ['request_counts', 'object', '各状态请求数量。']
             ],
-            samples: batchCreateSamples
+            samples: batchCreateSamples.value
           },
           {
-            title: 'List / Retrieve / Cancel / Delete Batch',
+            title: '列出 / 查询 / 取消 / 删除批量任务',
             method: 'GET / POST / DELETE',
             path: `${anthropicBatchBaseUrl.value}/messages/batches/{message_batch_id}`,
             description: '列出、查询、取消或删除批量任务。',
@@ -248,10 +260,10 @@ curl "$BASE_URL/anthropic/v1/messages" \\
               ['processing_status', 'string', '单个任务状态。'],
               ['request_counts', 'object', '各状态请求数量。']
             ],
-            samples: batchManageSamples
+            samples: batchManageSamples.value
           },
           {
-            title: 'Batch Results',
+            title: '批量任务结果',
             method: 'GET',
             path: `${anthropicBatchBaseUrl.value}/messages/batches/{message_batch_id}/results`,
             description: '读取批量任务结果流。',
@@ -261,12 +273,12 @@ curl "$BASE_URL/anthropic/v1/messages" \\
               ['result.type', 'string', 'succeeded、errored、canceled 或 expired。'],
               ['result.message', 'object', '成功时的 Messages 响应。']
             ],
-            samples: batchResultsSamples
+            samples: batchResultsSamples.value
           }
         ],
         anthropicModelsInterfaces: [
           {
-            title: 'Models',
+            title: '模型列表',
             method: 'GET',
             path: `${anthropicBaseUrl.value}/v1/models`,
             description: '读取当前 API Key 可调用的 Anthropic 模型列表。',
@@ -279,7 +291,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
               ['data[].id', 'string', '模型 ID。'],
               ['has_more', 'boolean', '是否还有下一页。']
             ],
-            samples: modelsSamples
+            samples: modelsSamples.value
           }
         ],
         batchItems: [
@@ -296,11 +308,11 @@ curl "$BASE_URL/anthropic/v1/messages" \\
           ['权限过滤', '列表会按当前 API Key 权限和后台启用渠道过滤。']
         ],
         paramFieldHeaders: ['参数', '类型', '说明'],
-        endpointHeaders: ['模块', '方法', '官方路径', '接口说明', '状态'],
+        endpointHeaders: ['模块', '方法', '接口路径', '接口说明', '状态'],
         requestParamsTitle: '请求参数',
         responseParamsTitle: '响应字段',
         endpointSearchPlaceholder: '筛选接口…',
-        anthropicIntro: `Anthropic 兼容接口使用 x-api-key 认证。下表仅列 Anthropic 官方 API 路径；${siteName.value} 的接入 Base URL、兼容扩展路径和示例在各小节中说明。`,
+        anthropicIntro: `Anthropic 兼容接口使用 x-api-key 认证。Messages 与模型接口经 /anthropic 前缀接入，Message Batches 走 /v1 路径；各小节提供可直接运行的示例。`,
         anthropicAuthItems: [
           ['Messages Base URL', anthropicBaseUrl.value],
           ['Message Batches Base URL', anthropicBatchBaseUrl.value],
@@ -366,6 +378,8 @@ curl "$BASE_URL/anthropic/v1/messages" \\
     return {
       anthropicTitle: '3. Anthropic-compatible APIs',
       anthropicQuickStartTitle: '3.1 Quick start',
+      anthropicQuickStartIntro:
+        'Verify your setup with a minimal curl call: Anthropic-compatible APIs authenticate with the x-api-key header. Later examples reuse the BASE_URL and API_KEY environment variables.',
       anthropicTextTitle: '3.2 Text generation',
       anthropicStreamTitle: '3.3 Streaming',
       anthropicBatchesTitle: '3.4 Batch tasks',
@@ -445,7 +459,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
             ['message_delta', 'event', 'Message status and usage delta.'],
             ['message_stop', 'event', 'Message stop event.']
           ],
-          samples: streamSamples
+          samples: streamSamples.value
         }
       ],
       anthropicBatchInterfaces: [
@@ -464,7 +478,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
             ['processing_status', 'string', 'Task status.'],
             ['request_counts', 'object', 'Request counts by status.']
           ],
-          samples: batchCreateSamples
+          samples: batchCreateSamples.value
         },
         {
           title: 'List / Retrieve / Cancel / Delete Batch',
@@ -480,7 +494,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
             ['processing_status', 'string', 'Single task status.'],
             ['request_counts', 'object', 'Request counts by status.']
           ],
-          samples: batchManageSamples
+          samples: batchManageSamples.value
         },
         {
           title: 'Batch Results',
@@ -493,7 +507,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
             ['result.type', 'string', 'succeeded, errored, canceled, or expired.'],
             ['result.message', 'object', 'Messages response when succeeded.']
           ],
-          samples: batchResultsSamples
+          samples: batchResultsSamples.value
         }
       ],
       anthropicModelsInterfaces: [
@@ -511,7 +525,7 @@ curl "$BASE_URL/anthropic/v1/messages" \\
             ['data[].id', 'string', 'Model ID.'],
             ['has_more', 'boolean', 'Whether another page is available.']
           ],
-          samples: modelsSamples
+          samples: modelsSamples.value
         }
       ],
       batchItems: [
@@ -534,11 +548,11 @@ curl "$BASE_URL/anthropic/v1/messages" \\
         ]
       ],
       paramFieldHeaders: ['Parameter', 'Type', 'Description'],
-      endpointHeaders: ['Module', 'Method', 'Official path', 'Description', 'Status'],
+      endpointHeaders: ['Module', 'Method', 'API path', 'Description', 'Status'],
       requestParamsTitle: 'Request parameters',
       responseParamsTitle: 'Response fields',
       endpointSearchPlaceholder: 'Filter endpoints…',
-      anthropicIntro: `Anthropic-compatible APIs use x-api-key auth. The table lists only official Anthropic API paths; ${siteName.value} Base URLs, compatibility extension paths, and runnable examples are described in each section.`,
+      anthropicIntro: `Anthropic-compatible APIs use x-api-key auth. Messages and models are served under the /anthropic prefix and Message Batches under /v1; each section provides runnable examples.`,
       anthropicAuthItems: [
         ['Messages Base URL', anthropicBaseUrl.value],
         ['Message Batches Base URL', anthropicBatchBaseUrl.value],

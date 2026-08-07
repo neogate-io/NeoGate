@@ -12,11 +12,21 @@ const errorExample = `{
   }
 }`
 
+const anthropicErrorExample = `{
+  "type": "error",
+  "error": {
+    "type": "authentication_error",
+    "message": "invalid x-api-key"
+  }
+}`
+
 const content = computed(() => {
   if (locale.value === 'zh-CN') {
     return {
       errorsTitle: '4. 错误码',
       errorIntro: '错误响应为 JSON。不同上游可能返回不同 message，网关会尽量保留可排查的信息。',
+      errorOpenAiTitle: 'OpenAI 兼容格式',
+      errorAnthropicTitle: 'Anthropic 兼容格式',
       errorHeaders: ['HTTP 状态', '常见原因', '建议处理'],
       errors: [
         [
@@ -44,6 +54,8 @@ const content = computed(() => {
     errorsTitle: '4. Errors',
     errorIntro:
       'Error responses are JSON. Upstream providers may return different messages; the gateway keeps useful diagnostic information where possible.',
+    errorOpenAiTitle: 'OpenAI-compatible format',
+    errorAnthropicTitle: 'Anthropic-compatible format',
     errorHeaders: ['HTTP status', 'Common reason', 'Suggested handling'],
     errors: [
       [
@@ -78,7 +90,12 @@ const content = computed(() => {
       <h2>{{ content.errorsTitle }}</h2>
       <p>{{ content.errorIntro }}</p>
     </div>
-    <CodeSampleCard :code="errorExample" :collapsible="false" />
+    <CodeSampleCard :title="content.errorOpenAiTitle" :code="errorExample" :collapsible="false" />
+    <CodeSampleCard
+      :title="content.errorAnthropicTitle"
+      :code="anthropicErrorExample"
+      :collapsible="false"
+    />
     <div class="interface-table-wrap">
       <table class="interface-table">
         <thead>

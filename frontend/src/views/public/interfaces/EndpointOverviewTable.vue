@@ -11,6 +11,12 @@ const props = defineProps<{
 
 const query = ref('')
 
+// Color-codes the method badge by the leading HTTP verb (GET/POST/DELETE/…).
+// Combined entries like 'GET/PATCH' or 'GET (WebSocket)' use the first verb.
+function methodClass(method: string) {
+  return `interface-method--${method.split(/[\s/]/)[0].toLowerCase()}`
+}
+
 const filteredRows = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   if (!keyword) return props.rows
@@ -50,14 +56,17 @@ const filteredRows = computed(() => {
             <template v-else>{{ row.name }}</template>
           </td>
           <td>
-            <span class="interface-method">{{ row.method }}</span>
+            <span class="interface-method" :class="methodClass(row.method)">{{ row.method }}</span>
           </td>
           <td>
             <code>{{ row.path }}</code>
           </td>
           <td>{{ row.description }}</td>
           <td>
-            <span class="interface-status" :class="{ 'interface-status--muted': !row.supported }">
+            <span
+              class="interface-status"
+              :class="row.supported ? 'interface-status--ok' : 'interface-status--muted'"
+            >
               {{ row.status }}
             </span>
           </td>

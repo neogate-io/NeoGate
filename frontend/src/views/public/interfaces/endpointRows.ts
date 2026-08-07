@@ -7,7 +7,6 @@ export interface EndpointRow {
   name: string // Module name, English in both locales
   method: string
   path: string
-  params?: string // Key parameter hints, '-' when none
   supported: boolean
   statusNote?: { zh: string; en: string } // Status suffix; use {site} for the brand name
   anchor?: string
@@ -63,7 +62,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Models',
     method: 'GET',
     path: '/v1/models',
-    params: '-',
     supported: true,
     anchor: 'models',
     description: {
@@ -75,7 +73,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Models',
     method: 'GET',
     path: '/v1/models/{model}',
-    params: 'model',
     supported: true,
     anchor: 'models',
     description: { zh: '查询单个模型详情。', en: 'Retrieve a single model.' }
@@ -84,7 +81,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Models',
     method: 'DELETE',
     path: '/v1/models/{model}',
-    params: 'model',
     supported: false,
     description: { zh: '删除或取消可删除模型。', en: 'Delete or cancel a deletable model.' }
   },
@@ -92,7 +88,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Chat Completions',
     method: 'POST',
     path: '/v1/chat/completions',
-    params: 'model, messages, stream',
     supported: true,
     anchor: 'text',
     description: {
@@ -104,7 +99,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Chat Completions',
     method: 'GET',
     path: '/v1/chat/completions/{completion_id}',
-    params: 'completion_id',
     supported: false,
     description: { zh: '查询已保存的 Chat Completion。', en: 'Retrieve a stored Chat Completion.' }
   },
@@ -112,7 +106,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Chat Completions',
     method: 'GET',
     path: '/v1/chat/completions/{completion_id}/messages',
-    params: 'completion_id',
     supported: false,
     description: { zh: '列出已保存对话的消息。', en: 'List messages of a stored conversation.' }
   },
@@ -120,7 +113,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Chat Completions',
     method: 'PATCH',
     path: '/v1/chat/completions/{completion_id}',
-    params: 'completion_id, metadata',
     supported: false,
     description: {
       zh: '更新已保存对话的元数据。',
@@ -131,7 +123,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Chat Completions',
     method: 'DELETE',
     path: '/v1/chat/completions/{completion_id}',
-    params: 'completion_id',
     supported: false,
     description: { zh: '删除已保存的 Chat Completion。', en: 'Delete a stored Chat Completion.' }
   },
@@ -139,7 +130,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Responses',
     method: 'POST',
     path: '/v1/responses',
-    params: 'model, input, stream, background, store',
     supported: true,
     anchor: 'text',
     description: {
@@ -151,7 +141,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Responses',
     method: 'GET',
     path: '/v1/responses/{response_id}',
-    params: 'response_id, stream, starting_after',
     supported: true,
     statusNote: backgroundTasksNote,
     anchor: 'text-async',
@@ -164,7 +153,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Responses',
     method: 'DELETE',
     path: '/v1/responses/{response_id}',
-    params: 'response_id',
     supported: false,
     description: { zh: '删除已保存的 Response。', en: 'Delete a stored Response.' }
   },
@@ -172,7 +160,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Responses',
     method: 'POST',
     path: '/v1/responses/{response_id}/cancel',
-    params: 'response_id',
     supported: true,
     statusNote: backgroundTasksNote,
     anchor: 'text-async',
@@ -182,7 +169,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Responses',
     method: 'GET',
     path: '/v1/responses/{response_id}/input_items',
-    params: 'response_id, limit, after',
     supported: true,
     statusNote: backgroundTasksNote,
     description: { zh: '列出 Response 的输入项。', en: 'List the input items of a Response.' }
@@ -191,7 +177,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Images',
     method: 'POST',
     path: '/v1/images/generations',
-    params: 'model, prompt, size, quality, n, stream, partial_images',
     supported: true,
     statusNote: streamingNote,
     anchor: 'images',
@@ -201,7 +186,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Images',
     method: 'POST',
     path: '/v1/images/edits',
-    params: 'model, image/image[] or images, prompt, mask, size, n, stream, partial_images',
     supported: true,
     statusNote: streamingNote,
     anchor: 'images',
@@ -211,7 +195,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Images',
     method: 'POST',
     path: '/v1/images/variations',
-    params: 'model=dall-e-2, image, size, n',
     supported: true,
     anchor: 'images',
     description: {
@@ -223,9 +206,7 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'POST',
     path: '/v1/videos',
-    params: 'model, prompt, input_reference/content, size, seconds',
     supported: true,
-    statusNote: { zh: '含 {site} 多素材扩展', en: 'including {site} multi-asset extensions' },
     anchor: 'videos',
     description: { zh: '创建视频生成任务。', en: 'Create a video generation task.' }
   },
@@ -233,7 +214,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Assets',
     method: 'POST',
     path: '/v1/assets',
-    params: 'model, type, url, name',
     supported: true,
     statusNote: siteExtensionNote,
     anchor: 'videos',
@@ -246,7 +226,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Assets',
     method: 'GET',
     path: '/v1/assets/{asset_id}',
-    params: 'asset_id',
     supported: true,
     statusNote: siteExtensionNote,
     anchor: 'videos',
@@ -259,7 +238,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'GET',
     path: '/v1/videos',
-    params: 'limit, after, order',
     supported: false,
     description: { zh: '列出视频任务。', en: 'List video tasks.' }
   },
@@ -267,7 +245,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'GET',
     path: '/v1/videos/{video_id}',
-    params: 'video_id',
     supported: true,
     anchor: 'videos',
     description: { zh: '查询视频任务状态。', en: 'Retrieve video task status.' }
@@ -276,7 +253,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'DELETE',
     path: '/v1/videos/{video_id}',
-    params: 'video_id',
     supported: false,
     description: { zh: '删除视频任务。', en: 'Delete a video task.' }
   },
@@ -284,7 +260,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'GET',
     path: '/v1/videos/{video_id}/content',
-    params: 'video_id',
     supported: true,
     anchor: 'videos',
     description: { zh: '下载生成完成的视频文件。', en: 'Download completed video content.' }
@@ -293,7 +268,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'POST',
     path: '/v1/videos/edits',
-    params: 'prompt, video.id',
     supported: false,
     description: { zh: '编辑已有视频。', en: 'Edit an existing video.' }
   },
@@ -301,7 +275,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'POST',
     path: '/v1/videos/extensions',
-    params: 'prompt, seconds, video.id',
     supported: false,
     description: {
       zh: '扩展已有视频时长或内容。',
@@ -312,7 +285,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Videos',
     method: 'POST',
     path: '/v1/videos/{video_id}/remix',
-    params: 'video_id, prompt',
     supported: false,
     description: {
       zh: '基于已有视频重新生成版本。',
@@ -323,7 +295,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Embeddings',
     method: 'POST',
     path: '/v1/embeddings',
-    params: 'model, input, dimensions, encoding_format',
     supported: true,
     anchor: 'embeddings',
     description: { zh: '创建文本向量嵌入。', en: 'Create text embeddings.' }
@@ -332,7 +303,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Audio',
     method: 'POST',
     path: '/v1/audio/speech',
-    params: 'model, input, voice, response_format',
     supported: false,
     description: { zh: '将文本转换为语音。', en: 'Convert text to speech.' }
   },
@@ -340,7 +310,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Audio',
     method: 'POST',
     path: '/v1/audio/transcriptions',
-    params: 'model, file, language, response_format',
     supported: true,
     anchor: 'audio',
     description: { zh: '将音频转写为文本。', en: 'Transcribe uploaded audio to text.' }
@@ -349,7 +318,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Audio',
     method: 'POST',
     path: '/v1/audio/translations',
-    params: 'model, file, response_format',
     supported: false,
     description: { zh: '将音频翻译为文本。', en: 'Translate audio to text.' }
   },
@@ -357,7 +325,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Moderations',
     method: 'POST',
     path: '/v1/moderations',
-    params: 'model, input',
     supported: true,
     description: { zh: '对输入内容进行安全审核。', en: 'Moderate input content.' }
   },
@@ -365,7 +332,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Files',
     method: 'POST',
     path: '/v1/files',
-    params: 'file, purpose',
     supported: false,
     description: { zh: '上传文件资源。', en: 'Upload a file resource.' }
   },
@@ -373,7 +339,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Files',
     method: 'GET',
     path: '/v1/files',
-    params: 'purpose, limit, after',
     supported: false,
     description: { zh: '列出已上传文件。', en: 'List uploaded files.' }
   },
@@ -381,7 +346,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Files',
     method: 'GET',
     path: '/v1/files/{file_id}',
-    params: 'file_id',
     supported: false,
     description: { zh: '查询文件元数据。', en: 'Retrieve file metadata.' }
   },
@@ -389,7 +353,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Files',
     method: 'DELETE',
     path: '/v1/files/{file_id}',
-    params: 'file_id',
     supported: false,
     description: { zh: '删除文件。', en: 'Delete a file.' }
   },
@@ -397,7 +360,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Files',
     method: 'GET',
     path: '/v1/files/{file_id}/content',
-    params: 'file_id',
     supported: false,
     description: { zh: '下载文件内容。', en: 'Download file content.' }
   },
@@ -405,7 +367,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Uploads',
     method: 'POST',
     path: '/v1/uploads',
-    params: 'purpose, filename, bytes, mime_type',
     supported: false,
     description: { zh: '创建分片上传会话。', en: 'Create a multipart upload session.' }
   },
@@ -413,7 +374,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Uploads',
     method: 'POST',
     path: '/v1/uploads/{upload_id}/parts',
-    params: 'upload_id, data',
     supported: false,
     description: { zh: '上传一个文件分片。', en: 'Upload a file part.' }
   },
@@ -421,7 +381,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Uploads',
     method: 'POST',
     path: '/v1/uploads/{upload_id}/complete',
-    params: 'upload_id, part_ids',
     supported: false,
     description: { zh: '完成分片上传。', en: 'Complete a multipart upload.' }
   },
@@ -429,7 +388,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Uploads',
     method: 'POST',
     path: '/v1/uploads/{upload_id}/cancel',
-    params: 'upload_id',
     supported: false,
     description: { zh: '取消分片上传。', en: 'Cancel a multipart upload.' }
   },
@@ -437,7 +395,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Batches',
     method: 'POST',
     path: '/v1/batches',
-    params: 'input_file_id, endpoint, completion_window',
     supported: false,
     description: { zh: '创建 OpenAI 批量任务。', en: 'Create an OpenAI batch task.' }
   },
@@ -445,7 +402,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Batches',
     method: 'GET',
     path: '/v1/batches',
-    params: 'limit, after',
     supported: false,
     description: { zh: '列出批量任务。', en: 'List batch tasks.' }
   },
@@ -453,7 +409,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Batches',
     method: 'GET',
     path: '/v1/batches/{batch_id}',
-    params: 'batch_id',
     supported: false,
     description: { zh: '查询批量任务。', en: 'Retrieve a batch task.' }
   },
@@ -461,7 +416,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Batches',
     method: 'POST',
     path: '/v1/batches/{batch_id}/cancel',
-    params: 'batch_id',
     supported: false,
     description: { zh: '取消批量任务。', en: 'Cancel a batch task.' }
   },
@@ -469,7 +423,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Fine-tuning',
     method: 'POST',
     path: '/v1/fine_tuning/jobs',
-    params: 'model, training_file, validation_file, hyperparameters',
     supported: false,
     description: { zh: '创建微调任务。', en: 'Create a fine-tuning job.' }
   },
@@ -477,7 +430,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Fine-tuning',
     method: 'GET',
     path: '/v1/fine_tuning/jobs',
-    params: 'limit, after',
     supported: false,
     description: { zh: '列出微调任务。', en: 'List fine-tuning jobs.' }
   },
@@ -485,7 +437,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Fine-tuning',
     method: 'GET',
     path: '/v1/fine_tuning/jobs/{fine_tuning_job_id}',
-    params: 'fine_tuning_job_id',
     supported: false,
     description: { zh: '查询微调任务。', en: 'Retrieve a fine-tuning job.' }
   },
@@ -493,7 +444,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Fine-tuning',
     method: 'POST',
     path: '/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel',
-    params: 'fine_tuning_job_id',
     supported: false,
     description: { zh: '取消微调任务。', en: 'Cancel a fine-tuning job.' }
   },
@@ -501,7 +451,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Fine-tuning',
     method: 'GET',
     path: '/v1/fine_tuning/jobs/{fine_tuning_job_id}/events',
-    params: 'fine_tuning_job_id, limit, after',
     supported: false,
     description: { zh: '列出微调事件。', en: 'List fine-tuning events.' }
   },
@@ -509,7 +458,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Fine-tuning',
     method: 'GET',
     path: '/v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints',
-    params: 'fine_tuning_job_id',
     supported: false,
     description: { zh: '列出微调检查点。', en: 'List fine-tuning checkpoints.' }
   },
@@ -517,7 +465,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Stores',
     method: 'POST',
     path: '/v1/vector_stores',
-    params: 'name, file_ids, expires_after',
     supported: false,
     description: { zh: '创建向量库。', en: 'Create a vector store.' }
   },
@@ -525,7 +472,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Stores',
     method: 'GET',
     path: '/v1/vector_stores',
-    params: 'limit, after, before',
     supported: false,
     description: { zh: '列出向量库。', en: 'List vector stores.' }
   },
@@ -533,7 +479,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Stores',
     method: 'GET/PATCH/DELETE',
     path: '/v1/vector_stores/{vector_store_id}',
-    params: 'vector_store_id',
     supported: false,
     description: {
       zh: '查询、更新或删除向量库。',
@@ -544,7 +489,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Store Files',
     method: 'POST/GET',
     path: '/v1/vector_stores/{vector_store_id}/files',
-    params: 'vector_store_id, file_id',
     supported: false,
     description: { zh: '添加或列出向量库文件。', en: 'Add or list vector store files.' }
   },
@@ -552,7 +496,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Store Files',
     method: 'GET/DELETE',
     path: '/v1/vector_stores/{vector_store_id}/files/{file_id}',
-    params: 'vector_store_id, file_id',
     supported: false,
     description: {
       zh: '查询或移除向量库文件。',
@@ -563,7 +506,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Store File Batches',
     method: 'POST/GET',
     path: '/v1/vector_stores/{vector_store_id}/file_batches',
-    params: 'vector_store_id, file_ids',
     supported: false,
     description: { zh: '创建向量库文件批处理。', en: 'Create a vector store file batch.' }
   },
@@ -571,7 +513,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Vector Store File Batches',
     method: 'GET/POST',
     path: '/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}',
-    params: 'vector_store_id, batch_id',
     supported: false,
     description: { zh: '查询或取消文件批处理。', en: 'Retrieve or cancel a file batch.' }
   },
@@ -579,7 +520,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Assistants',
     method: 'POST/GET',
     path: '/v1/assistants',
-    params: 'model, instructions, tools, metadata',
     supported: false,
     description: { zh: '创建或列出 Assistant。', en: 'Create or list Assistants.' }
   },
@@ -587,7 +527,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Assistants',
     method: 'GET/PATCH/DELETE',
     path: '/v1/assistants/{assistant_id}',
-    params: 'assistant_id',
     supported: false,
     description: {
       zh: '查询、更新或删除 Assistant。',
@@ -598,7 +537,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Threads',
     method: 'POST',
     path: '/v1/threads',
-    params: 'messages, metadata, tool_resources',
     supported: false,
     description: { zh: '创建 Assistants 线程。', en: 'Create an Assistants thread.' }
   },
@@ -606,7 +544,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Threads',
     method: 'GET/PATCH/DELETE',
     path: '/v1/threads/{thread_id}',
-    params: 'thread_id',
     supported: false,
     description: { zh: '查询、更新或删除线程。', en: 'Retrieve, update, or delete a thread.' }
   },
@@ -614,7 +551,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Thread Messages',
     method: 'POST/GET',
     path: '/v1/threads/{thread_id}/messages',
-    params: 'thread_id, role, content',
     supported: false,
     description: { zh: '创建或列出线程消息。', en: 'Create or list thread messages.' }
   },
@@ -622,7 +558,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Thread Messages',
     method: 'GET/PATCH/DELETE',
     path: '/v1/threads/{thread_id}/messages/{message_id}',
-    params: 'thread_id, message_id',
     supported: false,
     description: {
       zh: '查询、更新或删除线程消息。',
@@ -633,7 +568,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Thread Runs',
     method: 'POST/GET',
     path: '/v1/threads/{thread_id}/runs',
-    params: 'thread_id, assistant_id, model',
     supported: false,
     description: { zh: '创建或列出线程运行。', en: 'Create or list thread runs.' }
   },
@@ -641,7 +575,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Thread Runs',
     method: 'GET/PATCH',
     path: '/v1/threads/{thread_id}/runs/{run_id}',
-    params: 'thread_id, run_id',
     supported: false,
     description: { zh: '查询或更新线程运行。', en: 'Retrieve or update a thread run.' }
   },
@@ -649,7 +582,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Thread Runs',
     method: 'POST',
     path: '/v1/threads/{thread_id}/runs/{run_id}/cancel',
-    params: 'thread_id, run_id',
     supported: false,
     description: { zh: '取消线程运行。', en: 'Cancel a thread run.' }
   },
@@ -657,7 +589,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Thread Runs',
     method: 'POST',
     path: '/v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs',
-    params: 'thread_id, run_id, tool_outputs',
     supported: false,
     description: { zh: '提交工具调用结果。', en: 'Submit tool call outputs.' }
   },
@@ -665,7 +596,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Realtime',
     method: 'POST',
     path: '/v1/realtime/sessions',
-    params: 'model, voice, modalities, instructions',
     supported: false,
     description: {
       zh: '创建实时语音/多模态会话。',
@@ -676,7 +606,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Realtime',
     method: 'POST',
     path: '/v1/realtime/transcription_sessions',
-    params: 'input_audio_format, input_audio_transcription',
     supported: false,
     description: { zh: '创建实时转写会话。', en: 'Create a realtime transcription session.' }
   },
@@ -684,8 +613,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Realtime',
     method: 'GET (WebSocket)',
     path: '/v1/realtime?model=…',
-    params:
-      'model (query)；wss 升级后按 OpenAI 官方 Realtime 转写协议收发（transcription_session.update、input_audio_buffer.append、delta/completed 事件），当前对接阿里云 qwen3-asr-flash-realtime 实时转写，按音频时长计费',
     supported: true,
     description: {
       zh: '建立实时语音识别 WebSocket 会话（当前对接 qwen3-asr-flash-realtime，按音频时长计费）。',
@@ -696,7 +623,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Evals',
     method: 'POST/GET',
     path: '/v1/evals',
-    params: 'name, data_source_config, testing_criteria',
     supported: false,
     description: { zh: '创建或列出评测。', en: 'Create or list evals.' }
   },
@@ -704,7 +630,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Evals',
     method: 'GET/PATCH/DELETE',
     path: '/v1/evals/{eval_id}',
-    params: 'eval_id',
     supported: false,
     description: { zh: '查询、更新或删除评测。', en: 'Retrieve, update, or delete an eval.' }
   },
@@ -712,7 +637,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Eval Runs',
     method: 'POST/GET',
     path: '/v1/evals/{eval_id}/runs',
-    params: 'eval_id, data_source, model',
     supported: false,
     description: { zh: '创建或列出评测运行。', en: 'Create or list eval runs.' }
   },
@@ -720,7 +644,6 @@ export const openAiEndpointRows: EndpointRow[] = [
     name: 'Eval Runs',
     method: 'GET/DELETE',
     path: '/v1/evals/{eval_id}/runs/{run_id}',
-    params: 'eval_id, run_id',
     supported: false,
     description: { zh: '查询或删除评测运行。', en: 'Retrieve or delete an eval run.' }
   }
@@ -730,8 +653,7 @@ export const anthropicEndpointRows: EndpointRow[] = [
   {
     name: 'Messages',
     method: 'POST',
-    path: '/v1/messages',
-    params: 'model, max_tokens, messages, system, tools, stream',
+    path: '/anthropic/v1/messages',
     supported: true,
     anchor: 'text',
     description: {
@@ -742,8 +664,7 @@ export const anthropicEndpointRows: EndpointRow[] = [
   {
     name: 'Messages',
     method: 'POST',
-    path: '/v1/messages/count_tokens',
-    params: 'model, messages, system, tools',
+    path: '/anthropic/v1/messages/count_tokens',
     supported: true,
     description: {
       zh: '预估 Messages 请求的 token 数。',
@@ -754,7 +675,6 @@ export const anthropicEndpointRows: EndpointRow[] = [
     name: 'Message Batches',
     method: 'POST',
     path: '/v1/messages/batches',
-    params: 'requests[].custom_id, requests[].params',
     supported: true,
     anchor: 'batches',
     description: { zh: '创建 Message Batch 批量任务。', en: 'Create a Message Batch task.' }
@@ -763,7 +683,6 @@ export const anthropicEndpointRows: EndpointRow[] = [
     name: 'Message Batches',
     method: 'GET',
     path: '/v1/messages/batches',
-    params: 'limit, before_id, after_id',
     supported: true,
     anchor: 'batches',
     description: { zh: '列出 Message Batch 批量任务。', en: 'List Message Batch tasks.' }
@@ -772,7 +691,6 @@ export const anthropicEndpointRows: EndpointRow[] = [
     name: 'Message Batches',
     method: 'GET',
     path: '/v1/messages/batches/{message_batch_id}',
-    params: 'message_batch_id',
     supported: true,
     anchor: 'batches',
     description: { zh: '查询单个批量任务状态。', en: 'Retrieve a single batch task.' }
@@ -781,7 +699,6 @@ export const anthropicEndpointRows: EndpointRow[] = [
     name: 'Message Batches',
     method: 'POST',
     path: '/v1/messages/batches/{message_batch_id}/cancel',
-    params: 'message_batch_id',
     supported: true,
     anchor: 'batches',
     description: { zh: '取消批量任务。', en: 'Cancel a batch task.' }
@@ -790,7 +707,6 @@ export const anthropicEndpointRows: EndpointRow[] = [
     name: 'Message Batches',
     method: 'DELETE',
     path: '/v1/messages/batches/{message_batch_id}',
-    params: 'message_batch_id',
     supported: true,
     anchor: 'batches',
     description: { zh: '删除批量任务。', en: 'Delete a batch task.' }
@@ -799,7 +715,6 @@ export const anthropicEndpointRows: EndpointRow[] = [
     name: 'Message Batches',
     method: 'GET',
     path: '/v1/messages/batches/{message_batch_id}/results',
-    params: 'message_batch_id',
     supported: true,
     anchor: 'batches',
     description: { zh: '读取批量任务结果。', en: 'Read batch task results.' }
@@ -807,8 +722,7 @@ export const anthropicEndpointRows: EndpointRow[] = [
   {
     name: 'Models',
     method: 'GET',
-    path: '/v1/models',
-    params: 'limit, before_id, after_id',
+    path: '/anthropic/v1/models',
     supported: true,
     anchor: 'models',
     description: { zh: '列出 Anthropic 官方模型。', en: 'List official Anthropic models.' }
@@ -816,8 +730,7 @@ export const anthropicEndpointRows: EndpointRow[] = [
   {
     name: 'Models',
     method: 'GET',
-    path: '/v1/models/{model_id}',
-    params: 'model_id',
+    path: '/anthropic/v1/models/{model_id}',
     supported: true,
     anchor: 'models',
     description: {
@@ -828,40 +741,35 @@ export const anthropicEndpointRows: EndpointRow[] = [
   {
     name: 'Files',
     method: 'POST',
-    path: '/v1/files',
-    params: 'file, purpose, anthropic-beta',
+    path: '/anthropic/v1/files',
     supported: false,
     description: { zh: '上传文件资源。', en: 'Upload a file resource.' }
   },
   {
     name: 'Files',
     method: 'GET',
-    path: '/v1/files',
-    params: 'limit, before_id, after_id',
+    path: '/anthropic/v1/files',
     supported: false,
     description: { zh: '列出文件资源。', en: 'List file resources.' }
   },
   {
     name: 'Files',
     method: 'GET',
-    path: '/v1/files/{file_id}',
-    params: 'file_id',
+    path: '/anthropic/v1/files/{file_id}',
     supported: false,
     description: { zh: '查询文件元数据。', en: 'Retrieve file metadata.' }
   },
   {
     name: 'Files',
     method: 'DELETE',
-    path: '/v1/files/{file_id}',
-    params: 'file_id',
+    path: '/anthropic/v1/files/{file_id}',
     supported: false,
     description: { zh: '删除文件资源。', en: 'Delete a file resource.' }
   },
   {
     name: 'Files',
     method: 'GET',
-    path: '/v1/files/{file_id}/content',
-    params: 'file_id',
+    path: '/anthropic/v1/files/{file_id}/content',
     supported: false,
     description: { zh: '下载文件内容。', en: 'Download file content.' }
   }

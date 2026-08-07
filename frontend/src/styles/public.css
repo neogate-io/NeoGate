@@ -578,7 +578,7 @@
   gap: 40px;
   margin: 0 auto;
   padding: 58px clamp(18px, 4vw, 48px) 76px;
-  width: min(1260px, 100%);
+  width: min(1360px, 100%);
 }
 
 .docs-hero {
@@ -617,8 +617,11 @@
   border-right: 1px solid var(--public-border);
   display: grid;
   gap: 18px;
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
   padding: 2px 22px 2px 0;
   position: sticky;
+  scrollbar-width: thin;
   top: 96px;
 }
 
@@ -636,16 +639,20 @@
 }
 
 .docs-sidebar a {
+  border-radius: 6px;
   color: #64748b;
   font-size: 14px;
   font-weight: 650;
   line-height: 1.25;
-  padding: 9px 0 9px 12px;
+  padding: 7px 10px 7px 12px;
   text-decoration: none;
-  transition: color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .docs-sidebar a:hover {
+  background: #f1f5f9;
   color: var(--brand-blue);
 }
 
@@ -691,6 +698,7 @@
 }
 
 .docs-sidebar a.docs-sidebar-active-link {
+  background: var(--brand-blue-soft);
   color: var(--brand-blue);
 }
 
@@ -698,7 +706,7 @@
   color: #8a98aa;
   font-size: 12px;
   font-weight: 560;
-  padding: 5px 0 5px 34px;
+  padding: 5px 10px 5px 34px;
   position: relative;
 }
 
@@ -798,7 +806,7 @@
 .interface-meta-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
 .interface-meta-grid article {
@@ -816,6 +824,14 @@
   font-size: 13px;
   font-weight: 720;
   line-height: 1.25;
+}
+
+.interface-meta-grid code {
+  background: #ffffff;
+  border: 1px solid var(--public-border-soft);
+  border-radius: 6px;
+  display: block;
+  padding: 7px 10px;
 }
 
 .interface-meta-grid code,
@@ -873,6 +889,7 @@
   gap: 14px;
   min-width: 0;
   padding: 16px;
+  scroll-margin-top: 96px;
 }
 
 .interface-endpoint-heading {
@@ -899,9 +916,13 @@
 
 .interface-endpoint-url {
   align-items: center;
+  background: #f8fafc;
+  border: 1px solid rgba(216, 225, 236, 0.86);
+  border-radius: 7px;
   display: flex;
   gap: 10px;
   min-width: 0;
+  padding: 8px 10px;
 }
 
 .interface-endpoint-url code {
@@ -969,10 +990,19 @@
 }
 
 .interface-table th {
+  background: #f8fafc;
   color: #334155;
   font-size: 12px;
   font-weight: 780;
   line-height: 1.25;
+}
+
+.interface-table tbody tr {
+  transition: background 0.12s ease;
+}
+
+.interface-table tbody tr:hover td {
+  background: #f8fafc;
 }
 
 .interface-table td {
@@ -990,6 +1020,22 @@
   font-weight: 720;
 }
 
+/* Give the API path column the largest share so long paths stay on one line;
+   the method and status badges only need their intrinsic width. */
+.interface-table th:nth-child(2),
+.interface-table td:nth-child(2),
+.interface-table th:nth-child(5),
+.interface-table td:nth-child(5) {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.interface-table th:nth-child(3),
+.interface-table td:nth-child(3) {
+  min-width: 320px;
+  width: 38%;
+}
+
 .interface-method {
   background: var(--brand-blue-soft);
   border: 1px solid var(--brand-blue-border);
@@ -1003,6 +1049,25 @@
   white-space: nowrap;
 }
 
+.interface-method--get {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.interface-method--delete {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.interface-method--patch,
+.interface-method--put {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #c2410c;
+}
+
 .interface-status {
   background: #f7f9fc;
   border: 1px solid rgba(216, 225, 236, 0.9);
@@ -1014,6 +1079,12 @@
   line-height: 1;
   padding: 5px 7px;
   white-space: nowrap;
+}
+
+.interface-status--ok {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
 }
 
 .interface-status--muted {
@@ -1092,6 +1163,57 @@
 
 .interface-anchor {
   scroll-margin-top: 96px;
+}
+
+.docs-pager {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 8px;
+}
+
+.docs-pager-link {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid var(--public-border-soft);
+  border-radius: 8px;
+  color: var(--public-text);
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  text-decoration: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.docs-pager-link:hover {
+  border-color: var(--brand-blue-border);
+  box-shadow: var(--public-shadow);
+}
+
+.docs-pager-link span {
+  color: #8a98aa;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.docs-pager-link strong {
+  color: var(--brand-blue);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.3;
+}
+
+.docs-pager-next {
+  justify-items: end;
+  text-align: right;
+}
+
+/* First page has only a "next" link; keep it on the right side. */
+.docs-pager-next:only-child {
+  grid-column: 2;
 }
 
 .docs-check-item {
@@ -1382,6 +1504,14 @@
   border-bottom: 0;
 }
 
+.docs-params-table tbody tr {
+  transition: background 0.12s ease;
+}
+
+.docs-params-table tbody tr:hover td {
+  background: #f8fafc;
+}
+
 .docs-params-table th {
   color: #334155;
   font-size: 12px;
@@ -1397,7 +1527,7 @@
 }
 
 .docs-params-table td:first-child {
-  width: 180px;
+  width: 220px;
 }
 
 .docs-extension-badge {
@@ -1541,37 +1671,64 @@
     border-bottom: 1px solid var(--public-border);
     border-right: 0;
     gap: 12px;
+    max-height: none;
+    overflow: visible;
     padding: 0 0 16px;
     position: static;
   }
 
+  /* Sidebar becomes a horizontally scrollable row of pill chips. */
   .docs-sidebar nav {
     display: flex;
-    gap: 6px;
+    flex-wrap: nowrap;
+    gap: 8px;
     overflow-x: auto;
-    padding-bottom: 2px;
+    padding-bottom: 4px;
+    scrollbar-width: none;
   }
 
-  .docs-sidebar a {
-    border-left: 0;
-    border-bottom: 2px solid transparent;
+  .docs-sidebar nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .docs-sidebar nav > a {
+    background: #ffffff;
+    border: 1px solid var(--public-border-soft);
+    border-radius: 999px;
     flex: 0 0 auto;
-    padding: 8px 4px;
+    padding: 6px 12px;
     white-space: nowrap;
   }
 
-  .docs-sidebar a:hover {
-    border-bottom-color: var(--brand-blue);
-    border-left-color: transparent;
+  .docs-sidebar-group {
+    background: #ffffff;
+    border: 1px solid var(--public-border-soft);
+    border-radius: 999px;
+    flex: 0 0 auto;
+    padding-right: 4px;
+  }
+
+  .docs-sidebar-group > a {
+    padding: 6px 6px 6px 12px;
+  }
+
+  .docs-sidebar a.docs-sidebar-active-link,
+  .docs-sidebar-group:has(> a.docs-sidebar-active-link) {
+    background: var(--brand-blue-soft);
+    border-color: var(--brand-blue-border);
+  }
+
+  .docs-sidebar-group:has(> a.docs-sidebar-active-link) > a {
+    background: transparent;
   }
 
   .docs-sidebar a.docs-sidebar-sub-link {
     font-size: 12px;
-    padding: 8px 4px 8px 18px;
+    padding: 6px 12px;
   }
 
   .docs-sidebar a.docs-sidebar-sub-link::before {
-    left: 4px;
+    display: none;
   }
 
   .docs-hero h1 {
@@ -1587,6 +1744,10 @@
   }
 
   .interface-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .docs-check-list {
     grid-template-columns: 1fr;
   }
 

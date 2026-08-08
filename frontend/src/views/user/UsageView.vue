@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
-import { getUserUsage } from '../../api/usage'
+import { downloadUserUsageCsv, getUserUsage } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
@@ -10,7 +10,7 @@ import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import {
   cacheWriteTokens,
-  downloadCsv,
+  downloadBlob,
   formatDateTime,
   formatDurationMs,
   formatNumber,
@@ -46,13 +46,13 @@ const {
   reload
 } = useAsyncData(
   () =>
-    getUserUsage(
-      currentPage.value,
-      pageSize.value,
-      usageQueryRange.value.start,
-      usageQueryRange.value.end,
-      currentCursor.value
-    ),
+    getUserUsage({
+      page: currentPage.value,
+      limit: pageSize.value,
+      start: usageQueryRange.value.start,
+      end: usageQueryRange.value.end,
+      cursor: currentCursor.value
+    }),
   { items: [], total: 0, page: 1, limit: DEFAULT_PAGE_SIZE }
 )
 
@@ -183,41 +183,14 @@ async function handleDateRangeChange() {
 
 async function exportUsage() {
   await runDownload(async () => {
-    const exportPage = await getUserUsage(
-      1,
-      1000,
+    const result = await downloadUserUsageCsv(
       usageQueryRange.value.start,
       usageQueryRange.value.end
     )
-    const headers = [
-      t('time'),
-      t('model'),
-      t('inputShort'),
-      t('outputShort'),
-      t('tokens'),
-      t('cacheReadExport'),
-      t('cacheWriteShort'),
-      t('totalLatency'),
-      t('firstResponseLatency'),
-      t('throughput'),
-      t('cost'),
-      t('status')
-    ]
-    const rows = exportPage.items.map((row) => [
-      formatFullTime(row.created_at),
-      row.model || '',
-      row.input_tokens ?? '',
-      row.output_tokens ?? '',
-      row.total_tokens ?? '',
-      row.cache_in_tokens ?? '',
-      cacheWriteTokens(row),
-      formatDurationMs(row.latency_ms),
-      formatDurationMs(row.first_response_ms),
-      formatTokenRate(row.output_tokens_per_second, locale.value),
-      formatMoney(row.cost_micros, locale.value, 6),
-      statusLabel(row.status_code)
-    ])
-    downloadCsv(`usage-${new Date().toISOString().slice(0, 10)}.csv`, [headers, ...rows])
+    downloadBlob(
+      result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`,
+      result.blob
+    )
   })
 }
 </script>
@@ -298,7 +271,7 @@ async function exportUsage() {
           </summary>
           <div class="usage-detail-panel">
             <section class="usage-detail-section">
-              <h4>调用信息</h4>
+              <h4>{{ t('usageSectionRequest') }}</h4>
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('model') }}</dt>
@@ -355,7 +328,7 @@ async function exportUsage() {
               </dl>
             </section>
             <section class="usage-detail-section">
-              <h4>用量</h4>
+              <h4>{{ t('usageSectionTokens') }}</h4>
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('totalTokensDetail') }}</dt>
@@ -380,7 +353,7 @@ async function exportUsage() {
               </dl>
             </section>
             <section class="usage-detail-section">
-              <h4>性能</h4>
+              <h4>{{ t('usageSectionPerformance') }}</h4>
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('totalLatencyDetail') }}</dt>
@@ -397,7 +370,7 @@ async function exportUsage() {
               </dl>
             </section>
             <section class="usage-detail-section">
-              <h4>计费</h4>
+              <h4>{{ t('usageSectionBilling') }}</h4>
               <dl class="usage-detail-list">
                 <div>
                   <dt>{{ t('cost') }}</dt>
@@ -412,7 +385,7 @@ async function exportUsage() {
               </dl>
             </section>
             <section v-if="row.error_summary" class="usage-detail-section">
-              <h4>错误说明</h4>
+              <h4>{{ t('usageSectionError') }}</h4>
               <dl class="usage-detail-list">
                 <div class="usage-detail-wide">
                   <dt>{{ t('errorSummary') }}</dt>

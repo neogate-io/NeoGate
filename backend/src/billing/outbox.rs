@@ -655,7 +655,6 @@ async fn drain_billing_outbox(
 
 struct BillingOutboxChunkResult {
     selected: u64,
-    selected_ids: Vec<DbId>,
     processed: u64,
 }
 
@@ -672,7 +671,6 @@ async fn process_billing_outbox_chunk(
         tx.commit().await?;
         return Ok(BillingOutboxChunkResult {
             selected: 0,
-            selected_ids: Vec::new(),
             processed: 0,
         });
     }
@@ -697,7 +695,6 @@ async fn process_billing_outbox_chunk(
                     process_billing_records_individually(pool, activity, daily, records).await?;
                 return Ok(BillingOutboxChunkResult {
                     selected,
-                    selected_ids,
                     processed,
                 });
             }
@@ -722,7 +719,6 @@ async fn process_billing_outbox_chunk(
             process_billing_records_individually(pool, activity, daily, records).await?;
         return Ok(BillingOutboxChunkResult {
             selected,
-            selected_ids,
             processed,
         });
     }
@@ -732,7 +728,6 @@ async fn process_billing_outbox_chunk(
     daily.record(&processed_usages);
     Ok(BillingOutboxChunkResult {
         selected,
-        selected_ids,
         processed: processed_usages.len() as u64,
     })
 }
@@ -964,7 +959,7 @@ mod tests {
             .worker
             .sender
             .read()
-            .expect("billing outbox sender poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .is_none());
     }
 }

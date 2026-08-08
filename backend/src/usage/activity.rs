@@ -51,7 +51,7 @@ impl ActivityRecorder {
             return;
         }
 
-        let mut entries = entries.lock().expect("activity recorder poisoned");
+        let mut entries = entries.lock().unwrap_or_else(|e| e.into_inner());
         for usage in usages {
             if let Some(channel_key_id) = usage.channel_key_id {
                 insert_bounded_id(
@@ -91,7 +91,7 @@ async fn run_activity_worker(
 
 async fn flush_recorded_activity(pool: &PgPool, entries: &Arc<Mutex<ActivityState>>) {
     let pending = {
-        let mut entries = entries.lock().expect("activity recorder poisoned");
+        let mut entries = entries.lock().unwrap_or_else(|e| e.into_inner());
         if entries.is_empty() {
             return;
         }
@@ -116,7 +116,7 @@ async fn flush_recorded_activity(pool: &PgPool, entries: &Arc<Mutex<ActivityStat
 
     if let Err(err) = result {
         tracing::warn!("failed to flush activity timestamps: {err}");
-        let mut entries = entries.lock().expect("activity recorder poisoned");
+        let mut entries = entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.merge_bounded(pending);
     }
 }

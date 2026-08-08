@@ -85,6 +85,10 @@ fn anthropic_content_to_openai_response_output(
     let mut output = Vec::new();
     let mut text = String::new();
     let mut reasoning_text = String::new();
+
+    // 按原始块顺序遍历，在遇到 tool_use 时先 flush 已累积的 reasoning 和 text，
+    // 保持 Anthropic 原始顺序（thinking → text → tool_use）。
+    // 修复前：reasoning_text 统一在循环结束后追加，丢失了与 tool_use 之间的位置关系。
     for item in items {
         match item.get("type").and_then(Value::as_str) {
             Some("text") => {
@@ -98,6 +102,14 @@ fn anthropic_content_to_openai_response_output(
                 }
             }
             Some("tool_use") => {
+                // 在工具调用之前按顺序 flush 已累积的 reasoning 和 text
+                if !reasoning_text.is_empty() {
+                    output.push(openai_response_reasoning_item(
+                        format!("rs_{response_id}_{}", output.len()),
+                        std::mem::take(&mut reasoning_text),
+                        "completed",
+                    ));
+                }
                 if !text.is_empty() {
                     output.push(openai_response_message_item(
                         format!("msg_{response_id}_{}", output.len()),
@@ -112,6 +124,7 @@ fn anthropic_content_to_openai_response_output(
             _ => {}
         }
     }
+    // flush 循环结束后剩余的 reasoning 和 text
     if !reasoning_text.is_empty() {
         output.push(openai_response_reasoning_item(
             format!("rs_{response_id}_{}", output.len()),
@@ -339,7 +352,9 @@ impl AnthropicSseToOpenAiResponse {
             .and_then(|delta| delta.get("stop_reason"))
             .and_then(Value::as_str)
         {
-            // "max_tokens" stop reason is treated as completed, not incomplete.
+            // stop_reason = "tool_use" 表示工具调用正常完成，状态应标记为 completed。
+            // （与 max_tokens/end_turn 等其他停止原因区分：tool_use 是预期的中间停止，
+            //  不是截断，因此标记 completed 而非 incomplete。）
             self.status = "completed";
         }
         self.observe_usage(value);

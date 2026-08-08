@@ -28,6 +28,7 @@ import {
   microAmountToMajor,
   toDateKey
 } from '../../utils/format'
+import { axisTooltip, categoryAxis, chartGrid, metricAxis } from '../../utils/usageCharts'
 
 const { locale, t } = useLocale()
 const { currencySymbol, formatMoney } = useBillingCurrency()
@@ -145,31 +146,10 @@ const timelineRows = computed(() =>
 const modelSeriesRows = computed(() => statisticsTimeSeries.value.model_points)
 const costTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#2563eb'],
-  grid: {
-    left: 12,
-    right: 18,
-    top: 28,
-    bottom: 28,
-    outerBoundsMode: 'same',
-    outerBoundsContain: 'axisLabel'
-  },
-  tooltip: {
-    trigger: 'axis',
-    formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
-  },
-  xAxis: {
-    type: 'category',
-    data: dailyChartRows.value.map((item) => item.date),
-    axisLabel: { color: '#667085', hideOverlap: true }
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: {
-      color: '#667085',
-      formatter: (value: number) => formatChartMoney(value)
-    },
-    splitLine: { lineStyle: { color: '#edf2f7' } }
-  },
+  grid: chartGrid(),
+  tooltip: axisTooltip((params) => trendTooltip(params, t('cost'), 'cost')),
+  xAxis: categoryAxis(dailyChartRows.value.map((item) => item.date)),
+  yAxis: metricAxis(formatChartMoney),
   series: [
     {
       name: t('cost'),
@@ -182,28 +162,10 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
 }))
 const requestTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#16a34a'],
-  grid: {
-    left: 12,
-    right: 18,
-    top: 28,
-    bottom: 28,
-    outerBoundsMode: 'same',
-    outerBoundsContain: 'axisLabel'
-  },
-  tooltip: {
-    trigger: 'axis',
-    formatter: (params: unknown) => trendTooltip(params, t('requestCount'), 'number')
-  },
-  xAxis: {
-    type: 'category',
-    data: dailyChartRows.value.map((item) => item.date),
-    axisLabel: { color: '#667085', hideOverlap: true }
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: { color: '#667085' },
-    splitLine: { lineStyle: { color: '#edf2f7' } }
-  },
+  grid: chartGrid(),
+  tooltip: axisTooltip((params) => trendTooltip(params, t('requestCount'), 'number')),
+  xAxis: categoryAxis(dailyChartRows.value.map((item) => item.date)),
+  yAxis: metricAxis(),
   series: [
     {
       name: t('requestCount'),
@@ -217,29 +179,13 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
   const rows = statisticsSummary.value.top_users
   return {
     color: ['#0f766e'],
-    grid: {
-      left: 12,
-      right: 18,
-      top: 28,
-      bottom: 58,
-      outerBoundsMode: 'same',
-      outerBoundsContain: 'axisLabel'
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
-    },
-    xAxis: {
-      type: 'category',
-      data: rows.map((item) => item.user_display_name),
-      axisLabel: { color: '#667085', rotate: 24, width: 92, overflow: 'truncate' }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { color: '#667085', formatter: (value: number) => formatChartMoney(value) },
-      splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
+    grid: chartGrid(58),
+    tooltip: axisTooltip((params) => trendTooltip(params, t('cost'), 'cost'), true),
+    xAxis: categoryAxis(
+      rows.map((item) => item.user_display_name),
+      { rotate: 24, width: 92 }
+    ),
+    yAxis: metricAxis(formatChartMoney),
     series: [
       {
         name: t('cost'),
@@ -255,31 +201,13 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
 })
 const topModelsOption = computed<EChartsCoreOption>(() => ({
   color: ['#7c3aed'],
-  grid: {
-    left: 12,
-    right: 18,
-    top: 28,
-    bottom: 54,
-    outerBoundsMode: 'same',
-    outerBoundsContain: 'axisLabel'
-  },
-  tooltip: {
-    trigger: 'axis',
-    axisPointer: { type: 'shadow' },
-    formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
-  },
-  xAxis: {
-    type: 'category',
-    data: statisticsSummary.value.top_models.map((item) =>
-      modelDisplay(item.channel_name, item.model)
-    ),
-    axisLabel: { color: '#667085', rotate: 28, width: 92, overflow: 'truncate' }
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: { color: '#667085', formatter: (value: number) => formatChartMoney(value) },
-    splitLine: { lineStyle: { color: '#edf2f7' } }
-  },
+  grid: chartGrid(54),
+  tooltip: axisTooltip((params) => trendTooltip(params, t('cost'), 'cost'), true),
+  xAxis: categoryAxis(
+    statisticsSummary.value.top_models.map((item) => modelDisplay(item.channel_name, item.model)),
+    { rotate: 28, width: 92 }
+  ),
+  yAxis: metricAxis(formatChartMoney),
   series: [
     {
       name: t('cost'),
@@ -648,32 +576,11 @@ function modelLineOption(options: {
         ]
   return {
     color: chartPalette(),
-    grid: {
-      left: 12,
-      right: 18,
-      top: 36,
-      bottom: 34,
-      outerBoundsMode: 'same',
-      outerBoundsContain: 'axisLabel'
-    },
+    grid: chartGrid(34, 36),
     legend: { top: 0, type: 'scroll', textStyle: { color: '#667085' } },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
-    },
-    xAxis: {
-      type: 'category',
-      data: buckets,
-      axisLabel: { color: '#667085', hideOverlap: true }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#667085',
-        formatter: (value: number) => axisValueLabel(value, options.valueMode)
-      },
-      splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
+    tooltip: axisTooltip((params) => trendTooltip(params, options.label, options.valueMode)),
+    xAxis: categoryAxis(buckets),
+    yAxis: metricAxis((value) => axisValueLabel(value, options.valueMode)),
     series
   }
 }
@@ -687,32 +594,13 @@ function verticalMetricOption(options: {
 }): EChartsCoreOption {
   return {
     color: [options.color],
-    grid: {
-      left: 12,
-      right: 18,
-      top: 28,
-      bottom: 62,
-      outerBoundsMode: 'same',
-      outerBoundsContain: 'axisLabel'
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
-    },
-    xAxis: {
-      type: 'category',
-      data: options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
-      axisLabel: { color: '#667085', rotate: 28, width: 96, overflow: 'truncate' }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#667085',
-        formatter: (value: number) => axisValueLabel(value, options.valueMode)
-      },
-      splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
+    grid: chartGrid(62),
+    tooltip: axisTooltip((params) => trendTooltip(params, options.label, options.valueMode), true),
+    xAxis: categoryAxis(
+      options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
+      { rotate: 28, width: 96 }
+    ),
+    yAxis: metricAxis((value) => axisValueLabel(value, options.valueMode)),
     series: [
       {
         name: options.label,

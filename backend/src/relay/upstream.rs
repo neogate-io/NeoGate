@@ -433,15 +433,7 @@ pub(crate) async fn forward_anthropic(
     body: Bytes,
 ) -> AppResult<reqwest::Response> {
     let url = upstream_url(&upstream.base_url, "/v1/messages");
-    let anthropic_version = headers
-        .get("anthropic-version")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
-        .to_string();
-    let anthropic_beta = headers
-        .get("anthropic-beta")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+    let (anthropic_version, anthropic_beta) = extract_anthropic_version_headers(headers);
 
     send_upstream_request(
         upstream,
@@ -475,15 +467,7 @@ pub(crate) async fn forward_anthropic_bound(
     body: Option<Bytes>,
 ) -> AppResult<reqwest::Response> {
     let url = upstream_url(&upstream.base_url, path);
-    let anthropic_version = headers
-        .get("anthropic-version")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
-        .to_string();
-    let anthropic_beta = headers
-        .get("anthropic-beta")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+    let (anthropic_version, anthropic_beta) = extract_anthropic_version_headers(headers);
 
     send_upstream_request(upstream, UpstreamProtocol::Anthropic, path, || {
         let mut request = state
@@ -502,6 +486,20 @@ pub(crate) async fn forward_anthropic_bound(
         apply_anthropic_cli_passthrough_headers(request, headers)
     })
     .await
+}
+
+/// 从下游请求头提取 anthropic-version（缺省用 DEFAULT_ANTHROPIC_VERSION）和可选的 anthropic-beta。
+fn extract_anthropic_version_headers(headers: &HeaderMap) -> (String, Option<String>) {
+    let anthropic_version = headers
+        .get("anthropic-version")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
+        .to_string();
+    let anthropic_beta = headers
+        .get("anthropic-beta")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    (anthropic_version, anthropic_beta)
 }
 
 fn apply_anthropic_cli_passthrough_headers(
@@ -571,50 +569,37 @@ pub(crate) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
                 }
             })
             .to_string();
+            // tracing 宏要求编译期常量级别，无法传运行时 Level；
+            // 用局部宏把 14 个字段只写一份，展开到 error/warn 两个分支。
+            macro_rules! log_upstream_failed {
+                ($macro:ident) => {
+                    tracing::$macro!(
+                        channel = %ctx.upstream.channel_name,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        provider = %ctx.upstream.provider,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream = %ctx.upstream.base_url,
+                        status = upstream_error.status().as_u16(),
+                        client_status = upstream_error.status().as_u16(),
+                        latency_ms,
+                        error_kind,
+                        reason,
+                        detail,
+                        retryable = upstream_error.retryable,
+                        client_response = %client_response,
+                        "upstream request failed"
+                    )
+                };
+            }
             if upstream_error.status().is_server_error() {
-                tracing::error!(
-                    channel = %ctx.upstream.channel_name,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    channel_key_id = ?ctx.upstream.channel_key_id,
-                    credential_id = ?ctx.upstream.credential_id,
-                    provider = %ctx.upstream.provider,
-                    protocol = ctx.protocol.as_str(),
-                    model = %ctx.model,
-                    path = ctx.path,
-                    upstream = %ctx.upstream.base_url,
-                    status = upstream_error.status().as_u16(),
-                    client_status = upstream_error.status().as_u16(),
-                    latency_ms,
-                    error_kind,
-                    reason,
-                    detail,
-                    retryable = upstream_error.retryable,
-                    client_response = %client_response,
-                    "upstream request failed"
-                );
+                log_upstream_failed!(error);
             } else {
-                tracing::warn!(
-                    channel = %ctx.upstream.channel_name,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    channel_key_id = ?ctx.upstream.channel_key_id,
-                    credential_id = ?ctx.upstream.credential_id,
-                    provider = %ctx.upstream.provider,
-                    protocol = ctx.protocol.as_str(),
-                    model = %ctx.model,
-                    path = ctx.path,
-                    upstream = %ctx.upstream.base_url,
-                    status = upstream_error.status().as_u16(),
-                    client_status = upstream_error.status().as_u16(),
-                    latency_ms,
-                    error_kind,
-                    reason,
-                    detail,
-                    retryable = upstream_error.retryable,
-                    client_response = %client_response,
-                    "upstream request failed"
-                );
+                log_upstream_failed!(warn);
             }
             tracing::debug!(
                 channel_id = ctx.upstream.channel_id,

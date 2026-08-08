@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,14 +13,7 @@ import {
   WarningFilled
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import {
-  getModelReferenceCatalog,
-  getProviderModels,
-  getPricingTemplates,
-  getChannelPrices,
-  syncPricingTemplates,
-  upsertChannelPrice
-} from '../../api/prices'
+import { upsertChannelPrice } from '../../api/prices'
 import { updateChannelModel, updateChannel, type ChannelDiagnosticScope } from '../../api/channels'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
@@ -29,32 +22,29 @@ import ChannelExpandPanel, {
   type ChannelExpandPriceGroup
 } from '../../components/admin/channels/ChannelExpandPanel.vue'
 import ChannelProbeTrendCell from '../../components/admin/channels/ChannelProbeTrendCell.vue'
-import ChannelPriceDialog, {
-  type ChannelPriceForm,
-  type ChannelVideoPriceTierForm
-} from '../../components/admin/channels/ChannelPriceDialog.vue'
+import ChannelPriceDialog from '../../components/admin/channels/ChannelPriceDialog.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
+import { useChannelPricing } from '../../composables/useChannelPricing'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { MessageKey } from '../../i18n'
+import type { ChannelPriceForm, ChannelVideoPriceTierForm } from '../../types/channelPricing'
 import type {
   BillingMeter,
   Channel,
   ChannelKey,
   ChannelModel,
-  ModelReferenceCatalogRecord,
   PricingTemplate,
-  ProviderModel,
   ChannelPrice,
   VideoBillingMode,
   VideoPriceTier
 } from '../../types/admin'
-import { ApiError, readError } from '../../utils/errors'
+import { readError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import {
   channelPriceKey,
@@ -139,15 +129,8 @@ const {
   confirmDeleteChannel
 } = useChannels(t)
 
-const prices = ref<ChannelPrice[]>([])
-const templates = ref<PricingTemplate[]>([])
-const providerModels = ref<ProviderModel[]>([])
-const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
-const pricingLoading = ref(true)
 const servicePolicy = ref<ServicePolicy | null>(null)
 const channelsLoaded = ref(false)
-const priceDialogOpen = ref(false)
-const savingPrices = ref(false)
 const channelTableRef = ref()
 const togglingRuntimeKeys = useReactiveSet<string>()
 const updatingBaseModelKeys = useReactiveSet<string>()
@@ -161,17 +144,24 @@ const selectedDiagnosticScope = ref<ChannelDiagnosticScope>('all')
 const channelCurrentPage = ref(1)
 const channelPageSize = ref(20)
 const channelPageSizes = [20, 50, 100]
-const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 const anyVideoTierResolution = ANY_VIDEO_TIER_RESOLUTION
-
-const priceByModel = computed(
-  () =>
-    new Map(prices.value.map((price) => [channelPriceKey(price.channel_id, price.model), price]))
-)
+const pricing = useChannelPricing(t)
+const {
+  prices,
+  templates,
+  providerModels,
+  modelReferenceCatalog,
+  pricingLoading,
+  priceDialogOpen,
+  savingPrices,
+  priceForms,
+  priceByModel,
+  providerModelByModel,
+  loadPricingData,
+  syncReferencePricesIfNeeded,
+  clearForms: clearPriceForms
+} = pricing
 const isInternalServiceMode = computed(() => servicePolicy.value?.service_mode === 'internal')
-const providerModelByModel = computed(
-  () => new Map(providerModels.value.map((model) => [priceKey(model.provider, model.model), model]))
-)
 
 const diagnostic = useChannelDiagnostics(loadChannels)
 const {
@@ -748,26 +738,6 @@ function keyStatusTooltip(
   ].join('\n')
 }
 
-async function loadPricingData() {
-  await withLoading(pricingLoading, async () => {
-    try {
-      const [fetchedPrices, fetchedTemplates, fetchedProviderModels, fetchedModelReferenceCatalog] =
-        await Promise.all([
-          getChannelPrices(),
-          getPricingTemplates(),
-          getProviderModels(),
-          getModelReferenceCatalog()
-        ])
-      prices.value = fetchedPrices
-      templates.value = fetchedTemplates
-      providerModels.value = fetchedProviderModels
-      modelReferenceCatalog.value = fetchedModelReferenceCatalog
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
 function capabilityValues(capabilities: Record<string, unknown>, path: string[]) {
   let current: unknown = capabilities
   for (const key of path) {
@@ -1300,9 +1270,7 @@ function representativeVideoPriceMicros(
 }
 
 function openPriceDialog(row: Channel) {
-  for (const key of Object.keys(priceForms)) {
-    delete priceForms[key]
-  }
+  clearPriceForms()
 
   for (const model of channelModelList(row)) {
     const key = channelPriceKey(row.id, model)
@@ -1510,34 +1478,13 @@ function requireUnitPrice(form: (typeof priceForms)[string]) {
   }
 }
 
-function readReferenceSyncError(err: unknown) {
-  if (err instanceof ApiError && err.code === 'pricing_reference_source_unavailable') {
-    return t('referencePricesSourceUnavailable')
-  }
-
-  return readError(err)
-}
-
 function createFormMissingReferencePrices() {
   const models = splitCommaList(createForm.models)
   return models.some((model) => !findPricingTemplate(templates.value, createForm.provider, model))
 }
 
 async function syncCreateReferencePricesIfNeeded() {
-  if (!createFormMissingReferencePrices()) return true
-
-  try {
-    await syncPricingTemplates()
-    const [fetchedTemplates, fetchedProviderModels, fetchedModelReferenceCatalog] =
-      await Promise.all([getPricingTemplates(), getProviderModels(), getModelReferenceCatalog()])
-    templates.value = fetchedTemplates
-    providerModels.value = fetchedProviderModels
-    modelReferenceCatalog.value = fetchedModelReferenceCatalog
-    return true
-  } catch (err) {
-    ElMessage.error(readReferenceSyncError(err))
-    return false
-  }
+  return syncReferencePricesIfNeeded(createFormMissingReferencePrices())
 }
 
 async function saveChannelPrices() {

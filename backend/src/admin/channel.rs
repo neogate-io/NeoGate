@@ -188,6 +188,10 @@ pub struct UpdateChannelKeyRequest {
     pub last_error: Option<Option<String>>,
 }
 
+/// `base_model` 字段使用三层 Option 支持 PATCH 语义：
+/// - `None`：请求体中缺少此字段，不更新
+/// - `Some(None)`：显式设为 null，清空 base_model
+/// - `Some(Some(v))`：更新为新值 v
 #[derive(Debug, Deserialize)]
 pub struct UpdateChannelModelRequest {
     pub enabled: Option<bool>,
@@ -353,6 +357,9 @@ pub async fn update_channel(
             .iter()
             .map(|endpoint| endpoint.protocol.clone())
             .collect();
+        // 删除条件按 protocol 集合过滤，隐含假设 (channel_id, protocol) 唯一。
+        // 若同一 channel 下存在同协议多个 endpoint，此删除只保留 protocol 在新列表中的，
+        // 随后的 upsert 会按 (channel_id, protocol) 唯一键覆盖，仍然正确。
         sqlx::query(
             "DELETE FROM channel_endpoint WHERE channel_id = $1 AND NOT (protocol = ANY($2))",
         )
@@ -419,36 +426,60 @@ pub async fn update_channel_model(
         .flatten()
         .and_then(|value| trimmed_non_empty(Some(&value)).map(str::to_string));
 
-    let row = sqlx::query(
-        "UPDATE channel_model
-         SET enabled = COALESCE($3, enabled),
-             base_model = CASE WHEN $4 THEN $5 ELSE base_model END,
-             status = CASE
-                 WHEN COALESCE($3, enabled) = FALSE THEN 'disabled'
-                 WHEN status = 'disabled' THEN 'available'
-                 ELSE status
-             END,
-             runtime_status = CASE
-                 WHEN $3 = TRUE THEN 'normal'
-                 ELSE runtime_status
-             END,
-             cooldown_until = CASE
-                 WHEN $3 = TRUE THEN NULL
-                 ELSE cooldown_until
-             END,
-             last_error = CASE
-                 WHEN $3 = TRUE THEN NULL
-                 ELSE last_error
-             END,
-             last_status_code = CASE
-                 WHEN $3 = TRUE THEN NULL
-                 ELSE last_status_code
-             END,
-             updated_at = now()
-         WHERE channel_id = $1
-           AND model = $2
-         RETURNING id",
-    )
+    // 使用 CTE 将 UPDATE 与后续的 JOIN 合并为单次原子查询，
+    // 消除原来 RETURNING id 后再 models_by_channel 两步之间的不一致窗口。
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "WITH updated AS (
+             UPDATE channel_model
+             SET enabled = COALESCE($3, enabled),
+                 base_model = CASE WHEN $4 THEN $5 ELSE base_model END,
+                 status = CASE
+                     WHEN COALESCE($3, enabled) = FALSE THEN 'disabled'
+                     WHEN status = 'disabled' THEN 'available'
+                     ELSE status
+                 END,
+                 runtime_status = CASE
+                     WHEN $3 = TRUE THEN 'normal'
+                     ELSE runtime_status
+                 END,
+                 cooldown_until = CASE
+                     WHEN $3 = TRUE THEN NULL
+                     ELSE cooldown_until
+                 END,
+                 last_error = CASE
+                     WHEN $3 = TRUE THEN NULL
+                     ELSE last_error
+                 END,
+                 last_status_code = CASE
+                     WHEN $3 = TRUE THEN NULL
+                     ELSE last_status_code
+                 END,
+                 updated_at = now()
+             WHERE channel_id = $1
+               AND model = $2
+             RETURNING id, channel_id
+         )
+         SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.base_model, cm.enabled,
+                cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
+                cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
+                cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
+                COALESCE(
+                    cp.enabled
+                    AND {BILLABLE_PRICE_CONDITION_CP},
+                    FALSE
+                ) AS billing_enabled,
+                (cp.id IS NOT NULL) AS price_configured,
+                cp.input_price_micros, cp.output_price_micros,
+                cp.cache_read_price_micros, cp.cache_write_price_micros,
+                cp.billing_meter,
+                cp.unit_price_micros
+         FROM updated
+         JOIN channel_model cm ON cm.id = updated.id
+         JOIN channel c ON c.id = cm.channel_id
+         LEFT JOIN channel_price cp
+           ON cp.channel_id = cm.channel_id
+          AND cp.model = cm.model"
+    )))
     .bind(channel_id)
     .bind(model)
     .bind(req.enabled)
@@ -457,12 +488,8 @@ pub async fn update_channel_model(
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    let model_id: DbId = row.try_get("id")?;
-    let models = models_by_channel(state, &[channel_id]).await?;
-    models
-        .get(&channel_id)
-        .and_then(|items| items.iter().find(|item| item.id == model_id).cloned())
-        .ok_or(AppError::NotFound)
+
+    channel_model_from_row(&row)
 }
 
 pub async fn create_channel_key(

@@ -1,10 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAdminServicePolicy, getSetupStatus, getUserServicePolicy } from '../api/policy'
+import type { ServiceMode } from '../api/policy'
 import { useAuthStore } from '../stores/auth'
 import {
   anthropicSubSections,
   openAiSubSections
 } from '../views/public/interfaces/interfacesSections'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    allowedServiceModes?: ServiceMode[]
+    serviceModeRedirect?: string
+  }
+}
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -176,13 +184,23 @@ export const router = createRouter({
           path: 'apps',
           name: 'apps',
           component: () => import('../views/admin/AppsView.vue'),
-          meta: { messageKey: 'apps', subtitleKey: 'adminAppsSubtitle' }
+          meta: {
+            messageKey: 'apps',
+            subtitleKey: 'adminAppsSubtitle',
+            allowedServiceModes: ['internal'],
+            serviceModeRedirect: '/admin/channels'
+          }
         },
         {
           path: 'credentials',
           name: 'credentials',
           component: () => import('../views/admin/CredentialsView.vue'),
-          meta: { messageKey: 'credentialManagement', subtitleKey: 'adminCredentialsSubtitle' }
+          meta: {
+            messageKey: 'credentialManagement',
+            subtitleKey: 'adminCredentialsSubtitle',
+            allowedServiceModes: ['paid'],
+            serviceModeRedirect: '/admin/channels'
+          }
         },
         { path: 'credentials/openai', redirect: '/admin/credentials' },
         {
@@ -195,7 +213,12 @@ export const router = createRouter({
           path: 'projects',
           name: 'projects',
           component: () => import('../views/admin/ProjectsView.vue'),
-          meta: { messageKey: 'projectManagement', subtitleKey: 'adminProjectsSubtitle' }
+          meta: {
+            messageKey: 'projectManagement',
+            subtitleKey: 'adminProjectsSubtitle',
+            allowedServiceModes: ['internal'],
+            serviceModeRedirect: '/admin/keys'
+          }
         },
         {
           path: 'channels',
@@ -223,7 +246,12 @@ export const router = createRouter({
           path: 'cost-attribution',
           name: 'costAttribution',
           component: () => import('../views/admin/CostAttributionView.vue'),
-          meta: { messageKey: 'costAttribution', subtitleKey: 'adminCostAttributionSubtitle' }
+          meta: {
+            messageKey: 'costAttribution',
+            subtitleKey: 'adminCostAttributionSubtitle',
+            allowedServiceModes: ['internal'],
+            serviceModeRedirect: '/admin/statistics'
+          }
         },
         { path: 'settings', redirect: '/admin/settings/pricing-policies' },
         {
@@ -248,7 +276,12 @@ export const router = createRouter({
           path: 'settings/payment',
           name: 'paymentSettings',
           component: () => import('../views/admin/PaymentSettingsView.vue'),
-          meta: { messageKey: 'paymentSettings', subtitleKey: 'adminPaymentSubtitle' }
+          meta: {
+            messageKey: 'paymentSettings',
+            subtitleKey: 'adminPaymentSubtitle',
+            allowedServiceModes: ['paid'],
+            serviceModeRedirect: '/admin/settings/pricing-policies'
+          }
         },
         {
           path: 'settings/other',
@@ -349,38 +382,10 @@ router.beforeEach(async (to) => {
     return '/admin'
   }
 
-  if (to.name === 'paymentSettings') {
+  if (to.meta.allowedServiceModes?.length && to.meta.serviceModeRedirect) {
     const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode !== 'paid') {
-      return '/admin/settings/pricing-policies'
-    }
-  }
-
-  if (to.name === 'apps') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'paid') {
-      return '/admin/channels'
-    }
-  }
-
-  if (to.name === 'credentials') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'internal') {
-      return '/admin/channels'
-    }
-  }
-
-  if (to.name === 'projects') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'paid') {
-      return '/admin/keys'
-    }
-  }
-
-  if (to.name === 'costAttribution') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'paid') {
-      return '/admin/statistics'
+    if (servicePolicy && !to.meta.allowedServiceModes.includes(servicePolicy.service_mode)) {
+      return to.meta.serviceModeRedirect
     }
   }
 

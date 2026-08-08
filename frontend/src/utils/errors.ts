@@ -67,7 +67,8 @@ const generalApiErrorMessageKeys = {
   video_billing_meter_required: 'videoBillingMeterRequired',
   video_price_tiers_required: 'videoPriceTiersRequired',
   video_price_tier_resolution_required: 'videoPriceTierResolutionRequired',
-  video_price_tier_price_required: 'videoPriceTierPriceRequired'
+  video_price_tier_price_required: 'videoPriceTierPriceRequired',
+  export_limit_exceeded: 'exportLimitExceeded'
 } as Record<string, MessageKey>
 
 function tError(key: MessageKey) {
@@ -123,6 +124,10 @@ export function readModelFetchError(err: unknown, t: Translate) {
 
 export function isNoModelsReturnedError(err: unknown) {
   return err instanceof ApiError && err.code === 'no_models_returned'
+}
+
+export function isSessionExpiredError(err: unknown) {
+  return err instanceof ApiError && err.status === 401
 }
 
 function readMappedApiError(

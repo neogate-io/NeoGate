@@ -20,15 +20,12 @@ import { computed, onMounted, reactive, ref, type Component, type Ref } from 'vu
 import { ElMessage } from 'element-plus'
 import CreditAdjustDialog from '../../components/admin/common/CreditAdjustDialog.vue'
 import {
-  addProjectMember,
   autoConfigureProjectModel,
   createProjectModel,
   createProject,
   deleteProject,
-  deleteProjectMember,
   deleteProjectModel,
   getProjectModels,
-  getProjectMembers,
   getProjects,
   type ProjectPage,
   updateProjectModel,
@@ -45,18 +42,17 @@ import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { useLatestTask, type LatestTask } from '../../composables/useLatestTask'
 import { withLoading, withLoadingValue } from '../../composables/useLoadingTask'
+import { useProjectMembers } from '../../composables/useProjectMembers'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type {
   Channel,
   Project,
-  ProjectMember,
   ProjectModel,
   AutoSuggestion,
   ProjectModelCandidateTier,
   ProjectStatus,
   User
 } from '../../types/admin'
-import { copyTextWithMessage } from '../../utils/clipboard'
 import { createConfirmAction } from '../../utils/confirm'
 import { readError } from '../../utils/errors'
 import { formatCompactDateTime, formatDateTime, maskApiKey } from '../../utils/format'
@@ -80,11 +76,6 @@ type ProjectForm = {
   name: string
   ownerUserId: number | null
   status: ProjectStatus
-}
-type EditableProjectMemberRole = Extract<ProjectMember['role'], 'admin' | 'member'>
-type ProjectMemberForm = {
-  userId: number | null
-  role: EditableProjectMemberRole
 }
 type ProjectModelForm = {
   model: string
@@ -123,24 +114,17 @@ const projectDialogVisible = ref(false)
 const projectSaving = ref(false)
 const creditDialogVisible = ref(false)
 const creditSaving = ref(false)
-const membersDialogVisible = ref(false)
 const modelsDialogVisible = ref(false)
 const projectModelActiveTab = ref<'models' | 'smart'>('models')
-const membersLoading = ref(false)
 const projectModelsLoading = ref(false)
-const memberSaving = ref(false)
 const projectModelSaving = ref(false)
 const smartRouteSaving = ref(false)
 const smartAutoConfiguring = ref(false)
 const smartAutoDialogVisible = ref(false)
 const deletingProjectModelName = ref<string | null>(null)
-const memberUserOptions = ref<User[]>([])
-const memberUserSearchLoading = ref(false)
-const deletingMemberId = ref<number | null>(null)
 const deletingProjectId = ref<number | null>(null)
 const togglingProjectIds = useReactiveSet<number>()
 const selectedProject = ref<Project | null>(null)
-const selectedMembers = ref<ProjectMember[]>([])
 const selectedProjectModels = ref<ProjectModel[]>([])
 const editingSmartRoute = ref<ProjectModel | null>(null)
 const smartAutoSuggestions = ref<AutoSuggestion[]>([])
@@ -155,10 +139,6 @@ const projectForm = reactive<ProjectForm>({
   name: '',
   ownerUserId: null,
   status: 'enabled'
-})
-const memberForm = reactive<ProjectMemberForm>({
-  userId: null,
-  role: 'member'
 })
 const projectModelForm = reactive<ProjectModelForm>({
   model: '',
@@ -175,10 +155,8 @@ const smartCandidateForm = reactive<ProjectModelCandidateForm>({
   enabled: true
 })
 const smartRouteCandidates = ref<ProjectModelCandidateForm[]>([])
-const membersTask = useLatestTask(membersLoading)
 const projectModelsTask = useLatestTask(projectModelsLoading)
 const ownerSearchTask = useLatestTask(ownerSearchLoading)
-const memberSearchTask = useLatestTask(memberUserSearchLoading)
 const {
   currentPage,
   pageSize,
@@ -199,6 +177,24 @@ const {
   has_more: false
 } satisfies ProjectPage)
 const initialLoading = computed(() => !loaded.value)
+const projectMembers = useProjectMembers(t, selectedProject, reload)
+const {
+  membersDialogVisible,
+  membersLoading,
+  memberSaving,
+  memberUserOptions,
+  memberUserSearchLoading,
+  deletingMemberId,
+  selectedMembers,
+  memberForm,
+  editableMemberRoleOptions,
+  openMembersDialog,
+  searchMemberUsers,
+  submitAddProjectMember,
+  confirmDeleteProjectMember,
+  projectMemberDisplayName,
+  copyApiKeyValue
+} = projectMembers
 const showProjectsPagination = computed(
   () =>
     !initialLoading.value &&
@@ -290,16 +286,6 @@ function formatProjectModelCount(row: Project) {
   return row.project_model_count === 0 ? '-' : row.project_model_count.toLocaleString(locale.value)
 }
 
-function memberRoleText(role: ProjectMember['role']) {
-  const keys: Record<ProjectMember['role'], TranslationKey> = {
-    owner: 'memberRoleOwner',
-    admin: 'memberRoleAdmin',
-    member: 'memberRoleMember',
-    viewer: 'memberRoleViewer'
-  }
-  return t(keys[role])
-}
-
 function userSelectLabel(user: User) {
   return user.username ? `${user.username} / ${user.email}` : user.email
 }
@@ -310,18 +296,6 @@ function userOptionPrimary(user: User) {
 
 function userOptionSecondary(user: User) {
   return user.username ? user.email : `ID ${user.id}`
-}
-
-const editableMemberRoleOptions = computed<
-  Array<{ label: string; value: EditableProjectMemberRole }>
->(() => [
-  { label: memberRoleText('admin'), value: 'admin' },
-  { label: memberRoleText('member'), value: 'member' }
-])
-
-function projectMemberDisplayName(member: ProjectMember) {
-  const name = member.user_username || member.user_email
-  return member.role === 'admin' ? `${name}（管理员）` : name
 }
 
 function openCreateDialog() {
@@ -353,22 +327,6 @@ function openCreditDialog(row: Project) {
   creditDialogVisible.value = true
 }
 
-async function openMembersDialog(row: Project) {
-  selectedProject.value = row
-  membersDialogVisible.value = true
-  selectedMembers.value = []
-  memberUserOptions.value = []
-  Object.assign(memberForm, {
-    userId: null,
-    role: 'member'
-  })
-  try {
-    await loadSelectedProjectMembers()
-  } catch (err) {
-    ElMessage.error(readError(err))
-  }
-}
-
 async function openModelsDialog(row: Project) {
   selectedProject.value = row
   modelsDialogVisible.value = true
@@ -381,17 +339,6 @@ async function openModelsDialog(row: Project) {
   } catch (err) {
     ElMessage.error(readError(err))
   }
-}
-
-async function loadSelectedProjectMembers() {
-  const projectId = selectedProject.value?.id
-  if (!projectId) return
-  await membersTask.run(
-    () => getProjectMembers(projectId),
-    (members) => {
-      if (selectedProject.value?.id === projectId) selectedMembers.value = members
-    }
-  )
 }
 
 async function loadSelectedProjectModels(includeOptions = false) {
@@ -829,10 +776,6 @@ async function toggleProjectStatus(row: Project) {
   })
 }
 
-async function copyApiKeyValue(value: string) {
-  await copyTextWithMessage(value, t('apiKeyCopied'))
-}
-
 async function searchUserOptions(query: string, options: Ref<User[]>, task: LatestTask) {
   const search = query.trim()
   if (!search) {
@@ -854,63 +797,6 @@ async function searchUserOptions(query: string, options: Ref<User[]>, task: Late
 
 function searchOwnerUsers(query: string) {
   return searchUserOptions(query, ownerOptions, ownerSearchTask)
-}
-
-async function searchMemberUsers(query: string) {
-  return searchUserOptions(query, memberUserOptions, memberSearchTask)
-}
-
-async function submitAddProjectMember() {
-  const projectId = selectedProject.value?.id
-  if (!projectId) return
-  if (!memberForm.userId) {
-    ElMessage.error(t('projectMemberRequired'))
-    return
-  }
-  const memberUserId = memberForm.userId
-  await withLoading(memberSaving, async () => {
-    try {
-      await addProjectMember(projectId, {
-        user_id: memberUserId,
-        role: memberForm.role
-      })
-      ElMessage.success(t('projectMemberAdded'))
-      Object.assign(memberForm, {
-        userId: null,
-        role: 'member'
-      })
-      memberUserOptions.value = []
-      await loadSelectedProjectMembers()
-      await reload()
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
-async function confirmDeleteProjectMember(row: ProjectMember) {
-  if (!selectedProject.value || row.role === 'owner') return
-  const confirmed = await confirmDialog(
-    t('deleteProjectMemberConfirm').replace('{email}', row.user_email),
-    t('confirmDelete'),
-    {
-      confirmText: t('delete'),
-      danger: true,
-      type: 'warning'
-    }
-  )
-  if (!confirmed) return
-  const projectId = selectedProject.value.id
-  await withLoadingValue(deletingMemberId, row.id, null, async () => {
-    try {
-      await deleteProjectMember(projectId, row.id)
-      ElMessage.success(t('projectMemberRemoved'))
-      await loadSelectedProjectMembers()
-      await reload()
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
 }
 
 async function submitCredit() {

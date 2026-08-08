@@ -1,5 +1,6 @@
 use axum::{http::StatusCode, response::Response};
 use bytes::Bytes;
+use chrono::Utc;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -631,7 +632,7 @@ pub(super) fn anthropic_response_to_openai_chat(
     let payload = json!({
         "id": value.get("id").and_then(Value::as_str).unwrap_or("chatcmpl_anthropic_fallback"),
         "object": "chat.completion",
-        "created": 0,
+        "created": Utc::now().timestamp(),
         "model": value.get("model").and_then(Value::as_str).unwrap_or(fallback_model),
         "choices": [{
             "index": 0,
@@ -768,6 +769,8 @@ pub(super) struct AnthropicSseToOpenAiChat {
     buffer: Vec<u8>,
     model: String,
     message_id: String,
+    /// 首次创建时记录的 Unix 时间戳，整个流内所有 chunk 使用同一值以符合 OpenAI 规范。
+    created_at: i64,
     started: bool,
     active_tool_calls: HashMap<i64, String>,
     stopped: bool,
@@ -784,6 +787,7 @@ impl AnthropicSseToOpenAiChat {
             buffer: Vec::new(),
             model,
             message_id: "chatcmpl_anthropic_fallback".to_string(),
+            created_at: Utc::now().timestamp(),
             started: false,
             active_tool_calls: HashMap::new(),
             stopped: false,
@@ -903,10 +907,10 @@ impl AnthropicSseToOpenAiChat {
             .and_then(|delta| delta.get("partial_json"))
             .and_then(Value::as_str)
         {
+            // active_tool_calls 中的参数累积仅作记录，不做验证（暂无下游消费方）。
+            // 真实参数已通过 OpenAI tool_call delta 直接转发给客户端。
             let index = value.get("index").and_then(Value::as_i64).unwrap_or(0);
-            if let Some(arguments) = self.active_tool_calls.get_mut(&index) {
-                arguments.push_str(partial_json);
-            }
+            let _ = (index, partial_json); // 显式标注意图：index/partial_json 已在上方 push_chunk 中直接输出
             self.push_chunk(
                 out,
                 json!({
@@ -1036,7 +1040,7 @@ impl AnthropicSseToOpenAiChat {
         let payload = json!({
             "id": self.message_id,
             "object": "chat.completion.chunk",
-            "created": 0,
+            "created": self.created_at,
             "model": self.model,
             "choices": [{
                 "index": 0,

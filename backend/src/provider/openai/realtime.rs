@@ -36,8 +36,8 @@ use super::select_upstream_excluding;
 
 const REALTIME_PATH: &str = "/v1/realtime";
 const INITIAL_AUDIO_RESERVATION_SECONDS: i64 = 60;
-const MAX_AUDIO_CHUNK_BYTES: usize = 15 * 1024 * 1024;
-const MAX_CLIENT_MESSAGE_BYTES: usize = 21 * 1024 * 1024;
+const MAX_AUDIO_CHUNK_BYTES: usize = 2 * 1024 * 1024;  // 2 MB：实测单次音频块远小于此
+const MAX_CLIENT_MESSAGE_BYTES: usize = 4 * 1024 * 1024; // 4 MB：保留裕量，降低攻击者发超大帧时的内存压力
 const DEFAULT_SAMPLE_RATE: u32 = 16_000;
 const PCM_BYTES_PER_SAMPLE: u64 = 2;
 const SESSION_FINISH_TIMEOUT_SECS: u64 = 5;
@@ -58,9 +58,51 @@ struct RealtimeContext {
     upstream_model: String,
     routing: Option<crate::project::models::UsageRoutingSnapshot>,
     price: Price,
-    hold: DebitHold,
     relay_trace_id: Uuid,
     started: Instant,
+}
+
+/// 持有 realtime 会话的 billing hold，并在会话异常终止（tokio 任务被取消、
+/// 服务关机导致 `on_upgrade` 的 future 未跑完 `finish_session`）时兜底释放。
+/// `finish_session` 正常运行时会通过 `take()` 取出 hold 自行结算，从而解除本 guard。
+struct RealtimeHoldGuard {
+    state: Arc<AppState>,
+    hold: Option<DebitHold>,
+    relay_trace_id: Uuid,
+}
+
+impl RealtimeHoldGuard {
+    fn new(state: Arc<AppState>, hold: DebitHold, relay_trace_id: Uuid) -> Self {
+        Self {
+            state,
+            hold: Some(hold),
+            relay_trace_id,
+        }
+    }
+
+    /// 取出 hold 交给 `finish_session` 结算，解除 Drop 兜底。
+    fn take(&mut self) -> Option<DebitHold> {
+        self.hold.take()
+    }
+}
+
+impl Drop for RealtimeHoldGuard {
+    fn drop(&mut self) {
+        let Some(hold) = self.hold.take() else {
+            return; // 已被 finish_session 正常结算
+        };
+        let state = Arc::clone(&self.state);
+        let relay_trace_id = self.relay_trace_id;
+        // Drop 中无法 await，spawn 一个后台任务释放 hold，避免泄漏到
+        // recover_stale_allocations 的回收窗口。
+        tokio::spawn(async move {
+            tracing::warn!(
+                relay_trace_id = %relay_trace_id,
+                "realtime session dropped before settlement; releasing billing hold"
+            );
+            release_empty_hold(&state, hold, "realtime session dropped").await;
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -254,6 +296,7 @@ pub(crate) async fn openai_realtime(
         .await?;
     let unit_price = realtime_audio_unit_price(&price)?;
     let model_credit_account = auth.model_credit_account(&resolved.external_model).cloned();
+    let relay_trace_id = Uuid::new_v4();
     let hold = reserve_billable_credit(
         &state,
         &auth,
@@ -261,17 +304,19 @@ pub(crate) async fn openai_realtime(
         INITIAL_AUDIO_RESERVATION_SECONDS.saturating_mul(unit_price),
     )
     .await?;
+    // guard 持有 hold，并在任务取消时自动通过 Drop 兜底释放，
+    // 防止服务关机导致 finish_session 未运行时 hold 泄漏。
+    let mut hold_guard = RealtimeHoldGuard::new(Arc::clone(&state), hold, relay_trace_id);
     let permit = match state.user_request_limiter.try_acquire(auth.user_id).await {
         Ok(permit) => permit,
         Err(err) => {
-            release_empty_hold(&state, hold, "realtime ASR concurrency rejection").await;
+            // guard 在此 drop 时会自动释放 hold
             return Err(err);
         }
     };
     let upstream_socket = match connect_upstream(&upstream, &upstream_url).await {
         Ok(socket) => socket,
         Err(err) => {
-            release_empty_hold(&state, hold, "realtime ASR connection failure").await;
             return Err(err);
         }
     };
@@ -284,8 +329,7 @@ pub(crate) async fn openai_realtime(
         upstream_model: resolved.target_model,
         routing: resolved.routing,
         price,
-        hold,
-        relay_trace_id: Uuid::new_v4(),
+        relay_trace_id,
         started: Instant::now(),
     };
 
@@ -295,7 +339,7 @@ pub(crate) async fn openai_realtime(
             let _permit = permit;
             let upstream_model = ctx.upstream_model.clone();
             let outcome = proxy_session(client, upstream_socket, ctx.started, upstream_model).await;
-            finish_session(ctx, outcome).await;
+            finish_session(ctx, &mut hold_guard, outcome).await;
         }))
 }
 
@@ -1186,10 +1230,23 @@ impl UpstreamTranslator {
     }
 }
 
-async fn finish_session(ctx: RealtimeContext, outcome: ProxyOutcome) {
+async fn finish_session(
+    ctx: RealtimeContext,
+    hold_guard: &mut RealtimeHoldGuard,
+    outcome: ProxyOutcome,
+) {
     let success = outcome.session_finished && outcome.error_summary.is_none();
     let latency_ms = ctx.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
     let model_credit_account = ctx.auth.model_credit_account(&ctx.external_model).cloned();
+
+    // 从 guard 取出 hold 自行结算，解除 Drop 兜底。若已被取走（不应发生）则跳过计费。
+    let Some(hold) = hold_guard.take() else {
+        tracing::warn!(
+            relay_trace_id = %ctx.relay_trace_id,
+            "realtime hold already released before finish_session; skipping settlement"
+        );
+        return;
+    };
 
     let billing = if success && outcome.audio_seconds > 0 {
         match ctx
@@ -1206,7 +1263,7 @@ async fn finish_session(ctx: RealtimeContext, outcome: ProxyOutcome) {
                         user_key_credit_account: &ctx.auth.user_key_credit_account,
                         project_credit_account: &ctx.auth.project_credit_account,
                     },
-                    hold: ctx.hold.clone(),
+                    hold: hold.clone(),
                     usage: Some(BillableUsage::audio_seconds(outcome.audio_seconds)),
                     price: &ctx.price,
                     allow_supplemental: true,
@@ -1220,22 +1277,12 @@ async fn finish_session(ctx: RealtimeContext, outcome: ProxyOutcome) {
                     relay_trace_id = %ctx.relay_trace_id,
                     "failed to settle realtime ASR billing: {err}"
                 );
-                release_empty_hold(
-                    &ctx.state,
-                    ctx.hold.clone(),
-                    "realtime ASR settlement failure",
-                )
-                .await;
+                release_empty_hold(&ctx.state, hold, "realtime ASR settlement failure").await;
                 None
             }
         }
     } else {
-        release_empty_hold(
-            &ctx.state,
-            ctx.hold.clone(),
-            "incomplete realtime ASR session",
-        )
-        .await;
+        release_empty_hold(&ctx.state, hold, "incomplete realtime ASR session").await;
         None
     };
 

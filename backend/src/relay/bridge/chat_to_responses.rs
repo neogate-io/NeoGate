@@ -138,12 +138,15 @@ pub(super) fn openai_chat_response_to_openai_response(
         .and_then(|choice| choice.get("finish_reason"))
         .and_then(Value::as_str);
     let output = openai_chat_message_to_response_output(message, id);
-    let _ = finish_reason;
-    let payload = json!({
+    // 将 Chat Completions 的 finish_reason 映射到 Responses API 的 status / incomplete_details，
+    // 让客户端能区分正常完成与截断/内容过滤。
+    // "length" → max_output_tokens 截断；"content_filter" → content_filter 拦截；其余 → completed。
+    let (status, incomplete_details) = chat_finish_reason_to_response_status(finish_reason);
+    let mut payload = json!({
         "id": id,
         "object": "response",
         "created_at": value.get("created").and_then(Value::as_i64).unwrap_or(0),
-        "status": "completed",
+        "status": status,
         "background": false,
         "model": model,
         "output": output,
@@ -153,7 +156,27 @@ pub(super) fn openai_chat_response_to_openai_response(
             openai_chat_usage_tokens(usage, "completion_tokens")
         ),
     });
+    if let Some(details) = incomplete_details {
+        payload["incomplete_details"] = details;
+    }
     Ok(Bytes::from(serde_json::to_vec(&payload)?))
+}
+
+/// 将 Chat Completions 的 finish_reason 映射到 Responses API 的 (status, incomplete_details)。
+fn chat_finish_reason_to_response_status(
+    finish_reason: Option<&str>,
+) -> (&'static str, Option<Value>) {
+    match finish_reason {
+        Some("length") => (
+            "incomplete",
+            Some(json!({ "reason": "max_output_tokens" })),
+        ),
+        Some("content_filter") => (
+            "incomplete",
+            Some(json!({ "reason": "content_filter" })),
+        ),
+        _ => ("completed", None),
+    }
 }
 
 fn openai_chat_message_to_response_output(

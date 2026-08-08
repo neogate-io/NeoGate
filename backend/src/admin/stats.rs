@@ -760,6 +760,9 @@ async fn daily_stats(
     filter: &UsageStatsFilter,
     granularity: SummaryGranularity,
 ) -> AppResult<Vec<DailyUsageStats>> {
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         SELECT
@@ -826,6 +829,9 @@ async fn usage_timeseries(
     filter: &UsageStatsFilter,
     granularity: TimeGranularity,
 ) -> AppResult<Vec<UsageTimeSeriesPoint>> {
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         SELECT
@@ -881,6 +887,9 @@ async fn model_usage_timeseries(
     granularity: TimeGranularity,
     series_limit: i64,
 ) -> AppResult<Vec<ModelUsageTimeSeriesPoint>> {
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         WITH top_series AS (
@@ -1009,6 +1018,9 @@ async fn user_stats(
     .fetch_one(pool)
     .await?;
 
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         SELECT
@@ -1101,6 +1113,9 @@ async fn user_model_stats(
     .fetch_one(pool)
     .await?;
 
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         SELECT
@@ -1208,6 +1223,9 @@ async fn model_stats_page(
     .fetch_one(pool)
     .await?;
 
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         SELECT
@@ -1271,6 +1289,9 @@ async fn project_stats(
     page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<ProjectUsageStats>> {
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         WITH grouped AS (
@@ -1346,6 +1367,9 @@ async fn project_member_stats(
     page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<ProjectMemberUsageStats>> {
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         WITH grouped AS (
@@ -1424,6 +1448,9 @@ async fn key_stats(
     page: UsageStatsPageParams,
     sort: SortMode,
 ) -> AppResult<UsageStatsPage<KeyUsageStats>> {
+    // SAFETY: format!() 中插入的动态内容（bucket/format/order_by/limit 等）
+    // 均来自受信 enum 方法返回的 &'static str 或有界整数，不含任何用户输入。
+    // 用户过滤条件（日期、ID、搜索词等）全部通过 sqlx 的 \ 参数绑定传递。
     let sql = format!(
         r#"
         WITH grouped AS (

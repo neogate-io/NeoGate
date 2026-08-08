@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Close, Download, Search, Tickets } from '@element-plus/icons-vue'
+import { Close, Download, Search, Tickets } from '@element-plus/icons-vue'
 import {
   downloadAdminUsageStatisticsCsv,
   getAdminUsageStatisticsModels,
@@ -17,14 +17,16 @@ import {
   type UsageStatisticsQuery,
   type UserUsageStatistics
 } from '../../api/usage'
+import AttributionDimensionTable, {
+  type AttributionDimension,
+  type AttributionRow
+} from '../../components/admin/usage/AttributionDimensionTable.vue'
 import { useAsyncData } from '../../composables/useAsyncData'
-import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
-import { downloadBlob, formatNumber, toDateKey } from '../../utils/format'
+import { downloadBlob, toDateKey } from '../../utils/format'
 
-const { locale, t } = useLocale()
-const { formatMoney } = useBillingCurrency()
+const { t } = useLocale()
 const router = useRouter()
 
 type PrimaryDimension = 'project' | 'user' | 'model'
@@ -128,6 +130,11 @@ const detailTabs = computed<DetailTab[]>(() => {
   if (primaryDimension.value === 'user') return ['projects', 'models']
   return ['projects', 'users']
 })
+const detailDimension = computed<AttributionDimension>(() => {
+  if (detailTab.value === 'projects') return 'project'
+  if (detailTab.value === 'users') return 'user'
+  return 'model'
+})
 
 const activeDetailPage = computed({
   get: () => detailPage(detailTab.value).value,
@@ -163,125 +170,55 @@ const activeQuickRange = computed(() => {
   return null
 })
 
-const {
-  data: primaryProjects,
-  loading: primaryProjectsLoading,
-  reload: reloadPrimaryProjects
-} = useAsyncData(() => {
-  if (primaryDimension.value !== 'project')
-    return Promise.resolve(emptyPage<ProjectUsageStatistics>())
-  return getAdminUsageStatisticsProjects({
-    ...baseQuery.value,
-    page: primaryPage.value,
-    limit: primaryPageSize.value
-  })
-}, emptyPage<ProjectUsageStatistics>())
+const primaryData = useAsyncData<UsageStatisticsPage<AttributionRow>>(
+  () =>
+    loadDimensionPage(
+      primaryDimension.value,
+      baseQuery.value,
+      primaryPage.value,
+      primaryPageSize.value
+    ),
+  emptyPage<AttributionRow>()
+)
+const detailData = useAsyncData<UsageStatisticsPage<AttributionRow>>(() => {
+  if (!hasSelection.value) return Promise.resolve(emptyPage<AttributionRow>())
+  return loadDetailPage(
+    detailTab.value,
+    detailQuery.value,
+    activeDetailPage.value,
+    activeDetailPageSize.value
+  )
+}, emptyPage<AttributionRow>())
 
-const {
-  data: primaryUsers,
-  loading: primaryUsersLoading,
-  reload: reloadPrimaryUsers
-} = useAsyncData(() => {
-  if (primaryDimension.value !== 'user') return Promise.resolve(emptyPage<UserUsageStatistics>())
-  return getAdminUsageStatisticsUsers({
-    ...baseQuery.value,
-    page: primaryPage.value,
-    limit: primaryPageSize.value
-  })
-}, emptyPage<UserUsageStatistics>())
-
-const {
-  data: primaryModels,
-  loading: primaryModelsLoading,
-  reload: reloadPrimaryModels
-} = useAsyncData(() => {
-  if (primaryDimension.value !== 'model') return Promise.resolve(emptyPage<ModelUsageStatistics>())
-  return getAdminUsageStatisticsModels({
-    ...baseQuery.value,
-    page: primaryPage.value,
-    limit: primaryPageSize.value
-  })
-}, emptyPage<ModelUsageStatistics>())
-
-const {
-  data: detailProjects,
-  loading: detailProjectsLoading,
-  reload: reloadDetailProjects
-} = useAsyncData(() => {
-  if (!hasSelection.value || !detailTabs.value.includes('projects')) {
-    return Promise.resolve(emptyPage<ProjectUsageStatistics>())
-  }
-  return getAdminUsageStatisticsProjects({
-    ...detailQuery.value,
-    page: detailProjectsPage.value,
-    limit: detailProjectsPageSize.value
-  })
-}, emptyPage<ProjectUsageStatistics>())
-
-const {
-  data: detailUsers,
-  loading: detailUsersLoading,
-  reload: reloadDetailUsers
-} = useAsyncData(() => {
-  if (!hasSelection.value || !detailTabs.value.includes('users')) {
-    return Promise.resolve(emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>())
-  }
-  const query = {
-    ...detailQuery.value,
-    page: detailUsersPage.value,
-    limit: detailUsersPageSize.value
-  }
-  if (detailQuery.value.project_id != null) {
-    return getAdminUsageStatisticsProjectMembers(query)
-  }
-  return getAdminUsageStatisticsUsers(query)
-}, emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>())
-
-const {
-  data: detailModels,
-  loading: detailModelsLoading,
-  reload: reloadDetailModels
-} = useAsyncData(() => {
-  if (!hasSelection.value || !detailTabs.value.includes('models')) {
-    return Promise.resolve(emptyPage<ModelUsageStatistics>())
-  }
-  return getAdminUsageStatisticsModels({
-    ...detailQuery.value,
-    page: detailModelsPage.value,
-    limit: detailModelsPageSize.value
-  })
-}, emptyPage<ModelUsageStatistics>())
+const primaryProjects = computed(() => pageAs<ProjectUsageStatistics>(primaryData.data.value))
+const primaryUsers = computed(() => pageAs<UserUsageStatistics>(primaryData.data.value))
+const primaryModels = computed(() => pageAs<ModelUsageStatistics>(primaryData.data.value))
+const detailProjects = computed(() => pageAs<ProjectUsageStatistics>(detailData.data.value))
+const detailUsers = computed(() =>
+  pageAs<UserUsageStatistics | ProjectMemberUsageStatistics>(detailData.data.value)
+)
+const detailModels = computed(() => pageAs<ModelUsageStatistics>(detailData.data.value))
 const {
   data: attributionOptions,
   loading: attributionOptionsLoading,
   reload: reloadAttributionOptions
 } = useAsyncData(() => getAdminUsageStatisticsOptions(baseQuery.value), { models: [], users: [] })
 
-const primaryLoading = computed(
-  () => primaryProjectsLoading.value || primaryUsersLoading.value || primaryModelsLoading.value
-)
-const detailLoading = computed(
-  () => detailProjectsLoading.value || detailUsersLoading.value || detailModelsLoading.value
-)
+const primaryLoading = primaryData.loading
+const detailLoading = detailData.loading
 const loading = computed(
   () => primaryLoading.value || detailLoading.value || attributionOptionsLoading.value
 )
 const filteredModelOptions = computed(() => attributionOptions.value.models)
 
 async function reloadPrimary() {
-  if (primaryDimension.value === 'project') await reloadPrimaryProjects()
-  if (primaryDimension.value === 'user') await reloadPrimaryUsers()
-  if (primaryDimension.value === 'model') await reloadPrimaryModels()
+  await primaryData.reload()
   syncSelectedFromPrimary()
 }
 
 async function reloadDetails() {
   if (!hasSelection.value) return
-  const reloads: Array<Promise<void>> = []
-  if (detailTabs.value.includes('projects')) reloads.push(reloadDetailProjects())
-  if (detailTabs.value.includes('users')) reloads.push(reloadDetailUsers())
-  if (detailTabs.value.includes('models')) reloads.push(reloadDetailModels())
-  await Promise.all(reloads)
+  await detailData.reload()
 }
 
 async function reloadAttribution() {
@@ -298,6 +235,51 @@ async function changePrimaryDimension(tab: PrimaryDimension) {
   clearSelection()
   detailTab.value = defaultDetailTab(tab)
   await reloadPrimary()
+}
+
+async function changeDetailTab(tab: DetailTab) {
+  if (detailTab.value === tab) return
+  detailTab.value = tab
+  detailPage(tab).value = 1
+  await reloadDetails()
+}
+
+function selectPrimaryRow(row: AttributionRow) {
+  if (primaryDimension.value === 'project') return selectProject(row as ProjectUsageStatistics)
+  if (primaryDimension.value === 'user') return selectUser(row as UserUsageStatistics)
+  return selectModel(row as ModelUsageStatistics)
+}
+
+function selectDetailRow(row: AttributionRow) {
+  if (detailTab.value === 'projects') return refineProject(row as ProjectUsageStatistics)
+  if (detailTab.value === 'users') {
+    return selectUser(row as UserUsageStatistics | ProjectMemberUsageStatistics)
+  }
+  return selectModel(row as ModelUsageStatistics)
+}
+
+function openDetailRow(row: AttributionRow) {
+  if (detailTab.value === 'projects') {
+    const item = row as ProjectUsageStatistics
+    return openUsageDetails({
+      project_id: item.project_id ?? undefined,
+      project_name: item.project_name
+    })
+  }
+  if (detailTab.value === 'users') {
+    const item = row as UserUsageStatistics | ProjectMemberUsageStatistics
+    return openUsageDetails({
+      user_id: item.user_id ?? undefined,
+      user_name: item.user_display_name
+    })
+  }
+  const item = row as ModelUsageStatistics
+  return openUsageDetails({
+    model: item.model,
+    channel_id: item.channel_id ?? undefined,
+    channel_name: item.channel_name,
+    billing_meter: item.billing_meter
+  })
 }
 
 async function applyQuickRange(days: number) {
@@ -414,9 +396,7 @@ async function clearSelection() {
   selectedModel.value = null
   refinements.value = {}
   resetDetailPages()
-  detailProjects.value = emptyPage<ProjectUsageStatistics>()
-  detailUsers.value = emptyPage<UserUsageStatistics | ProjectMemberUsageStatistics>()
-  detailModels.value = emptyPage<ModelUsageStatistics>()
+  detailData.data.value = emptyPage<AttributionRow>()
 }
 
 async function exportAttribution(scope: string | number | object) {
@@ -471,9 +451,8 @@ async function handleDetailPageSizeChange(tab: DetailTab, size: number) {
 }
 
 async function reloadDetailTab(tab: DetailTab) {
-  if (tab === 'projects') await reloadDetailProjects()
-  if (tab === 'users') await reloadDetailUsers()
-  if (tab === 'models') await reloadDetailModels()
+  if (detailTab.value !== tab) detailTab.value = tab
+  await reloadDetails()
 }
 
 function detailPage(tab: DetailTab) {
@@ -569,37 +548,39 @@ function currentPrimaryPage() {
   return primaryModels.value
 }
 
-function billingMeterLabel(value?: string | null) {
-  if (value === 'image') return t('billingMeterImageGeneration')
-  if (value === 'video') return t('billingMeterVideo')
-  if (value === 'audio') return t('billingMeterAudio')
-  if (value === 'token') return t('billingMeterToken')
-  return t('billingMeterAll')
+async function loadDimensionPage(
+  dimension: PrimaryDimension,
+  query: UsageStatisticsQuery,
+  page: number,
+  limit: number
+): Promise<UsageStatisticsPage<AttributionRow>> {
+  const request = { ...query, page, limit }
+  if (dimension === 'project') return getAdminUsageStatisticsProjects(request)
+  if (dimension === 'user') return getAdminUsageStatisticsUsers(request)
+  return getAdminUsageStatisticsModels(request)
 }
 
-function projectRowKey(row: ProjectUsageStatistics) {
-  return row.project_id ?? row.project_name
+async function loadDetailPage(
+  tab: DetailTab,
+  query: UsageStatisticsQuery,
+  page: number,
+  limit: number
+): Promise<UsageStatisticsPage<AttributionRow>> {
+  const request = { ...query, page, limit }
+  if (tab === 'projects') return getAdminUsageStatisticsProjects(request)
+  if (tab === 'users' && query.project_id != null) {
+    return getAdminUsageStatisticsProjectMembers(request)
+  }
+  if (tab === 'users') return getAdminUsageStatisticsUsers(request)
+  return getAdminUsageStatisticsModels(request)
 }
 
-function userRowKey(row: UserUsageStatistics | ProjectMemberUsageStatistics) {
-  return row.user_id ?? row.user_display_name
-}
-
-function modelRowKey(row: ModelUsageStatistics) {
-  return `${row.channel_id ?? 'channel'}/${row.channel_name}/${row.model}/${row.billing_meter}`
+function pageAs<T>(page: UsageStatisticsPage<AttributionRow>): UsageStatisticsPage<T> {
+  return page as UsageStatisticsPage<T>
 }
 
 function modelDisplay(row: Pick<ModelUsageStatistics, 'channel_name' | 'model'>) {
   return row.model ? `${row.channel_name || '-'}/${row.model}` : row.channel_name || '-'
-}
-
-function userDisplay(row: UserUsageStatistics | ProjectMemberUsageStatistics) {
-  return row.user_display_name || row.user_email || row.user_username || '-'
-}
-
-function successRate(success: number, total: number) {
-  if (total <= 0) return '-'
-  return `${((success / total) * 100).toFixed(1)}%`
 }
 </script>
 
@@ -723,157 +704,13 @@ function successRate(success: number, total: number) {
           </el-button>
         </div>
 
-        <el-table
-          v-if="primaryDimension === 'project'"
-          v-loading="primaryProjectsLoading"
-          class="admin-table service-table attribution-table"
-          :data="primaryProjects.items"
-          :row-key="projectRowKey"
-          stripe
-          highlight-current-row
-          @row-click="selectProject"
-        >
-          <el-table-column :label="t('project')" min-width="190">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ row.project_name }}</strong>
-                <span v-if="row.project_id != null">#{{ row.project_id }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{
-              successRate(row.success_count, row.request_count)
-            }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('userCount')" min-width="100" align="right">
-            <template #default="{ row }">{{ formatNumber(row.member_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="90" align="right">
-            <template #default="{ row }">
-              <el-button
-                class="icon-only-action"
-                :aria-label="t('viewDrilldown')"
-                :icon="ArrowRight"
-                @click.stop="selectProject(row)"
-              />
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
-
-        <el-table
-          v-else-if="primaryDimension === 'user'"
-          v-loading="primaryUsersLoading"
-          class="admin-table service-table attribution-table"
-          :data="primaryUsers.items"
-          :row-key="userRowKey"
-          stripe
-          highlight-current-row
-          @row-click="selectUser"
-        >
-          <el-table-column :label="t('usageUser')" min-width="190">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ userDisplay(row) }}</strong>
-                <span v-if="row.user_id != null">#{{ row.user_id }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{
-              successRate(row.success_count, row.request_count)
-            }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('modelCount')" min-width="100" align="right">
-            <template #default="{ row }">{{ formatNumber(row.model_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="90" align="right">
-            <template #default="{ row }">
-              <el-button
-                class="icon-only-action"
-                :aria-label="t('viewDrilldown')"
-                :icon="ArrowRight"
-                @click.stop="selectUser(row)"
-              />
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
-
-        <el-table
-          v-else
-          v-loading="primaryModelsLoading"
-          class="admin-table service-table attribution-table"
-          :data="primaryModels.items"
-          :row-key="modelRowKey"
-          stripe
-          highlight-current-row
-          @row-click="selectModel"
-        >
-          <el-table-column :label="t('channelAndModel')" min-width="230">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ modelDisplay(row) }}</strong>
-                <span v-if="row.channel_id != null"
-                  >#{{ row.channel_id }} / {{ billingMeterLabel(row.billing_meter) }}</span
-                >
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{
-              successRate(row.success_count, row.request_count)
-            }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('userCount')" min-width="100" align="right">
-            <template #default="{ row }">{{ formatNumber(row.user_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="90" align="right">
-            <template #default="{ row }">
-              <el-button
-                class="icon-only-action"
-                :aria-label="t('viewDrilldown')"
-                :icon="ArrowRight"
-                @click.stop="selectModel(row)"
-              />
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
+        <AttributionDimensionTable
+          :kind="primaryDimension"
+          :rows="currentPrimaryPage().items"
+          :loading="primaryLoading"
+          primary
+          @select="selectPrimaryRow"
+        />
 
         <div class="attribution-pagination">
           <el-pagination
@@ -948,165 +785,19 @@ function successRate(success: number, total: number) {
             v-for="tab in detailTabs"
             :key="tab"
             :class="{ 'is-active': detailTab === tab }"
-            @click="detailTab = tab"
+            @click="changeDetailTab(tab)"
           >
             {{ t(`drilldown_${tab}`) }}
           </el-button>
         </div>
 
-        <el-table
-          v-if="detailTab === 'projects'"
-          v-loading="detailProjectsLoading"
-          class="admin-table service-table attribution-table"
-          :data="detailProjects.items"
-          :row-key="projectRowKey"
-          stripe
-          @row-click="refineProject"
-        >
-          <el-table-column :label="t('project')" min-width="190">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ row.project_name }}</strong>
-                <span v-if="row.project_id != null">#{{ row.project_id }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{
-              successRate(row.success_count, row.request_count)
-            }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="130" align="right">
-            <template #default="{ row }">
-              <el-button
-                class="admin-action-button"
-                :icon="Tickets"
-                @click.stop="
-                  openUsageDetails({ project_id: row.project_id, project_name: row.project_name })
-                "
-              >
-                {{ t('details') }}
-              </el-button>
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
-
-        <el-table
-          v-else-if="detailTab === 'users'"
-          v-loading="detailUsersLoading"
-          class="admin-table service-table attribution-table"
-          :data="detailUsers.items"
-          :row-key="userRowKey"
-          stripe
-          @row-click="selectUser"
-        >
-          <el-table-column :label="t('usageUser')" min-width="190">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ userDisplay(row) }}</strong>
-                <span v-if="row.user_id != null">#{{ row.user_id }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{
-              successRate(row.success_count, row.request_count)
-            }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="130" align="right">
-            <template #default="{ row }">
-              <el-button
-                class="admin-action-button"
-                :icon="Tickets"
-                @click.stop="
-                  openUsageDetails({ user_id: row.user_id, user_name: row.user_display_name })
-                "
-              >
-                {{ t('details') }}
-              </el-button>
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
-
-        <el-table
-          v-else
-          v-loading="detailModelsLoading"
-          class="admin-table service-table attribution-table"
-          :data="detailModels.items"
-          :row-key="modelRowKey"
-          stripe
-          @row-click="selectModel"
-        >
-          <el-table-column :label="t('channelAndModel')" min-width="230">
-            <template #default="{ row }">
-              <div class="attribution-primary-cell">
-                <strong>{{ modelDisplay(row) }}</strong>
-                <span v-if="row.channel_id != null"
-                  >#{{ row.channel_id }} / {{ billingMeterLabel(row.billing_meter) }}</span
-                >
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cost')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatMoney(row.cost_micros, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('requestCount')" min-width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.request_count, locale) }}</template>
-          </el-table-column>
-          <el-table-column :label="t('successRate')" min-width="100" align="right">
-            <template #default="{ row }">{{
-              successRate(row.success_count, row.request_count)
-            }}</template>
-          </el-table-column>
-          <el-table-column :label="t('tokens')" min-width="120" align="right">
-            <template #default="{ row }">{{ formatNumber(row.total_tokens, locale) }}</template>
-          </el-table-column>
-          <el-table-column min-width="130" align="right">
-            <template #default="{ row }">
-              <el-button
-                class="admin-action-button"
-                :icon="Tickets"
-                @click.stop="
-                  openUsageDetails({
-                    model: row.model,
-                    channel_id: row.channel_id,
-                    channel_name: row.channel_name,
-                    billing_meter: row.billing_meter
-                  })
-                "
-              >
-                {{ t('details') }}
-              </el-button>
-            </template>
-          </el-table-column>
-          <template #empty>
-            <el-empty :description="t('noStatisticsData')" />
-          </template>
-        </el-table>
+        <AttributionDimensionTable
+          :kind="detailDimension"
+          :rows="detailPageData(detailTab).items"
+          :loading="detailLoading"
+          @select="selectDetailRow"
+          @details="openDetailRow"
+        />
 
         <div class="attribution-pagination">
           <el-pagination

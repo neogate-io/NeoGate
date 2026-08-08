@@ -51,6 +51,31 @@ pub struct ChannelDiagnosticReport {
     pub endpoints: Vec<EndpointDiagnosticReport>,
 }
 
+/// ModelStarted / ModelResult 事件共享的 endpoint + key 字段。
+/// 用 #[serde(flatten)] 内联，序列化后的 JSON 结构与拆分前完全一致。
+#[derive(Debug, Clone, Serialize)]
+pub struct EndpointKeyFields {
+    pub endpoint_id: DbId,
+    pub protocol: String,
+    pub base_url: String,
+    pub key_id: Option<DbId>,
+    pub key_name: String,
+    pub key_prefix: Option<String>,
+}
+
+impl EndpointKeyFields {
+    fn new(endpoint: &EndpointTarget, key: &KeyTarget) -> Self {
+        Self {
+            endpoint_id: endpoint.id,
+            protocol: endpoint.protocol.clone(),
+            base_url: endpoint.base_url.clone(),
+            key_id: key.id,
+            key_name: mask_possible_secret_label(&key.name),
+            key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChannelDiagnosticEvent {
@@ -60,21 +85,13 @@ pub enum ChannelDiagnosticEvent {
         provider: String,
     },
     ModelStarted {
-        endpoint_id: DbId,
-        protocol: String,
-        base_url: String,
-        key_id: Option<DbId>,
-        key_name: String,
-        key_prefix: Option<String>,
+        #[serde(flatten)]
+        target: EndpointKeyFields,
         model: String,
     },
     ModelResult {
-        endpoint_id: DbId,
-        protocol: String,
-        base_url: String,
-        key_id: Option<DbId>,
-        key_name: String,
-        key_prefix: Option<String>,
+        #[serde(flatten)]
+        target: EndpointKeyFields,
         model: String,
         step: DiagnosticStep,
     },
@@ -123,6 +140,13 @@ pub enum DiagnosticStatus {
     Warning,
     Failed,
     Skipped,
+}
+
+impl DiagnosticStatus {
+    /// 诊断是否算“通过”（Ok 或 Warning），用于判断是否需要冷却/记录错误。
+    fn is_passing(self) -> bool {
+        matches!(self, DiagnosticStatus::Ok | DiagnosticStatus::Warning)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -385,9 +409,9 @@ async fn diagnose_endpoint(
     let mut key_reports = Vec::new();
     for key in enabled_keys {
         let report = diagnose_key(state, channel, endpoint, key, scope, progress).await;
-        for model in report.discovered_models.clone() {
-            if !discovered_models.iter().any(|item| item == &model) {
-                discovered_models.push(model);
+        for model in &report.discovered_models {
+            if !discovered_models.contains(model) {
+                discovered_models.push(model.clone());
             }
         }
         if let Some(key_id) = key.id {
@@ -559,12 +583,7 @@ fn send_model_started_event(
 ) {
     if let Some(progress) = progress {
         let _ = progress.send(ChannelDiagnosticEvent::ModelStarted {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            key_id: key.id,
-            key_name: mask_possible_secret_label(&key.name),
-            key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
+            target: EndpointKeyFields::new(endpoint, key),
             model: model.to_string(),
         });
     }
@@ -579,12 +598,7 @@ fn send_model_result_event(
 ) {
     if let Some(progress) = progress {
         let _ = progress.send(ChannelDiagnosticEvent::ModelResult {
-            endpoint_id: endpoint.id,
-            protocol: endpoint.protocol.clone(),
-            base_url: endpoint.base_url.clone(),
-            key_id: key.id,
-            key_name: mask_possible_secret_label(&key.name),
-            key_prefix: key.key_prefix.as_deref().map(mask_key_prefix),
+            target: EndpointKeyFields::new(endpoint, key),
             model: model.to_string(),
             step: step.clone(),
         });
@@ -1187,36 +1201,19 @@ async fn persist_key_health(
     key_id: DbId,
     report: &KeyDiagnosticReport,
 ) -> AppResult<()> {
-    let recovered =
-        report.status == DiagnosticStatus::Ok || report.status == DiagnosticStatus::Warning;
-    if !recovered
-        && (!key_report_has_hard_cooldown_failure(report)
-            || !can_cooldown_key(state, key_id).await?)
-    {
+    let recovered = report.status.is_passing();
+    // 仅当“未恢复 且 属于 key 级硬错误 且 冷却不会切断最后可用路径”时才冷却，否则只记软失败。
+    let should_cooldown = !recovered
+        && key_report_has_hard_cooldown_failure(report)
+        && can_cooldown_key(state, key_id).await?;
+    if !recovered && !should_cooldown {
         tracing::info!(
             key_id,
             "skipping diagnostic key cooldown because it would remove the last routable path or the error is not key-scoped"
         );
-        persist_key_soft_failure(state, key_id, Some(&report.summary)).await?;
-        return Ok(());
+        return persist_soft_failure(state, "channel_key", key_id, Some(&report.summary)).await;
     }
-    let cooldown_until =
-        (!recovered).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
-    sqlx::query(
-        "UPDATE channel_key
-         SET healthy = TRUE,
-             last_error = $2,
-             cooldown_until = $3,
-             updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(key_id)
-    .bind((!recovered).then_some(report.summary.as_str()))
-    .bind(cooldown_until)
-    .execute(&state.db.pool)
-    .await?;
-    invalidate_routing(state).await;
-    Ok(())
+    persist_health_update(state, "channel_key", key_id, recovered, &report.summary).await
 }
 
 async fn persist_endpoint_health(
@@ -1224,31 +1221,49 @@ async fn persist_endpoint_health(
     endpoint_id: DbId,
     report: &EndpointDiagnosticReport,
 ) -> AppResult<()> {
-    let recovered =
-        report.status == DiagnosticStatus::Ok || report.status == DiagnosticStatus::Warning;
-    if !recovered
-        && (!endpoint_report_has_hard_cooldown_failure(report)
-            || !can_cooldown_endpoint(state, endpoint_id).await?)
-    {
+    let recovered = report.status.is_passing();
+    let should_cooldown = !recovered
+        && endpoint_report_has_hard_cooldown_failure(report)
+        && can_cooldown_endpoint(state, endpoint_id).await?;
+    if !recovered && !should_cooldown {
         tracing::info!(
             endpoint_id,
             "skipping diagnostic endpoint cooldown because it would remove the last routable path or the error is soft"
         );
-        persist_endpoint_soft_failure(state, endpoint_id, Some(&report.summary)).await?;
-        return Ok(());
+        return persist_soft_failure(state, "channel_endpoint", endpoint_id, Some(&report.summary))
+            .await;
     }
+    persist_health_update(
+        state,
+        "channel_endpoint",
+        endpoint_id,
+        recovered,
+        &report.summary,
+    )
+    .await
+}
+
+/// 将诊断健康结果写入 channel_key / channel_endpoint（表名仅来自内部字面量，SQL 安全）。
+/// recovered=false 时设置冷却窗口并记录 last_error。
+async fn persist_health_update(
+    state: &AppState,
+    table: &str,
+    id: DbId,
+    recovered: bool,
+    summary: &str,
+) -> AppResult<()> {
     let cooldown_until =
         (!recovered).then(|| Utc::now() + ChronoDuration::minutes(DIAGNOSTIC_COOLDOWN_MINUTES));
-    sqlx::query(
-        "UPDATE channel_endpoint
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE {table}
          SET healthy = TRUE,
              last_error = $2,
              cooldown_until = $3,
              updated_at = now()
          WHERE id = $1",
-    )
-    .bind(endpoint_id)
-    .bind((!recovered).then_some(report.summary.as_str()))
+    )))
+    .bind(id)
+    .bind((!recovered).then_some(summary))
     .bind(cooldown_until)
     .execute(&state.db.pool)
     .await?;
@@ -1256,36 +1271,20 @@ async fn persist_endpoint_health(
     Ok(())
 }
 
-async fn persist_endpoint_soft_failure(
+/// 只更新 last_error 不触发冷却（软失败）。表名仅来自内部字面量，SQL 安全。
+async fn persist_soft_failure(
     state: &AppState,
-    endpoint_id: DbId,
+    table: &str,
+    id: DbId,
     summary: Option<&str>,
 ) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE channel_endpoint
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE {table}
          SET last_error = $2,
              updated_at = now()
          WHERE id = $1",
-    )
-    .bind(endpoint_id)
-    .bind(summary)
-    .execute(&state.db.pool)
-    .await?;
-    Ok(())
-}
-
-async fn persist_key_soft_failure(
-    state: &AppState,
-    key_id: DbId,
-    summary: Option<&str>,
-) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE channel_key
-         SET last_error = $2,
-             updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(key_id)
+    )))
+    .bind(id)
     .bind(summary)
     .execute(&state.db.pool)
     .await?;

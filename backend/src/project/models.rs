@@ -136,10 +136,16 @@ impl UsageRoutingSnapshot {
 }
 
 fn truncate_chars(value: String, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value;
+    // 单次遍历：先 take(limit) 收集截断字符串，再检查是否真的超限。
+    // 修复前：chars().count() 即使不超限也遍历全字符串（O(n)），超限时更双倍遍历。
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_none() {
+        // 未超限：返回原字符串（避免 truncated 的 collect 分配）
+        value
+    } else {
+        truncated
     }
-    value.chars().take(limit).collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

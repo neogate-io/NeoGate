@@ -48,7 +48,7 @@ impl UsageDailyRecorder {
 
         let day = Utc::now().date_naive();
         let aggregates = daily_usage_aggregates(day, usages);
-        let mut entries = entries.lock().expect("usage daily recorder poisoned");
+        let mut entries = entries.lock().unwrap_or_else(|e| e.into_inner());
         merge_bounded_daily_usage_aggregates(&mut entries, aggregates);
     }
 }
@@ -70,7 +70,7 @@ async fn flush_daily_recorded_usage(
     entries: &Arc<Mutex<HashMap<DailyUsageKey, DailyUsageAggregate>>>,
 ) {
     let pending = {
-        let mut entries = entries.lock().expect("usage daily recorder poisoned");
+        let mut entries = entries.lock().unwrap_or_else(|e| e.into_inner());
         if entries.is_empty() {
             return;
         }
@@ -89,7 +89,7 @@ async fn flush_daily_recorded_usage(
 
     if let Err(err) = result {
         tracing::warn!("failed to flush daily usage aggregates: {err}");
-        let mut entries = entries.lock().expect("usage daily recorder poisoned");
+        let mut entries = entries.lock().unwrap_or_else(|e| e.into_inner());
         let aggregates = pending
             .into_iter()
             .map(|aggregate| (aggregate.key.clone(), aggregate))
@@ -143,7 +143,7 @@ async fn flush_usage_daily_aggregates(
             .push_bind(item.reason_out_tokens)
             .push_bind(item.audio_in_tokens)
             .push_bind(item.audio_out_tokens)
-            .push_bind(item.billing_meter.as_str())
+            .push_bind(item.key.billing_meter.as_str())
             .push_bind(item.billable_units)
             .push_bind(item.cost_micros);
     });
@@ -218,7 +218,7 @@ struct DailyUsageAggregate {
     reason_out_tokens: i64,
     audio_in_tokens: i64,
     audio_out_tokens: i64,
-    billing_meter: BillingMeter,
+    // billing_meter 已由 key.billing_meter 持有，此处不再重复，避免两者不一致。
     billable_units: i64,
     cost_micros: i64,
 }
@@ -324,32 +324,41 @@ impl DailyUsageAggregate {
                 .and_then(|usage| usage.audio_output_tokens)
                 .unwrap_or(0)
                 .max(0),
-            billing_meter: fields.billing_meter,
             billable_units: fields.billable_units,
             cost_micros: fields.cost_micros.unwrap_or(0).max(0),
         }
     }
 
     fn add(&mut self, other: &Self) {
-        self.request_count += other.request_count;
-        self.success_count += other.success_count;
-        self.error_count += other.error_count;
-        self.streamed_count += other.streamed_count;
-        self.latency_ms_total += other.latency_ms_total;
-        self.first_response_ms_total += other.first_response_ms_total;
-        self.first_response_count += other.first_response_count;
-        self.input_tokens += other.input_tokens;
-        self.output_tokens += other.output_tokens;
-        self.total_tokens += other.total_tokens;
-        self.cache_in_tokens += other.cache_in_tokens;
-        self.cache_create_in_tokens += other.cache_create_in_tokens;
-        self.cache_create_5m_in_tokens += other.cache_create_5m_in_tokens;
-        self.cache_create_1h_in_tokens += other.cache_create_1h_in_tokens;
-        self.reason_out_tokens += other.reason_out_tokens;
-        self.audio_in_tokens += other.audio_in_tokens;
-        self.audio_out_tokens += other.audio_out_tokens;
-        self.billable_units += other.billable_units;
-        self.cost_micros += other.cost_micros;
+        self.request_count = self.request_count.saturating_add(other.request_count);
+        self.success_count = self.success_count.saturating_add(other.success_count);
+        self.error_count = self.error_count.saturating_add(other.error_count);
+        self.streamed_count = self.streamed_count.saturating_add(other.streamed_count);
+        self.latency_ms_total = self.latency_ms_total.saturating_add(other.latency_ms_total);
+        self.first_response_ms_total = self
+            .first_response_ms_total
+            .saturating_add(other.first_response_ms_total);
+        self.first_response_count = self
+            .first_response_count
+            .saturating_add(other.first_response_count);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+        self.cache_in_tokens = self.cache_in_tokens.saturating_add(other.cache_in_tokens);
+        self.cache_create_in_tokens = self
+            .cache_create_in_tokens
+            .saturating_add(other.cache_create_in_tokens);
+        self.cache_create_5m_in_tokens = self
+            .cache_create_5m_in_tokens
+            .saturating_add(other.cache_create_5m_in_tokens);
+        self.cache_create_1h_in_tokens = self
+            .cache_create_1h_in_tokens
+            .saturating_add(other.cache_create_1h_in_tokens);
+        self.reason_out_tokens = self.reason_out_tokens.saturating_add(other.reason_out_tokens);
+        self.audio_in_tokens = self.audio_in_tokens.saturating_add(other.audio_in_tokens);
+        self.audio_out_tokens = self.audio_out_tokens.saturating_add(other.audio_out_tokens);
+        self.billable_units = self.billable_units.saturating_add(other.billable_units);
+        self.cost_micros = self.cost_micros.saturating_add(other.cost_micros);
     }
 }
 

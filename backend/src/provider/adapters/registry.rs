@@ -13,15 +13,23 @@ pub(crate) fn adapter_for_endpoint(
     base_url: &str,
     hint: Option<&str>,
 ) -> &'static dyn ProviderAdapter {
+    // hint 最优先：先于所有 URL/provider 检查，确保显式配置可覆盖自动检测。
+    // 修复前：globalaiopc URL 匹配在 hint 之前，导致 hint=newapi 对 globalaiopc URL 无效。
+    if let Some(h) = hint {
+        if h.eq_ignore_ascii_case("newapi") {
+            return &NEWAPI_ADAPTER;
+        }
+        // 未知 hint 值：记录 warn 便于排查配置拼写错误，而不是静默降级。
+        tracing::warn!(
+            hint = h,
+            provider,
+            base_url,
+            "unknown adapter hint; falling through to provider/url detection"
+        );
+    }
+
     if provider.eq_ignore_ascii_case("openai") && globalaiopc::matches_base_url(base_url) {
         return &GLOBALAIOPC_ADAPTER;
-    }
-    // hint 显式指定时优先使用；当前仅支持 "newapi"，未来可扩展。
-    if hint
-        .map(|h| h.eq_ignore_ascii_case("newapi"))
-        .unwrap_or(false)
-    {
-        return &NEWAPI_ADAPTER;
     }
     if provider.eq_ignore_ascii_case("custom") && matches_base_url(base_url) {
         return &HAXICLOUD_ADAPTER;

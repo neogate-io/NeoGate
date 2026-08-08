@@ -217,11 +217,27 @@ async fn run_worker(
 }
 
 fn push_bounded_usage(usages: &mut Vec<UsageInsert>, usage: UsageInsert) {
-    if usages.len() >= USAGE_BATCH_SIZE {
-        tracing::warn!("relay usage flush buffer is full; dropping non-billing usage record");
+    if usages.len() < USAGE_BATCH_SIZE {
+        usages.push(usage);
         return;
     }
-    usages.push(usage);
+    // Buffer 已满。含 billing 字段的记录对应已实际扣款，丢弃会造成"有账单无 usage 行"
+    // 的财务数据不一致——优先保留：找一条无 billing 的条目替换。
+    if usage.billing.is_some() {
+        if let Some(pos) = usages.iter().position(|u| u.billing.is_none()) {
+            tracing::warn!(
+                "relay usage flush buffer is full; evicting non-billing record to preserve billing usage"
+            );
+            usages[pos] = usage;
+            return;
+        }
+        // 所有 slot 都是 billing 记录，buffer 已被同等高优先级占满，只能丢弃并 error。
+        tracing::error!(
+            "relay usage flush buffer is full with billing records; dropping billing usage record"
+        );
+    } else {
+        tracing::warn!("relay usage flush buffer is full; dropping non-billing usage record");
+    }
 }
 
 fn insert_bounded_failure(failures: &mut HashMap<DbId, KeyFailure>, failure: KeyFailure) {

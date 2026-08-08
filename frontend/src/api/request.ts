@@ -1,6 +1,6 @@
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
-import { ApiError, readApiErrorPayload } from '../utils/errors'
+import { ApiError, isSessionExpiredError, readApiErrorPayload } from '../utils/errors'
 import { translate } from '../i18n'
 import { locale } from '../composables/useLocale'
 import { router } from '../router'
@@ -18,6 +18,14 @@ export async function userRequest<T>(path: string, init?: RequestInit) {
 }
 
 export async function adminFileRequest(path: string, init?: RequestInit) {
+  return authedFileRequest(path, init)
+}
+
+export async function userFileRequest(path: string, init?: RequestInit) {
+  return authedFileRequest(path, init)
+}
+
+async function authedFileRequest(path: string, init?: RequestInit) {
   const auth = useAuthStore()
   const headers = new Headers(init?.headers)
   if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
@@ -105,9 +113,7 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 }
 
 function handleAuthFailure(err: unknown) {
-  if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
-    return
-  }
+  if (!(err instanceof ApiError)) return
 
   const auth = useAuthStore()
   if (!auth.isAuthed) return
@@ -121,6 +127,8 @@ function handleAuthFailure(err: unknown) {
       .catch(() => undefined)
     return
   }
+
+  if (!isSessionExpiredError(err)) return
 
   ElMessage.warning(translate(locale.value, 'sessionExpired'))
   auth.clearToken()

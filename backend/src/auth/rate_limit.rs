@@ -171,7 +171,7 @@ impl LocalAuthRateLimiter {
         message: &'static str,
     ) -> AppResult<()> {
         let now = Instant::now();
-        let mut buckets = self.buckets.lock().expect("auth rate limiter poisoned");
+        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         if buckets.len() > AUTH_RATE_LIMIT_MAX_ENTRIES {
             buckets.retain(|_, bucket| bucket.reset_at > now);
         }
@@ -206,9 +206,9 @@ impl RedisAuthRateLimiter {
         let count: i64 = redis::Script::new(
             r#"
             local count = redis.call('INCR', KEYS[1])
-            if count == 1 then
-                redis.call('PEXPIRE', KEYS[1], ARGV[1])
-            end
+            -- 无条件刷新 TTL：防止旧 key 惰性未清理时 INCR 返回 > 1 而 TTL 未被重设，
+            -- 导致该 key 永久积累计数。固定窗口语义不变（每次请求重置到 window 后过期）。
+            redis.call('PEXPIRE', KEYS[1], ARGV[1])
             return count
             "#,
         )

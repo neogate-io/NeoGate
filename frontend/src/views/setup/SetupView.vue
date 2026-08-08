@@ -36,6 +36,7 @@ import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { useSetupWizard, type BusinessSetupStep } from '../../composables/useSetupWizard'
 import { setSiteBrand } from '../../composables/useSiteBrand'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
 import { abortableDelay, isAbortError } from '../../utils/async'
@@ -51,21 +52,12 @@ import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
-type BusinessSetupStep =
-  | 'admin-password'
-  | 'service-mode'
-  | 'upstream'
-  | 'smtp'
-  | 'payment'
-  | 'finish'
 type SetupEndpointPayload = {
   protocol: Protocol
   base_url: string
   models: string[]
   enabled: boolean
 }
-const optionalBusinessSteps = new Set<BusinessSetupStep>(['upstream', 'smtp', 'payment'])
-
 const router = useRouter()
 const { locale, t } = useLocale()
 const loading = ref(false)
@@ -83,10 +75,6 @@ const status = ref<ServicePolicy | null>(null)
 const providers = ref<ProviderRecord[]>([])
 const envFile = ref('')
 const clusterEnvTemplate = ref('')
-const currentBusinessStep = ref<BusinessSetupStep>('admin-password')
-const includeUpstream = ref(true)
-const includePayment = ref(true)
-const reviewingRuntimeConfig = ref(false)
 const fetchedModels = ref<string[]>([])
 const selectedFetchedModels = ref<string[]>([])
 const pricingTemplates = ref<PricingTemplate[]>([])
@@ -219,6 +207,29 @@ const shouldConfigureSmtp = computed(() => setupForm.registrationEnabled)
 const shouldShowPaymentStep = computed(
   () => setupForm.serviceMode === 'paid' && paymentForm.enabled
 )
+const setupWizard = useSetupWizard({
+  configureSmtp: () => shouldConfigureSmtp.value,
+  showPayment: () => shouldShowPaymentStep.value,
+  showBusinessSetup: () =>
+    Boolean(
+      status.value &&
+      !status.value.bootstrap_required &&
+      !status.value.setup_completed &&
+      !reviewingRuntimeConfig.value
+    )
+})
+const {
+  currentBusinessStep,
+  includeUpstream,
+  includePayment,
+  reviewingRuntimeConfig,
+  businessSetupSteps,
+  isLastBusinessStep,
+  canSkipCurrentBusinessStep,
+  goToAdjacentBusinessStep,
+  isBusinessStepActive,
+  isBusinessStepDone
+} = setupWizard
 const shouldConfigurePayment = computed(() => shouldShowPaymentStep.value && includePayment.value)
 const setupFinishModeTitle = computed(() =>
   setupForm.serviceMode === 'paid' ? t('setupFinishPaidMode') : t('setupFinishInternalMode')
@@ -279,24 +290,6 @@ const setupFinishAddonItems = computed(() => [
         : t('setupFinishPaymentNotNeeded')
   }
 ])
-const businessSetupSteps = computed<BusinessSetupStep[]>(() => [
-  'admin-password',
-  'service-mode',
-  'upstream',
-  ...(shouldConfigureSmtp.value ? (['smtp'] as const) : []),
-  ...(shouldShowPaymentStep.value ? (['payment'] as const) : []),
-  'finish'
-])
-const currentBusinessStepIndex = computed(() =>
-  businessSetupSteps.value.indexOf(currentBusinessStep.value)
-)
-const isLastBusinessStep = computed(
-  () => currentBusinessStepIndex.value === businessSetupSteps.value.length - 1
-)
-const canSkipCurrentBusinessStep = computed(() =>
-  optionalBusinessSteps.has(currentBusinessStep.value)
-)
-
 const setupSteps = computed(() => {
   const businessStepMeta: Record<
     BusinessSetupStep,
@@ -964,26 +957,12 @@ function skipOptionalBusinessStep() {
   }
 }
 
-function goToAdjacentBusinessStep(offset: -1 | 1) {
-  const nextStep = businessSetupSteps.value[currentBusinessStepIndex.value + offset]
-  if (nextStep) currentBusinessStep.value = nextStep
-}
-
 async function handleBusinessSubmit() {
   if (isLastBusinessStep.value) {
     await submitSetup()
     return
   }
   await goToNextBusinessStep()
-}
-
-function isBusinessStepActive(step: BusinessSetupStep) {
-  return showBusinessSetup.value && currentBusinessStep.value === step
-}
-
-function isBusinessStepDone(step: BusinessSetupStep) {
-  if (!showBusinessSetup.value) return false
-  return currentBusinessStepIndex.value > businessSetupSteps.value.indexOf(step)
 }
 
 function applyProviderDefaults() {

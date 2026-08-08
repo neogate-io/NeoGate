@@ -291,8 +291,7 @@ pub(crate) async fn create_anthropic_message_batch(
     headers: HeaderMap,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    let model = batch_model(&body)?;
-    let request_count = batch_request_count(&body)?;
+    let (model, request_count) = validate_batch_body(&body)?;
     let resolved =
         crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &model)
             .await?;
@@ -631,7 +630,12 @@ async fn finish_results_response(
                         }
                         Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                     }
-                    Some(Err(err)) => Some((Err(std::io::Error::other(err)), None)),
+                    Some(Err(err)) => {
+                        // 流错误（网络中断/客户端断流）时仍需调用 finish()，
+                        // 否则 billing hold 既不结算也不释放，须等 stale_terminal_held_tasks 超时回收。
+                        relay.finish().await;
+                        Some((Err(std::io::Error::other(err)), None))
+                    }
                     None => {
                         relay.finish().await;
                         None
@@ -775,7 +779,9 @@ fn count_tokens_model(body: &[u8]) -> AppResult<String> {
         .ok_or_else(|| AppError::BadRequest("model is required".to_string()))
 }
 
-fn batch_model(body: &[u8]) -> AppResult<String> {
+/// 一次解析 batch 请求体，同时提取 model 和 request_count，
+/// 消除原来 batch_model + batch_request_count 两次独立解析的冗余。
+fn validate_batch_body(body: &[u8]) -> AppResult<(String, i64)> {
     let value: Value = serde_json::from_slice(body)?;
     let requests = value
         .get("requests")
@@ -795,8 +801,8 @@ fn batch_model(body: &[u8]) -> AppResult<String> {
             .ok_or_else(|| {
                 AppError::BadRequest(format!("requests[{index}].params.model is required"))
             })?;
-        if let Some(model) = model {
-            if model != item_model {
+        if let Some(m) = model {
+            if m != item_model {
                 return Err(AppError::BadRequest(
                     "message batches must use a single model".to_string(),
                 ));
@@ -805,20 +811,11 @@ fn batch_model(body: &[u8]) -> AppResult<String> {
             model = Some(item_model);
         }
     }
-    let model = model.expect("non-empty requests set model");
-    Ok(model.to_string())
-}
-
-fn batch_request_count(body: &[u8]) -> AppResult<i64> {
-    let value: Value = serde_json::from_slice(body)?;
-    let count = value
-        .get("requests")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::BadRequest("requests is required".to_string()))?
-        .len();
-    i64::try_from(count)
-        .map_err(|_| AppError::BadRequest("too many batch requests".to_string()))
-        .map(|count| count.max(1))
+    let model = model.expect("non-empty requests set model").to_string();
+    let count = i64::try_from(requests.len())
+        .map_err(|_| AppError::BadRequest("too many batch requests".to_string()))?
+        .max(1);
+    Ok((model, count))
 }
 
 fn task_upstream_counts(task: &UpstreamTask) -> Value {
@@ -853,7 +850,9 @@ mod tests {
             br#"{"requests":[{"custom_id":"one","params":{"model":"claude-sonnet"}}]}"#,
         );
 
-        assert_eq!(batch_model(&body).unwrap(), "claude-sonnet");
+        let (model, count) = validate_batch_body(&body).unwrap();
+        assert_eq!(model, "claude-sonnet");
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -862,7 +861,7 @@ mod tests {
             br#"{"requests":[{"params":{"model":"claude-a"}},{"params":{"model":"claude-b"}}]}"#,
         );
 
-        assert!(batch_model(&body).is_err());
+        assert!(validate_batch_body(&body).is_err());
     }
 
     #[test]

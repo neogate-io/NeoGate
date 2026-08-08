@@ -426,41 +426,41 @@ impl Billing {
         let token_usage = usage.and_then(|usage| usage.token_usage);
         let billing_meter = usage.map_or(price.billing_meter, |usage| usage.meter);
         let billable_units = usage.map_or(0, |usage| usage.billable_units.max(0));
+        // 提前解构，避免后续 hold.parts 被 move 后 hold 仍被借用。
+        let transaction_id = hold.transaction_id;
+        let estimated_micros = hold.estimated_micros;
+        let charge_credit = hold.charge_credit;
 
-        if !hold.charge_credit {
-            return Ok(BillingCharge {
-                transaction_id: hold.transaction_id,
-                input_tokens: token_usage.map(|usage| usage.input_tokens),
-                output_tokens: token_usage.map(|usage| usage.output_tokens),
-                total_tokens: token_usage.map(TokenUsage::total_tokens),
+        if !charge_credit {
+            return Ok(make_billing_charge(
+                transaction_id,
+                token_usage,
                 billing_meter,
                 billable_units,
                 cost_micros,
                 status,
-                parts: Vec::new(),
-                returned_parts: Vec::new(),
-            });
+                Vec::new(),
+                Vec::new(),
+            ));
         }
 
-        if cost_micros >= hold.estimated_micros {
-            if cost_micros > hold.estimated_micros && allow_supplemental {
-                let supplemental_micros = cost_micros - hold.estimated_micros;
+        if cost_micros >= estimated_micros {
+            if cost_micros > estimated_micros && allow_supplemental {
+                let supplemental_micros = cost_micros - estimated_micros;
                 match self.reserve(pool, accounts, supplemental_micros).await {
                     Ok(extra_hold) => {
                         let mut parts = hold.parts;
                         parts.extend(extra_hold.parts);
-                        return Ok(BillingCharge {
-                            transaction_id: hold.transaction_id,
-                            input_tokens: token_usage.map(|usage| usage.input_tokens),
-                            output_tokens: token_usage.map(|usage| usage.output_tokens),
-                            total_tokens: token_usage.map(TokenUsage::total_tokens),
+                        return Ok(make_billing_charge(
+                            transaction_id,
+                            token_usage,
                             billing_meter,
                             billable_units,
                             cost_micros,
                             status,
                             parts,
-                            returned_parts: Vec::new(),
-                        });
+                            Vec::new(),
+                        ));
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -469,22 +469,21 @@ impl Billing {
                     }
                 }
             }
-            return Ok(BillingCharge {
-                transaction_id: hold.transaction_id,
-                input_tokens: token_usage.map(|usage| usage.input_tokens),
-                output_tokens: token_usage.map(|usage| usage.output_tokens),
-                total_tokens: token_usage.map(TokenUsage::total_tokens),
+            let capped_status = if cost_micros > estimated_micros {
+                BillingChargeStatus::Undercharged
+            } else {
+                status
+            };
+            return Ok(make_billing_charge(
+                transaction_id,
+                token_usage,
                 billing_meter,
                 billable_units,
-                cost_micros: hold.estimated_micros,
-                status: if cost_micros > hold.estimated_micros {
-                    BillingChargeStatus::Undercharged
-                } else {
-                    status
-                },
-                parts: hold.parts,
-                returned_parts: Vec::new(),
-            });
+                estimated_micros,
+                capped_status,
+                hold.parts,
+                Vec::new(),
+            ));
         }
 
         let mut remaining = cost_micros;
@@ -509,18 +508,16 @@ impl Billing {
             }
         }
 
-        Ok(BillingCharge {
-            transaction_id: hold.transaction_id,
-            input_tokens: token_usage.map(|usage| usage.input_tokens),
-            output_tokens: token_usage.map(|usage| usage.output_tokens),
-            total_tokens: token_usage.map(TokenUsage::total_tokens),
+        Ok(make_billing_charge(
+            transaction_id,
+            token_usage,
             billing_meter,
             billable_units,
             cost_micros,
             status,
-            parts: consumed,
+            consumed,
             returned_parts,
-        })
+        ))
     }
 
     async fn prefetch(
@@ -634,6 +631,32 @@ impl Billing {
             }
         }
         Ok(())
+    }
+}
+
+/// `settle` 各分支共享的 BillingCharge 构造辅助函数，消除重复展开 token_usage 字段的样板代码。
+#[allow(clippy::too_many_arguments)]
+fn make_billing_charge(
+    transaction_id: uuid::Uuid,
+    token_usage: Option<TokenUsage>,
+    billing_meter: BillingMeter,
+    billable_units: i64,
+    cost_micros: i64,
+    status: BillingChargeStatus,
+    parts: Vec<DebitPart>,
+    returned_parts: Vec<DebitPart>,
+) -> BillingCharge {
+    BillingCharge {
+        transaction_id,
+        input_tokens: token_usage.map(|u| u.input_tokens),
+        output_tokens: token_usage.map(|u| u.output_tokens),
+        total_tokens: token_usage.map(TokenUsage::total_tokens),
+        billing_meter,
+        billable_units,
+        cost_micros,
+        status,
+        parts,
+        returned_parts,
     }
 }
 

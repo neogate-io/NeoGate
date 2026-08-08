@@ -616,10 +616,12 @@ pub async fn get_smtp_setting(state: &AppState) -> AppResult<SmtpSettingRecord> 
     Ok(record_from_stored(setting, Some(updated_at)))
 }
 
-pub async fn upsert_smtp_setting(
+/// 校验并加密 SMTP 设置，返回待写入的 JSON 值。不触碰数据库写入，
+/// 供普通路径与 setup 事务路径共用，避免逻辑重复。
+async fn prepare_smtp_setting_value(
     state: &AppState,
     req: UpsertSmtpSettingRequest,
-) -> AppResult<SmtpSettingRecord> {
+) -> AppResult<serde_json::Value> {
     let existing = existing_smtp_setting(state).await?;
     let smtp_host = required_trimmed(req.smtp_host, "SMTP host is required")?;
     let from_email = required_trimmed(req.from_email, "sender email is required")?;
@@ -644,7 +646,14 @@ pub async fn upsert_smtp_setting(
         from_name: optional_trimmed(req.from_name),
         subject_prefix: optional_trimmed(req.subject_prefix),
     };
-    let value = serde_json::to_value(&setting)?;
+    Ok(serde_json::to_value(&setting)?)
+}
+
+pub async fn upsert_smtp_setting(
+    state: &AppState,
+    req: UpsertSmtpSettingRequest,
+) -> AppResult<SmtpSettingRecord> {
+    let value = prepare_smtp_setting_value(state, req).await?;
     let row = sqlx::query(
         r#"
         INSERT INTO setting (key, value)
@@ -663,6 +672,29 @@ pub async fn upsert_smtp_setting(
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let setting: StoredSmtpSetting = serde_json::from_value(value)?;
     Ok(record_from_stored(setting, Some(updated_at)))
+}
+
+/// setup 事务专用：在给定事务内写入 SMTP 设置，与 service_policy 同一事务提交，
+/// 避免 setup 失败时留下孤立的 SMTP 配置。
+pub(crate) async fn upsert_smtp_setting_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    req: UpsertSmtpSettingRequest,
+) -> AppResult<()> {
+    let value = prepare_smtp_setting_value(state, req).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        "#,
+    )
+    .bind(SMTP_SETTING_KEY)
+    .bind(value)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 pub async fn test_smtp_setting(

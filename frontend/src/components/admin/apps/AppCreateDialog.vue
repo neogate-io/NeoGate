@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { Link, View } from '@element-plus/icons-vue'
+import type { FormInstance, FormItemRule, FormRules } from 'element-plus'
 import type { UseAppCreate } from '../../../composables/useAppCreate'
 import { useLocale } from '../../../composables/useLocale'
 import type { AppRecord } from '../../../types/admin'
@@ -20,8 +22,57 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+const formRef = ref<FormInstance>()
 
-function submitCreate() {
+function requiredRule(message: string, trigger: 'blur' | 'change' = 'blur'): FormItemRule {
+  return { required: true, whitespace: true, message, trigger }
+}
+
+const formRules = computed<FormRules>(() => {
+  const rules: FormRules = {
+    name: [requiredRule(t('appNameRequired'))],
+    model: [requiredRule(t('appModelRequired'), 'change')]
+  }
+
+  if (create.form.appType === 'wecom') {
+    rules.corpId = [requiredRule(t('appWecomCorpIdRequired'))]
+    rules.agentId = [requiredRule(t('appWecomAgentIdRequired'))]
+    if (props.mode !== 'edit') {
+      rules.corpSecret = [requiredRule(t('appWecomSecretRequired'))]
+      rules.callbackToken = [requiredRule(t('appCallbackTokenRequired'))]
+    }
+    rules.encodingAesKey = [
+      {
+        trigger: 'blur',
+        validator: (_rule, value: string, callback) => {
+          const normalized = value.trim()
+          if (!normalized && props.mode === 'edit') return callback()
+          if (!normalized) return callback(new Error(t('appAesKeyRequired')))
+          if (normalized.length !== 43) return callback(new Error(t('appAesKeyLength')))
+          callback()
+        }
+      }
+    ]
+  }
+
+  if (create.form.appType === 'feishu') {
+    rules.feishuAppId = [requiredRule(t('appFeishuAppIdRequired'))]
+    if (props.mode !== 'edit') {
+      rules.feishuAppSecret = [requiredRule(t('appFeishuAppSecretRequired'))]
+      rules.feishuVerificationToken = [requiredRule(t('appFeishuTokenRequired'))]
+    }
+  }
+
+  if (create.form.appType === 'dingtalk' && props.mode !== 'edit') {
+    rules.dingtalkAppSecret = [requiredRule(t('appDingtalkSecretRequired'))]
+  }
+
+  return rules
+})
+
+async function submitCreate() {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (props.mode === 'edit') {
     emit('save')
     return
@@ -64,13 +115,16 @@ function showCreatedAppDetail() {
     </div>
 
     <el-form
+      ref="formRef"
       v-else-if="create.form.step === 2 || mode === 'edit'"
       class="app-create-form"
       label-position="top"
+      :model="create.form"
+      :rules="formRules"
       @submit.prevent="submitCreate"
     >
       <div class="app-form-grid">
-        <el-form-item class="app-name-field" :label="t('appName')">
+        <el-form-item class="app-name-field" :label="t('appName')" prop="name">
           <el-input v-model="create.form.name" :placeholder="t('appNamePlaceholder')" />
         </el-form-item>
       </div>
@@ -87,7 +141,7 @@ function showCreatedAppDetail() {
       <div class="app-form-divider">{{ t('appModelSettings') }}</div>
 
       <div class="app-form-grid">
-        <el-form-item :label="t('appDefaultModel')">
+        <el-form-item :label="t('appDefaultModel')" prop="model">
           <el-select v-model="create.form.model" filterable :placeholder="t('appSelectModel')">
             <el-option
               v-for="item in create.modelOptions.value"
@@ -155,37 +209,43 @@ function showCreatedAppDetail() {
 
       <template v-if="create.form.appType === 'wecom'">
         <div class="app-form-grid">
-          <el-form-item :label="t('appWecomCorpId')">
+          <el-form-item :label="t('appWecomCorpId')" prop="corpId">
             <el-input v-model="create.form.corpId" :placeholder="t('appWecomCorpIdPlaceholder')" />
           </el-form-item>
-          <el-form-item :label="t('appWecomAgentId')">
+          <el-form-item :label="t('appWecomAgentId')" prop="agentId">
             <el-input
               v-model="create.form.agentId"
               :placeholder="t('appWecomDetailsPlaceholder')"
             />
           </el-form-item>
-          <el-form-item :label="t('appWecomSecret')">
+          <el-form-item :label="t('appWecomSecret')" prop="corpSecret">
             <el-input
               v-model="create.form.corpSecret"
-              :placeholder="t('appWecomDetailsPlaceholder')"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appWecomDetailsPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
-          <el-form-item :label="t('appCallbackToken')">
+          <el-form-item :label="t('appCallbackToken')" prop="callbackToken">
             <el-input
               v-model="create.form.callbackToken"
-              :placeholder="t('appCallbackTokenPlaceholder')"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appCallbackTokenPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
         </div>
-        <el-form-item label="EncodingAESKey">
+        <el-form-item label="EncodingAESKey" prop="encodingAesKey">
           <el-input
             v-model="create.form.encodingAesKey"
             maxlength="43"
-            :placeholder="t('appAesKeyPlaceholder')"
+            :placeholder="
+              mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appAesKeyPlaceholder')
+            "
             show-word-limit
             show-password
             type="password"
@@ -209,24 +269,30 @@ function showCreatedAppDetail() {
 
       <template v-if="create.form.appType === 'feishu'">
         <div class="app-form-grid">
-          <el-form-item label="App ID">
+          <el-form-item label="App ID" prop="feishuAppId">
             <el-input
               v-model="create.form.feishuAppId"
               :placeholder="t('appFeishuCredentialPlaceholder')"
             />
           </el-form-item>
-          <el-form-item label="App Secret">
+          <el-form-item label="App Secret" prop="feishuAppSecret">
             <el-input
               v-model="create.form.feishuAppSecret"
-              :placeholder="t('appFeishuCredentialPlaceholder')"
+              :placeholder="
+                mode === 'edit'
+                  ? t('appKeepSecretPlaceholder')
+                  : t('appFeishuCredentialPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
-          <el-form-item label="Verification Token">
+          <el-form-item label="Verification Token" prop="feishuVerificationToken">
             <el-input
               v-model="create.form.feishuVerificationToken"
-              :placeholder="t('appFeishuTokenPlaceholder')"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appFeishuTokenPlaceholder')
+              "
               show-password
               type="password"
             />
@@ -234,7 +300,9 @@ function showCreatedAppDetail() {
           <el-form-item :label="t('appEncryptKeyOptional')">
             <el-input
               v-model="create.form.feishuEncryptKey"
-              :placeholder="t('appEncryptKeyPlaceholder')"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appEncryptKeyPlaceholder')
+              "
               show-password
               type="password"
             />
@@ -246,10 +314,12 @@ function showCreatedAppDetail() {
       </template>
 
       <template v-if="create.form.appType === 'dingtalk'">
-        <el-form-item :label="t('appDingtalkSecret')">
+        <el-form-item :label="t('appDingtalkSecret')" prop="dingtalkAppSecret">
           <el-input
             v-model="create.form.dingtalkAppSecret"
-            :placeholder="t('appDingtalkSecretPlaceholder')"
+            :placeholder="
+              mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appDingtalkSecretPlaceholder')
+            "
             show-password
             type="password"
           />

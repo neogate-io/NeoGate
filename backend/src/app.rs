@@ -68,6 +68,9 @@ pub struct AppState {
     pub user_auth_cache: auth::UserAuthCache,
     pub auth_rate_limiter: auth::AuthRateLimiter,
     pub(crate) user_request_limiter: relay::UserRequestLimiter,
+    /// per-endpoint 并发限制，防止某个 webhook app 在消息风暴时无限 spawn LLM 推理任务。
+    /// 键为 endpoint_id，值为各 endpoint 独享的 Semaphore。
+    pub(crate) app_message_limiter: Arc<dashmap::DashMap<crate::id::DbId, Arc<tokio::sync::Semaphore>>>,
     pub service_policy_cache: policy::ServicePolicyCache,
     pub cache_invalidator: cache::CacheInvalidator,
     pub(crate) task_wakeup: Arc<Notify>,
@@ -731,6 +734,7 @@ pub(crate) async fn build_state(
             config.relay.user_concurrent_request_limit,
             config.relay.global_concurrent_request_limit,
         ),
+        app_message_limiter: Arc::new(dashmap::DashMap::new()),
         service_policy_cache: policy::ServicePolicyCache::default(),
         cache_invalidator,
         task_wakeup: Arc::new(Notify::new()),
@@ -1056,6 +1060,7 @@ pub(crate) mod tests {
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
             user_request_limiter: relay::UserRequestLimiter::new(100, 0),
+            app_message_limiter: Arc::new(dashmap::DashMap::new()),
             service_policy_cache: policy::ServicePolicyCache::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
             task_wakeup: Arc::new(Notify::new()),

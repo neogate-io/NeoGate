@@ -61,14 +61,14 @@ impl RequestAuthLogContext {
         *self
             .inner
             .write()
-            .expect("request auth log context poisoned") = RequestAuthLogState { auth, subject_id };
+            .unwrap_or_else(|e| e.into_inner()) = RequestAuthLogState { auth, subject_id };
     }
 
     pub fn snapshot(&self) -> (&'static str, Option<DbId>) {
         let state = *self
             .inner
             .read()
-            .expect("request auth log context poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         (state.auth, state.subject_id)
     }
 }
@@ -94,9 +94,9 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
 }
 
 pub fn issue_admin_token(ttl: Duration, secret: &str, admin_id: DbId) -> String {
-    let issued_at = Utc::now().timestamp_millis();
-    let expires_at = Utc::now() + chrono_ttl(ttl);
-    let expires_at = expires_at.timestamp();
+    let now = Utc::now();
+    let issued_at = now.timestamp_millis();
+    let expires_at = (now + chrono_ttl(ttl)).timestamp();
     let nonce = generate_admin_nonce();
     let payload = admin_session_token_payload(issued_at, expires_at, admin_id, &nonce);
     let signature = hmac_sha256_hex(secret.as_bytes(), payload.as_bytes());
@@ -314,14 +314,21 @@ impl UserAuthCache {
     pub fn get(&self, cache_key: &str) -> Option<UserAuth> {
         let shard = self.shard(cache_key);
         {
-            let entries = shard.read().expect("user auth cache poisoned");
+            let entries = shard.read().unwrap_or_else(|e| e.into_inner());
             let cached = entries.get(cache_key)?;
             if cached.expires_at > Instant::now() {
                 return Some(cached.auth.clone());
             }
         }
-        let mut entries = shard.write().expect("user auth cache poisoned");
-        entries.remove(cache_key);
+        // 读锁释放到写锁获取之间有窗口，另一线程可能已插入新鲜 entry。
+        // 升级为写锁后需再次检查 expires_at，避免把刚插入的有效 entry 误删。
+        let mut entries = shard.write().unwrap_or_else(|e| e.into_inner());
+        let still_expired = entries
+            .get(cache_key)
+            .is_some_and(|cached| cached.expires_at <= Instant::now());
+        if still_expired {
+            entries.remove(cache_key);
+        }
         None
     }
 
@@ -333,7 +340,7 @@ impl UserAuthCache {
         let mut entries = self
             .shard(&cache_key)
             .write()
-            .expect("user auth cache poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         prune_expired_auth_entries(&mut entries, now);
         trim_auth_cache_for_insert(&mut entries, &cache_key, self.max_entries_per_shard);
         entries.insert(
@@ -349,7 +356,7 @@ impl UserAuthCache {
         for shard in self.entries.iter() {
             shard
                 .write()
-                .expect("user auth cache poisoned")
+                .unwrap_or_else(|e| e.into_inner())
                 .retain(|_, cached| cached.auth.user_id != user_id);
         }
     }
@@ -358,14 +365,14 @@ impl UserAuthCache {
         for shard in self.entries.iter() {
             shard
                 .write()
-                .expect("user auth cache poisoned")
+                .unwrap_or_else(|e| e.into_inner())
                 .retain(|_, cached| cached.auth.user_key_id != user_key_id);
         }
     }
 
     pub fn clear(&self) {
         for shard in self.entries.iter() {
-            shard.write().expect("user auth cache poisoned").clear();
+            shard.write().unwrap_or_else(|e| e.into_inner()).clear();
         }
     }
 

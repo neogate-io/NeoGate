@@ -32,6 +32,7 @@ import {
 } from '../utils/channel'
 import { isNoModelsReturnedError, readError, readModelFetchError } from '../utils/errors'
 import { withLoading, withLoadingValue } from './useLoadingTask'
+import { createChannelBaseUrlBinding } from './channelBaseUrl'
 
 type Translate = (key: MessageKey) => string
 type ModelPickerTarget = {
@@ -131,20 +132,10 @@ export function useChannels(t: Translate) {
 
   const createForm = reactive(defaultCreateForm())
   const editForm = reactive<ChannelForm>(defaultCreateForm())
-
-  const createBaseUrl = computed({
-    get: () => visibleBaseUrl(createForm),
-    set: (value: string) => {
-      setVisibleBaseUrl(createForm, value)
-    }
-  })
-
-  const editBaseUrl = computed({
-    get: () => visibleBaseUrl(editForm),
-    set: (value: string) => {
-      setVisibleBaseUrl(editForm, value)
-    }
-  })
+  const createBaseUrlBinding = createChannelBaseUrlBinding(createForm)
+  const editBaseUrlBinding = createChannelBaseUrlBinding(editForm)
+  const createBaseUrl = createBaseUrlBinding.value
+  const editBaseUrl = editBaseUrlBinding.value
 
   const secretInput = computed({
     get: () => keepHyphenWithNextChar(createForm.secret),
@@ -191,6 +182,7 @@ export function useChannels(t: Translate) {
   function openCreateDialog() {
     const provider = providerOptions.value[0]
     Object.assign(createForm, defaultCreateForm(provider))
+    createBaseUrlBinding.syncProtocol()
     resetFetchedModels()
     createDialogOpen.value = true
   }
@@ -217,6 +209,7 @@ export function useChannels(t: Translate) {
       use_credentials: provider === 'openai' && row.use_credentials,
       secret: ''
     })
+    editBaseUrlBinding.syncProtocol()
     resetFetchedModels()
     editDialogOpen.value = true
   }
@@ -238,6 +231,7 @@ export function useChannels(t: Translate) {
 
     Object.assign(createForm, defaultCreateForm(option))
     createForm.use_credentials = false
+    createBaseUrlBinding.syncProtocol()
     resetFetchedModels()
   }
 
@@ -590,22 +584,11 @@ export function useChannels(t: Translate) {
     return form.provider === 'openai'
   }
 
-  function visibleBaseUrl(form: ChannelForm) {
-    if (form.provider === 'openai' && form.use_credentials) {
-      return form.endpoints.openai_oauth.base_url
-    }
-
-    return form.endpoints.openai.base_url || form.endpoints.anthropic.base_url
-  }
-
-  function setVisibleBaseUrl(form: ChannelForm, value: string) {
-    modelFetchEndpoint(form).base_url = value
-  }
-
   watch(
     () => createForm.use_credentials,
     (useCredentials) => {
       syncOpenAiCredentialEndpoint(createForm, useCredentials)
+      createBaseUrlBinding.syncProtocol()
       resetFetchedModels()
     }
   )
@@ -614,6 +597,7 @@ export function useChannels(t: Translate) {
     () => editForm.use_credentials,
     (useCredentials) => {
       syncOpenAiCredentialEndpoint(editForm, useCredentials)
+      editBaseUrlBinding.syncProtocol()
       resetFetchedModels()
     }
   )

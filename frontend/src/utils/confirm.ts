@@ -20,6 +20,7 @@ export async function confirmAction(
       cancelButtonText: options.cancelText,
       confirmButtonText: options.confirmText,
       confirmButtonClass: options.danger ? 'el-button--danger' : undefined,
+      customClass: 'app-confirm-message-box',
       type: options.type
     })
     return true

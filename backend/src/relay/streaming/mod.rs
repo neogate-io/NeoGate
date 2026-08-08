@@ -25,7 +25,6 @@ use crate::{
     project::models::UsageRoutingSnapshot,
     AppState,
 };
-use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
@@ -1110,6 +1109,7 @@ async fn record_channel_affinity(ctx: &RelayContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn stream_error_data(frame: &Bytes) -> Value {
         let frame = std::str::from_utf8(frame).expect("stream error frame is utf-8");

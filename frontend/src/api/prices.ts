@@ -28,9 +28,7 @@ export function getModelReferenceCatalog() {
 }
 
 export function getLiveModelReferenceCatalog() {
-  return adminRequest<ModelReferenceCatalogRecord[]>(
-    '/api/admin/model-reference-catalog/live'
-  )
+  return adminRequest<ModelReferenceCatalogRecord[]>('/api/admin/model-reference-catalog/live')
 }
 
 export function syncPricingTemplates(source = '') {

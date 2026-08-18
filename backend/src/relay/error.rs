@@ -275,22 +275,23 @@ fn is_quota_or_balance_error(lowered: &str) -> bool {
     contains_any(
         lowered,
         &[
-            "insufficient_quota",
-            "insufficient quota",
-            "exceeded your current quota",
-            "quota exceeded",
-            "quota has been exhausted",
-            "quota exhausted",
-            "allocationquota",
-            "insufficient balance",
-            "insufficient credit",
-            "not enough credits",
-            "credit balance",
-            "billing hard limit",
-            "billing",
-            "余额",
-            "额度",
-            "欠费",
+            "insufficient_quota",            // OpenAI
+            "insufficient quota",            // OpenAI / 通用
+            "exceeded your current quota",   // OpenAI
+            "quota exceeded",                // AWS Bedrock / 通用
+            "quota has been exhausted",      // AWS Bedrock
+            "quota exhausted",               // 通用
+            "allocationquota",               // Azure OpenAI
+            "insufficient balance",          // 国内厂商
+            "insufficient credit",           // 国内厂商
+            "not enough credits",            // 国内厂商
+            "credit balance",                // 国内厂商
+            "billing hard limit",            // OpenAI
+            // 注意：不使用裸 "billing"，避免将 "invalid billing address"
+            // 等与余额无关的错误误判为配额耗尽，触发错误 failover。
+            "余额",                          // 国内厂商
+            "额度",                          // 国内厂商
+            "欠费",                          // 国内厂商
         ],
     )
 }
@@ -300,15 +301,15 @@ fn is_rate_limit_error(status: StatusCode, lowered: &str) -> bool {
         || contains_any(
             lowered,
             &[
-                "rate_limit_exceeded",
-                "rate limit",
-                "too many requests",
-                "requests per minute",
-                "tokens per minute",
-                "overloaded_error",
-                "overloaded",
-                "请求过于频繁",
-                "限流",
+                "rate_limit_exceeded",   // OpenAI
+                "rate limit",            // 通用
+                "too many requests",     // 通用
+                "requests per minute",   // OpenAI
+                "tokens per minute",     // OpenAI
+                "overloaded_error",      // Anthropic
+                "overloaded",            // Anthropic / 国内厂商
+                "请求过于频繁",           // 国内厂商
+                "限流",                  // 国内厂商
             ],
         )
 }
@@ -318,19 +319,19 @@ fn is_auth_error(status: StatusCode, lowered: &str) -> bool {
         || contains_any(
             lowered,
             &[
-                "invalid_api_key",
-                "incorrect api key",
-                "invalid api key",
-                "expired api key",
-                "authentication",
-                "unauthorized",
-                "permission denied",
-                "forbidden",
-                "access denied",
-                "无效的 api key",
-                "未授权",
-                "无权限",
-                "未登录",
+                "invalid_api_key",       // OpenAI
+                "incorrect api key",     // OpenAI
+                "invalid api key",       // 通用
+                "expired api key",       // 通用
+                "authentication",        // 通用
+                "unauthorized",          // 通用
+                "permission denied",     // 通用
+                "forbidden",             // 通用
+                "access denied",         // 通用
+                "无效的 api key",         // 国内厂商
+                "未授权",                 // 国内厂商
+                "无权限",                 // 国内厂商
+                "未登录",                 // 国内厂商
             ],
         )
 }
@@ -346,21 +347,21 @@ pub(crate) fn is_model_error_text(lowered: &str) -> bool {
     contains_any(
         lowered,
         &[
-            "model_not_found",
-            "model not found",
-            "model_not_available",
-            "model is not available",
-            "does not exist",
-            "doesn't exist",
-            "not supported",
-            "unsupported model",
-            "no such model",
-            "unknown provider for model",
-            "no provider for model",
-            "provider for model",
-            "模型不存在",
-            "模型不可用",
-            "不支持的模型",
+            "model_not_found",               // OpenAI
+            "model not found",               // 通用
+            "model_not_available",           // 通用
+            "model is not available",        // 通用
+            "does not exist",                // OpenAI / 国内厂商
+            "doesn't exist",                 // 通用
+            "not supported",                 // 通用
+            "unsupported model",             // 通用
+            "no such model",                 // 通用
+            "unknown provider for model",    // 国内适配层
+            "no provider for model",         // 国内适配层
+            "provider for model",            // 国内适配层
+            "模型不存在",                     // 国内厂商
+            "模型不可用",                     // 国内厂商
+            "不支持的模型",                   // 国内厂商
         ],
     )
 }
@@ -370,16 +371,16 @@ fn is_context_length_error(status: StatusCode, lowered: &str) -> bool {
         || contains_any(
             lowered,
             &[
-                "context_length_exceeded",
-                "maximum context length",
-                "context window",
-                "too many tokens",
-                "input is too long",
-                "prompt is too long",
-                "tokens exceeds",
-                "上下文",
-                "输入过长",
-                "token 超",
+                "context_length_exceeded",   // OpenAI
+                "maximum context length",    // OpenAI
+                "context window",            // 通用
+                "too many tokens",           // 通用
+                "input is too long",         // Anthropic / 通用
+                "prompt is too long",        // 通用
+                "tokens exceeds",            // 国内厂商
+                "上下文",                     // 国内厂商
+                "输入过长",                   // 国内厂商
+                "token 超",                  // 国内厂商
             ],
         )
 }
@@ -388,16 +389,18 @@ fn is_safety_error(lowered: &str) -> bool {
     contains_any(
         lowered,
         &[
-            "content_policy_violation",
-            "content policy",
-            "safety",
-            "moderation",
-            "blocked",
-            "sensitive content",
-            "unsafe content",
-            "内容安全",
-            "安全策略",
-            "敏感内容",
+            "content_policy_violation",  // OpenAI
+            "content policy",            // OpenAI / 通用
+            "safety",                    // 通用
+            "moderation",                // OpenAI moderation
+            // 注意：不使用裸 "blocked"，该词在网络错误、IP 封禁等场景同样常见，
+            // 会误将非内容安全错误归类为 ContentRejected 导致不重试。
+            "content blocked",           // Azure Content Safety
+            "sensitive content",         // 国内厂商
+            "unsafe content",            // 通用
+            "内容安全",                  // 国内厂商
+            "安全策略",                  // 国内厂商
+            "敏感内容",                  // 国内厂商
         ],
     )
 }

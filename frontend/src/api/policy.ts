@@ -45,21 +45,23 @@ let adminServicePolicyCache: ServicePolicy | null = null
 let adminServicePolicyLoadedAt = 0
 let adminServicePolicyPromise: Promise<ServicePolicy> | null = null
 
-export function getSetupStatus(force = false) {
+export function getSetupStatus(force = false, init?: RequestInit) {
   if (!force && setupStatusCache && Date.now() - setupStatusLoadedAt < setupStatusCacheTtlMs) {
     return Promise.resolve(setupStatusCache)
   }
   if (!force && setupStatusPromise) return setupStatusPromise
 
-  setupStatusPromise = publicRequest<ServicePolicy>('/api/setup/status')
-    .then((status) => {
-      setupStatusCache = status
-      setupStatusLoadedAt = Date.now()
-      return status
-    })
-    .finally(() => {
-      setupStatusPromise = null
-    })
+  const request = publicRequest<ServicePolicy>('/api/setup/status', init).then((status) => {
+    setupStatusCache = status
+    setupStatusLoadedAt = Date.now()
+    return status
+  })
+
+  if (force) return request
+
+  setupStatusPromise = request.finally(() => {
+    setupStatusPromise = null
+  })
 
   return setupStatusPromise
 }
@@ -97,8 +99,8 @@ export function getClusterEnvTemplate() {
   })
 }
 
-export function getSetupProviders() {
-  return publicRequest<ProviderRecord[]>('/api/setup/providers')
+export function getSetupProviders(init?: RequestInit) {
+  return publicRequest<ProviderRecord[]>('/api/setup/providers', init)
 }
 
 export function fetchSetupUpstreamModels(input: {

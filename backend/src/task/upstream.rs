@@ -49,20 +49,17 @@ pub(crate) async fn insert_task(
     let expires_at = Utc::now()
         + ChronoDuration::from_std(retention)
             .unwrap_or_else(|_| ChronoDuration::seconds(2_592_000));
-    sqlx::query(
+    let inserted = sqlx::query(
         r#"
         INSERT INTO task_upstream (
             task_type, upstream_task_id, user_id, project_id, user_key_id,
             protocol, provider, model, upstream_model,
-            channel_id, channel_endpoint_id, channel_key_id, credential_id, upstream_base_url,
+            channel_id, channel_endpoint_id, channel_key_id, credential_id, upstream_base_url, adapter_hint,
             status, terminal, billing_hold, upstream_metadata, next_poll_at, expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-        ON CONFLICT (task_type, provider, upstream_task_id) DO UPDATE
-        SET status = EXCLUDED.status,
-            terminal = EXCLUDED.terminal,
-            upstream_metadata = EXCLUDED.upstream_metadata,
-            updated_at = now()
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+        ON CONFLICT (user_key_id, task_type, upstream_task_id) DO NOTHING
+        RETURNING id
         "#,
     )
     .bind(task.task_type.as_str())
@@ -79,14 +76,20 @@ pub(crate) async fn insert_task(
     .bind(task.upstream.channel_key_id)
     .bind(task.upstream.credential_id)
     .bind(&task.upstream.base_url)
+    .bind(task.upstream.adapter_hint.as_deref())
     .bind(task.status)
     .bind(task.terminal)
     .bind(hold)
     .bind(task.upstream_metadata)
     .bind(next_poll_at)
     .bind(expires_at)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
+    if inserted.is_none() {
+        return Err(AppError::Conflict(
+            "an async task with this upstream id already exists for the API key".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -112,9 +115,9 @@ pub(crate) async fn fetch_task_for_auth(
 pub(crate) async fn claim_due_tasks(
     pool: &PgPool,
     limit: i64,
-    poll_interval: Duration,
-) -> AppResult<Vec<UpstreamTask>> {
-    let next_poll_at = next_poll_at(poll_interval);
+    claim_timeout: Duration,
+) -> AppResult<(Vec<UpstreamTask>, DateTime<Utc>)> {
+    let claimed_until = next_poll_at(claim_timeout);
     let rows = sqlx::query(
         r#"
         WITH due AS (
@@ -134,31 +137,62 @@ pub(crate) async fn claim_due_tasks(
         WHERE task.id = due.id
         RETURNING task.id, task.task_type, task.upstream_task_id, task.user_id, task.project_id, task.user_key_id,
                   task.provider, task.model, task.upstream_model, task.channel_id, task.channel_endpoint_id,
-                  task.channel_key_id, task.credential_id, task.upstream_base_url,
+                  task.channel_key_id, task.credential_id, task.upstream_base_url, task.adapter_hint,
                   task.status, task.terminal, task.upstream_metadata, task.created_at
         "#,
     )
     .bind(limit)
-    .bind(next_poll_at)
+    .bind(claimed_until)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(task_from_row).collect()
+    Ok((
+        rows.iter().map(task_from_row).collect::<AppResult<_>>()?,
+        claimed_until,
+    ))
+}
+
+pub(crate) async fn release_task_claim(
+    pool: &PgPool,
+    task_id: DbId,
+    claimed_until: DateTime<Utc>,
+    poll_interval: Duration,
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE task_upstream
+        SET next_poll_at = $3,
+            updated_at = now()
+        WHERE id = $1
+          AND terminal = FALSE
+          AND next_poll_at = $2
+        "#,
+    )
+    .bind(task_id)
+    .bind(claimed_until)
+    .bind(next_poll_at(poll_interval))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) struct TerminalHeldTask {
+    pub task: UpstreamTask,
+    pub usage: Option<TokenUsage>,
 }
 
 pub(crate) async fn fetch_stale_terminal_held_tasks(
     pool: &PgPool,
     stale_before: DateTime<Utc>,
     limit: i64,
-) -> AppResult<Vec<UpstreamTask>> {
+) -> AppResult<Vec<TerminalHeldTask>> {
     let rows = sqlx::query(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
-               upstream_base_url, status, terminal, upstream_metadata, created_at
+               upstream_base_url, adapter_hint, status, terminal, upstream_metadata, usage_summary, created_at
         FROM task_upstream
         WHERE terminal = TRUE
           AND billing_status = 'held'
-          AND usage_summary = '{}'::JSONB
           AND updated_at <= $1
         ORDER BY updated_at ASC, id ASC
         LIMIT $2
@@ -168,7 +202,14 @@ pub(crate) async fn fetch_stale_terminal_held_tasks(
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(task_from_row).collect()
+    rows.iter()
+        .map(|row| {
+            let task = task_from_row(row)?;
+            let summary: UsageSummary = serde_json::from_value(row.try_get("usage_summary")?)?;
+            let usage = summary.token_usage();
+            Ok(TerminalHeldTask { task, usage })
+        })
+        .collect()
 }
 
 pub(crate) async fn list_tasks_for_auth(
@@ -183,7 +224,7 @@ pub(crate) async fn list_tasks_for_auth(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
-               upstream_base_url, status, terminal, upstream_metadata, created_at
+               upstream_base_url, adapter_hint, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE user_key_id = $1
           AND task_type = $2
@@ -308,7 +349,7 @@ pub(crate) async fn fetch_task(
         r#"
         SELECT id, task_type, upstream_task_id, user_id, project_id, user_key_id,
                provider, model, upstream_model, channel_id, channel_endpoint_id, channel_key_id, credential_id,
-               upstream_base_url, status, terminal, upstream_metadata, created_at
+               upstream_base_url, adapter_hint, status, terminal, upstream_metadata, created_at
         FROM task_upstream
         WHERE user_key_id = $1
           AND task_type = $2
@@ -357,6 +398,7 @@ impl UpstreamTask {
             provider: self.provider.clone(),
             channel_name,
             base_url: self.upstream_base_url.clone(),
+            adapter_hint: self.adapter_hint.clone(),
             responses_chat_fallback: false,
             secret: secrets.plaintext(channel_key_id, &secret_ciphertext)?,
             account_id: None,
@@ -399,25 +441,16 @@ pub(crate) async fn update_task_from_upstream_value(
     Ok(())
 }
 
-pub(crate) async fn mark_billing_status(
+pub(crate) async fn held_billing_hold(
     pool: &PgPool,
     task_id: DbId,
-    from_status: &str,
-    to_status: &str,
 ) -> AppResult<Option<DebitHold>> {
     let row = sqlx::query(
-        r#"
-        UPDATE task_upstream
-        SET billing_status = $3,
-            updated_at = now()
-        WHERE id = $1
-          AND billing_status = $2
-        RETURNING billing_hold
-        "#,
+        "SELECT billing_hold
+         FROM task_upstream
+         WHERE id = $1 AND billing_status = 'held'",
     )
     .bind(task_id)
-    .bind(from_status)
-    .bind(to_status)
     .fetch_optional(pool)
     .await?;
     let Some(row) = row else {
@@ -437,9 +470,15 @@ fn task_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UpstreamTask> {
         task_type: match task_type.as_str() {
             "openai_response" => UpstreamTaskType::OpenAiResponse,
             "openai_video" => UpstreamTaskType::OpenAiVideo,
+            "audio_transcription" => UpstreamTaskType::AudioTranscription,
             "neogate_response" => UpstreamTaskType::NeogateResponse,
             "anthropic_message_batch" => UpstreamTaskType::AnthropicMessageBatch,
-            other => return Err(AppError::BadRequest(format!("invalid task type: {other}"))),
+            // DB 中出现未知 task_type 是数据异常，不是客户端请求错误
+            other => {
+                return Err(AppError::Anyhow(anyhow::anyhow!(
+                    "unknown task type in db: {other}"
+                )))
+            }
         },
         upstream_task_id: row.try_get("upstream_task_id")?,
         user_id: row.try_get("user_id")?,
@@ -455,6 +494,7 @@ fn task_from_row(row: &sqlx::postgres::PgRow) -> AppResult<UpstreamTask> {
         channel_key_id: row.try_get("channel_key_id")?,
         credential_id: row.try_get("credential_id")?,
         upstream_base_url: row.try_get("upstream_base_url")?,
+        adapter_hint: row.try_get("adapter_hint")?,
         status: row.try_get("status")?,
         terminal: row.try_get("terminal")?,
         upstream_metadata: row.try_get("upstream_metadata")?,

@@ -16,7 +16,7 @@ use crate::{
     auth::UserAuth,
     error::{reqwest_status, AppError, AppResult},
     input::bounded_limit,
-    provider::adapters::{adapter_for_endpoint, RelayRoute},
+    provider::adapters::{adapter_for_endpoint, AnthropicCapabilities, RelayRoute},
     task::{
         billing as task_billing, results::AnthropicResultsUsageParser, upstream as upstream_task,
     },
@@ -62,7 +62,7 @@ pub(crate) async fn anthropic_messages(
     let PreparedRelayBody {
         body,
         meta,
-        output_tokens,
+        requested_output_tokens,
     } = prepare_relay_body(
         body,
         BodyKind::Anthropic,
@@ -138,7 +138,7 @@ pub(crate) async fn anthropic_messages(
             &auth,
             user_key_model_credit_account.as_ref(),
             &upstream_body,
-            output_tokens,
+            requested_output_tokens,
             &price,
         )
         .await?;
@@ -147,6 +147,7 @@ pub(crate) async fn anthropic_messages(
             auth: auth.clone(),
             upstream,
             protocol,
+            method: "POST",
             path: "/v1/messages",
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),
@@ -175,7 +176,11 @@ pub(crate) async fn anthropic_messages(
             UpstreamProtocol::Openai => {
                 let body = bridge::messages_to_openai_chat(upstream_body.clone())?;
                 let route = RelayRoute::ChatCompletions;
-                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+                let adapter = adapter_for_endpoint(
+                    &ctx.upstream.provider,
+                    &ctx.upstream.base_url,
+                    ctx.upstream.adapter_hint.as_deref(),
+                );
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,
@@ -286,8 +291,7 @@ pub(crate) async fn create_anthropic_message_batch(
     headers: HeaderMap,
     RelayBody(body): RelayBody,
 ) -> AppResult<Response> {
-    let model = batch_model(&body)?;
-    let request_count = batch_request_count(&body)?;
+    let (model, request_count) = validate_batch_body(&body)?;
     let resolved =
         crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &model)
             .await?;
@@ -324,6 +328,15 @@ pub(crate) async fn create_anthropic_message_batch(
             .await?
     };
     ensure_key_backed_async_upstream(&upstream)?;
+    // new-api 类上游没有 /v1/messages/batches 端点，转发只会拿到 404。批量是异步操作，
+    // 无法像 count_tokens 那样本地兜底，因此在预扣额度前直接返回明确的“上游不支持”错误。
+    let capabilities = AnthropicCapabilities::for_adapter_hint(upstream.adapter_hint.as_deref());
+    if !capabilities.supports_batch {
+        return Err(AppError::BadRequestWithCode {
+            code: "batch_unsupported",
+            message: "selected upstream does not support the Anthropic message batches API",
+        });
+    }
     let price = state
         .billing
         .price_for(
@@ -617,7 +630,12 @@ async fn finish_results_response(
                         }
                         Some((Ok::<Bytes, std::io::Error>(chunk), Some(relay)))
                     }
-                    Some(Err(err)) => Some((Err(std::io::Error::other(err)), None)),
+                    Some(Err(err)) => {
+                        // 流错误（网络中断/客户端断流）时仍需调用 finish()，
+                        // 否则 billing hold 既不结算也不释放，须等 stale_terminal_held_tasks 超时回收。
+                        relay.finish().await;
+                        Some((Err(std::io::Error::other(err)), None))
+                    }
                     None => {
                         relay.finish().await;
                         None
@@ -673,11 +691,97 @@ impl Drop for AnthropicResultsRelay {
     }
 }
 
+pub(crate) async fn anthropic_count_tokens(
+    State(state): State<Arc<AppState>>,
+    auth: UserAuth,
+    headers: HeaderMap,
+    RelayBody(body): RelayBody,
+) -> AppResult<Response> {
+    let model = count_tokens_model(&body)?;
+    let resolved =
+        crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &model)
+            .await?;
+    let upstream_body = if resolved.target_model == model {
+        body
+    } else {
+        rewrite_relay_body_model(body, BodyKind::Anthropic, &resolved.target_model)?
+    };
+    let upstream = if let Some(channel_id) = resolved.target_channel_id {
+        state
+            .selector
+            .select_bound_channel_protocols(
+                &state.db.pool,
+                &state.secrets,
+                &[UpstreamProtocol::Anthropic],
+                &resolved.target_model,
+                channel_id,
+                SelectionConstraints::default(),
+            )
+            .await?
+            .1
+    } else {
+        state
+            .selector
+            .select(
+                &state.db.pool,
+                &state.secrets,
+                UpstreamProtocol::Anthropic,
+                &resolved.target_model,
+            )
+            .await?
+    };
+    // new-api 类上游只实现了 /v1/messages，没有 count_tokens 端点，转发必然 404。
+    // 对已知不支持的上游直接本地估算，避免浪费一次往返，也避免把上游 404 透传给
+    // Claude Code（那会破坏其上下文占比追踪与自动压缩）。
+    let capabilities = AnthropicCapabilities::for_adapter_hint(upstream.adapter_hint.as_deref());
+    if !capabilities.supports_count_tokens {
+        return local_count_tokens_response(&upstream_body);
+    }
+
+    let response = forward_anthropic_bound(
+        &state,
+        &headers,
+        &upstream,
+        Method::POST,
+        "/v1/messages/count_tokens",
+        Some(upstream_body.clone()),
+    )
+    .await?;
+    // 其他上游若返回 404（不支持该端点），同样回退到本地估算。
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return local_count_tokens_response(&upstream_body);
+    }
+    raw_upstream_response(response).await
+}
+
+/// 用本地估算器构造一个合法的 Anthropic count_tokens 响应 `{"input_tokens": N}`。
+fn local_count_tokens_response(body: &Bytes) -> AppResult<Response> {
+    let input_tokens = crate::billing::estimate_anthropic_input_tokens(body);
+    let payload = json!({ "input_tokens": input_tokens });
+    let body = Bytes::from(serde_json::to_vec(&payload)?);
+    response_from_bytes(
+        StatusCode::OK,
+        HeaderValue::from_static("application/json"),
+        body,
+    )
+}
+
 pub(crate) fn batch_terminal(status: &str) -> bool {
     matches!(status, "ended" | "canceled" | "cancelled" | "expired")
 }
 
-fn batch_model(body: &[u8]) -> AppResult<String> {
+fn count_tokens_model(body: &[u8]) -> AppResult<String> {
+    let value: Value = serde_json::from_slice(body)?;
+    value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| AppError::BadRequest("model is required".to_string()))
+}
+
+/// 一次解析 batch 请求体，同时提取 model 和 request_count，
+/// 消除原来 batch_model + batch_request_count 两次独立解析的冗余。
+fn validate_batch_body(body: &[u8]) -> AppResult<(String, i64)> {
     let value: Value = serde_json::from_slice(body)?;
     let requests = value
         .get("requests")
@@ -697,8 +801,8 @@ fn batch_model(body: &[u8]) -> AppResult<String> {
             .ok_or_else(|| {
                 AppError::BadRequest(format!("requests[{index}].params.model is required"))
             })?;
-        if let Some(model) = model {
-            if model != item_model {
+        if let Some(m) = model {
+            if m != item_model {
                 return Err(AppError::BadRequest(
                     "message batches must use a single model".to_string(),
                 ));
@@ -707,20 +811,11 @@ fn batch_model(body: &[u8]) -> AppResult<String> {
             model = Some(item_model);
         }
     }
-    let model = model.expect("non-empty requests set model");
-    Ok(model.to_string())
-}
-
-fn batch_request_count(body: &[u8]) -> AppResult<i64> {
-    let value: Value = serde_json::from_slice(body)?;
-    let count = value
-        .get("requests")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::BadRequest("requests is required".to_string()))?
-        .len();
-    i64::try_from(count)
-        .map_err(|_| AppError::BadRequest("too many batch requests".to_string()))
-        .map(|count| count.max(1))
+    let model = model.expect("non-empty requests set model").to_string();
+    let count = i64::try_from(requests.len())
+        .map_err(|_| AppError::BadRequest("too many batch requests".to_string()))?
+        .max(1);
+    Ok((model, count))
 }
 
 fn task_upstream_counts(task: &UpstreamTask) -> Value {
@@ -755,7 +850,9 @@ mod tests {
             br#"{"requests":[{"custom_id":"one","params":{"model":"claude-sonnet"}}]}"#,
         );
 
-        assert_eq!(batch_model(&body).unwrap(), "claude-sonnet");
+        let (model, count) = validate_batch_body(&body).unwrap();
+        assert_eq!(model, "claude-sonnet");
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -764,7 +861,7 @@ mod tests {
             br#"{"requests":[{"params":{"model":"claude-a"}},{"params":{"model":"claude-b"}}]}"#,
         );
 
-        assert!(batch_model(&body).is_err());
+        assert!(validate_batch_body(&body).is_err());
     }
 
     #[test]

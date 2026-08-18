@@ -7,11 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use tokio::{
-    sync::mpsc::{
-        self,
-        error::{TryRecvError, TrySendError},
-        Receiver,
-    },
+    sync::mpsc::{self, error::TryRecvError, Receiver},
     task::JoinHandle,
     time,
 };
@@ -32,6 +28,9 @@ const BILLING_OUTBOX_WRITE_ATTEMPTS: u32 = 7;
 const BILLING_OUTBOX_INITIAL_RETRY_DELAY: Duration = Duration::from_millis(50);
 const BILLING_OUTBOX_BACKGROUND_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const BILLING_OUTBOX_BACKGROUND_RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
+/// 后台 retry worker 的最大重试次数。超过后将整批记录逐条提交至 billing outbox
+/// 表（process worker 负责处理），避免单条损坏记录永久阻塞整个 retry batch。
+const BILLING_RETRY_WORKER_MAX_ATTEMPTS: u32 = 20;
 
 #[derive(Clone)]
 pub struct BillingOutbox {
@@ -116,8 +115,28 @@ impl BillingOutbox {
         if process_outbox {
             for _ in 0..BILLING_PROCESS_WORKERS {
                 let process_worker = outbox.clone();
+                // 用监督壳包裹：worker panic 后记录 error 并自动重启，而非静默退出。
                 tokio::spawn(async move {
-                    process_worker.run_process_worker(flush_interval).await;
+                    loop {
+                        let worker = process_worker.clone();
+                        let result = tokio::spawn(async move {
+                            worker.run_process_worker(flush_interval).await;
+                        })
+                        .await;
+                        match result {
+                            Ok(()) => break, // 正常关机（channel 关闭等），不重启
+                            Err(err) if err.is_panic() => {
+                                tracing::error!(
+                                    "billing process worker panicked; restarting after delay: {err:?}"
+                                );
+                                time::sleep(Duration::from_millis(200)).await;
+                            }
+                            Err(err) => {
+                                tracing::warn!("billing process worker exited: {err:?}");
+                                break;
+                            }
+                        }
+                    }
                 });
             }
         }
@@ -152,61 +171,128 @@ impl BillingOutbox {
         }
     }
 
-    fn enqueue_retry(&self, usage: UsageInsert) {
+    /// Atomically persists an async task's billing intent and transitions the
+    /// task out of `held`. A crash can therefore leave either both operations
+    /// committed or neither operation committed.
+    pub async fn enqueue_task_durable(
+        &self,
+        task_id: DbId,
+        usage: &UsageInsert,
+    ) -> AppResult<bool> {
+        let Some(billing) = &usage.billing else {
+            return Ok(false);
+        };
+        let payload = serde_json::to_value(usage)?;
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO billing (transaction_id, payload)
+             VALUES ($1, $2)
+             ON CONFLICT (transaction_id) DO NOTHING
+             RETURNING id",
+        )
+        .bind(billing.transaction_id)
+        .bind(&payload)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if inserted.is_none() {
+            let existing_payload: serde_json::Value = sqlx::query_scalar(
+                "SELECT payload
+                 FROM billing
+                 WHERE transaction_id = $1
+                 FOR UPDATE",
+            )
+            .bind(billing.transaction_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if existing_payload != payload {
+                tx.rollback().await?;
+                return Err(AppError::Conflict(
+                    "billing transaction payload does not match the existing record".to_string(),
+                ));
+            }
+        }
+        let updated = sqlx::query(
+            "UPDATE task_upstream
+             SET billing_status = 'settled', updated_at = now()
+             WHERE id = $1 AND billing_status = 'held'
+             RETURNING billing_hold",
+        )
+        .bind(task_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = updated {
+            let hold_value: Option<serde_json::Value> = row.try_get("billing_hold")?;
+            let hold = hold_value
+                .map(serde_json::from_value::<crate::billing::DebitHold>)
+                .transpose()?
+                .ok_or_else(|| {
+                    AppError::Conflict("async task billing hold is missing".to_string())
+                })?;
+            if hold.transaction_id != billing.transaction_id {
+                tx.rollback().await?;
+                return Err(AppError::Conflict(
+                    "async task hold transaction does not match billing transaction".to_string(),
+                ));
+            }
+        } else {
+            let status: Option<String> = sqlx::query_scalar(
+                "SELECT billing_status
+                 FROM task_upstream
+                 WHERE id = $1
+                 FOR UPDATE",
+            )
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if status.as_deref() == Some("settled") {
+                tx.commit().await?;
+                self.health.record_success();
+                return Ok(false);
+            }
+            tx.rollback().await?;
+            return Err(match status {
+                Some(status) => AppError::Conflict(format!(
+                    "async task billing status is {status}; expected held or settled"
+                )),
+                None => AppError::NotFound,
+            });
+        }
+        tx.commit().await?;
+        self.health.record_success();
+        Ok(true)
+    }
+
+    async fn enqueue_retry(&self, usage: UsageInsert) -> AppResult<()> {
         if usage.billing.is_none() {
-            return;
+            return Ok(());
         }
 
         let sender = self.retry_worker.sender();
         let Some(sender) = sender else {
             self.health.record_failure();
-            tracing::error!(
-                "billing outbox retry queue is unavailable; dropping in-memory billing retry"
-            );
-            return;
+            return Err(AppError::UpstreamUnavailable(
+                "billing outbox retry queue is unavailable".to_string(),
+            ));
         };
-
-        match sender.try_send(usage) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.health.record_failure();
-                tracing::error!(
-                    "billing outbox retry queue is full; dropping in-memory billing retry"
-                );
-            }
-            Err(TrySendError::Closed(_)) => {
-                self.health.record_failure();
-                tracing::error!(
-                    "billing outbox retry queue is closed; dropping in-memory billing retry"
-                );
-            }
-        }
+        sender.send(usage).await.map_err(|_| {
+            self.health.record_failure();
+            AppError::UpstreamUnavailable("billing outbox retry queue is closed".to_string())
+        })
     }
 
-    pub fn enqueue_or_retry(&self, usage: UsageInsert) {
+    pub async fn enqueue_or_retry(&self, usage: UsageInsert) -> AppResult<()> {
         if usage.billing.is_none() {
-            return;
+            return Ok(());
         }
 
         let sender = self.worker.sender();
         let Some(sender) = sender else {
-            self.enqueue_retry(usage);
-            return;
+            return self.enqueue_retry(usage).await;
         };
-
-        match sender.try_send(usage) {
-            Ok(()) => {}
-            Err(TrySendError::Full(usage)) => {
-                self.health.record_failure();
-                tracing::warn!("billing outbox queue is full; queueing bounded background retry");
-                self.enqueue_retry(usage);
-            }
-            Err(TrySendError::Closed(usage)) => {
-                self.health.record_failure();
-                tracing::warn!("billing outbox queue is closed; queueing bounded background retry");
-                self.enqueue_retry(usage);
-            }
-        }
+        sender.send(usage).await.map_err(|_| {
+            self.health.record_failure();
+            AppError::UpstreamUnavailable("billing outbox queue is closed".to_string())
+        })
     }
 
     pub async fn flush_pending(&self, timeout: Duration, process_outbox: bool) {
@@ -242,14 +328,7 @@ impl BillingOutbox {
                     let Some(usage) = usage else {
                         break;
                     };
-                    let mut batch = vec![usage];
-                    while batch.len() < BILLING_BATCH_SIZE as usize {
-                        match receiver.try_recv() {
-                            Ok(usage) => batch.push(usage),
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => break,
-                        }
-                    }
+                    let batch = drain_batch_from_receiver(&mut receiver, usage, BILLING_BATCH_SIZE as usize);
 
                     match persist_billing_usages_with_retry(&self.pool, &batch).await {
                         Ok(()) => self.health.record_success(),
@@ -260,7 +339,9 @@ impl BillingOutbox {
                                 "failed to persist relay billing usage batch from queue; queueing bounded background retry: {err}"
                             );
                             for usage in batch {
-                                self.enqueue_retry(usage);
+                                if let Err(err) = self.enqueue_retry(usage).await {
+                                    tracing::error!("failed to enqueue durable billing retry: {err}");
+                                }
                             }
                         }
                     }
@@ -296,16 +377,11 @@ impl BillingOutbox {
 
     async fn run_retry_worker(self, mut receiver: mpsc::Receiver<UsageInsert>) {
         while let Some(usage) = receiver.recv().await {
-            let mut batch = vec![usage];
-            while batch.len() < BILLING_BATCH_SIZE as usize {
-                match receiver.try_recv() {
-                    Ok(usage) => batch.push(usage),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => break,
-                }
-            }
+            let batch =
+                drain_batch_from_receiver(&mut receiver, usage, BILLING_BATCH_SIZE as usize);
 
             let mut delay = BILLING_OUTBOX_BACKGROUND_RETRY_INITIAL_DELAY;
+            let mut attempt = 0u32;
             loop {
                 match persist_billing_usages(&self.pool, &batch).await {
                     Ok(()) => {
@@ -314,8 +390,30 @@ impl BillingOutbox {
                     }
                     Err(err) => {
                         self.health.record_failure();
+                        attempt += 1;
+                        if attempt >= BILLING_RETRY_WORKER_MAX_ATTEMPTS {
+                            // 超过最大重试次数后逐条写入 billing outbox 表，由
+                            // process worker 再次处理，避免损坏记录永久阻塞整个 batch
+                            tracing::error!(
+                                count = batch.len(),
+                                attempt,
+                                "billing retry batch exceeded max attempts; falling back to per-record persist: {err}"
+                            );
+                            for item in &batch {
+                                if let Err(fb_err) =
+                                    persist_billing_usage_with_retry(&self.pool, item).await
+                                {
+                                    tracing::error!(
+                                        "failed to fall back per-record billing persist: {fb_err}"
+                                    );
+                                }
+                            }
+                            break;
+                        }
                         tracing::error!(
                             count = batch.len(),
+                            attempt,
+                            max_attempts = BILLING_RETRY_WORKER_MAX_ATTEMPTS,
                             "failed to persist durable billing batch in bounded background retry: {err}"
                         );
                         time::sleep(delay).await;
@@ -329,29 +427,26 @@ impl BillingOutbox {
 
 impl WorkerSlot {
     fn set(&self, sender: mpsc::Sender<UsageInsert>, handle: JoinHandle<()>) {
-        *self.sender.write().expect("billing outbox sender poisoned") = Some(sender);
-        *self
-            .handle
-            .write()
-            .expect("billing outbox worker handle poisoned") = Some(handle);
+        *self.sender.write().unwrap_or_else(|e| e.into_inner()) = Some(sender);
+        *self.handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     fn sender(&self) -> Option<mpsc::Sender<UsageInsert>> {
         self.sender
             .read()
-            .expect("billing outbox sender poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     async fn close_and_wait(&self) {
         self.sender
             .write()
-            .expect("billing outbox sender poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .take();
         let handle = self
             .handle
             .write()
-            .expect("billing outbox worker handle poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .take();
         if let Some(handle) = handle {
             let _ = handle.await;
@@ -361,27 +456,18 @@ impl WorkerSlot {
 
 impl BillingOutboxHealth {
     fn record_success(&self) {
-        *self
-            .failed_since
-            .write()
-            .expect("billing outbox health poisoned") = None;
+        *self.failed_since.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn record_failure(&self) {
-        let mut failed_since = self
-            .failed_since
-            .write()
-            .expect("billing outbox health poisoned");
+        let mut failed_since = self.failed_since.write().unwrap_or_else(|e| e.into_inner());
         if failed_since.is_none() {
             *failed_since = Some(Utc::now());
         }
     }
 
     fn status(&self) -> BillingOutboxWriteStatus {
-        let failed_since = *self
-            .failed_since
-            .read()
-            .expect("billing outbox health poisoned");
+        let failed_since = *self.failed_since.read().unwrap_or_else(|e| e.into_inner());
         BillingOutboxWriteStatus {
             healthy: failed_since.is_none(),
             failed_since,
@@ -464,6 +550,23 @@ async fn persist_billing_usages_with_retry(pool: &PgPool, usages: &[UsageInsert]
     Ok(())
 }
 
+/// run_worker / run_retry_worker 共用的批量收集辅助：先放入第一条，再尽量从 channel 排空，
+/// 上限 `max_size`。消除两个函数原来的重复 while + try_recv 逻辑。
+fn drain_batch_from_receiver<T>(
+    receiver: &mut mpsc::Receiver<T>,
+    first: T,
+    max_size: usize,
+) -> Vec<T> {
+    let mut batch = vec![first];
+    while batch.len() < max_size {
+        match receiver.try_recv() {
+            Ok(item) => batch.push(item),
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        }
+    }
+    batch
+}
+
 async fn persist_billing_usage(pool: &PgPool, usage: &UsageInsert) -> AppResult<()> {
     let Some(billing) = &usage.billing else {
         return Ok(());
@@ -516,14 +619,16 @@ async fn process_billing_outbox_batch(
 ) -> AppResult<u64> {
     let mut processed = 0;
     let mut remaining = limit.max(0);
-    let mut selected_ids = Vec::new();
+    // 不再跨 chunk 累积 selected_ids：
+    // - 成功处理的记录已被标记为 'processed'，被 WHERE status='pending' 自然过滤；
+    // - FOR UPDATE SKIP LOCKED 防止并发 worker 重复获取；
+    // - 失败记录的 attempts 递增，ORDER BY attempts ASC 让它们排在后面。
+    // 原来的累积方案在大批量时会产生最多 40×500=20000 条的 IN 子句，显著增加 PG 开销。
     while remaining > 0 {
         let chunk_limit = remaining.min(BILLING_PROCESS_CHUNK_SIZE);
-        let result =
-            process_billing_outbox_chunk(pool, activity, daily, chunk_limit, &selected_ids).await?;
+        let result = process_billing_outbox_chunk(pool, activity, daily, chunk_limit, &[]).await?;
         processed += result.processed;
         remaining -= result.selected as i64;
-        selected_ids.extend(result.selected_ids);
         if result.selected < chunk_limit as u64 {
             break;
         }
@@ -550,7 +655,6 @@ async fn drain_billing_outbox(
 
 struct BillingOutboxChunkResult {
     selected: u64,
-    selected_ids: Vec<DbId>,
     processed: u64,
 }
 
@@ -567,7 +671,6 @@ async fn process_billing_outbox_chunk(
         tx.commit().await?;
         return Ok(BillingOutboxChunkResult {
             selected: 0,
-            selected_ids: Vec::new(),
             processed: 0,
         });
     }
@@ -580,7 +683,9 @@ async fn process_billing_outbox_chunk(
             Ok(usage) => processed_usages.push(usage),
             Err(err) => {
                 let failed_id = record.id;
-                let _ = tx.rollback().await;
+                if let Err(rb_err) = tx.rollback().await {
+                    tracing::warn!(billing_id = %failed_id, "failed to rollback billing transaction: {rb_err}");
+                }
                 tracing::warn!(
                     billing_id = %failed_id,
                     selected,
@@ -590,7 +695,6 @@ async fn process_billing_outbox_chunk(
                     process_billing_records_individually(pool, activity, daily, records).await?;
                 return Ok(BillingOutboxChunkResult {
                     selected,
-                    selected_ids,
                     processed,
                 });
             }
@@ -604,7 +708,9 @@ async fn process_billing_outbox_chunk(
     }
     .await
     {
-        let _ = tx.rollback().await;
+        if let Err(rb_err) = tx.rollback().await {
+            tracing::warn!(selected, "failed to rollback billing transaction: {rb_err}");
+        }
         tracing::warn!(
             selected,
             "failed to process billing chunk; retrying selected records individually: {err}"
@@ -613,7 +719,6 @@ async fn process_billing_outbox_chunk(
             process_billing_records_individually(pool, activity, daily, records).await?;
         return Ok(BillingOutboxChunkResult {
             selected,
-            selected_ids,
             processed,
         });
     }
@@ -623,7 +728,6 @@ async fn process_billing_outbox_chunk(
     daily.record(&processed_usages);
     Ok(BillingOutboxChunkResult {
         selected,
-        selected_ids,
         processed: processed_usages.len() as u64,
     })
 }
@@ -801,7 +905,7 @@ async fn record_billing_failure(pool: &PgPool, id: DbId, err: &AppError) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::billing::{BillingCharge, BillingMeter};
+    use crate::billing::{BillingCharge, BillingChargeStatus, BillingMeter};
 
     fn usage_with_billing(id: DbId) -> UsageInsert {
         UsageInsert {
@@ -835,7 +939,7 @@ mod tests {
                 billing_meter: BillingMeter::Token,
                 billable_units: 0,
                 cost_micros: 0,
-                status: "billed".to_string(),
+                status: BillingChargeStatus::Billed,
                 parts: Vec::new(),
                 returned_parts: Vec::new(),
             }),
@@ -843,16 +947,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_outbox_without_workers_drops_to_retry_without_panicking() {
+    async fn new_outbox_without_workers_reports_unavailable_queue() {
         let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
         let outbox = BillingOutbox::new(pool);
-        outbox.enqueue_or_retry(usage_with_billing(1));
+        assert!(outbox
+            .enqueue_or_retry(usage_with_billing(1))
+            .await
+            .is_err());
 
         assert!(outbox
             .worker
             .sender
             .read()
-            .expect("billing outbox sender poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .is_none());
     }
 }

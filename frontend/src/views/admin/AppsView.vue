@@ -15,6 +15,7 @@ import AppCreateDialog from '../../components/admin/apps/AppCreateDialog.vue'
 import AppDetailDrawer from '../../components/admin/apps/AppDetailDrawer.vue'
 import { useAppCreate } from '../../composables/useAppCreate'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
+import { useLatestTask } from '../../composables/useLatestTask'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import type { AppRecord, AppRunLog } from '../../types/admin'
@@ -38,6 +39,7 @@ const activeDetailTab = ref('overview')
 const selectedApp = ref<AppRecord | null>(null)
 const create = useAppCreate()
 const edit = useAppCreate()
+const logsTask = useLatestTask(logsLoading)
 
 function cost(value: number) {
   return formatMoney(value, locale.value, 4)
@@ -57,9 +59,17 @@ function replaceApp(nextApp: AppRecord) {
 async function load() {
   await withLoading(loading, async () => {
     try {
-      const [nextApps] = await Promise.all([getApps(), create.loadModelOptions()])
-      edit.modelOptions.value = create.modelOptions.value
-      apps.value = nextApps
+      const [appsResult, modelsResult] = await Promise.allSettled([
+        getApps(),
+        create.loadModelOptions()
+      ])
+      if (appsResult.status === 'rejected') throw appsResult.reason
+      apps.value = appsResult.value
+      if (modelsResult.status === 'fulfilled') {
+        edit.modelOptions.value = create.modelOptions.value
+      } else {
+        ElMessage.error(readError(modelsResult.reason))
+      }
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -78,7 +88,7 @@ async function toggleApp(app: AppRecord) {
       status,
       endpoint: { enabled: status === 'enabled' }
     })
-    ElMessage.success('应用状态已更新。')
+    ElMessage.success(t('appStatusUpdated'))
     replaceApp(nextApp)
   } catch (err) {
     ElMessage.error(readError(err))
@@ -88,7 +98,8 @@ async function toggleApp(app: AppRecord) {
 async function openEdit(app: AppRecord) {
   selectedApp.value = app
   try {
-    await edit.loadModelOptions(app.user_key_id)
+    const current = await edit.loadModelOptions(app.user_key_id)
+    if (!current) return
   } catch (err) {
     edit.modelOptions.value = create.modelOptions.value
     ElMessage.error(readError(err))
@@ -105,7 +116,7 @@ async function saveApp() {
       const nextApp = await updateApp(app.id, edit.updatePayload())
       replaceApp(nextApp)
       editOpen.value = false
-      ElMessage.success('应用已保存。')
+      ElMessage.success(t('appSaved'))
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -114,10 +125,10 @@ async function saveApp() {
 
 async function removeApp(app: AppRecord) {
   const confirmed = await confirmDialog(
-    `确认删除${create.typeLabel(app.app_type)}“${app.name}”吗？`,
-    '删除应用',
+    t('appDeleteConfirm', { type: create.typeLabel(app.app_type), name: app.name }),
+    t('appDeleteTitle'),
     {
-      confirmText: '删除',
+      confirmText: t('appDelete'),
       danger: true,
       type: 'warning'
     }
@@ -125,7 +136,7 @@ async function removeApp(app: AppRecord) {
   if (!confirmed) return
   try {
     await deleteApp(app.id)
-    ElMessage.success('应用已删除。')
+    ElMessage.success(t('appDeleted'))
     await load()
   } catch (err) {
     ElMessage.error(readError(err))
@@ -136,7 +147,7 @@ async function testSelectedApp() {
   if (!selectedApp.value) return
   try {
     await testApp(selectedApp.value.id)
-    ElMessage.success('连接配置可用。')
+    ElMessage.success(t('appConnectionValid'))
   } catch (err) {
     ElMessage.error(readError(err))
   }
@@ -144,6 +155,7 @@ async function testSelectedApp() {
 
 async function openDetail(app: AppRecord) {
   selectedApp.value = app
+  logs.value = []
   activeDetailTab.value = 'overview'
   detailOpen.value = true
   await loadLogs(app.id)
@@ -151,18 +163,21 @@ async function openDetail(app: AppRecord) {
 
 async function loadLogs(appId = selectedApp.value?.id) {
   if (!appId) return
-  await withLoading(logsLoading, async () => {
-    try {
-      logs.value = await getAppRunLogs({ appId, limit: 100 })
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
+  try {
+    await logsTask.run(
+      () => getAppRunLogs({ appId, limit: 100 }),
+      (nextLogs) => {
+        logs.value = nextLogs
+      }
+    )
+  } catch (err) {
+    ElMessage.error(readError(err))
+  }
 }
 
 async function copyText(value?: string | null) {
   if (!value) return
-  await copyTextWithMessage(value, '已复制。')
+  await copyTextWithMessage(value, t('appCopied'))
 }
 
 onMounted(load)
@@ -173,7 +188,7 @@ onMounted(load)
     <div class="table-toolbar admin-page-toolbar apps-toolbar">
       <div class="admin-page-toolbar-actions">
         <el-button class="admin-action-button" type="primary" :icon="Plus" @click="openCreate">
-          新建应用
+          {{ t('appNew') }}
         </el-button>
       </div>
     </div>
@@ -181,7 +196,7 @@ onMounted(load)
     <div v-loading="loading" class="apps-grid">
       <div v-if="!loading && apps.length === 0" class="apps-empty">
         <el-icon><Promotion /></el-icon>
-        <p>暂无应用</p>
+        <p>{{ t('appEmpty') }}</p>
       </div>
 
       <article
@@ -206,7 +221,7 @@ onMounted(load)
               'is-disabled': app.status !== 'enabled'
             }"
             :aria-pressed="app.status === 'enabled'"
-            :aria-label="app.status === 'enabled' ? '启用' : '禁用'"
+            :aria-label="app.status === 'enabled' ? t('appEnabled') : t('appDisabled')"
             @click="toggleApp(app)"
           >
             <span class="channel-runtime-switch-icon">
@@ -216,40 +231,40 @@ onMounted(load)
               </el-icon>
             </span>
             <span class="channel-runtime-switch-text">
-              {{ app.status === 'enabled' ? '启用' : '禁用' }}
+              {{ app.status === 'enabled' ? t('appEnabled') : t('appDisabled') }}
             </span>
           </button>
         </header>
         <dl class="app-card-metrics">
           <div class="app-card-model">
-            <dt>模型</dt>
+            <dt>{{ t('appModel') }}</dt>
             <dd>{{ app.model }}</dd>
           </div>
           <div>
-            <dt>消息</dt>
+            <dt>{{ t('appMessagesMetric') }}</dt>
             <dd>{{ app.today_message_count }}</dd>
           </div>
           <div>
-            <dt>消耗</dt>
+            <dt>{{ t('appSpend') }}</dt>
             <dd>{{ cost(app.today_cost_micros) }}</dd>
           </div>
         </dl>
         <div class="app-actions table-row-actions">
-          <el-tooltip content="详情" placement="top" :show-after="600">
+          <el-tooltip :content="t('appDetails')" placement="top" :show-after="600">
             <el-button
               class="admin-action-button icon-only-action"
               :icon="View"
               @click="openDetail(app)"
             />
           </el-tooltip>
-          <el-tooltip content="编辑" placement="top" :show-after="600">
+          <el-tooltip :content="t('appEdit')" placement="top" :show-after="600">
             <el-button
               class="admin-action-button icon-only-action"
               :icon="Edit"
               @click="openEdit(app)"
             />
           </el-tooltip>
-          <el-tooltip content="删除" placement="top" :show-after="600">
+          <el-tooltip :content="t('appDelete')" placement="top" :show-after="600">
             <el-button
               class="admin-action-button icon-only-action"
               type="danger"

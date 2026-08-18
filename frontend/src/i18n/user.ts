@@ -44,6 +44,11 @@ export const userMessages = {
     manageApiKeys: '管理 API 密钥',
     viewUsageDetails: '查看使用明细',
     usageRecords: '调用记录',
+    usageSectionRequest: '调用信息',
+    usageSectionTokens: '用量',
+    usageSectionPerformance: '性能',
+    usageSectionBilling: '计费',
+    usageSectionError: '错误说明',
     usageUser: '用户',
     usageModelSearchPlaceholder: '搜索用户、通道或模型',
     usageStatusAll: '全部状态',
@@ -149,6 +154,23 @@ export const userMessages = {
     viewRechargeOrders: '充值记录',
     rechargeOrderCreated: '充值订单已创建。',
     rechargeAmountRequired: '请输入有效的充值金额。',
+    paymentReturnChecking: '正在确认支付结果',
+    paymentReturnCheckingHint: '支付通知可能需要几秒钟，请不要关闭此页面。',
+    paymentReturnPaid: '支付成功',
+    paymentReturnPaidHint: '充值金额已经到账。',
+    paymentReturnPending: '支付结果待确认',
+    paymentReturnPendingHint: '尚未收到支付平台的成功通知，可以稍后重新确认。',
+    paymentReturnFailed: '支付未完成',
+    paymentReturnFailedHint: '订单没有支付成功，请返回充值页面重试。',
+    paymentReturnError: '支付结果查询失败',
+    paymentReturnErrorHint: '暂时无法连接服务器，请稍后重新确认。',
+    paymentReturnUnknown: '无法核验支付结果',
+    paymentReturnUnknownHint: '回跳地址中缺少有效订单号，或该订单不属于当前账号。',
+    paymentOrderNo: '订单号',
+    paymentAmount: '支付金额',
+    paymentTime: '支付时间',
+    paymentCheckAgain: '重新确认',
+    returnToUserHome: '返回用户后台',
     userApiKeyCount: 'API 密钥数',
     activeApiKeys: '启用密钥',
     latestUsage: '最近使用',
@@ -171,7 +193,7 @@ export const userMessages = {
     noApiKeys: '暂无 API 密钥',
     apiKeysInternalEmptyHint:
       '当前为内部模式，API 密钥由管理员在项目中分配。请联系管理员将你添加为项目成员。',
-    apiKeyOrJson: '输入API Key',
+    apiKeyOrJson: '输入API Key'
   },
   'en-US': {
     overview: 'Overview',
@@ -216,6 +238,11 @@ export const userMessages = {
     manageApiKeys: 'Manage API keys',
     viewUsageDetails: 'View usage details',
     usageRecords: 'Usage records',
+    usageSectionRequest: 'Request',
+    usageSectionTokens: 'Usage',
+    usageSectionPerformance: 'Performance',
+    usageSectionBilling: 'Billing',
+    usageSectionError: 'Error details',
     usageUser: 'User',
     usageModelSearchPlaceholder: 'Search user, channel, or model',
     usageStatusAll: 'All statuses',
@@ -244,7 +271,8 @@ export const userMessages = {
     routingReason_fallback_no_candidate:
       'No available candidate in this tier, so the fallback model was used',
     routingReason_missing_context: 'Request context was unavailable, so the default tier was used',
-    routingReason_complex_signal: 'The request matched complex-task signals, so advanced tier was used',
+    routingReason_complex_signal:
+      'The request matched complex-task signals, so advanced tier was used',
     routingReason_medium_signal:
       'The request matched tool, structured, or medium-complexity signals, so standard tier was used',
     routingReason_simple_signal: 'The request looked simple, so simple tier was used',
@@ -324,6 +352,27 @@ export const userMessages = {
     viewRechargeOrders: 'Recharge records',
     rechargeOrderCreated: 'Recharge order created.',
     rechargeAmountRequired: 'Enter a valid recharge amount.',
+    paymentReturnChecking: 'Confirming payment',
+    paymentReturnCheckingHint:
+      'The payment notification may take a few seconds. Keep this page open.',
+    paymentReturnPaid: 'Payment successful',
+    paymentReturnPaidHint: 'The recharge amount has been credited.',
+    paymentReturnPending: 'Payment pending confirmation',
+    paymentReturnPendingHint:
+      'A successful payment notification has not arrived yet. Check again shortly.',
+    paymentReturnFailed: 'Payment not completed',
+    paymentReturnFailedHint:
+      'The order was not paid successfully. Return to recharge and try again.',
+    paymentReturnError: 'Payment check failed',
+    paymentReturnErrorHint: 'The server is temporarily unavailable. Check again shortly.',
+    paymentReturnUnknown: 'Unable to verify payment',
+    paymentReturnUnknownHint:
+      'The return URL has no valid order number, or the order is not owned by this account.',
+    paymentOrderNo: 'Order number',
+    paymentAmount: 'Payment amount',
+    paymentTime: 'Payment time',
+    paymentCheckAgain: 'Check again',
+    returnToUserHome: 'Return to dashboard',
     userApiKeyCount: 'API Keys',
     activeApiKeys: 'Active keys',
     latestUsage: 'Latest usage',
@@ -347,6 +396,6 @@ export const userMessages = {
     noApiKeys: 'No API keys',
     apiKeysInternalEmptyHint:
       'In internal mode, API keys are assigned by admins through projects. Ask an admin to add you as a project member.',
-    apiKeyOrJson: 'Enter API key',
-  },
+    apiKeyOrJson: 'Enter API key'
+  }
 } satisfies LocaleMessages

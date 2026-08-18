@@ -19,7 +19,7 @@ const emit = defineEmits<{
   test: []
 }>()
 
-const { locale } = useLocale()
+const { locale, t } = useLocale()
 const { formatMoney } = useBillingCurrency()
 
 function cost(value: number) {
@@ -32,6 +32,13 @@ function logStatusType(status: AppRunLog['status']) {
   if (status === 'ignored') return 'info'
   return 'warning'
 }
+
+function logStatusLabel(status: AppRunLog['status']) {
+  if (status === 'success') return t('appLogSuccess')
+  if (status === 'failed') return t('appLogFailed')
+  if (status === 'ignored') return t('appLogIgnored')
+  return t('appLogPending')
+}
 </script>
 
 <template>
@@ -41,115 +48,122 @@ function logStatusType(status: AppRunLog['status']) {
         class="app-detail-close"
         :icon="Close"
         circle
-        aria-label="关闭"
+        :aria-label="t('appClose')"
         @click="open = false"
       />
       <header class="app-detail-hero">
         <div>
           <h2>{{ app.name }}</h2>
-          <span>{{ app.description || '这个应用还没有描述。' }}</span>
+          <span>{{ app.description || t('appNoDescription') }}</span>
         </div>
       </header>
 
       <el-tabs v-model="activeTab" class="app-detail-tabs">
-        <el-tab-pane label="概览" name="overview">
+        <el-tab-pane :label="t('appOverview')" name="overview">
           <dl class="app-detail-list">
             <div class="app-detail-model">
-              <dt>模型</dt>
+              <dt>{{ t('appModel') }}</dt>
               <dd>{{ app.model }}</dd>
             </div>
             <div class="app-detail-stat">
-              <dt>今日消息</dt>
+              <dt>{{ t('appTodayMessages') }}</dt>
               <dd>{{ app.today_message_count }}</dd>
             </div>
             <div class="app-detail-stat">
-              <dt>今日消耗</dt>
+              <dt>{{ t('appTodaySpend') }}</dt>
               <dd>{{ cost(app.today_cost_micros) }}</dd>
             </div>
             <div>
-              <dt>上下文轮数</dt>
+              <dt>{{ t('appContextTurns') }}</dt>
               <dd>{{ app.context_turns }}</dd>
             </div>
             <div>
-              <dt>最大输出 Token</dt>
+              <dt>{{ t('appMaxOutputTokens') }}</dt>
               <dd>{{ app.max_output_tokens }}</dd>
             </div>
             <div>
-              <dt>最近活跃</dt>
+              <dt>{{ t('appLastActive') }}</dt>
               <dd>
-                {{ app.last_active_at ? formatCompactDateTime(app.last_active_at) : '尚未活跃' }}
+                {{
+                  app.last_active_at
+                    ? formatCompactDateTime(app.last_active_at)
+                    : t('appNeverActive')
+                }}
               </dd>
             </div>
           </dl>
         </el-tab-pane>
 
-        <el-tab-pane label="接入配置" name="endpoint">
+        <el-tab-pane :label="t('appAccessSettings')" name="endpoint">
           <div v-if="app.endpoint" class="endpoint-panel">
             <dl class="endpoint-list">
               <div>
-                <dt>入口类型</dt>
+                <dt>{{ t('appEndpointType') }}</dt>
                 <dd>{{ app.endpoint.endpoint_type }}</dd>
               </div>
               <div v-if="app.endpoint.callback_url">
-                <dt>回调 URL</dt>
+                <dt>{{ t('appCallbackUrl') }}</dt>
                 <dd>
                   <button type="button" @click="emit('copy', app.endpoint.callback_url)">
                     <span>{{ app.endpoint.callback_url }}</span>
-                    <small>点击复制</small>
+                    <small>{{ t('appClickToCopy') }}</small>
                   </button>
                 </dd>
               </div>
               <div v-if="app.endpoint.invoke_url">
-                <dt>调用 URL</dt>
+                <dt>{{ t('appInvokeUrl') }}</dt>
                 <dd>
                   <button type="button" @click="emit('copy', app.endpoint.invoke_url)">
                     <span>{{ app.endpoint.invoke_url }}</span>
-                    <small>点击复制</small>
+                    <small>{{ t('appClickToCopy') }}</small>
                   </button>
                 </dd>
               </div>
               <div v-if="app.endpoint.widget_script_url">
-                <dt>嵌入脚本</dt>
+                <dt>{{ t('appEmbedScript') }}</dt>
                 <dd>
                   <button type="button" @click="emit('copy', app.endpoint.widget_script_url)">
                     <span>{{ app.endpoint.widget_script_url }}</span>
-                    <small>点击复制</small>
+                    <small>{{ t('appClickToCopy') }}</small>
                   </button>
                 </dd>
               </div>
               <div>
-                <dt>密钥</dt>
+                <dt>{{ t('appSecrets') }}</dt>
                 <dd>
-                  {{
-                    app.endpoint.secrets_set.length ? app.endpoint.secrets_set.join(', ') : '-'
-                  }}
+                  {{ app.endpoint.secrets_set.length ? app.endpoint.secrets_set.join(', ') : '-' }}
                 </dd>
               </div>
             </dl>
             <div class="endpoint-actions">
               <el-button class="admin-action-button" :icon="Refresh" @click="emit('test')">
-                测试连接
+                {{ t('appTestConnection') }}
               </el-button>
             </div>
           </div>
         </el-tab-pane>
 
-        <el-tab-pane class="app-log-pane" label="会话日志" name="logs">
+        <el-tab-pane class="app-log-pane" :label="t('appSessionLogs')" name="logs">
           <el-table v-loading="logsLoading" :data="logs" class="app-log-table" size="small">
-            <el-table-column label="时间" min-width="128">
+            <el-table-column :label="t('time')" min-width="128">
               <template #default="{ row }: { row: AppRunLog }">
                 {{ formatCompactDateTime(row.created_at) }}
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="86">
+            <el-table-column :label="t('status')" width="86">
               <template #default="{ row }: { row: AppRunLog }">
                 <el-tag :type="logStatusType(row.status)" round>
-                  {{ row.status }}
+                  {{ logStatusLabel(row.status) }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="model" label="模型" min-width="118" show-overflow-tooltip />
-            <el-table-column label="外部用户" min-width="96" show-overflow-tooltip>
+            <el-table-column
+              prop="model"
+              :label="t('appModel')"
+              min-width="118"
+              show-overflow-tooltip
+            />
+            <el-table-column :label="t('appExternalUser')" min-width="96" show-overflow-tooltip>
               <template #default="{ row }: { row: AppRunLog }">
                 {{ row.external_user_id || '-' }}
               </template>
@@ -161,12 +175,12 @@ function logStatusType(status: AppRunLog['status']) {
             </el-table-column>
             <el-table-column
               prop="error_summary"
-              label="错误"
+              :label="t('appError')"
               min-width="130"
               show-overflow-tooltip
             />
             <template #empty>
-              <div class="app-log-empty">暂无会话日志</div>
+              <div class="app-log-empty">{{ t('appNoSessionLogs') }}</div>
             </template>
           </el-table>
         </el-tab-pane>

@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    BillableUsage, BillingMeter, Price, TokenUsage, VideoBillingMode, VideoPriceTier,
-    MICROS_PER_MAJOR_UNIT,
+    micros_for_tokens, BillableUsage, BillingMeter, Price, TokenUsage, VideoBillingMode,
+    VideoPriceTier,
 };
 use crate::error::{AppError, AppResult};
 
@@ -63,11 +63,12 @@ pub fn video_billing_input(
     }
 }
 
-pub fn json_video_billing_input(value: &Value) -> VideoBillingInput {
+pub fn json_video_billing_input(value: &Value, model: Option<&str>) -> VideoBillingInput {
+    let resolution = string_field(value, "resolution")
+        .or_else(|| string_field(value, "size"))
+        .or_else(|| model.and_then(model_resolution).map(str::to_string));
     video_billing_input(
-        string_field(value, "resolution")
-            .or_else(|| string_field(value, "size"))
-            .as_deref(),
+        resolution.as_deref(),
         positive_i64_field(value, "duration").or_else(|| positive_i64_field(value, "seconds")),
         json_has_video_input(value),
     )
@@ -200,22 +201,37 @@ pub fn settlement_usage_and_price(
             ))
         }
         VideoBillingMode::PerSecond => Some((
-            BillableUsage::video_seconds(metadata.duration_seconds),
+            BillableUsage::video_seconds(
+                provider_video_duration_seconds(upstream_metadata)
+                    .unwrap_or(metadata.duration_seconds)
+                    .min(metadata.duration_seconds),
+            ),
             video_settlement_price(BillingMeter::Video, metadata.price_micros),
         )),
     }
 }
 
 pub fn total_tokens_from_metadata(value: &Value) -> Option<i64> {
-    value
-        .get("usage")
-        .or_else(|| {
-            value
-                .get("response")
-                .and_then(|response| response.get("usage"))
-        })
-        .and_then(|usage| usage.get("total_tokens"))
+    let usage = value.get("usage").or_else(|| {
+        value
+            .get("response")
+            .and_then(|response| response.get("usage"))
+    })?;
+    usage
+        .get("total_tokens")
         .and_then(value_as_positive_i64)
+        .or_else(|| {
+            let input = usage
+                .get("input_tokens")
+                .or_else(|| usage.get("prompt_tokens"))
+                .and_then(value_as_non_negative_i64)?;
+            let output = usage
+                .get("output_tokens")
+                .or_else(|| usage.get("completion_tokens"))
+                .and_then(value_as_non_negative_i64)?;
+            let total = input.saturating_add(output);
+            (total > 0).then_some(total)
+        })
 }
 
 pub fn provider_video_duration_seconds(value: &Value) -> Option<i64> {
@@ -285,12 +301,26 @@ fn value_as_positive_i64(value: &Value) -> Option<i64> {
         .filter(|value| *value > 0)
 }
 
+fn value_as_non_negative_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|text| text.trim().parse::<i64>().ok())
+        })
+        .filter(|value| *value >= 0)
+}
+
 fn json_has_video_input(value: &Value) -> bool {
     let Some(content) = value.get("content").and_then(Value::as_array) else {
         return false;
     };
+    // 需与适配器的 has_video_reference 口径一致（globalaiopc.rs）：适配器据此选择更贵的
+    // with_video 上游模型。若这里漏判 role==reference_video，会按无视频档位计费而少扣。
     content.iter().any(|item| {
         item.get("type").and_then(Value::as_str) == Some("video_url")
+            || item.get("role").and_then(Value::as_str) == Some("reference_video")
             || item.get("video_url").is_some()
     })
 }
@@ -317,13 +347,11 @@ fn normalize_resolution(value: Option<&str>) -> String {
     }
 }
 
-fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
-    if tokens <= 0 || price_micros <= 0 {
-        return 0;
-    }
-    let product = (tokens as i128).saturating_mul(price_micros as i128);
-    let rounded = (product + MICROS_PER_MAJOR_UNIT as i128 - 1) / MICROS_PER_MAJOR_UNIT as i128;
-    i64::try_from(rounded).unwrap_or(i64::MAX)
+fn model_resolution(model: &str) -> Option<&'static str> {
+    let model = model.to_ascii_lowercase();
+    ["1080p", "720p", "480p"]
+        .into_iter()
+        .find(|resolution| model.ends_with(resolution))
 }
 
 #[cfg(test)]
@@ -364,19 +392,29 @@ mod tests {
 
     #[test]
     fn defaults_resolution_and_duration() {
-        let input = json_video_billing_input(&json!({"model":"doubao-seedance-2.0"}));
+        let input = json_video_billing_input(&json!({"model":"doubao-seedance-2.0"}), None);
         assert_eq!(input.resolution, "480p");
         assert_eq!(input.duration_seconds, 5);
         assert!(!input.has_video_input);
     }
 
     #[test]
+    fn infers_resolution_from_full_model_code() {
+        let input =
+            json_video_billing_input(&json!({"duration": 5}), Some("provider-video-model-1080p"));
+        assert_eq!(input.resolution, "1080p");
+    }
+
+    #[test]
     fn detects_video_input_and_resolution_tier() {
-        let input = json_video_billing_input(&json!({
-            "resolution": "1280x720",
-            "duration": "8",
-            "content": [{"type":"video_url","video_url":{"url":"https://example.test/a.mp4"}}]
-        }));
+        let input = json_video_billing_input(
+            &json!({
+                "resolution": "1280x720",
+                "duration": "8",
+                "content": [{"type":"video_url","video_url":{"url":"https://example.test/a.mp4"}}]
+            }),
+            None,
+        );
         assert_eq!(input.resolution, "720p");
         assert_eq!(input.duration_seconds, 8);
         assert!(input.has_video_input);
@@ -507,5 +545,34 @@ mod tests {
 
         let value = serde_json::json!({"seconds": "4"});
         assert_eq!(provider_video_duration_seconds(&value), Some(4));
+    }
+
+    #[test]
+    fn totals_separate_video_token_fields_when_total_is_missing() {
+        let value = json!({"usage": {"input_tokens": 120, "output_tokens": 30}});
+        assert_eq!(total_tokens_from_metadata(&value), Some(150));
+    }
+
+    #[test]
+    fn per_second_settlement_prefers_bounded_actual_duration() {
+        let metadata = VideoBillingMetadata {
+            mode: VideoBillingMode::PerSecond,
+            resolution: "720p".to_string(),
+            duration_seconds: 10,
+            has_video_input: false,
+            price_micros: 100,
+            estimated_tokens_per_second: None,
+            estimated_tokens: None,
+            estimated_micros: 1_000,
+        };
+        let (usage, _) =
+            settlement_usage_and_price(&metadata, &json!({"usage": {"output_video_duration": 7}}))
+                .unwrap();
+        assert_eq!(usage.billable_units, 7);
+
+        let (usage, _) =
+            settlement_usage_and_price(&metadata, &json!({"usage": {"output_video_duration": 20}}))
+                .unwrap();
+        assert_eq!(usage.billable_units, 10);
     }
 }

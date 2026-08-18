@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,14 +13,7 @@ import {
   WarningFilled
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import {
-  getModelReferenceCatalog,
-  getProviderModels,
-  getPricingTemplates,
-  getChannelPrices,
-  syncPricingTemplates,
-  upsertChannelPrice
-} from '../../api/prices'
+import { upsertChannelPrice } from '../../api/prices'
 import { updateChannelModel, updateChannel, type ChannelDiagnosticScope } from '../../api/channels'
 import { getAdminServicePolicy, type ServicePolicy } from '../../api/policy'
 import ChannelFormDialog from '../../components/admin/channels/ChannelFormDialog.vue'
@@ -29,32 +22,29 @@ import ChannelExpandPanel, {
   type ChannelExpandPriceGroup
 } from '../../components/admin/channels/ChannelExpandPanel.vue'
 import ChannelProbeTrendCell from '../../components/admin/channels/ChannelProbeTrendCell.vue'
-import ChannelPriceDialog, {
-  type ChannelPriceForm,
-  type ChannelVideoPriceTierForm
-} from '../../components/admin/channels/ChannelPriceDialog.vue'
+import ChannelPriceDialog from '../../components/admin/channels/ChannelPriceDialog.vue'
 import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog.vue'
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useChannelDiagnostics } from '../../composables/useChannelDiagnostics'
 import { useChannels } from '../../composables/useChannels'
+import { useChannelPricing } from '../../composables/useChannelPricing'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
 import { useReactiveSet } from '../../composables/useReactiveSet'
 import type { MessageKey } from '../../i18n'
+import type { ChannelPriceForm, ChannelVideoPriceTierForm } from '../../types/channelPricing'
 import type {
   BillingMeter,
   Channel,
   ChannelKey,
   ChannelModel,
-  ModelReferenceCatalogRecord,
   PricingTemplate,
-  ProviderModel,
   ChannelPrice,
   VideoBillingMode,
   VideoPriceTier
 } from '../../types/admin'
-import { ApiError, readError } from '../../utils/errors'
+import { readError } from '../../utils/errors'
 import { splitCommaList } from '../../utils/channel'
 import {
   channelPriceKey,
@@ -63,6 +53,7 @@ import {
   isChannelPriceConfigured,
   priceKey,
   pricingReferenceModelAliases,
+  resolvePricingReference,
   resolvedVideoTokensPerSecondEstimate
 } from '../../utils/pricing'
 import {
@@ -138,18 +129,11 @@ const {
   confirmDeleteChannel
 } = useChannels(t)
 
-const prices = ref<ChannelPrice[]>([])
-const templates = ref<PricingTemplate[]>([])
-const providerModels = ref<ProviderModel[]>([])
-const modelReferenceCatalog = ref<ModelReferenceCatalogRecord[]>([])
-const bundledVideoTierCatalog = ref<BundledVideoTierRecord[]>([])
-const pricingLoading = ref(true)
 const servicePolicy = ref<ServicePolicy | null>(null)
 const channelsLoaded = ref(false)
-const priceDialogOpen = ref(false)
-const savingPrices = ref(false)
 const channelTableRef = ref()
 const togglingRuntimeKeys = useReactiveSet<string>()
+const updatingBaseModelKeys = useReactiveSet<string>()
 const togglingChannelIds = useReactiveSet<number>()
 const channelSearch = ref('')
 const appliedChannelSearch = ref('')
@@ -160,35 +144,24 @@ const selectedDiagnosticScope = ref<ChannelDiagnosticScope>('all')
 const channelCurrentPage = ref(1)
 const channelPageSize = ref(20)
 const channelPageSizes = [20, 50, 100]
-const priceForms = reactive<Record<string, ChannelPriceForm>>({})
 const anyVideoTierResolution = ANY_VIDEO_TIER_RESOLUTION
-
-type BundledPricingModel = {
-  cost?: {
-    video_tiers?: unknown
-  }
-}
-
-type BundledPricingProvider = {
-  models?: Record<string, BundledPricingModel>
-}
-
-type BundledPricingCatalog = Record<string, BundledPricingProvider>
-
-type BundledVideoTierRecord = {
-  provider: string
-  model: string
-  videoTiers: ReferenceVideoTier[]
-}
-
-const priceByModel = computed(
-  () =>
-    new Map(prices.value.map((price) => [channelPriceKey(price.channel_id, price.model), price]))
-)
+const pricing = useChannelPricing(t)
+const {
+  prices,
+  templates,
+  providerModels,
+  modelReferenceCatalog,
+  pricingLoading,
+  priceDialogOpen,
+  savingPrices,
+  priceForms,
+  priceByModel,
+  providerModelByModel,
+  loadPricingData,
+  syncReferencePricesIfNeeded,
+  clearForms: clearPriceForms
+} = pricing
 const isInternalServiceMode = computed(() => servicePolicy.value?.service_mode === 'internal')
-const providerModelByModel = computed(
-  () => new Map(providerModels.value.map((model) => [priceKey(model.provider, model.model), model]))
-)
 
 const diagnostic = useChannelDiagnostics(loadChannels)
 const {
@@ -318,14 +291,19 @@ function channelModelRecords(row: Channel) {
   )
 }
 
+function modelClassificationReference(provider: string, model: string, baseModel?: string | null) {
+  return resolvePricingReference(templates.value, provider, model, baseModel)
+}
+
 function channelDiagnosticCapabilities(row: Channel) {
   const models = channelModelRecords(row)
   return models.reduce(
     (capabilities, item) => {
+      const reference = modelClassificationReference(row.provider, item.model, item.base_model)
       const meter =
         item.billing_meter ??
         priceByModel.value.get(channelPriceKey(row.id, item.model))?.billing_meter
-      const displayMeter = displayBillingMeterForModel(row.provider, item.model, meter)
+      const displayMeter = displayBillingMeterForModel(reference.provider, reference.model, meter)
       if (displayMeter === 'image') {
         capabilities.image = true
       } else if (displayMeter === 'video') {
@@ -387,11 +365,15 @@ function channelPriceStatus(row: Channel) {
 function channelPriceRows(row: Channel) {
   return channelModelRecords(row).map((channelModel) => {
     const model = channelModel.model
+    const baseModel = channelModel.base_model ?? null
+    const baseModelSaving = isBaseModelUpdating(row.id, model)
     const price = priceByModel.value.get(channelPriceKey(row.id, model))
     const hasConfiguredPrice = channelModel.price_configured || isChannelPriceConfigured(price)
     if (pricingLoading.value && prices.value.length === 0) {
       return {
         model,
+        baseModel,
+        baseModelSaving,
         disabled: false,
         missing: false,
         billingEnabled: false,
@@ -449,10 +431,15 @@ function channelPriceRows(row: Channel) {
       : t('priceMissing')
     const modelStatus = channelModel.status
     const upstreamMissing = modelStatus === 'missing'
-    const modelCategory = modelCategoryForModel(row.provider, model)
-    const defaultBillingMeter = defaultBillingMeterForModel(row.provider, model)
+    const reference = modelClassificationReference(row.provider, model, channelModel.base_model)
+    const modelCategory = modelCategoryForModel(reference.provider, reference.model)
+    const defaultBillingMeter = defaultBillingMeterForModel(reference.provider, reference.model)
     const displayBillingMeter = billingMeter ?? defaultBillingMeter
-    const billingMeterLabel = billingMeterDisplayLabel(row.provider, model, displayBillingMeter)
+    const billingMeterLabel = billingMeterDisplayLabel(
+      reference.provider,
+      reference.model,
+      displayBillingMeter
+    )
     const formattedPriceParts = {
       input: inputPrice,
       output: outputPrice,
@@ -474,10 +461,12 @@ function channelPriceRows(row: Channel) {
             }
           ]
         : displayBillingMeter === 'video'
-          ? videoTierRows(row.provider, model, price)
+          ? videoTierRows(reference.provider, reference.model, price)
           : []
     return {
       model,
+      baseModel,
+      baseModelSaving,
       disabled: !modelEnabled,
       missing: !hasConfiguredPrice,
       billingEnabled,
@@ -496,7 +485,9 @@ function channelPriceRows(row: Channel) {
       cacheWritePrice,
       imagePriceGroups: imageGroups,
       cachePrice:
-        displayBillingMeter === 'image' || displayBillingMeter === 'video'
+        displayBillingMeter === 'image' ||
+        displayBillingMeter === 'video' ||
+        displayBillingMeter === 'audio'
           ? '-'
           : price && displayBillingMeter === 'token'
             ? `${cacheReadPrice} / ${cacheWritePrice}`
@@ -507,11 +498,13 @@ function channelPriceRows(row: Channel) {
       price:
         displayBillingMeter === 'image'
           ? `${unitPrice} / ${t('perImage')}`
-          : displayBillingMeter === 'video'
-            ? videoTierSpecsLabel(price?.video_price_tiers)
-            : price && displayBillingMeter === 'token'
-              ? `${inputPrice} / ${outputPrice}`
-              : t('priceMissing')
+          : displayBillingMeter === 'audio'
+            ? `${unitPrice} / ${t('perSecond')}`
+            : displayBillingMeter === 'video'
+              ? videoTierSpecsLabel(price?.video_price_tiers)
+              : price && displayBillingMeter === 'token'
+                ? `${inputPrice} / ${outputPrice}`
+                : t('priceMissing')
     }
   })
 }
@@ -540,7 +533,7 @@ function compactPriceGroup(items: ChannelExpandPriceGroup[]) {
 }
 
 function imagePriceGroups(
-  modelCategory: 'text' | 'image' | 'video',
+  modelCategory: 'text' | 'image' | 'video' | 'audio',
   displayBillingMeter: BillingMeter,
   configured: boolean,
   prices: {
@@ -551,6 +544,9 @@ function imagePriceGroups(
     unit: string
   }
 ) {
+  if (modelCategory === 'audio') {
+    return [inlinePriceGroup(`/ ${t('perSecond')}`, configured ? prices.unit : t('priceMissing'))]
+  }
   if (modelCategory !== 'image') return []
   if (displayBillingMeter === 'token') {
     return [
@@ -664,6 +660,10 @@ function isRuntimeToggling(channelId: number, model: string) {
   return togglingRuntimeKeys.has(runtimeKey(channelId, model))
 }
 
+function isBaseModelUpdating(channelId: number, model: string) {
+  return updatingBaseModelKeys.has(runtimeKey(channelId, model))
+}
+
 function isChannelToggling(channelId: number) {
   return togglingChannelIds.has(channelId)
 }
@@ -738,33 +738,6 @@ function keyStatusTooltip(
   ].join('\n')
 }
 
-async function loadPricingData() {
-  await withLoading(pricingLoading, async () => {
-    try {
-      const [
-        fetchedPrices,
-        fetchedTemplates,
-        fetchedProviderModels,
-        fetchedModelReferenceCatalog,
-        fetchedBundledVideoTierCatalog
-      ] = await Promise.all([
-        getChannelPrices(),
-        getPricingTemplates(),
-        getProviderModels(),
-        getModelReferenceCatalog(),
-        getBundledVideoTierCatalog()
-      ])
-      prices.value = fetchedPrices
-      templates.value = fetchedTemplates
-      providerModels.value = fetchedProviderModels
-      modelReferenceCatalog.value = fetchedModelReferenceCatalog
-      bundledVideoTierCatalog.value = fetchedBundledVideoTierCatalog
-    } catch (err) {
-      ElMessage.error(readError(err))
-    }
-  })
-}
-
 function capabilityValues(capabilities: Record<string, unknown>, path: string[]) {
   let current: unknown = capabilities
   for (const key of path) {
@@ -806,7 +779,41 @@ function canUseVideoBilling(provider: string, model: string) {
   return output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0
 }
 
-function modelCategoryForModel(provider: string, model: string): 'text' | 'image' | 'video' {
+function inferredAudioTranscriptionMode(
+  capabilities: Record<string, unknown> | undefined
+): 'file' | 'realtime' | null {
+  if (!capabilities) return null
+  if (capabilities.realtime_audio_transcription === true) return 'realtime'
+  if (capabilities.audio_transcription === true) return 'file'
+  const input = capabilityValues(capabilities, ['modalities', 'input'])
+  const output = capabilityValues(capabilities, ['modalities', 'output'])
+  return input.includes('audio') && output.includes('text') ? 'file' : null
+}
+
+function audioTranscriptionModeForModel(provider: string, model: string) {
+  const catalogCapabilities = findReferenceCatalogRecord(provider, model)?.capabilities
+  const providerCapabilities = findReferenceProviderModel(provider, model)?.capabilities
+  const capabilities = [catalogCapabilities, providerCapabilities]
+
+  if (capabilities.some((value) => value?.realtime_audio_transcription === true)) {
+    return 'realtime'
+  }
+  return (
+    capabilities
+      .map(inferredAudioTranscriptionMode)
+      .find((mode): mode is 'file' => mode === 'file') ?? null
+  )
+}
+
+function canUseAudioBilling(provider: string, model: string) {
+  return audioTranscriptionModeForModel(provider, model) !== null
+}
+
+function modelCategoryForModel(
+  provider: string,
+  model: string
+): 'text' | 'image' | 'video' | 'audio' {
+  if (canUseAudioBilling(provider, model)) return 'audio'
   const output = modelOutputModalities(provider, model)
   if (output.includes('video') || referenceVideoTiersForModel(provider, model).length > 0) {
     return 'video'
@@ -816,6 +823,7 @@ function modelCategoryForModel(provider: string, model: string): 'text' | 'image
 }
 
 function defaultBillingMeterForModel(provider: string, model: string) {
+  if (canUseAudioBilling(provider, model)) return 'audio'
   if (canUseVideoBilling(provider, model)) {
     const template = findPricingTemplate(templates.value, provider, model)
     if (referenceVideoTiersForModel(provider, model).length === 0 && template?.billing_meter) {
@@ -843,6 +851,7 @@ function billingMeterDisplayLabel(provider: string, model: string, billingMeter:
     return t('billingMeterPerCall')
   if (billingMeter === 'image') return t('billingMeterImageGeneration')
   if (billingMeter === 'video') return t('billingMeterVideo')
+  if (billingMeter === 'audio') return t('videoBillingPerSecond')
   return t('billingMeterToken')
 }
 
@@ -855,19 +864,23 @@ function videoBillingModeDisplayLabel(price: ChannelPrice | undefined, billingMe
 }
 
 function isBillingMeterLocked(provider: string, model: string) {
-  return canUseVideoBilling(provider, model) || !canUseImageBilling(provider, model)
+  return (
+    canUseAudioBilling(provider, model) ||
+    canUseVideoBilling(provider, model) ||
+    !canUseImageBilling(provider, model)
+  )
 }
 
 function templateAppliesToForm(template: PricingTemplate, form: ChannelPriceForm) {
   if (form.canUseVideoBilling && template.billing_meter === 'token') return true
   return (
     template.billing_meter ===
-    (form.billingMeter ?? defaultBillingMeterForModel(form.provider, form.model))
+    (form.billingMeter ?? defaultBillingMeterForModel(form.referenceProvider, form.referenceModel))
   )
 }
 
 function findApplicablePricingTemplate(form: ChannelPriceForm) {
-  const template = findPricingTemplate(templates.value, form.provider, form.model)
+  const template = findPricingTemplate(templates.value, form.referenceProvider, form.referenceModel)
   return template && templateAppliesToForm(template, form) ? template : undefined
 }
 
@@ -886,7 +899,7 @@ function hasManualPriceInput(form: ChannelPriceForm) {
       return tier.inputWithVideoUnit > 0 || tier.inputWithoutVideoUnit > 0
     })
   }
-  if (form.billingMeter === 'image') return form.unitPrice > 0
+  if (form.billingMeter === 'image' || form.billingMeter === 'audio') return form.unitPrice > 0
   return (
     form.inputPerMillion > 0 ||
     form.outputPerMillion > 0 ||
@@ -901,7 +914,9 @@ function hasEnabledBillablePrice(price?: ChannelPrice, billingMeter?: BillingMet
   if (price.video_billing_mode) {
     return (price.video_price_tiers ?? []).length > 0
   }
-  if (price.billing_meter === 'image') return (price.unit_price_micros ?? 0) > 0
+  if (price.billing_meter === 'image' || price.billing_meter === 'audio') {
+    return (price.unit_price_micros ?? 0) > 0
+  }
   if (price.billing_meter === 'video') return (price.video_price_tiers ?? []).length > 0
   return price.input_price_micros > 0 || price.output_price_micros > 0
 }
@@ -935,53 +950,6 @@ function canonicalReferenceProvider(provider: string) {
 
 function providerMatchesReference(left: string, right: string) {
   return canonicalReferenceProvider(left) === canonicalReferenceProvider(right)
-}
-
-function providerMatchesBundledVideoReference(
-  recordProvider: string,
-  provider: string,
-  model: string
-) {
-  if (providerMatchesReference(recordProvider, provider)) return true
-  const aliases = pricingReferenceModelAliases(model)
-  return (
-    canonicalReferenceProvider(recordProvider) === 'doubao' &&
-    [...aliases].some((alias) => alias.includes('seedance'))
-  )
-}
-
-function isReferenceVideoTier(value: unknown): value is ReferenceVideoTier {
-  if (!value || typeof value !== 'object') return false
-  const tier = value as ReferenceVideoTier
-  return Boolean(tier.tiers && typeof tier.tiers === 'object')
-}
-
-function bundledVideoTierRecordsFromPricingCatalog(catalog: BundledPricingCatalog) {
-  return Object.entries(catalog).flatMap(([provider, providerData]) => {
-    return Object.entries(providerData.models ?? {}).flatMap(([model, modelData]) => {
-      const value = modelData.cost?.video_tiers
-      const videoTiers = Array.isArray(value) ? value.filter(isReferenceVideoTier) : []
-      if (videoTiers.length === 0) return []
-      return [
-        {
-          provider: canonicalReferenceProvider(provider),
-          model,
-          videoTiers
-        }
-      ]
-    })
-  })
-}
-
-async function getBundledVideoTierCatalog() {
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}model-pricing.json`)
-    if (!response.ok) return []
-    const catalog = (await response.json()) as BundledPricingCatalog
-    return bundledVideoTierRecordsFromPricingCatalog(catalog)
-  } catch {
-    return []
-  }
 }
 
 function referenceVideoTierResolutionLabel(tier: ReferenceVideoTier) {
@@ -1054,10 +1022,7 @@ function referenceVideoTiersForModel(provider: string, model: string) {
     return referenceVideoTiersForModel(template.provider, model)
   }
 
-  const bundledRecord = findBundledVideoTierRecord(provider, model)
-  return filterReferenceVideoTiersForCurrency(
-    normalizedReferenceVideoTiers(model, bundledRecord?.videoTiers ?? [])
-  )
+  return []
 }
 
 function videoTokenReferenceTierFromTemplate(template?: PricingTemplate): ReferenceVideoTier[] {
@@ -1077,6 +1042,10 @@ function priceDialogReferenceVideoTiersForModel(provider: string, model: string)
   const tiers = referenceVideoTiersForModel(provider, model)
   if (tiers.length > 0) return tiers
   return videoTokenReferenceTierFromTemplate(findPricingTemplate(templates.value, provider, model))
+}
+
+function referenceVideoTiersForForm(form: ChannelPriceForm) {
+  return priceDialogReferenceVideoTiersForModel(form.referenceProvider, form.referenceModel)
 }
 
 function isMainlandReferenceVideoTier(tier: ReferenceVideoTier) {
@@ -1137,14 +1106,6 @@ function findReferenceProviderModel(provider: string, model: string) {
   const aliases = pricingReferenceModelAliases(model)
   return providerModels.value.find((record) => {
     if (!providerMatchesReference(record.provider, provider)) return false
-    return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
-  })
-}
-
-function findBundledVideoTierRecord(provider: string, model: string) {
-  const aliases = pricingReferenceModelAliases(model)
-  return bundledVideoTierCatalog.value.find((record) => {
-    if (!providerMatchesBundledVideoReference(record.provider, provider, model)) return false
     return [...pricingReferenceModelAliases(record.model)].some((alias) => aliases.has(alias))
   })
 }
@@ -1309,30 +1270,35 @@ function representativeVideoPriceMicros(
 }
 
 function openPriceDialog(row: Channel) {
-  for (const key of Object.keys(priceForms)) {
-    delete priceForms[key]
-  }
+  clearPriceForms()
 
   for (const model of channelModelList(row)) {
     const key = channelPriceKey(row.id, model)
     const price = priceByModel.value.get(key)
-    const template = findPricingTemplate(templates.value, row.provider, model)
-    const supportsImageBilling = canUseImageBilling(row.provider, model)
-    const supportsVideoBilling = canUseVideoBilling(row.provider, model)
+    const channelModel = channelModelRecords(row).find((item) => item.model === model)
+    const reference = modelClassificationReference(row.provider, model, channelModel?.base_model)
+    const template = findPricingTemplate(templates.value, reference.provider, reference.model)
+    const supportsImageBilling = canUseImageBilling(reference.provider, reference.model)
+    const supportsVideoBilling = canUseVideoBilling(reference.provider, reference.model)
     const referenceVideoTiers = supportsVideoBilling
-      ? priceDialogReferenceVideoTiersForModel(row.provider, model)
+      ? priceDialogReferenceVideoTiersForModel(reference.provider, reference.model)
       : []
-    const lockedBillingMeter = lockedBillingMeterForReferencePrice(row.provider, model)
+    const lockedBillingMeter = lockedBillingMeterForReferencePrice(
+      reference.provider,
+      reference.model
+    )
     const lockedVideoBillingMode = lockedVideoBillingModeForReferenceTiers(referenceVideoTiers)
-    const defaultBillingMeter = defaultBillingMeterForModel(row.provider, model)
+    const defaultBillingMeter = defaultBillingMeterForModel(reference.provider, reference.model)
     const savedBillingMeter =
       price?.billing_meter === 'image' && supportsImageBilling
         ? 'image'
         : price?.billing_meter === 'video' && supportsVideoBilling
           ? 'video'
-          : price?.billing_meter === 'token' && defaultBillingMeter === 'token'
-            ? 'token'
-            : null
+          : price?.billing_meter === 'audio' && defaultBillingMeter === 'audio'
+            ? 'audio'
+            : price?.billing_meter === 'token' && defaultBillingMeter === 'token'
+              ? 'token'
+              : null
     const billingMeter =
       supportsVideoBilling && referenceVideoTiers.length > 0
         ? 'video'
@@ -1351,14 +1317,16 @@ function openPriceDialog(row: Channel) {
           ? referenceVideoTiersToForm(referenceVideoTiers)
           : []
     const inputPrice = price?.input_price_micros ?? template?.input_price_micros ?? 0
-    const cacheWritePrice = template
-      ? template.cache_write_price_micros
-      : (price?.cache_write_price_micros ?? inputPrice)
+    const cacheWritePrice =
+      price?.cache_write_price_micros ?? template?.cache_write_price_micros ?? inputPrice
     priceForms[key] = {
       channelId: row.id,
       provider: row.provider,
       model,
-      modelCategory: modelCategoryForModel(row.provider, model),
+      referenceProvider: reference.provider,
+      referenceModel: reference.model,
+      modelCategory: modelCategoryForModel(reference.provider, reference.model),
+      audioTranscriptionMode: audioTranscriptionModeForModel(reference.provider, reference.model),
       billingMeter,
       videoBillingMode,
       videoPriceTiers: initialVideoPriceTiers,
@@ -1377,7 +1345,8 @@ function openPriceDialog(row: Channel) {
       enabled: hasEnabledBillablePrice(price, billingMeter) || Boolean(template),
       hasPrice: hasEnabledBillablePrice(price, billingMeter),
       hasPriceRecord: Boolean(price),
-      billingMeterLocked: Boolean(lockedBillingMeter) || isBillingMeterLocked(row.provider, model),
+      billingMeterLocked:
+        Boolean(lockedBillingMeter) || isBillingMeterLocked(reference.provider, reference.model),
       videoBillingModeLocked: Boolean(lockedVideoBillingMode),
       canUseImageBilling: supportsImageBilling,
       canUseVideoBilling: supportsVideoBilling
@@ -1389,8 +1358,7 @@ function openPriceDialog(row: Channel) {
 function hasReferencePrice(form: (typeof priceForms)[string]) {
   if (form.canUseVideoBilling) {
     return (
-      priceDialogReferenceVideoTiersForModel(form.provider, form.model).length > 0 ||
-      Boolean(findApplicablePricingTemplate(form))
+      referenceVideoTiersForForm(form).length > 0 || Boolean(findApplicablePricingTemplate(form))
     )
   }
   return Boolean(findApplicablePricingTemplate(form))
@@ -1402,7 +1370,7 @@ function referencePriceFallbackLabel(form: (typeof priceForms)[string]) {
 
 function referencePriceSummary(form: (typeof priceForms)[string]) {
   if (form.canUseVideoBilling) {
-    const tiers = priceDialogReferenceVideoTiersForModel(form.provider, form.model)
+    const tiers = referenceVideoTiersForForm(form)
     if (tiers.length > 0) {
       return tiers
         .map((tier) => {
@@ -1424,6 +1392,12 @@ function referencePriceSummary(form: (typeof priceForms)[string]) {
       ? formatPricePerMillion(template.unit_price_micros, locale.value)
       : t('priceMissing')
     return `${t('billingMeterImageGeneration')} ${unit} / ${t('perImage')}`
+  }
+  if (template.billing_meter === 'audio') {
+    const unit = template.unit_price_micros
+      ? formatPricePerMillion(template.unit_price_micros, locale.value)
+      : t('priceMissing')
+    return `${t('billingMeterAudio')} ${unit} / ${t('perSecond')}`
   }
   const input = formatPricePerMillion(template.input_price_micros, locale.value)
   const output = formatPricePerMillion(template.output_price_micros, locale.value)
@@ -1447,11 +1421,9 @@ function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVid
   const resolutions = new Set(
     splitCommaList(tier.resolutionsText).map((resolution) => resolution.toLowerCase())
   )
-  const referenceTier = priceDialogReferenceVideoTiersForModel(form.provider, form.model).find(
-    (item) => {
-      return referenceVideoTierMatchesFormResolutions(item, resolutions)
-    }
-  )
+  const referenceTier = referenceVideoTiersForForm(form).find((item) => {
+    return referenceVideoTierMatchesFormResolutions(item, resolutions)
+  })
   if (!referenceTier) return ''
 
   return referenceVideoTierSummary(referenceTier)
@@ -1459,7 +1431,7 @@ function videoTierReferencePriceSummary(form: ChannelPriceForm, tier: ChannelVid
 
 function fillReferencePrice(form: (typeof priceForms)[string]) {
   if (form.canUseVideoBilling) {
-    const tiers = priceDialogReferenceVideoTiersForModel(form.provider, form.model)
+    const tiers = referenceVideoTiersForForm(form)
     if (tiers.length > 0) {
       form.videoBillingMode = defaultVideoBillingModeForReferenceTiers(tiers)
       form.billingMeter = 'video'
@@ -1498,18 +1470,12 @@ function requireBillingMeter(form: (typeof priceForms)[string]) {
   return form.billingMeter
 }
 
-function requireImageUnitPrice(form: (typeof priceForms)[string]) {
+function requireUnitPrice(form: (typeof priceForms)[string]) {
   if (form.unitPrice <= 0) {
-    throw new Error(t('imageUnitPriceRequired'))
+    throw new Error(
+      form.billingMeter === 'audio' ? t('audioUnitPriceRequired') : t('imageUnitPriceRequired')
+    )
   }
-}
-
-function readReferenceSyncError(err: unknown) {
-  if (err instanceof ApiError && err.code === 'pricing_reference_source_unavailable') {
-    return t('referencePricesSourceUnavailable')
-  }
-
-  return readError(err)
 }
 
 function createFormMissingReferencePrices() {
@@ -1518,30 +1484,7 @@ function createFormMissingReferencePrices() {
 }
 
 async function syncCreateReferencePricesIfNeeded() {
-  if (!createFormMissingReferencePrices()) return true
-
-  try {
-    await syncPricingTemplates()
-    const [
-      fetchedTemplates,
-      fetchedProviderModels,
-      fetchedModelReferenceCatalog,
-      fetchedBundledVideoTierCatalog
-    ] = await Promise.all([
-      getPricingTemplates(),
-      getProviderModels(),
-      getModelReferenceCatalog(),
-      getBundledVideoTierCatalog()
-    ])
-    templates.value = fetchedTemplates
-    providerModels.value = fetchedProviderModels
-    modelReferenceCatalog.value = fetchedModelReferenceCatalog
-    bundledVideoTierCatalog.value = fetchedBundledVideoTierCatalog
-    return true
-  } catch (err) {
-    ElMessage.error(readReferenceSyncError(err))
-    return false
-  }
+  return syncReferencePricesIfNeeded(createFormMissingReferencePrices())
 }
 
 async function saveChannelPrices() {
@@ -1553,8 +1496,8 @@ async function saveChannelPrices() {
           form.canUseVideoBilling && form.videoBillingMode ? videoPriceTiersPayload(form) : []
         const billingMeter =
           form.canUseVideoBilling && form.videoBillingMode ? 'video' : requireBillingMeter(form)
-        if (billingMeter === 'image') {
-          requireImageUnitPrice(form)
+        if (billingMeter === 'image' || billingMeter === 'audio') {
+          requireUnitPrice(form)
         }
         const representativeWithoutVideo = representativeVideoPriceMicros(
           videoTiers,
@@ -1584,7 +1527,7 @@ async function saveChannelPrices() {
             form.canUseVideoBilling && form.videoBillingMode ? 0 : cacheWritePricePayload(form),
           billing_meter: billingMeter,
           unit_price_micros:
-            billingMeter === 'image'
+            billingMeter === 'image' || billingMeter === 'audio'
               ? majorToMicroAmount(form.unitPrice)
               : billingMeter === 'video'
                 ? representativeWithoutVideo
@@ -1612,6 +1555,21 @@ async function toggleChannelModelRuntime(channelId: number, model: string, enabl
     try {
       await updateChannelModel(channelId, model, { enabled })
       await loadChannels()
+    } catch (err) {
+      ElMessage.error(readError(err))
+    }
+  })
+}
+
+async function updateChannelBaseModel(channelId: number, model: string, baseModel: string | null) {
+  const key = runtimeKey(channelId, model)
+  if (updatingBaseModelKeys.has(key)) return
+
+  await updatingBaseModelKeys.withItem(key, async () => {
+    try {
+      await updateChannelModel(channelId, model, { base_model: baseModel })
+      await loadChannels()
+      ElMessage.success(t('baseModelSaved'))
     } catch (err) {
       ElMessage.error(readError(err))
     }
@@ -1784,6 +1742,7 @@ onMounted(loadInitialData)
               :rows="channelPriceRows(row)"
               @edit-price="openPriceDialog"
               @toggle-model-runtime="toggleChannelModelRuntime"
+              @update-base-model="updateChannelBaseModel"
             />
           </template>
         </el-table-column>

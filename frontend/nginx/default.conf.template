@@ -1,3 +1,10 @@
+# Forward WebSocket upgrade headers only when the client asks for a protocol
+# upgrade (e.g. /v1/realtime); plain HTTP requests get Connection: close.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
 server {
     listen 80;
     server_name _;
@@ -17,6 +24,8 @@ server {
         proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
 
         # Keep streaming APIs responsive and allow long-running model/image requests.
         proxy_buffering off;

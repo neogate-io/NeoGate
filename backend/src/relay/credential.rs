@@ -221,17 +221,123 @@ async fn flush(
     }
 
     let updates = std::mem::take(pending).into_values().collect::<Vec<_>>();
-    for update in updates {
-        if let Err(err) = flush_one(pool, &update).await {
+
+    // 按状态拆分成两批，分别做批量 upsert，避免原来逐条 N 次 round-trip。
+    let (available, unavailable): (Vec<_>, Vec<_>) = updates
+        .into_iter()
+        .partition(|u| matches!(u.status, PendingCredentialModelStatus::Available));
+
+    if !available.is_empty() {
+        if let Err(err) = flush_available_batch(pool, &available).await {
             tracing::warn!(
-                credential_id = update.key.credential_id,
-                channel_endpoint_id = update.key.channel_endpoint_id,
-                model = %update.key.model,
+                count = available.len(),
                 error = %err,
-                "failed to flush credential model state"
+                "failed to flush available credential model states"
             );
         }
     }
+    if !unavailable.is_empty() {
+        if let Err(err) = flush_unavailable_batch(pool, &unavailable).await {
+            tracing::warn!(
+                count = unavailable.len(),
+                error = %err,
+                "failed to flush unavailable credential model states"
+            );
+        }
+    }
+}
+
+/// 批量 upsert 所有 Available 状态更新，单次 DB round-trip。
+async fn flush_available_batch(
+    pool: &PgPool,
+    updates: &[PendingCredentialModelUpdate],
+) -> sqlx::Result<()> {
+    use sqlx::QueryBuilder;
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "INSERT INTO credential_model
+         (credential_id, channel_endpoint_id, model, status, unavailable_until,
+          last_error, last_status_code, last_seen_at, success_count, failure_count)
+         ",
+    );
+    qb.push_values(updates, |mut b, u| {
+        b.push_bind(u.key.credential_id)
+            .push_bind(u.key.channel_endpoint_id)
+            .push_bind(&u.key.model)
+            .push("'available'")
+            .push("NULL")
+            .push("NULL")
+            .push("NULL")
+            .push("now()")
+            .push_bind(u.success_count)
+            .push_bind(u.failure_count);
+    });
+    qb.push(
+        " ON CONFLICT (credential_id, channel_endpoint_id, model)
+          DO UPDATE SET
+              status = 'available',
+              unavailable_until = NULL,
+              last_error = NULL,
+              last_status_code = NULL,
+              last_seen_at = now(),
+              success_count = credential_model.success_count + EXCLUDED.success_count,
+              failure_count = credential_model.failure_count + EXCLUDED.failure_count,
+              updated_at = now()",
+    );
+    qb.build().execute(pool).await?;
+    Ok(())
+}
+
+/// 批量 upsert 所有 Unavailable 状态更新，单次 DB round-trip。
+async fn flush_unavailable_batch(
+    pool: &PgPool,
+    updates: &[PendingCredentialModelUpdate],
+) -> sqlx::Result<()> {
+    use sqlx::QueryBuilder;
+    // unavailable 需要逐条处理不同的 unavailable_until/last_error/last_status_code，
+    // 仍用 QueryBuilder 批量推送。
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "INSERT INTO credential_model
+         (credential_id, channel_endpoint_id, model, status, unavailable_until,
+          last_error, last_status_code, last_seen_at, success_count, failure_count)
+         ",
+    );
+    qb.push_values(updates, |mut b, u| {
+        let (unavailable_until, last_error, last_status_code) = match &u.status {
+            PendingCredentialModelStatus::Unavailable {
+                unavailable_until,
+                last_error,
+                last_status_code,
+            } => (*unavailable_until, last_error.as_str(), *last_status_code),
+            PendingCredentialModelStatus::Available => {
+                // 逻辑上不会走到这里（已按状态拆分）
+                return;
+            }
+        };
+        b.push_bind(u.key.credential_id)
+            .push_bind(u.key.channel_endpoint_id)
+            .push_bind(&u.key.model)
+            .push("'unavailable'")
+            .push_bind(unavailable_until)
+            .push_bind(last_error)
+            .push_bind(last_status_code)
+            .push("now()")
+            .push_bind(u.success_count)
+            .push_bind(u.failure_count);
+    });
+    qb.push(
+        " ON CONFLICT (credential_id, channel_endpoint_id, model)
+          DO UPDATE SET
+              status = 'unavailable',
+              unavailable_until = EXCLUDED.unavailable_until,
+              last_error = EXCLUDED.last_error,
+              last_status_code = EXCLUDED.last_status_code,
+              last_seen_at = now(),
+              success_count = credential_model.success_count + EXCLUDED.success_count,
+              failure_count = credential_model.failure_count + EXCLUDED.failure_count,
+              updated_at = now()",
+    );
+    qb.build().execute(pool).await?;
+    Ok(())
 }
 
 async fn flush_one(pool: &PgPool, update: &PendingCredentialModelUpdate) -> sqlx::Result<()> {

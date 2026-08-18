@@ -1,16 +1,42 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAdminServicePolicy, getSetupStatus, getUserServicePolicy } from '../api/policy'
+import type { ServiceMode } from '../api/policy'
 import { useAuthStore } from '../stores/auth'
+import {
+  anthropicSubSections,
+  openAiSubSections
+} from '../views/public/interfaces/interfacesSections'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    allowedServiceModes?: ServiceMode[]
+    serviceModeRedirect?: string
+  }
+}
 
 export const router = createRouter({
   history: createWebHistory(),
   scrollBehavior(to, _from, savedPosition) {
     if (savedPosition) return savedPosition
     if (to.hash) {
+      // Section components load asynchronously (defineAsyncComponent), so the
+      // hash target may not exist yet right after navigation. Wait briefly for
+      // it to mount; fall back to the top of the page if it never appears.
       return new Promise((resolve) => {
-        window.setTimeout(() => {
-          resolve({ el: to.hash, top: 96, behavior: 'smooth' })
-        }, 0)
+        let attempts = 0
+        const tryResolve = () => {
+          if (document.querySelector(to.hash)) {
+            resolve({ el: to.hash, top: 96, behavior: 'smooth' })
+            return
+          }
+          attempts += 1
+          if (attempts >= 20) {
+            resolve({ top: 0 })
+            return
+          }
+          window.setTimeout(tryResolve, 50)
+        }
+        tryResolve()
       })
     }
     return { top: 0 }
@@ -38,7 +64,7 @@ export const router = createRouter({
       path: '/payment/return',
       name: 'paymentReturn',
       component: () => import('../views/public/PaymentReturnView.vue'),
-      meta: { messageKey: 'paymentSettings' }
+      meta: { messageKey: 'paymentSettings', user: true }
     },
     {
       path: '/interfaces',
@@ -53,17 +79,23 @@ export const router = createRouter({
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/interfaces/openai',
+      path: `/interfaces/openai/:sub(${openAiSubSections.join('|')})?`,
       name: 'interfacesOpenAi',
       component: () => import('../views/public/InterfacesView.vue'),
-      props: { section: 'openai' },
+      props: (route: { params: { sub?: string } }) => ({
+        section: 'openai',
+        sub: route.params.sub
+      }),
       meta: { messageKey: 'interfaces' }
     },
     {
-      path: '/interfaces/anthropic',
+      path: `/interfaces/anthropic/:sub(${anthropicSubSections.join('|')})?`,
       name: 'interfacesAnthropic',
       component: () => import('../views/public/InterfacesView.vue'),
-      props: { section: 'anthropic' },
+      props: (route: { params: { sub?: string } }) => ({
+        section: 'anthropic',
+        sub: route.params.sub
+      }),
       meta: { messageKey: 'interfaces' }
     },
     {
@@ -152,13 +184,23 @@ export const router = createRouter({
           path: 'apps',
           name: 'apps',
           component: () => import('../views/admin/AppsView.vue'),
-          meta: { messageKey: 'apps', subtitleKey: 'adminAppsSubtitle' }
+          meta: {
+            messageKey: 'apps',
+            subtitleKey: 'adminAppsSubtitle',
+            allowedServiceModes: ['internal'],
+            serviceModeRedirect: '/admin/channels'
+          }
         },
         {
           path: 'credentials',
           name: 'credentials',
           component: () => import('../views/admin/CredentialsView.vue'),
-          meta: { messageKey: 'credentialManagement', subtitleKey: 'adminCredentialsSubtitle' }
+          meta: {
+            messageKey: 'credentialManagement',
+            subtitleKey: 'adminCredentialsSubtitle',
+            allowedServiceModes: ['paid'],
+            serviceModeRedirect: '/admin/channels'
+          }
         },
         { path: 'credentials/openai', redirect: '/admin/credentials' },
         {
@@ -171,7 +213,12 @@ export const router = createRouter({
           path: 'projects',
           name: 'projects',
           component: () => import('../views/admin/ProjectsView.vue'),
-          meta: { messageKey: 'projectManagement', subtitleKey: 'adminProjectsSubtitle' }
+          meta: {
+            messageKey: 'projectManagement',
+            subtitleKey: 'adminProjectsSubtitle',
+            allowedServiceModes: ['internal'],
+            serviceModeRedirect: '/admin/keys'
+          }
         },
         {
           path: 'channels',
@@ -190,13 +237,21 @@ export const router = createRouter({
           path: 'statistics',
           name: 'statistics',
           component: () => import('../views/admin/StatisticsView.vue'),
-          meta: { messageKey: 'consumptionOverview', subtitleKey: 'adminConsumptionOverviewSubtitle' }
+          meta: {
+            messageKey: 'consumptionOverview',
+            subtitleKey: 'adminConsumptionOverviewSubtitle'
+          }
         },
         {
           path: 'cost-attribution',
           name: 'costAttribution',
           component: () => import('../views/admin/CostAttributionView.vue'),
-          meta: { messageKey: 'costAttribution', subtitleKey: 'adminCostAttributionSubtitle' }
+          meta: {
+            messageKey: 'costAttribution',
+            subtitleKey: 'adminCostAttributionSubtitle',
+            allowedServiceModes: ['internal'],
+            serviceModeRedirect: '/admin/statistics'
+          }
         },
         { path: 'settings', redirect: '/admin/settings/pricing-policies' },
         {
@@ -221,7 +276,12 @@ export const router = createRouter({
           path: 'settings/payment',
           name: 'paymentSettings',
           component: () => import('../views/admin/PaymentSettingsView.vue'),
-          meta: { messageKey: 'paymentSettings', subtitleKey: 'adminPaymentSubtitle' }
+          meta: {
+            messageKey: 'paymentSettings',
+            subtitleKey: 'adminPaymentSubtitle',
+            allowedServiceModes: ['paid'],
+            serviceModeRedirect: '/admin/settings/pricing-policies'
+          }
         },
         {
           path: 'settings/other',
@@ -242,6 +302,17 @@ export const router = createRouter({
 })
 
 let setupCompleted = false
+
+// Legacy subsection anchors (/interfaces/openai#openai-text) now live on their
+// own pages; redirect them before any other navigation guard runs.
+router.beforeEach((to) => {
+  for (const prefix of ['openai', 'anthropic'] as const) {
+    const base = `/interfaces/${prefix}`
+    if (to.path === base && to.hash.startsWith(`#${prefix}-`)) {
+      return { path: `${base}/${to.hash.slice(prefix.length + 2)}`, replace: true }
+    }
+  }
+})
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
@@ -311,38 +382,10 @@ router.beforeEach(async (to) => {
     return '/admin'
   }
 
-  if (to.name === 'paymentSettings') {
+  if (to.meta.allowedServiceModes?.length && to.meta.serviceModeRedirect) {
     const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode !== 'paid') {
-      return '/admin/settings/pricing-policies'
-    }
-  }
-
-  if (to.name === 'apps') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'paid') {
-      return '/admin/channels'
-    }
-  }
-
-  if (to.name === 'credentials') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'internal') {
-      return '/admin/channels'
-    }
-  }
-
-  if (to.name === 'projects') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'paid') {
-      return '/admin/keys'
-    }
-  }
-
-  if (to.name === 'costAttribution') {
-    const servicePolicy = await getAdminServicePolicy().catch(() => null)
-    if (servicePolicy && servicePolicy.service_mode === 'paid') {
-      return '/admin/statistics'
+    if (servicePolicy && !to.meta.allowedServiceModes.includes(servicePolicy.service_mode)) {
+      return to.meta.serviceModeRedirect
     }
   }
 

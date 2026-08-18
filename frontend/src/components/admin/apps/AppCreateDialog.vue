@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { Link, View } from '@element-plus/icons-vue'
+import type { FormInstance, FormItemRule, FormRules } from 'element-plus'
 import type { UseAppCreate } from '../../../composables/useAppCreate'
 import { useLocale } from '../../../composables/useLocale'
 import type { AppRecord } from '../../../types/admin'
@@ -20,8 +22,57 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+const formRef = ref<FormInstance>()
 
-function submitCreate() {
+function requiredRule(message: string, trigger: 'blur' | 'change' = 'blur'): FormItemRule {
+  return { required: true, whitespace: true, message, trigger }
+}
+
+const formRules = computed<FormRules>(() => {
+  const rules: FormRules = {
+    name: [requiredRule(t('appNameRequired'))],
+    model: [requiredRule(t('appModelRequired'), 'change')]
+  }
+
+  if (create.form.appType === 'wecom') {
+    rules.corpId = [requiredRule(t('appWecomCorpIdRequired'))]
+    rules.agentId = [requiredRule(t('appWecomAgentIdRequired'))]
+    if (props.mode !== 'edit') {
+      rules.corpSecret = [requiredRule(t('appWecomSecretRequired'))]
+      rules.callbackToken = [requiredRule(t('appCallbackTokenRequired'))]
+    }
+    rules.encodingAesKey = [
+      {
+        trigger: 'blur',
+        validator: (_rule, value: string, callback) => {
+          const normalized = value.trim()
+          if (!normalized && props.mode === 'edit') return callback()
+          if (!normalized) return callback(new Error(t('appAesKeyRequired')))
+          if (normalized.length !== 43) return callback(new Error(t('appAesKeyLength')))
+          callback()
+        }
+      }
+    ]
+  }
+
+  if (create.form.appType === 'feishu') {
+    rules.feishuAppId = [requiredRule(t('appFeishuAppIdRequired'))]
+    if (props.mode !== 'edit') {
+      rules.feishuAppSecret = [requiredRule(t('appFeishuAppSecretRequired'))]
+      rules.feishuVerificationToken = [requiredRule(t('appFeishuTokenRequired'))]
+    }
+  }
+
+  if (create.form.appType === 'dingtalk' && props.mode !== 'edit') {
+    rules.dingtalkAppSecret = [requiredRule(t('appDingtalkSecretRequired'))]
+  }
+
+  return rules
+})
+
+async function submitCreate() {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (props.mode === 'edit') {
     emit('save')
     return
@@ -43,7 +94,7 @@ function showCreatedAppDetail() {
     :close-on-click-modal="false"
     :title="
       mode === 'edit'
-        ? `编辑${create.typeLabel(create.form.appType)}`
+        ? t('appEditTitle', { type: create.typeLabel(create.form.appType) })
         : create.createDialogTitle.value
     "
     width="680px"
@@ -58,37 +109,40 @@ function showCreatedAppDetail() {
         @click="create.selectType(item.type, item.enabled)"
       >
         <img class="app-type-card-icon" :src="item.iconUrl" alt="" />
-        <strong>{{ item.label }}</strong>
-        <span>{{ item.enabled ? item.description : '即将支持' }}</span>
+        <strong>{{ t(item.labelKey) }}</strong>
+        <span>{{ item.enabled ? t(item.descriptionKey) : t('appTypeComingSoon') }}</span>
       </button>
     </div>
 
     <el-form
+      ref="formRef"
       v-else-if="create.form.step === 2 || mode === 'edit'"
       class="app-create-form"
       label-position="top"
+      :model="create.form"
+      :rules="formRules"
       @submit.prevent="submitCreate"
     >
       <div class="app-form-grid">
-        <el-form-item class="app-name-field" label="应用名称">
-          <el-input v-model="create.form.name" placeholder="例如 研发知识助手" />
+        <el-form-item class="app-name-field" :label="t('appName')" prop="name">
+          <el-input v-model="create.form.name" :placeholder="t('appNamePlaceholder')" />
         </el-form-item>
       </div>
 
-      <el-form-item label="描述（可选）">
+      <el-form-item :label="t('appDescriptionOptional')">
         <el-input
           v-model="create.form.description"
-          placeholder="简单说明这个应用的用途，例如：回答研发制度、流程和常见问题"
+          :placeholder="t('appDescriptionPlaceholder')"
           type="textarea"
           :rows="2"
         />
       </el-form-item>
 
-      <div class="app-form-divider">大模型设置</div>
+      <div class="app-form-divider">{{ t('appModelSettings') }}</div>
 
       <div class="app-form-grid">
-        <el-form-item label="默认模型">
-          <el-select v-model="create.form.model" filterable placeholder="选择可用模型">
+        <el-form-item :label="t('appDefaultModel')" prop="model">
+          <el-select v-model="create.form.model" filterable :placeholder="t('appSelectModel')">
             <el-option
               v-for="item in create.modelOptions.value"
               :key="item.model"
@@ -97,17 +151,17 @@ function showCreatedAppDetail() {
             >
               <div class="app-model-option">
                 <span>{{ item.model }}</span>
-                <small>{{ item.channel_count }} 个渠道</small>
+                <small>{{ t('appChannelCount', { count: item.channel_count }) }}</small>
               </div>
             </el-option>
             <template #empty>
-              <span class="app-model-empty">暂无可用模型，请先配置渠道模型</span>
+              <span class="app-model-empty">{{ t('appNoModels') }}</span>
             </template>
           </el-select>
         </el-form-item>
       </div>
 
-      <el-form-item v-if="mode !== 'edit'" label="使用场景">
+      <el-form-item v-if="mode !== 'edit'" :label="t('appUsageScenario')">
         <el-radio-group
           v-model="create.form.usageScenario"
           class="usage-scenario-grid"
@@ -119,8 +173,8 @@ function showCreatedAppDetail() {
             class="usage-scenario-option"
             :value="item.value"
           >
-            <strong>{{ item.label }}</strong>
-            <span>{{ item.description }}</span>
+            <strong>{{ t(item.labelKey) }}</strong>
+            <span>{{ t(item.descriptionKey) }}</span>
             <el-button
               v-if="create.form.usageScenario === item.value && create.canApplyScenarioPrompt.value"
               class="scenario-prompt-button"
@@ -128,70 +182,76 @@ function showCreatedAppDetail() {
               type="primary"
               @click.stop="create.applySelectedScenarioPrompt"
             >
-              使用默认提示词
+              {{ t('appUseDefaultPrompt') }}
             </el-button>
           </el-radio>
         </el-radio-group>
       </el-form-item>
 
-      <el-form-item label="系统提示词">
+      <el-form-item :label="t('appSystemPrompt')">
         <el-input v-model="create.form.systemPrompt" type="textarea" :rows="3" />
       </el-form-item>
 
       <el-collapse class="app-advanced-collapse">
-        <el-collapse-item title="高级设置" name="advanced">
+        <el-collapse-item :title="t('appAdvancedSettings')" name="advanced">
           <div class="app-form-grid">
-            <el-form-item label="上下文轮数">
+            <el-form-item :label="t('appContextTurns')">
               <el-input-number v-model="create.form.contextTurns" :min="0" :max="50" />
             </el-form-item>
-            <el-form-item label="最大输出 Token">
+            <el-form-item :label="t('appMaxOutputTokens')">
               <el-input-number v-model="create.form.maxOutputTokens" :min="1" :max="128000" />
             </el-form-item>
           </div>
         </el-collapse-item>
       </el-collapse>
 
-      <div class="app-form-divider">接入配置</div>
+      <div class="app-form-divider">{{ t('appAccessSettings') }}</div>
 
       <template v-if="create.form.appType === 'wecom'">
         <div class="app-form-grid">
-          <el-form-item label="企业ID（CorpID）">
+          <el-form-item :label="t('appWecomCorpId')" prop="corpId">
+            <el-input v-model="create.form.corpId" :placeholder="t('appWecomCorpIdPlaceholder')" />
+          </el-form-item>
+          <el-form-item :label="t('appWecomAgentId')" prop="agentId">
             <el-input
-              v-model="create.form.corpId"
-              placeholder="在企业微信管理后台 > 我的企业中查看"
+              v-model="create.form.agentId"
+              :placeholder="t('appWecomDetailsPlaceholder')"
             />
           </el-form-item>
-          <el-form-item label="应用 AgentID">
-            <el-input v-model="create.form.agentId" placeholder="在自建应用详情中查看" />
-          </el-form-item>
-          <el-form-item label="应用 Secret">
+          <el-form-item :label="t('appWecomSecret')" prop="corpSecret">
             <el-input
               v-model="create.form.corpSecret"
-              placeholder="在自建应用详情中查看"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appWecomDetailsPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
-          <el-form-item label="回调 Token">
+          <el-form-item :label="t('appCallbackToken')" prop="callbackToken">
             <el-input
               v-model="create.form.callbackToken"
-              placeholder="与企业微信回调配置中的 Token 保持一致"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appCallbackTokenPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
         </div>
-        <el-form-item label="EncodingAESKey">
+        <el-form-item label="EncodingAESKey" prop="encodingAesKey">
           <el-input
             v-model="create.form.encodingAesKey"
             maxlength="43"
-            placeholder="从企业微信回调配置中复制，必须是 43 位"
+            :placeholder="
+              mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appAesKeyPlaceholder')
+            "
             show-word-limit
             show-password
             type="password"
           />
           <p class="app-form-hint">
-            企业微信校验 URL 时会使用这个密钥加密 echostr，NeoGate 保存的值必须和企业微信后台一致。
+            {{ t('appAesKeyHelp') }}
           </p>
         </el-form-item>
       </template>
@@ -200,7 +260,7 @@ function showCreatedAppDetail() {
         <el-form-item label="Webhook Secret">
           <el-input
             v-model="create.form.webhookSecret"
-            :placeholder="mode === 'edit' ? '留空则保持当前密钥不变' : ''"
+            :placeholder="mode === 'edit' ? t('appKeepSecretPlaceholder') : ''"
             show-password
             type="password"
           />
@@ -209,68 +269,78 @@ function showCreatedAppDetail() {
 
       <template v-if="create.form.appType === 'feishu'">
         <div class="app-form-grid">
-          <el-form-item label="App ID">
+          <el-form-item label="App ID" prop="feishuAppId">
             <el-input
               v-model="create.form.feishuAppId"
-              placeholder="在飞书开发者后台 > 凭证与基础信息中查看"
+              :placeholder="t('appFeishuCredentialPlaceholder')"
             />
           </el-form-item>
-          <el-form-item label="App Secret">
+          <el-form-item label="App Secret" prop="feishuAppSecret">
             <el-input
               v-model="create.form.feishuAppSecret"
-              placeholder="在飞书开发者后台 > 凭证与基础信息中查看"
+              :placeholder="
+                mode === 'edit'
+                  ? t('appKeepSecretPlaceholder')
+                  : t('appFeishuCredentialPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
-          <el-form-item label="Verification Token">
+          <el-form-item label="Verification Token" prop="feishuVerificationToken">
             <el-input
               v-model="create.form.feishuVerificationToken"
-              placeholder="与飞书事件订阅配置中的 Verification Token 保持一致"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appFeishuTokenPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
-          <el-form-item label="Encrypt Key（可选）">
+          <el-form-item :label="t('appEncryptKeyOptional')">
             <el-input
               v-model="create.form.feishuEncryptKey"
-              placeholder="开启飞书事件加密时填写"
+              :placeholder="
+                mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appEncryptKeyPlaceholder')
+              "
               show-password
               type="password"
             />
           </el-form-item>
         </div>
         <p class="app-form-hint">
-          创建后把事件订阅请求地址复制到飞书开发者后台，并订阅接收消息事件。
+          {{ t('appFeishuHelp') }}
         </p>
       </template>
 
       <template v-if="create.form.appType === 'dingtalk'">
-        <el-form-item label="机器人 AppSecret">
+        <el-form-item :label="t('appDingtalkSecret')" prop="dingtalkAppSecret">
           <el-input
             v-model="create.form.dingtalkAppSecret"
-            placeholder="填写钉钉机器人基础信息中的 AppSecret"
+            :placeholder="
+              mode === 'edit' ? t('appKeepSecretPlaceholder') : t('appDingtalkSecretPlaceholder')
+            "
             show-password
             type="password"
           />
           <p class="app-form-hint">
-            创建后把消息接收地址复制到钉钉机器人配置中；NeoGate 会用 AppSecret 校验钉钉回调签名。
+            {{ t('appDingtalkHelp') }}
           </p>
         </el-form-item>
       </template>
 
       <template v-if="create.form.appType === 'widget'">
-        <el-form-item label="允许嵌入域名（一行一个）">
+        <el-form-item :label="t('appAllowedDomains')">
           <el-input v-model="create.form.allowedDomains" type="textarea" :rows="3" />
         </el-form-item>
         <div class="app-form-grid">
-          <el-form-item label="欢迎语">
+          <el-form-item :label="t('appWelcomeMessage')">
             <el-input v-model="create.form.welcome" />
           </el-form-item>
-          <el-form-item label="主题色">
+          <el-form-item :label="t('appThemeColor')">
             <el-color-picker v-model="create.form.themeColor" />
           </el-form-item>
-          <el-form-item label="匿名访问">
+          <el-form-item :label="t('appAnonymousAccess')">
             <el-switch v-model="create.form.anonymousAccess" />
           </el-form-item>
         </div>
@@ -290,7 +360,11 @@ function showCreatedAppDetail() {
         <div>
           <strong>{{ create.createdApp.value?.name }}</strong>
           <span>
-            {{ create.typeLabel(create.createdApp.value?.app_type || create.form.appType) }}已创建
+            {{
+              t('appCreatedType', {
+                type: create.typeLabel(create.createdApp.value?.app_type || create.form.appType)
+              })
+            }}
           </span>
         </div>
       </div>
@@ -300,7 +374,7 @@ function showCreatedAppDetail() {
         type="warning"
         :closable="false"
         show-icon
-        title="未生成公开访问 URL，请先配置 PUBLIC_BASE_URL。"
+        :title="t('appPublicUrlMissing')"
       />
 
       <div class="app-access-url-list">
@@ -314,14 +388,14 @@ function showCreatedAppDetail() {
             <span>{{ item.helper }}</span>
           </div>
           <div class="app-access-url-copy">
-            <code>{{ item.value || '未配置公开访问地址' }}</code>
+            <code>{{ item.value || t('appPublicUrlNotConfigured') }}</code>
             <el-button
               :disabled="!item.value"
               :icon="Link"
               type="primary"
               @click="emit('copy', item.value)"
             >
-              复制 URL
+              {{ t('appCopyUrl') }}
             </el-button>
           </div>
         </div>
@@ -331,10 +405,10 @@ function showCreatedAppDetail() {
     <template #footer>
       <div class="app-dialog-footer">
         <el-button v-if="create.form.step === 2 && mode !== 'edit'" @click="create.form.step = 1">
-          返回
+          {{ t('appBack') }}
         </el-button>
         <el-button @click="open = false">
-          {{ create.form.step === 3 ? '关闭' : t('cancel') }}
+          {{ create.form.step === 3 ? t('appClose') : t('cancel') }}
         </el-button>
         <el-button
           v-if="create.form.step === 2 || mode === 'edit'"
@@ -342,7 +416,7 @@ function showCreatedAppDetail() {
           :loading="mode === 'edit' ? saving : create.saving.value"
           @click="submitCreate"
         >
-          {{ mode === 'edit' ? '保存' : '创建应用' }}
+          {{ mode === 'edit' ? t('appSave') : t('appCreateAction') }}
         </el-button>
         <el-button
           v-if="create.form.step === 3"
@@ -350,7 +424,7 @@ function showCreatedAppDetail() {
           :icon="View"
           @click="showCreatedAppDetail"
         >
-          查看详情
+          {{ t('appViewDetails') }}
         </el-button>
       </div>
     </template>

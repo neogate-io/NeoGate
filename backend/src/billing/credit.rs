@@ -52,7 +52,6 @@ pub(super) struct RedisHotCreditStore {
 
 #[derive(Debug, Clone, Default)]
 struct CreditAccountHotCredit {
-    generation: u64,
     total_available_micros: i64,
     segments: VecDeque<HotSegment>,
 }
@@ -65,22 +64,24 @@ struct HotSegment {
 
 const HOT_CREDIT_SHARDS: usize = 64;
 
+// 线格式：列表项为 `allocation_id:segment_amount`。匹配模式统一用不带尾冒号的
+// `([^:]+):([^:]+)`，可同时解析历史遗留的三段格式（`id:amount:generation`）与
+// 当前两段格式，保证滚动部署期间新旧数据互通。
 static REDIS_CREDIT_ALLOCATION_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
     redis::Script::new(
         r#"
-        if not redis.call('GET', KEYS[3]) then
+        if not redis.call('GET', KEYS[2]) then
           local total = 0
           local items = redis.call('LRANGE', KEYS[1], 0, -1)
           for _, item in ipairs(items) do
-            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+)')
             total = total + tonumber(segment_amount)
           end
-          redis.call('SET', KEYS[3], total)
+          redis.call('SET', KEYS[2], total)
         end
-        local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
-        redis.call('RPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2] .. ':' .. tostring(gen))
-        redis.call('INCRBY', KEYS[3], ARGV[2])
-        return gen
+        redis.call('RPUSH', KEYS[1], ARGV[1] .. ':' .. ARGV[2])
+        redis.call('INCRBY', KEYS[2], ARGV[2])
+        return 1
         "#,
     )
 });
@@ -88,11 +89,9 @@ static REDIS_CREDIT_ALLOCATION_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|
 static REDIS_DRAIN_CREDIT_ACCOUNT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
     redis::Script::new(
         r#"
-        local gen = tonumber(redis.call('GET', KEYS[2]) or '0')
         local items = redis.call('LRANGE', KEYS[1], 0, -1)
         redis.call('DEL', KEYS[1])
-        redis.call('DEL', KEYS[3])
-        redis.call('SET', KEYS[2], gen + 1)
+        redis.call('DEL', KEYS[2])
         return items
         "#,
     )
@@ -106,19 +105,20 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
         local available = 0
         for i = 1, account_count do
           local list_key = KEYS[i]
-          local total_key = KEYS[account_count * 2 + i]
-          local total = redis.call('GET', total_key)
-          if not total then
+          local total_key = KEYS[account_count + i]
+          local total = tonumber(redis.call('GET', total_key))
+          -- total 不存在或为负（崩溃后 list/total 不同步）时，从 list 重建
+          if not total or total < 0 then
             local rebuilt = 0
             local items = redis.call('LRANGE', list_key, 0, -1)
             for _, item in ipairs(items) do
-              local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+              local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+)')
               rebuilt = rebuilt + tonumber(segment_amount)
             end
             redis.call('SET', total_key, rebuilt)
-            total = tostring(rebuilt)
+            total = rebuilt
           end
-          available = available + tonumber(total)
+          available = available + total
         end
         if available < amount then
           return {}
@@ -129,13 +129,11 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
         for i = 1, account_count do
           if remaining <= 0 then break end
           local list_key = KEYS[i]
-          local gen_key = KEYS[account_count + i]
-          local total_key = KEYS[account_count * 2 + i]
-          local gen = tonumber(redis.call('GET', gen_key) or '0')
+          local total_key = KEYS[account_count + i]
           while remaining > 0 do
             local item = redis.call('LPOP', list_key)
             if not item then break end
-            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):([^:]+)')
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+)')
             local segment_amount_num = tonumber(segment_amount)
             local debit = segment_amount_num
             if debit > remaining then
@@ -146,10 +144,9 @@ static REDIS_DEBIT_ORDERED_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| {
             table.insert(output, tostring(i))
             table.insert(output, allocation_id)
             table.insert(output, tostring(debit))
-            table.insert(output, tostring(gen))
             local leftover = segment_amount_num - debit
             if leftover > 0 then
-              redis.call('LPUSH', list_key, allocation_id .. ':' .. tostring(leftover) .. ':' .. tostring(gen))
+              redis.call('LPUSH', list_key, allocation_id .. ':' .. tostring(leftover))
             end
           end
         end
@@ -166,18 +163,19 @@ static REDIS_AVAILABLE_CREDIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(||
         for i = 1, account_count do
           local list_key = KEYS[i]
           local total_key = KEYS[account_count + i]
-          local total = redis.call('GET', total_key)
-          if not total then
+          local total = tonumber(redis.call('GET', total_key))
+          -- total 不存在或为负时，从 list 重建
+          if not total or total < 0 then
             local rebuilt = 0
             local items = redis.call('LRANGE', list_key, 0, -1)
             for _, item in ipairs(items) do
-              local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+              local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+)')
               rebuilt = rebuilt + tonumber(segment_amount)
             end
             redis.call('SET', total_key, rebuilt)
-            total = tostring(rebuilt)
+            total = rebuilt
           end
-          available = available + tonumber(total)
+          available = available + total
         end
         return available
         "#,
@@ -196,7 +194,7 @@ static REDIS_REMOVE_ALLOCATIONS_SCRIPT: LazyLock<redis::Script> = LazyLock::new(
         redis.call('DEL', KEYS[1])
         local kept = 0
         for _, item in ipairs(items) do
-            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+):')
+            local allocation_id, segment_amount = string.match(item, '([^:]+):([^:]+)')
             if not remove[allocation_id] then
                 redis.call('RPUSH', KEYS[1], item)
                 kept = kept + tonumber(segment_amount)
@@ -239,8 +237,6 @@ impl HotCreditStore for MemoryHotCreditStore {
     ) -> AppResult<Vec<DebitPart>> {
         let mut balances = self.lock_shard_for_credit_account(credit_account).await;
         let account_hot = balances.entry(credit_account.clone()).or_default();
-        let generation = account_hot.generation;
-        account_hot.generation = account_hot.generation.wrapping_add(1);
         account_hot.total_available_micros = 0;
         Ok(std::mem::take(&mut account_hot.segments)
             .into_iter()
@@ -249,7 +245,6 @@ impl HotCreditStore for MemoryHotCreditStore {
                 credit_account: credit_account.clone(),
                 allocation_id: segment.allocation_id,
                 amount_micros: segment.available_micros,
-                generation,
             })
             .collect())
     }
@@ -302,7 +297,6 @@ impl HotCreditStore for MemoryHotCreditStore {
             let Some(account_hot) = balances.get_mut(credit_account) else {
                 continue;
             };
-            let generation = account_hot.generation;
             let segments = &mut account_hot.segments;
             while remaining > 0 {
                 let Some(front) = segments.front_mut() else {
@@ -316,7 +310,6 @@ impl HotCreditStore for MemoryHotCreditStore {
                     credit_account: credit_account.clone(),
                     allocation_id: front.allocation_id,
                     amount_micros: debit,
-                    generation,
                 });
                 if front.available_micros == 0 {
                     segments.pop_front();
@@ -439,10 +432,6 @@ impl RedisHotCreditStore {
         format!("{}:hot_credit:{}", self.key_prefix, credit_account.id)
     }
 
-    fn generation_key(&self, credit_account: &CreditAccountId) -> String {
-        format!("{}:hot_credit_gen:{}", self.key_prefix, credit_account.id)
-    }
-
     fn total_key(&self, credit_account: &CreditAccountId) -> String {
         format!("{}:hot_credit_total:{}", self.key_prefix, credit_account.id)
     }
@@ -460,12 +449,10 @@ impl HotCreditStore for RedisHotCreditStore {
             return Ok(());
         }
         let credit_account_key = self.credit_account_key(&credit_account);
-        let generation_key = self.generation_key(&credit_account);
         let total_key = self.total_key(&credit_account);
         let mut conn = self.manager.clone();
-        let _: u64 = REDIS_CREDIT_ALLOCATION_SCRIPT
+        let _: i64 = REDIS_CREDIT_ALLOCATION_SCRIPT
             .key(credit_account_key)
-            .key(generation_key)
             .key(total_key)
             .arg(allocation_id)
             .arg(amount_micros)
@@ -479,12 +466,10 @@ impl HotCreditStore for RedisHotCreditStore {
         credit_account: &CreditAccountId,
     ) -> AppResult<Vec<DebitPart>> {
         let credit_account_key = self.credit_account_key(credit_account);
-        let generation_key = self.generation_key(credit_account);
         let total_key = self.total_key(credit_account);
         let mut conn = self.manager.clone();
         let items: Vec<String> = REDIS_DRAIN_CREDIT_ACCOUNT_SCRIPT
             .key(credit_account_key)
-            .key(generation_key)
             .key(total_key)
             .invoke_async(&mut conn)
             .await?;
@@ -509,10 +494,6 @@ impl HotCreditStore for RedisHotCreditStore {
             .iter()
             .map(|credit_account| self.credit_account_key(credit_account))
             .collect::<Vec<_>>();
-        let generation_keys = credit_accounts
-            .iter()
-            .map(|credit_account| self.generation_key(credit_account))
-            .collect::<Vec<_>>();
         let total_keys = credit_accounts
             .iter()
             .map(|credit_account| self.total_key(credit_account))
@@ -520,9 +501,6 @@ impl HotCreditStore for RedisHotCreditStore {
         let mut conn = self.manager.clone();
         let mut invocation = REDIS_DEBIT_ORDERED_SCRIPT.prepare_invoke();
         for key in &credit_account_keys {
-            invocation.key(key);
-        }
-        for key in &generation_keys {
             invocation.key(key);
         }
         for key in &total_keys {
@@ -534,7 +512,7 @@ impl HotCreditStore for RedisHotCreditStore {
             return Ok(None);
         }
         let mut parts = Vec::new();
-        let mut chunks = values.chunks_exact(4);
+        let mut chunks = values.chunks_exact(3);
         for chunk in &mut chunks {
             parts.push(decode_redis_debit_part(credit_accounts, chunk)?);
         }
@@ -619,9 +597,6 @@ fn decode_redis_debit_part(
     let amount_micros = chunk[2]
         .parse::<i64>()
         .map_err(|err| AppError::BadRequest(format!("invalid redis hot credit amount: {err}")))?;
-    let generation = chunk[3].parse::<u64>().map_err(|err| {
-        AppError::BadRequest(format!("invalid redis hot credit generation: {err}"))
-    })?;
     if allocation_id <= 0 || amount_micros <= 0 {
         return Err(AppError::BadRequest(
             "invalid redis hot credit debit part".to_string(),
@@ -631,20 +606,18 @@ fn decode_redis_debit_part(
         credit_account,
         allocation_id,
         amount_micros,
-        generation,
     })
 }
 
 fn decode_hot_segment(credit_account: &CreditAccountId, item: &str) -> Option<DebitPart> {
+    // 兼容历史三段格式（id:amount:generation）与当前两段格式：取前两段，忽略多余部分。
     let mut parts = item.splitn(3, ':');
     let allocation_id = parts.next()?.parse::<DbId>().ok()?;
     let amount_micros = parts.next()?.parse::<i64>().ok()?;
-    let generation = parts.next()?.parse::<u64>().ok()?;
     (amount_micros > 0).then(|| DebitPart {
         credit_account: credit_account.clone(),
         allocation_id,
         amount_micros,
-        generation,
     })
 }
 

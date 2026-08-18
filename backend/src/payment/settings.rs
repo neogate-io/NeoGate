@@ -67,10 +67,12 @@ pub async fn get_payment_setting(state: &AppState) -> AppResult<PaymentSettingRe
     Ok(record_from_stored(setting, true, Some(updated_at)))
 }
 
-pub async fn upsert_payment_setting(
+/// 校验并加密 Payment 设置，返回待写入的 JSON 值。不触碰数据库写入，
+/// 供普通路径与 setup 事务路径共用，避免逻辑重复。
+async fn prepare_payment_setting_value(
     state: &AppState,
     req: UpsertPaymentSettingRequest,
-) -> AppResult<PaymentSettingRecord> {
+) -> AppResult<serde_json::Value> {
     let existing = existing_payment_setting(state).await?;
     let zpay_api_url = optional_trimmed(Some(req.zpay_api_url))
         .unwrap_or_else(|| default_zpay_api_url().to_string());
@@ -107,7 +109,14 @@ pub async fn upsert_payment_setting(
         zpay_default_pay_type,
         zpay_site_name,
     };
-    let value = serde_json::to_value(&setting)?;
+    Ok(serde_json::to_value(&setting)?)
+}
+
+pub async fn upsert_payment_setting(
+    state: &AppState,
+    req: UpsertPaymentSettingRequest,
+) -> AppResult<PaymentSettingRecord> {
+    let value = prepare_payment_setting_value(state, req).await?;
     let row = sqlx::query(
         r#"
         INSERT INTO setting (key, value)
@@ -126,6 +135,29 @@ pub async fn upsert_payment_setting(
     let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
     let setting: StoredPaymentSetting = serde_json::from_value(value)?;
     Ok(record_from_stored(setting, true, Some(updated_at)))
+}
+
+/// setup 事务专用：在给定事务内写入 Payment 设置，与 service_policy 同一事务提交，
+/// 避免 setup 失败时留下孤立的 Payment 配置。
+pub(crate) async fn upsert_payment_setting_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    req: UpsertPaymentSettingRequest,
+) -> AppResult<()> {
+    let value = prepare_payment_setting_value(state, req).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO setting (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        "#,
+    )
+    .bind(PAYMENT_SETTING_KEY)
+    .bind(value)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 pub async fn runtime_payment_config(state: &AppState) -> AppResult<PaymentConfig> {

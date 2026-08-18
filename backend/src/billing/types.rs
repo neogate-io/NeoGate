@@ -9,6 +9,7 @@ pub enum BillingMeter {
     Token,
     Image,
     Video,
+    Audio,
 }
 
 impl BillingMeter {
@@ -17,6 +18,7 @@ impl BillingMeter {
             Self::Token => "token",
             Self::Image => "image",
             Self::Video => "video",
+            Self::Audio => "audio",
         }
     }
 
@@ -25,6 +27,7 @@ impl BillingMeter {
             "token" => Ok(Self::Token),
             "image" => Ok(Self::Image),
             "video" => Ok(Self::Video),
+            "audio" => Ok(Self::Audio),
             _ => Err(format!("invalid billing meter: {value}")),
         }
     }
@@ -188,7 +191,7 @@ pub struct TokenUsage {
 
 impl TokenUsage {
     pub fn total_tokens(self) -> i64 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 
@@ -239,6 +242,14 @@ impl BillableUsage {
             billable_units: seconds.max(0),
         }
     }
+
+    pub fn audio_seconds(seconds: i64) -> Self {
+        Self {
+            meter: BillingMeter::Audio,
+            token_usage: None,
+            billable_units: seconds.max(0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,20 +257,100 @@ pub struct DebitPart {
     pub credit_account: CreditAccountId,
     pub allocation_id: DbId,
     pub amount_micros: i64,
-    pub(super) generation: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebitHold {
     pub transaction_id: Uuid,
     pub estimated_micros: i64,
+    /// Amount charged when a successful token response has no usable usage data.
+    /// `None` preserves full-estimate fallback for legacy and unit-billed holds.
+    #[serde(default)]
+    pub usage_missing_micros: Option<i64>,
     pub parts: Vec<DebitPart>,
     #[serde(default = "default_charge_credit")]
     pub charge_credit: bool,
 }
 
+impl DebitHold {
+    pub(crate) fn new(estimated_micros: i64, parts: Vec<DebitPart>, charge_credit: bool) -> Self {
+        Self {
+            transaction_id: Uuid::new_v4(),
+            estimated_micros,
+            usage_missing_micros: None,
+            parts,
+            charge_credit,
+        }
+    }
+
+    pub(crate) fn with_usage_missing_fallback(mut self, amount_micros: i64) -> Self {
+        self.usage_missing_micros = Some(amount_micros.max(0));
+        self
+    }
+
+    pub(crate) fn cost_when_usage_missing(&self) -> i64 {
+        self.usage_missing_micros.unwrap_or(self.estimated_micros)
+    }
+}
+
 fn default_charge_credit() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DebitHold, TokenUsage};
+
+    #[test]
+    fn deserializes_legacy_hold_without_usage_missing_fallback() {
+        let hold: DebitHold = serde_json::from_str(
+            r#"{
+                "transaction_id":"00000000-0000-0000-0000-000000000001",
+                "estimated_micros":123,
+                "parts":[]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(hold.estimated_micros, 123);
+        assert_eq!(hold.usage_missing_micros, None);
+        assert!(hold.charge_credit);
+        assert_eq!(hold.cost_when_usage_missing(), 123);
+    }
+
+    #[test]
+    fn token_total_saturates_on_overflow() {
+        let usage = TokenUsage {
+            input_tokens: i64::MAX,
+            output_tokens: 1,
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_creation_input_tokens_5m: None,
+            cache_creation_input_tokens_1h: None,
+            reasoning_output_tokens: None,
+            audio_input_tokens: None,
+            audio_output_tokens: None,
+        };
+        assert_eq!(usage.total_tokens(), i64::MAX);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingChargeStatus {
+    Billed,
+    UsageMissing,
+    Undercharged,
+}
+
+impl BillingChargeStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Billed => "billed",
+            Self::UsageMissing => "usage_missing",
+            Self::Undercharged => "undercharged",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,7 +362,7 @@ pub struct BillingCharge {
     pub billing_meter: BillingMeter,
     pub billable_units: i64,
     pub cost_micros: i64,
-    pub status: String,
+    pub status: BillingChargeStatus,
     pub parts: Vec<DebitPart>,
     pub returned_parts: Vec<DebitPart>,
 }

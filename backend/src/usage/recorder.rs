@@ -86,7 +86,8 @@ pub struct UsageRecorder {
 }
 
 struct UsageItem {
-    usage: UsageInsert,
+    /// None 表示 failure-only 入队项（不写 usage 行），仅用于持久化 key failure。
+    usage: Option<UsageInsert>,
     failure: Option<KeyFailure>,
 }
 
@@ -114,7 +115,10 @@ impl UsageRecorder {
             return Ok(());
         };
 
-        let item = UsageItem { usage, failure };
+        let item = UsageItem {
+            usage: Some(usage),
+            failure,
+        };
         match sender.try_send(item) {
             Ok(()) => {}
             Err(TrySendError::Full(_item)) => {
@@ -125,6 +129,28 @@ impl UsageRecorder {
             }
         }
         Ok(())
+    }
+
+    /// billing 路径专用：仅持久化 key 冷却状态，不写 usage 行。
+    /// 避免 billing 分支因直接 return 而跳过 `flush_key_failures` 导致
+    /// `channel_key.cooldown_until` 只存在内存、routing cache TTL 到期后丢失。
+    pub fn enqueue_key_failure(&self, failure: KeyFailure) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let item = UsageItem {
+            usage: None,
+            failure: Some(failure),
+        };
+        match sender.try_send(item) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                tracing::warn!("relay usage queue is full; dropping key failure record");
+            }
+            Err(TrySendError::Closed(_)) => {
+                tracing::warn!("relay usage worker is closed; dropping key failure record");
+            }
+        }
     }
 }
 
@@ -147,7 +173,9 @@ async fn run_worker(
                         if let Some(failure) = item.failure {
                             insert_bounded_failure(&mut failures, failure);
                         }
-                        push_bounded_usage(&mut usages, item.usage);
+                        if let Some(usage) = item.usage {
+                            push_bounded_usage(&mut usages, usage);
+                        }
                         if usages.len() >= USAGE_BATCH_SIZE
                             || failures.len() >= KEY_BATCH_SIZE
                         {
@@ -189,11 +217,27 @@ async fn run_worker(
 }
 
 fn push_bounded_usage(usages: &mut Vec<UsageInsert>, usage: UsageInsert) {
-    if usages.len() >= USAGE_BATCH_SIZE {
-        tracing::warn!("relay usage flush buffer is full; dropping non-billing usage record");
+    if usages.len() < USAGE_BATCH_SIZE {
+        usages.push(usage);
         return;
     }
-    usages.push(usage);
+    // Buffer 已满。含 billing 字段的记录对应已实际扣款，丢弃会造成"有账单无 usage 行"
+    // 的财务数据不一致——优先保留：找一条无 billing 的条目替换。
+    if usage.billing.is_some() {
+        if let Some(pos) = usages.iter().position(|u| u.billing.is_none()) {
+            tracing::warn!(
+                "relay usage flush buffer is full; evicting non-billing record to preserve billing usage"
+            );
+            usages[pos] = usage;
+            return;
+        }
+        // 所有 slot 都是 billing 记录，buffer 已被同等高优先级占满，只能丢弃并 error。
+        tracing::error!(
+            "relay usage flush buffer is full with billing records; dropping billing usage record"
+        );
+    } else {
+        tracing::warn!("relay usage flush buffer is full; dropping non-billing usage record");
+    }
 }
 
 fn insert_bounded_failure(failures: &mut HashMap<DbId, KeyFailure>, failure: KeyFailure) {
@@ -592,7 +636,7 @@ fn coalesce_debit_parts(parts: &[DebitPart]) -> Vec<DebitPart> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::billing::{BillingMeter, TokenUsage};
+    use crate::billing::{BillingChargeStatus, BillingMeter, TokenUsage};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -605,7 +649,7 @@ pub(super) mod tests {
             billing_meter: BillingMeter::Token,
             billable_units: 30,
             cost_micros: 300,
-            status: "billed".to_string(),
+            status: BillingChargeStatus::Billed,
             parts: Vec::new(),
             returned_parts: Vec::new(),
         }
@@ -755,7 +799,7 @@ pub(super) mod tests {
             billing_meter: BillingMeter::Token,
             billable_units: 30,
             cost_micros: 300,
-            status: "billed".to_string(),
+            status: BillingChargeStatus::Billed,
             parts: Vec::new(),
             returned_parts: Vec::new(),
         });

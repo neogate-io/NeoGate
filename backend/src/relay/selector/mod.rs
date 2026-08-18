@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{atomic::AtomicUsize, Arc, RwLock as StdRwLock},
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock as StdRwLock,
+    },
     time::{Duration, Instant},
 };
 
@@ -79,6 +82,10 @@ impl UpstreamProtocol {
 pub struct Selector {
     routing_cache: Arc<RwLock<Arc<RoutingCache>>>,
     reload_lock: Arc<Mutex<()>>,
+    /// 每次 invalidate 递增。routing_snapshot 在加载前捕获、写回前比对：若期间
+    /// 发生过 invalidate，则本次加载视为陈旧（loaded_at 置 None），下次强制重载。
+    /// 解决 reload 用陈旧 DB 数据覆盖 invalidate 意图的 TOCTOU 竞态。
+    routing_epoch: Arc<AtomicU64>,
     routing_cache_ttl: Duration,
     credential_runtime_secrets: RuntimeSecretCache,
     model_blocks: ModelBlockCache,
@@ -130,6 +137,9 @@ pub struct SelectedUpstream {
     pub provider: String,
     pub channel_name: String,
     pub base_url: String,
+    /// 显式 adapter 类型 hint，从 channel_endpoint.adapter_hint 加载。
+    /// None 表示按 provider 默认规则选取。
+    pub adapter_hint: Option<String>,
     /// 运行时降级标志：为 true 时，本条 responses 请求由 adapter 改走 /v1/chat/completions
     /// 并用 bridge 把响应转回 responses 格式。由 per-(endpoint,model) 学习写入，不从 DB 加载。
     pub responses_chat_fallback: bool,
@@ -171,6 +181,7 @@ pub struct ChannelCandidate {
     pub provider: String,
     pub name: String,
     pub base_url: String,
+    pub adapter_hint: Option<String>,
     pub models: Vec<String>,
     pub priority: i32,
     pub weight: i32,
@@ -231,6 +242,7 @@ impl Selector {
         Self {
             routing_cache: Arc::new(RwLock::new(Arc::new(RoutingCache::default()))),
             reload_lock: Arc::new(Mutex::new(())),
+            routing_epoch: Arc::new(AtomicU64::new(0)),
             routing_cache_ttl,
             credential_runtime_secrets: RuntimeSecretCache::default(),
             model_blocks: ModelBlockCache::default(),
@@ -240,9 +252,13 @@ impl Selector {
 
     pub async fn invalidate(&self) {
         let mut cache = self.routing_cache.write().await;
+        // 在持写锁时递增 epoch，与 routing_snapshot 的写回串行化：
+        // 若 reload 在本次之前捕获了旧 epoch，其写回时会检测到不一致并作废。
+        self.routing_epoch.fetch_add(1, Ordering::AcqRel);
         let mut next = (**cache).clone();
         next.loaded_at = None;
         *cache = Arc::new(next);
+        drop(cache);
         self.credential_runtime_secrets.clear();
         self.model_blocks.clear_expired(Utc::now());
         self.responses_support.clear_expired(Utc::now());
@@ -289,6 +305,7 @@ impl Selector {
     pub async fn invalidate_refreshed_credential(&self, credential_id: DbId) {
         self.credential_runtime_secrets.remove(credential_id);
         let mut cache = self.routing_cache.write().await;
+        self.routing_epoch.fetch_add(1, Ordering::AcqRel);
         let mut next = (**cache).clone();
         next.loaded_at = None;
         *cache = Arc::new(next);
@@ -313,6 +330,93 @@ impl Selector {
             excluded_endpoint_ids: &[],
         };
         self.select_from_snapshot(&scope)
+    }
+
+    pub(crate) async fn select_matching_endpoint(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        protocol: UpstreamProtocol,
+        model: &str,
+        channel_id: Option<DbId>,
+        matches: impl Fn(&ChannelCandidate) -> bool,
+    ) -> AppResult<SelectedUpstream> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let channel = choose::choose_channel_for_request_matching(
+            &snapshot,
+            protocol,
+            model,
+            now,
+            &model_blocks,
+            &[],
+            None,
+            |channel| channel_id.is_none_or(|id| channel.id == id) && matches(channel),
+        )
+        .ok_or_else(|| {
+            AppError::UpstreamUnavailable(format!(
+                "no available matching upstream channel for {model}"
+            ))
+        })?;
+        let keys = channel_keys(&snapshot, channel);
+        let key = choose_key(channel, keys, model, now, &model_blocks, &[]).ok_or_else(|| {
+            AppError::UpstreamUnavailable(format!("channel {} has no available key", channel.name))
+        })?;
+        self.selected_upstream_from_candidate(secrets, channel, key)
+    }
+
+    pub(crate) async fn select_exact_endpoint(
+        &self,
+        pool: &PgPool,
+        secrets: &SecretStore,
+        protocol: UpstreamProtocol,
+        model: &str,
+        endpoint_id: DbId,
+        channel_key_id: Option<DbId>,
+        credential_id: Option<DbId>,
+    ) -> AppResult<SelectedUpstream> {
+        let snapshot = self.routing_snapshot(pool).await?;
+        let now = Utc::now();
+        let model_blocks = ModelBlockLookup::new(&snapshot.model_blocks, &self.model_blocks);
+        let channel = snapshot
+            .channels
+            .iter()
+            .find(|channel| channel.endpoint_id == endpoint_id && channel.protocol == protocol)
+            .ok_or_else(|| {
+                AppError::UpstreamUnavailable(
+                    "bound asset upstream endpoint is no longer available".to_string(),
+                )
+            })?;
+        let availability = ChannelAvailability {
+            protocol,
+            model,
+            now,
+            model_blocks: &model_blocks,
+            attempted: &[],
+            excluded_endpoint_ids: None,
+        };
+        if !channel_is_available(&snapshot, channel, &availability) {
+            return Err(AppError::UpstreamUnavailable(
+                "bound asset upstream endpoint is not available for this model".to_string(),
+            ));
+        }
+        let key = channel_keys(&snapshot, channel)
+            .iter()
+            .find(|key| {
+                if channel.use_credentials {
+                    credential_id.is_some_and(|id| key.credential_id == Some(id))
+                } else {
+                    channel_key_id.is_some_and(|id| key.id == id && key.credential_id.is_none())
+                }
+            })
+            .filter(|key| key_is_available(channel, key, model, now, &model_blocks))
+            .ok_or_else(|| {
+                AppError::UpstreamUnavailable(
+                    "bound asset upstream key is no longer available".to_string(),
+                )
+            })?;
+        self.selected_upstream_from_candidate(secrets, channel, key)
     }
 
     pub(crate) async fn select_with_affinity(
@@ -627,6 +731,7 @@ impl Selector {
             provider: channel.provider.clone(),
             channel_name: channel.name.clone(),
             base_url: channel.base_url.clone(),
+            adapter_hint: channel.adapter_hint.clone(),
             responses_chat_fallback: false,
             secret: runtime.secret,
             account_id: runtime.account_id,
@@ -720,6 +825,19 @@ impl Selector {
         channel_key_id: DbId,
         cooldown_until: DateTime<Utc>,
     ) {
+        // 先用读锁检查 key 是否存在：对于纯 credential 渠道，channel_key 不存在，
+        // 可以直接返回而无需持写锁或克隆 cache。
+        {
+            let cache = self.routing_cache.read().await;
+            let found = cache.keys.values().any(|keys| {
+                keys.iter()
+                    .any(|key| key.credential_id.is_none() && key.id == channel_key_id)
+            });
+            if !found {
+                return;
+            }
+        }
+        // key 存在才升级到写锁并执行克隆更新。
         let mut guard = self.routing_cache.write().await;
         let mut cache = (**guard).clone();
         for keys in cache.keys.values_mut() {
@@ -750,10 +868,19 @@ impl Selector {
             }
         }
 
-        let loaded = Arc::new(load_routing_cache(pool).await?);
+        // 在读 DB 前捕获 epoch。DB 读期间若发生 invalidate（不持 reload_lock，只持
+        // cache 写锁），本次加载可能已陈旧。
+        let epoch_before = self.routing_epoch.load(Ordering::Acquire);
+        let mut loaded = load_routing_cache(pool).await?;
         let mut cache = self.routing_cache.write().await;
-        *cache = loaded;
-        Ok(Arc::clone(&cache))
+        if self.routing_epoch.load(Ordering::Acquire) != epoch_before {
+            // 加载期间被 invalidate：仍存入作为当前可用值，但标记为非 fresh，
+            // 使下次 routing_snapshot 强制重载，不让陈旧数据抹除 invalidate 的意图。
+            loaded.loaded_at = None;
+        }
+        let loaded = Arc::new(loaded);
+        *cache = Arc::clone(&loaded);
+        Ok(loaded)
     }
 
     pub(crate) async fn has_alternate_channel_for_model(

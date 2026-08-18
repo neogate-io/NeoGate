@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -36,8 +36,10 @@ import ModelPickerDialog from '../../components/admin/channels/ModelPickerDialog
 import ProviderIcon from '../../components/common/ProviderIcon.vue'
 import { useLocale } from '../../composables/useLocale'
 import { withLoading } from '../../composables/useLoadingTask'
+import { useSetupWizard, type BusinessSetupStep } from '../../composables/useSetupWizard'
 import { setSiteBrand } from '../../composables/useSiteBrand'
 import type { PricingTemplate, ProviderRecord } from '../../types/admin'
+import { abortableDelay, isAbortError } from '../../utils/async'
 import { majorToMicroAmount, microAmountToMajor } from '../../utils/format'
 import {
   ApiError,
@@ -46,29 +48,16 @@ import {
   readModelFetchError,
   readSmtpTestError
 } from '../../utils/errors'
-import {
-  isManualBaseUrlProvider,
-  sortProvidersForDisplay,
-  splitCommaList
-} from '../../utils/channel'
+import { sortProvidersForDisplay, splitCommaList } from '../../utils/channel'
 import { findPricingTemplate } from '../../utils/pricing'
 
 type Protocol = 'openai' | 'anthropic'
-type BusinessSetupStep =
-  | 'admin-password'
-  | 'service-mode'
-  | 'upstream'
-  | 'smtp'
-  | 'payment'
-  | 'finish'
 type SetupEndpointPayload = {
   protocol: Protocol
   base_url: string
   models: string[]
   enabled: boolean
 }
-const optionalBusinessSteps = new Set<BusinessSetupStep>(['upstream', 'smtp', 'payment'])
-
 const router = useRouter()
 const { locale, t } = useLocale()
 const loading = ref(false)
@@ -81,14 +70,11 @@ const generatingTemplate = ref(false)
 const testingDatabase = ref(false)
 const waitingForRestart = ref(false)
 const restartWaitTimedOut = ref(false)
+let restartController: AbortController | null = null
 const status = ref<ServicePolicy | null>(null)
 const providers = ref<ProviderRecord[]>([])
 const envFile = ref('')
 const clusterEnvTemplate = ref('')
-const currentBusinessStep = ref<BusinessSetupStep>('admin-password')
-const includeUpstream = ref(true)
-const includePayment = ref(true)
-const reviewingRuntimeConfig = ref(false)
 const fetchedModels = ref<string[]>([])
 const selectedFetchedModels = ref<string[]>([])
 const pricingTemplates = ref<PricingTemplate[]>([])
@@ -121,7 +107,10 @@ watch(
   locale,
   (next, prev) => {
     if (status.value?.billing_currency) return
-    if ((prev === 'zh-CN' && bootstrapForm.billingCurrency === 'CNY') || (prev === 'en-US' && bootstrapForm.billingCurrency === 'USD')) {
+    if (
+      (prev === 'zh-CN' && bootstrapForm.billingCurrency === 'CNY') ||
+      (prev === 'en-US' && bootstrapForm.billingCurrency === 'USD')
+    ) {
       bootstrapForm.billingCurrency = next === 'zh-CN' ? 'CNY' : 'USD'
     }
   },
@@ -139,8 +128,6 @@ const setupForm = reactive({
   protocol: 'openai' as Protocol,
   channelName: '',
   baseUrl: '',
-  openAiBaseUrl: '',
-  anthropicBaseUrl: '',
   secret: '',
   models: ''
 })
@@ -217,10 +204,33 @@ const setupPaymentDescription = computed(() =>
   paymentForm.enabled ? t('setupPaymentEnabledHint') : t('setupPaymentDisabledHint')
 )
 const shouldConfigureSmtp = computed(() => setupForm.registrationEnabled)
-const shouldShowPaymentStep = computed(() => setupForm.serviceMode === 'paid' && paymentForm.enabled)
-const shouldConfigurePayment = computed(
-  () => shouldShowPaymentStep.value && includePayment.value
+const shouldShowPaymentStep = computed(
+  () => setupForm.serviceMode === 'paid' && paymentForm.enabled
 )
+const setupWizard = useSetupWizard({
+  configureSmtp: () => shouldConfigureSmtp.value,
+  showPayment: () => shouldShowPaymentStep.value,
+  showBusinessSetup: () =>
+    Boolean(
+      status.value &&
+      !status.value.bootstrap_required &&
+      !status.value.setup_completed &&
+      !reviewingRuntimeConfig.value
+    )
+})
+const {
+  currentBusinessStep,
+  includeUpstream,
+  includePayment,
+  reviewingRuntimeConfig,
+  businessSetupSteps,
+  isLastBusinessStep,
+  canSkipCurrentBusinessStep,
+  goToAdjacentBusinessStep,
+  isBusinessStepActive,
+  isBusinessStepDone
+} = setupWizard
+const shouldConfigurePayment = computed(() => shouldShowPaymentStep.value && includePayment.value)
 const setupFinishModeTitle = computed(() =>
   setupForm.serviceMode === 'paid' ? t('setupFinishPaidMode') : t('setupFinishInternalMode')
 )
@@ -280,24 +290,6 @@ const setupFinishAddonItems = computed(() => [
         : t('setupFinishPaymentNotNeeded')
   }
 ])
-const businessSetupSteps = computed<BusinessSetupStep[]>(() => [
-  'admin-password',
-  'service-mode',
-  'upstream',
-  ...(shouldConfigureSmtp.value ? (['smtp'] as const) : []),
-  ...(shouldShowPaymentStep.value ? (['payment'] as const) : []),
-  'finish'
-])
-const currentBusinessStepIndex = computed(() =>
-  businessSetupSteps.value.indexOf(currentBusinessStep.value)
-)
-const isLastBusinessStep = computed(
-  () => currentBusinessStepIndex.value === businessSetupSteps.value.length - 1
-)
-const canSkipCurrentBusinessStep = computed(() =>
-  optionalBusinessSteps.has(currentBusinessStep.value)
-)
-
 const setupSteps = computed(() => {
   const businessStepMeta: Record<
     BusinessSetupStep,
@@ -337,7 +329,9 @@ const setupSteps = computed(() => {
       key: 'runtime',
       title: t('setupStepRuntime'),
       description: t('setupStepRuntimeDescription'),
-      done: status.value ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value : false,
+      done: status.value
+        ? !status.value.bootstrap_required && !reviewingRuntimeConfig.value
+        : false,
       active: Boolean(status.value?.bootstrap_required) || reviewingRuntimeConfig.value
     },
     ...businessSetupSteps.value.map((step) => ({
@@ -368,9 +362,6 @@ const selectedProvider = computed(() =>
   providers.value.find((provider) => provider.code === setupForm.provider)
 )
 const providerOptions = computed(() => sortProvidersForDisplay(providers.value))
-const isManualBaseUrlProviderSelected = computed(() =>
-  Boolean(selectedProvider.value && isManualBaseUrlProvider(selectedProvider.value.code))
-)
 const bootstrapMissingDatabase = computed(() => !status.value?.database_configured)
 const clusterBlocked = computed(
   () => status.value?.bootstrap_required && status.value.runtime_mode === 'distributed'
@@ -536,35 +527,45 @@ async function handleRuntimeSubmit() {
 }
 
 async function waitForRuntimeRestart() {
+  restartController?.abort()
+  const controller = new AbortController()
+  restartController = controller
   waitingForRestart.value = true
   restartWaitTimedOut.value = false
   const deadline = Date.now() + 120_000
-  while (Date.now() < deadline) {
-    await sleep(1500)
-    try {
-      const nextStatus = await getSetupStatus(true)
-      if (nextStatus.setup_completed) {
-        await router.replace('/login')
-        return
-      }
-      if (!nextStatus.bootstrap_required) {
-        status.value = nextStatus
-        envFile.value = ''
-        waitingForRestart.value = false
-        restartWaitTimedOut.value = false
-        providers.value = await getSetupProviders()
-        if (providerOptions.value.length > 0 && !selectedProvider.value) {
-          setupForm.provider = providerOptions.value[0].code
+  try {
+    while (Date.now() < deadline) {
+      await abortableDelay(1500, controller.signal)
+      try {
+        const nextStatus = await getSetupStatus(true, { signal: controller.signal })
+        if (nextStatus.setup_completed) {
+          await router.replace('/login')
+          return
         }
-        applyProviderDefaults()
-        return
+        if (!nextStatus.bootstrap_required) {
+          status.value = nextStatus
+          envFile.value = ''
+          waitingForRestart.value = false
+          restartWaitTimedOut.value = false
+          providers.value = await getSetupProviders({ signal: controller.signal })
+          if (providerOptions.value.length > 0 && !selectedProvider.value) {
+            setupForm.provider = providerOptions.value[0].code
+          }
+          applyProviderDefaults()
+          return
+        }
+      } catch (error) {
+        if (isAbortError(error)) return
+        // The backend is expected to be temporarily unavailable while it restarts.
       }
-    } catch {
-      // The backend is expected to be temporarily unavailable while it restarts.
     }
+    waitingForRestart.value = false
+    restartWaitTimedOut.value = true
+  } catch (error) {
+    if (!isAbortError(error)) throw error
+  } finally {
+    if (restartController === controller) restartController = null
   }
-  waitingForRestart.value = false
-  restartWaitTimedOut.value = true
 }
 
 async function testDatabaseConnection() {
@@ -710,18 +711,17 @@ async function submitSetup() {
             }))
           : [],
         smtp: shouldConfigureSmtp.value && smtpForm.enabled ? smtpPayload() : null,
-        payment:
-          shouldConfigurePayment.value
-              ? {
-                payment_enabled: true,
-                zpay_api_url: paymentForm.apiUrl,
-                zpay_merchant_id: paymentForm.merchantId || null,
-                zpay_secret_key: paymentForm.secretKey || null,
-                clear_zpay_secret_key: false,
-                zpay_default_pay_type: paymentForm.payType,
-                zpay_site_name: paymentForm.siteName
-              }
-            : null
+        payment: shouldConfigurePayment.value
+          ? {
+              payment_enabled: true,
+              zpay_api_url: paymentForm.apiUrl,
+              zpay_merchant_id: paymentForm.merchantId || null,
+              zpay_secret_key: paymentForm.secretKey || null,
+              clear_zpay_secret_key: false,
+              zpay_default_pay_type: paymentForm.payType,
+              zpay_site_name: paymentForm.siteName
+            }
+          : null
       })
       setSiteBrand({
         site_name: completedStatus.site_name || bootstrapForm.siteName,
@@ -892,10 +892,7 @@ async function sendSmtpTestEmail() {
 }
 
 function readReferenceSyncError(err: unknown) {
-  if (
-    err instanceof ApiError &&
-    err.code === 'pricing_reference_source_unavailable'
-  ) {
+  if (err instanceof ApiError && err.code === 'pricing_reference_source_unavailable') {
     return t('referencePricesSourceUnavailable')
   }
 
@@ -960,11 +957,6 @@ function skipOptionalBusinessStep() {
   }
 }
 
-function goToAdjacentBusinessStep(offset: -1 | 1) {
-  const nextStep = businessSetupSteps.value[currentBusinessStepIndex.value + offset]
-  if (nextStep) currentBusinessStep.value = nextStep
-}
-
 async function handleBusinessSubmit() {
   if (isLastBusinessStep.value) {
     await submitSetup()
@@ -973,64 +965,25 @@ async function handleBusinessSubmit() {
   await goToNextBusinessStep()
 }
 
-function isBusinessStepActive(step: BusinessSetupStep) {
-  return showBusinessSetup.value && currentBusinessStep.value === step
-}
-
-function isBusinessStepDone(step: BusinessSetupStep) {
-  if (!showBusinessSetup.value) return false
-  return currentBusinessStepIndex.value > businessSetupSteps.value.indexOf(step)
-}
-
 function applyProviderDefaults() {
   const provider = selectedProvider.value
   if (!provider) return
-  if (isManualBaseUrlProvider(provider.code)) {
-    setupForm.channelName = ''
-    setupForm.baseUrl = ''
-    setupForm.openAiBaseUrl = ''
-    setupForm.anthropicBaseUrl = ''
-    setupForm.protocol = 'openai'
-    return
-  }
 
   setupForm.channelName = provider.display_name
-  setupForm.openAiBaseUrl = ''
-  setupForm.anthropicBaseUrl = ''
-  const endpoint =
+  const defaultEndpoint =
     provider.default_endpoints.find((item) => item.protocol === 'openai' && item.base_url) ??
     provider.default_endpoints.find((item) => item.protocol === 'anthropic' && item.base_url)
-  if (endpoint?.protocol === 'openai' || endpoint?.protocol === 'anthropic') {
-    setupForm.protocol = endpoint.protocol
-  }
-  setupForm.baseUrl = endpoint?.base_url || ''
+  setupForm.protocol =
+    defaultEndpoint?.protocol === 'anthropic' || provider.code === 'anthropic'
+      ? 'anthropic'
+      : 'openai'
+  setupForm.baseUrl = defaultEndpoint?.base_url || ''
 }
 
 function setupEndpointsForSubmit(models: string[]) {
   const provider = selectedProvider.value
   const endpointModels = [...models]
-  if (!provider || isManualBaseUrlProvider(provider.code)) {
-    const endpoints: SetupEndpointPayload[] = []
-    const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
-    const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
-    if (openAiBaseUrl) {
-      endpoints.push({
-        protocol: 'openai',
-        base_url: openAiBaseUrl,
-        models: endpointModels,
-        enabled: true
-      })
-    }
-    if (anthropicBaseUrl) {
-      endpoints.push({
-        protocol: 'anthropic',
-        base_url: anthropicBaseUrl,
-        models: endpointModels,
-        enabled: true
-      })
-    }
-    return endpoints
-  }
+  if (!provider) return []
 
   const endpoints: SetupEndpointPayload[] = []
   for (const endpoint of provider.default_endpoints) {
@@ -1049,26 +1002,6 @@ function setupEndpointsForSubmit(models: string[]) {
 }
 
 function setupModelFetchEndpoint() {
-  if (isManualBaseUrlProviderSelected.value) {
-    const openAiBaseUrl = setupForm.openAiBaseUrl.trim()
-    if (openAiBaseUrl) {
-      return {
-        protocol: 'openai' as const,
-        base_url: openAiBaseUrl
-      }
-    }
-
-    const anthropicBaseUrl = setupForm.anthropicBaseUrl.trim()
-    if (anthropicBaseUrl) {
-      return {
-        protocol: 'anthropic' as const,
-        base_url: anthropicBaseUrl
-      }
-    }
-
-    return null
-  }
-
   const baseUrl = setupForm.baseUrl.trim()
   return baseUrl
     ? {
@@ -1142,11 +1075,11 @@ function isLoopbackUrl(value: string) {
   }
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
 onMounted(load)
+onBeforeUnmount(() => {
+  restartController?.abort()
+  restartController = null
+})
 </script>
 
 <template>
@@ -1492,21 +1425,7 @@ onMounted(load)
                   :placeholder="t('channelNamePlaceholder')"
                 />
               </el-form-item>
-              <template v-if="isManualBaseUrlProviderSelected">
-                <el-form-item :label="t('openAiBaseUrl')">
-                  <el-input
-                    v-model="setupForm.openAiBaseUrl"
-                    :placeholder="t('baseUrlPlaceholder')"
-                  />
-                </el-form-item>
-                <el-form-item :label="t('anthropicBaseUrl')">
-                  <el-input
-                    v-model="setupForm.anthropicBaseUrl"
-                    :placeholder="t('anthropicBaseUrlPlaceholder')"
-                  />
-                </el-form-item>
-              </template>
-              <el-form-item v-else :label="t('baseUrl')">
+              <el-form-item :label="t('baseUrl')">
                 <el-input v-model="setupForm.baseUrl" :placeholder="t('baseUrlPlaceholder')" />
               </el-form-item>
             </div>
@@ -1710,7 +1629,9 @@ onMounted(load)
 
             <section class="setup-finish-mode-card">
               <span class="setup-finish-mode-icon">
-                <el-icon><CreditCard v-if="setupForm.serviceMode === 'paid'" /><Briefcase v-else /></el-icon>
+                <el-icon
+                  ><CreditCard v-if="setupForm.serviceMode === 'paid'" /><Briefcase v-else
+                /></el-icon>
               </span>
               <div class="setup-finish-mode-copy">
                 <span class="setup-finish-eyebrow">{{ t('serviceMode') }}</span>
@@ -1724,7 +1645,11 @@ onMounted(load)
             </section>
 
             <div class="setup-finish-addon-list">
-              <div v-for="item in setupFinishAddonItems" :key="item.key" class="setup-finish-addon-row">
+              <div
+                v-for="item in setupFinishAddonItems"
+                :key="item.key"
+                class="setup-finish-addon-row"
+              >
                 <span class="setup-finish-addon-icon">
                   <el-icon><component :is="item.icon" /></el-icon>
                 </span>

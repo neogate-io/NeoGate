@@ -1,9 +1,17 @@
 import type { BillingMeter, CursorPage, UsageRecord } from '../types/admin'
-import { adminFileRequest, adminRequest, userRequest } from './request'
+import { adminFileRequest, adminRequest, userFileRequest, userRequest } from './request'
 
 export type UsagePage = CursorPage<UsageRecord> & {
   total: number
   page: number
+}
+
+export type UserUsageQuery = {
+  page?: number
+  limit?: number
+  start?: string
+  end?: string
+  cursor?: string
 }
 
 export type AdminUsageStatus = 'all' | 'success' | 'failed'
@@ -163,6 +171,7 @@ export type UserModelUsageStatistics = {
 export type UsageCostBreakdown = {
   chat_cost_micros: number
   image_cost_micros: number
+  audio_cost_micros: number
   coding_cost_micros: number
   other_cost_micros: number
 }
@@ -264,21 +273,7 @@ export type UsageStatisticsOptions = {
 }
 
 export function getAdminUsage(query: AdminUsageQuery = {}) {
-  const params = new URLSearchParams({
-    page: String(query.page ?? 1),
-    limit: String(query.limit ?? 20)
-  })
-  if (query.start) params.set('start', query.start)
-  if (query.end) params.set('end', query.end)
-  if (query.query) params.set('query', query.query)
-  if (query.model) params.set('model', query.model)
-  if (query.project_id != null) params.set('project_id', String(query.project_id))
-  if (query.user_id != null) params.set('user_id', String(query.user_id))
-  if (query.user_key_id != null) params.set('user_key_id', String(query.user_key_id))
-  if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
-  if (query.billing_meter) params.set('billing_meter', query.billing_meter)
-  if (query.status && query.status !== 'all') params.set('status', query.status)
-  if (query.cursor) params.set('cursor', query.cursor)
+  const params = adminUsageParams({ page: 1, limit: 20, ...query })
   return adminRequest<UsagePage>(`/api/admin/usage?${params}`)
 }
 
@@ -350,19 +345,29 @@ export function downloadAdminUsageCsv(query: AdminUsageQuery = {}) {
   return adminFileRequest(`/api/admin/usage/export.csv?${params}`)
 }
 
-export function getUserUsage(page = 1, limit = 20, start?: string, end?: string, cursor?: string) {
+export function getUserUsage(query: UserUsageQuery = {}) {
   const params = new URLSearchParams({
-    page: String(page),
-    limit: String(limit)
+    page: String(query.page ?? 1),
+    limit: String(query.limit ?? 20)
   })
+  if (query.start) params.set('start', query.start)
+  if (query.end) params.set('end', query.end)
+  if (query.cursor) params.set('cursor', query.cursor)
+  return userRequest<UsagePage>(`/api/user/usage?${params}`)
+}
+
+export function downloadUserUsageCsv(start?: string, end?: string) {
+  const params = new URLSearchParams()
   if (start) params.set('start', start)
   if (end) params.set('end', end)
-  if (cursor) params.set('cursor', cursor)
-  return userRequest<UsagePage>(`/api/user/usage?${params}`)
+  const query = params.toString()
+  return userFileRequest(`/api/user/usage/export.csv${query ? `?${query}` : ''}`)
 }
 
 function adminUsageParams(query: AdminUsageQuery) {
   const params = new URLSearchParams()
+  if (query.page != null) params.set('page', String(query.page))
+  if (query.limit != null) params.set('limit', String(query.limit))
   if (query.start) params.set('start', query.start)
   if (query.end) params.set('end', query.end)
   if (query.query) params.set('query', query.query)
@@ -373,6 +378,7 @@ function adminUsageParams(query: AdminUsageQuery) {
   if (query.channel_id != null) params.set('channel_id', String(query.channel_id))
   if (query.billing_meter) params.set('billing_meter', query.billing_meter)
   if (query.status && query.status !== 'all') params.set('status', query.status)
+  if (query.cursor) params.set('cursor', query.cursor)
   return params
 }
 

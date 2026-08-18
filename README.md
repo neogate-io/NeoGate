@@ -4,7 +4,7 @@
 
 🚀 **极致性能、简单易用、企业私有化的大模型 API 网关**
 
-Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, model routing, app publishing to WeCom, webhooks, web widgets, multi-tenant API keys, usage tracking, billing, and enterprise private deployment.
+Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible APIs, smart model routing, audio and video processing, enterprise app publishing, multi-tenant API keys, usage tracking, billing, and private deployment.
 
 <p align="center">
   <strong>中文</strong> |
@@ -35,7 +35,7 @@ Self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropic-compatible 
 
 NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有化部署场景，强调极致性能、简单易用和可控运维。它帮助企业把大模型调用统一到可管理、可观测、可计费的网关之下。
 
-通过「应用管理」，NeoGate 可以把大模型能力发布到企业微信、Webhook 和网页组件等入口，让员工、业务系统或外部应用直接使用 AI 能力。NeoGate 适用于企业内部 AI 网关、多项目多团队统一管理、多应用接入，以及面向客户或开发者的计费运营场景。
+NeoGate 可部署在企业自有服务器、私有云或内部网络中，将上游凭证、模型访问策略、项目成员与 API Key、调用记录和成本数据集中纳管。企业可以在兼容现有 OpenAI 和 Anthropic 客户端的前提下，为不同部门、项目和内部应用建立独立的权限、预算与成本边界，并根据业务规模从单机部署平滑扩展到多副本架构。
 
 仓库地址：[neogate-io/NeoGate](https://github.com/neogate-io/NeoGate)
 
@@ -50,7 +50,7 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 
 ## 🔎 Search Keywords
 
-`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `self-hosted AI infrastructure` · `model routing` · `AI app management` · `WeCom integration` · `webhook AI app` · `web chat widget` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
+`LLM API gateway` · `AI gateway` · `OpenAI-compatible proxy` · `Anthropic-compatible API` · `realtime ASR` · `OpenAI video API` · `Alibaba Cloud Bailian` · `self-hosted AI infrastructure` · `smart model routing` · `AI app management` · `WeCom integration` · `Feishu integration` · `DingTalk integration` · `webhook AI app` · `web chat widget` · `multi-tenant API keys` · `usage tracking` · `cost management` · `billing` · `Rust`
 
 ---
 
@@ -78,19 +78,27 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
     </tr>
     <tr>
       <td>🧰 应用管理</td>
-      <td>创建企业微信、Webhook 和网页组件应用，让员工或外部系统直接与大模型对话。</td>
+      <td>创建企业微信、飞书、钉钉、Webhook 和网页组件应用，让员工或外部系统直接与大模型对话。</td>
     </tr>
     <tr>
-      <td>🧭 模型路由</td>
+      <td>🧠 智能模型路由</td>
+      <td>识别多模态、工具调用、代码、推理强度和上下文长度等请求特征，按复杂度选择不同模型，并保留可追踪的路由决策。</td>
+    </tr>
+    <tr>
+      <td>🧭 可靠上游路由</td>
       <td>按模型、优先级和权重分配请求，并在上游 key 异常时自动冷却和切换。</td>
     </tr>
     <tr>
-      <td>📊 用量记录</td>
-      <td>记录用户、项目、API Key、模型和通道维度的调用用量，便于排障、分析和核算。</td>
+      <td>🎙️ 语音/视频处理</td>
+      <td>提供 OpenAI 兼容的文件转写、Realtime 实时语音识别和视频生成接口，统一处理异步任务、结果查询、故障切换，以及按音频时长或视频规格计费。</td>
+    </tr>
+    <tr>
+      <td>📊 用量与成本分析</td>
+      <td>记录用户、项目、API Key、模型和通道维度的调用明细，并汇总成本、请求数、成功率与 Token 用量，支持时间筛选、多级下钻和 CSV 导出。</td>
     </tr>
     <tr>
       <td>💳 服务计费</td>
-      <td>支持内部模式和计费模式，可开启额度、充值和支付能力，对内管理或对外收费。</td>
+      <td>支持内部模式和计费模式，以及项目、API Key、模型三级额度、预留结算、充值支付和可追踪账本。</td>
     </tr>
     <tr>
       <td>🚀 集群部署</td>
@@ -123,7 +131,7 @@ NeoGate 是一个使用 Rust 构建的大模型 API 网关，面向企业私有�
 - **密钥更安全**：上游凭证不用散落在各个应用里，权限、额度和访问策略集中管理，团队用起来更安心。
 - **成本更清楚**：谁在用、哪个项目在用、用了多少 Token 和费用，都能按维度看清楚，核算和排查更顺手。
 - **团队更好协作**：不同团队、客户或内部应用可以用项目隔开，边界清楚，统计清楚，协作也更轻松。
-- **AI 更容易落地**：通过企业微信、Webhook 和网页组件，把大模型能力放到员工和系统每天都会用到的入口里。
+- **AI 更容易落地**：通过企业微信、飞书、钉钉、Webhook 和网页组件，把大模型能力放到员工和系统每天都会用到的入口里。
 - **场景覆盖更完整**：既能做企业内部 AI 网关，也能延伸到额度、充值、支付和计费运营，少做很多重复建设。
 
 ---
@@ -186,9 +194,6 @@ docker compose -f docker-compose.build.yml up -d --build
 docker compose -f docker-compose.cn.yml up -d --build
 ```
 
-> [!TIP]
-> 从源码构建时，2G 内存服务器上如遇到前端和后端同时编译导致内存不足，请改用分步构建：先执行 `docker compose -f docker-compose.build.yml build backend`，再执行 `docker compose -f docker-compose.build.yml build web`，最后执行 `docker compose -f docker-compose.build.yml up -d --no-build`。
-
 启动后访问 `http://服务器IP:8080`，首次运行向导会引导你完成管理员、服务模式、初始上游、价格、SMTP 和支付等配置。
 
 #### 绑定域名和宿主机 Nginx
@@ -236,38 +241,15 @@ docker compose exec backend neogate admin reset-password --username admin
 
 ### 🧑‍💻 源码本地运行
 
-源码运行适合二次开发、调试和自定义部署。你可以使用开发部署体验完整流程，也可以使用 release 构建配合 Nginx、systemd 等工具自行托管。生产环境仍建议优先使用 Docker Compose 或集群部署方案。
+源码运行适合二次开发、调试和自定义部署。请先准备 PostgreSQL 16、Rust 1.94+、Node.js 20+ 和 pnpm。
 
-#### 公共准备
+#### 准备数据库
 
-先准备这些依赖：
-
-| 依赖 | 推荐版本 |
-| --- | --- |
-| PostgreSQL | 16 或兼容版本 |
-| Rust | 1.94 或更新版本 |
-| Node.js | 20 或兼容版本 |
-| pnpm | 与项目前端兼容的版本 |
-
-确认这些命令可用：
-
-```bash
-psql --version
-cargo --version
-node --version
-pnpm --version
-```
-
-> [!TIP]
-> 如果 `cargo --version` 显示的是 1.75 等较旧版本，请升级 Rust 工具链后再运行后端；旧版 Cargo 无法编译部分依赖。
-
-建议创建 NeoGate 专用数据库用户和数据库：
+进入 PostgreSQL：
 
 ```bash
 sudo -u postgres psql
 ```
-
-在 `psql` 中执行：
 
 ```sql
 CREATE USER neogate WITH PASSWORD 'change-me';
@@ -275,216 +257,72 @@ CREATE DATABASE neogate OWNER neogate;
 \q
 ```
 
-首次运行向导里的 PostgreSQL 连接地址填写：
+数据库连接地址：
 
 ```text
 postgres://neogate:change-me@localhost:5432/neogate
 ```
 
-首次启动时，如果运行配置还不完整，后端会进入 bootstrap 模式，并通过首次运行页面写入数据库连接、站点信息和随机密钥。多数情况下不需要先手动编辑 `.env`。
+#### 开发运行
 
-#### 开发部署
+分别启动后端、定时任务和前端：
 
-开发部署使用 Rust 调试构建和 Vite 开发服务，适合本地开发、联调和体验首次运行流程。
+```bash
+cargo run -p neogate
+```
 
-<table>
-  <thead>
-    <tr>
-      <th width="120">服务</th>
-      <th>命令</th>
-      <th width="190">默认地址</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>后端</td>
-      <td><code>cargo run -p neogate</code></td>
-      <td><code>http://127.0.0.1:8080</code></td>
-    </tr>
-    <tr>
-      <td>定时任务</td>
-      <td><code>cargo run -p neogate-scheduler</code></td>
-      <td>无 HTTP 地址</td>
-    </tr>
-    <tr>
-      <td>前端</td>
-      <td><code>cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev --host 0.0.0.0</code></td>
-      <td><code>http://服务器IP:5173</code></td>
-    </tr>
-  </tbody>
-</table>
+```bash
+cargo run -p neogate-scheduler
+```
 
-打开 `http://服务器IP:5173`，页面会自动跳转到首次运行向导。按提示完成运行配置、管理员账号、服务模式、初始上游和可选 SMTP；如果保存运行配置后提示需要重启，请重新运行后端并刷新页面。
+```bash
+cd frontend
+pnpm install
+pnpm dev --host 0.0.0.0
+```
 
-#### 正式部署
+打开 `http://localhost:5173`；远程开发时使用 `http://服务器IP:5173`。按照首次运行向导完成数据库连接、管理员账号、服务模式和初始上游配置。保存运行配置后如提示重启，重新启动后端即可。
 
-正式部署建议使用 release 构建运行后端和定时任务，并用 Nginx 托管前端静态文件。后端和定时任务可以交给 systemd、supervisord 或其他进程管理工具保持常驻。
+#### 正式运行
 
-构建后端和定时任务：
+构建后端、定时任务和前端：
 
 ```bash
 cargo build --release -p neogate -p neogate-scheduler
+cd frontend
+pnpm install
+pnpm build
+cd ..
 ```
 
-运行后端：
+分别启动后端和定时任务：
 
 ```bash
 BIND_ADDR=127.0.0.1:8080 ./target/release/neogate
 ```
 
-运行定时任务：
-
 ```bash
 ./target/release/neogate-scheduler
 ```
 
-也可以使用 systemd 托管后端进程，并在启动后端时自动拉起定时任务。下面示例假设项目放在 `/opt/neogate`，并已在仓库根目录完成 release 构建：
-
-```ini
-[Unit]
-Description=NeoGate backend
-
-[Service]
-WorkingDirectory=/opt/neogate
-Environment=BIND_ADDR=127.0.0.1:8080
-Environment=RUST_LOG=info
-Environment=NEOGATE_ENV_FILE=/opt/neogate/.env
-ExecStart=/opt/neogate/deploy/systemd/start-neogate.sh
-KillMode=control-group
-TimeoutStopSec=30
-Restart=always
-StandardOutput=append:/var/log/neogate/backend.log
-StandardError=append:/var/log/neogate/backend-error.log
-
-[Install]
-WantedBy=multi-user.target
-```
-
-保存为 `/etc/systemd/system/neogate.service` 后启动：
-
-```bash
-sudo mkdir -p /var/log/neogate
-sudo systemctl daemon-reload
-sudo systemctl enable --now neogate
-sudo systemctl status neogate
-```
-
-建议为服务日志添加 logrotate，避免日志文件长期运行后持续增长：
-
-```bash
-sudo tee /etc/logrotate.d/neogate >/dev/null <<'EOF'
-/var/log/neogate/*.log {
-    daily
-    rotate 14
-    compress
-    missingok
-    notifempty
-    copytruncate
-}
-EOF
-```
-
-构建前端：
-
-```bash
-cd frontend
-pnpm install
-pnpm build
-```
-
-构建完成后，将 `frontend/dist` 交给 Nginx 等静态 Web 服务托管。仓库提供的 `deploy/nginx/source-build.conf.example` 默认以 `/usr/share/nginx/html` 为静态目录，并将后端接口和健康检查路径转发到本机后端 `http://127.0.0.1:8080`。
-
-源码部署时可以按下面方式使用：
-
-```bash
-sudo install -d /usr/share/nginx/html
-sudo cp -r frontend/dist/. /usr/share/nginx/html/
-sudo cp deploy/nginx/source-build.conf.example /etc/nginx/conf.d/neogate.conf
-sudo nginx -t
-sudo systemctl reload nginx
-```
+正式环境应使用 systemd、supervisord 等工具保持进程常驻，并通过 Nginx 托管 `frontend/dist`、代理后端接口和配置 HTTPS。生产环境仍建议优先使用 Docker Compose 或集群部署方案。
 
 ---
 
 ## ✅ 生产建议
 
-上线前必须确认：
+上线前至少确认：
 
-<table>
-  <thead>
-    <tr>
-      <th width="170">检查项</th>
-      <th>建议</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>👤 管理员账号</td>
-      <td>在首次运行向导中创建管理员账号，不要使用弱密码；如忘记密码，可使用 <code>neogate admin reset-password</code> 在服务器侧重置。</td>
-    </tr>
-    <tr>
-      <td>🔐 系统密钥</td>
-      <td>使用足够长且随机的 <code>ADMIN_TOKEN_SECRET</code> 和 <code>UPSTREAM_SECRET_KEY</code>；单机部署可由首次运行向导生成，集群部署需要提前写入所有节点共享的环境配置。</td>
-    </tr>
-    <tr>
-      <td>🌍 站点地址</td>
-      <td>在首次运行向导或环境配置中设置可信的 <code>PUBLIC_BASE_URL</code>，用于生成密码重置链接和安装脚本地址。</td>
-    </tr>
-    <tr>
-      <td>🏷️ 站点名称</td>
-      <td>在首次运行向导或环境配置中设置 <code>SITE_NAME</code>，用于页面、邮件和支付网关显示。</td>
-    </tr>
-  </tbody>
-</table>
+- **安全与域名**：使用强管理员密码和随机生成的 `ADMIN_TOKEN_SECRET`、`UPSTREAM_SECRET_KEY`；通过 HTTPS 对外提供服务，并正确配置 `PUBLIC_BASE_URL` 和反向代理。
+- **上游可用性**：通过通道诊断验证模型、端点和凭证，保持定时任务进程运行，以执行通道探测和模型目录同步。
+- **计费配置**：计费模式上线前检查模型价格、额度策略、充值套餐和支付回调；内部模式也应确认用量与成本记录正常。
+- **数据持久化**：持久化并定期备份 PostgreSQL、运行配置和系统密钥；使用后台图片生成或其他需要本地响应资产的任务时，同时持久化 `NEOGATE_ASSET_DIR`。
+- **集群部署**：多副本部署需要共享 PostgreSQL、Redis 和系统密钥，并根据实际负载规划 API、Worker 与 Scheduler 角色。
 
-按使用场景确认：
+更多配置和容量限制请参考：
 
-<table>
-  <thead>
-    <tr>
-      <th width="170">场景</th>
-      <th>建议</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>🔁 跨域访问</td>
-      <td>当前端与 API 跨域访问时，设置正确的 <code>CORS_ALLOWED_ORIGINS</code>；同域反向代理部署通常无需额外配置。</td>
-    </tr>
-    <tr>
-      <td>📦 大请求转发</td>
-      <td>转发图片编辑、文件上传或超长上下文请求时，确认反向代理的请求体限制不低于后端 <code>RELAY_BODY_LIMIT_BYTES</code>（默认 64 MiB）。</td>
-    </tr>
-    <tr>
-      <td>🧾 计费用量解析</td>
-      <td>非流式 JSON 和 SSE 的用量解析缓冲区固定为 16 MiB；上游响应超过该大小时无法提取计费用量。</td>
-    </tr>
-    <tr>
-      <td>⏱️ 长耗时请求</td>
-      <td>图片编辑等长耗时请求如果出现 504，可调大 <code>UPSTREAM_TIMEOUT_SECONDS</code>（默认 600 秒；旧的 <code>REQUEST_TIMEOUT_SECONDS</code> 仍作为兼容别名）。</td>
-    </tr>
-    <tr>
-      <td>🚦 用户并发</td>
-      <td><code>USER_CONCURRENT_REQUEST_LIMIT</code> 默认限制每个用户最多 100 个并发模型请求；<code>GLOBAL_CONCURRENT_REQUEST_LIMIT</code> 默认 0 表示不启用全局并发限制。</td>
-    </tr>
-    <tr>
-      <td>🔀 上游故障切换</td>
-      <td>上游返回 429、5xx、529 或发生超时/连接类错误时，NeoGate 最多自动切换其他可用上游 5 次。</td>
-    </tr>
-    <tr>
-      <td>🩺 上游监控</td>
-      <td>通道可用性由定时任务进程探测，默认每 10 分钟执行一次；可通过 <code>CHANNEL_PROBE_INTERVAL_SECONDS</code> 调整。上游模型列表默认每天同步一次，可通过 <code>UPSTREAM_MODEL_SYNC_INTERVAL_SECONDS</code> 调整。</td>
-    </tr>
-    <tr>
-      <td>💳 计费模式</td>
-      <td>如需使用计费模式，在首次运行向导或管理员后台配置模型价格、充值套餐和支付通道。</td>
-    </tr>
-    <tr>
-      <td>🌐 集群部署</td>
-      <td>如需集群部署，设置 <code>RUNTIME_MODE=distributed</code> 并配置 Redis；否则保持默认单节点模式即可。</td>
-    </tr>
-  </tbody>
-</table>
+- [单机部署](docs/deployment/standalone.zh.md)
+- [集群部署](docs/deployment/cluster.zh.md)
 
 ---
 
@@ -506,6 +344,13 @@ NeoGate 名称、Logo 及相关标识不随 AGPL 授权，使用边界见 [TRADE
 | 🤝 代码贡献 | [Pull Requests](https://github.com/neogate-io/NeoGate/pulls) |
 | 💬 官方 QQ 群 | 群号：`1179649618` |
 
-<p align="left">
-  <img src="frontend/public/qrcode.png" alt="NeoGate 官方 QQ 群二维码" width="220" />
-</p>
+<table>
+  <tr>
+    <th>微信联系</th>
+    <th>官方 QQ 群</th>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/wechat.png" alt="NeoGate 微信联系二维码" width="220" /></td>
+    <td><img src="docs/assets/qq.png" alt="NeoGate 官方 QQ 群二维码" width="220" /></td>
+  </tr>
+</table>

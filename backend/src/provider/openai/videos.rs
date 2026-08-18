@@ -1,12 +1,14 @@
 use std::{sync::Arc, time::Instant};
 
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::{header, HeaderMap, HeaderValue, Method},
     response::Response,
 };
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
+use futures_util::StreamExt;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -17,8 +19,8 @@ use crate::{
     provider::adapters::{adapter_for_endpoint, RelayRoute},
     relay::{
         describe_upstream_http_failure, finish_task_json_response, forward_openai_bound,
-        forward_openai_with_content_type, forward_prepared_openai, raw_upstream_response,
-        read_upstream_error_body, record_upstream_http_failure,
+        forward_openai_video_task_bound, forward_openai_with_content_type, forward_prepared_openai,
+        raw_upstream_response, read_upstream_error_body, record_upstream_http_failure,
         record_upstream_transport_failure_for_failover, release_empty_hold,
         reserve_billable_credit, reserve_credit, respond_upstream_http_failure,
         response_from_bytes, rewrite_relay_body_model, selector::AttemptedUpstream,
@@ -32,9 +34,10 @@ use crate::{
 };
 
 use super::{
+    assets::resolve_video_asset_request,
     content_type_header, json_string_field, log_relay_transport_failover,
     multipart::{
-        multipart_boundary, multipart_text_fields, rewrite_multipart_model_field,
+        multipart_boundary, multipart_files, multipart_text_fields, rewrite_multipart_model_field,
         safe_multipart_log_label,
     },
     positive_i64_field, positive_i64_text, required_json_string_field, select_upstream_excluding,
@@ -69,7 +72,14 @@ pub(crate) async fn openai_video(
         upstream_task::fetch_task_for_auth(&state, &auth, UpstreamTaskType::OpenAiVideo, &video_id)
             .await?;
     let path = format!("/v1/videos/{video_id}");
-    let response = forward_openai_bound(&state, &upstream, Method::GET, &path, None).await?;
+    let response = forward_openai_video_task_bound(
+        &state,
+        &upstream,
+        Method::GET,
+        &path,
+        task.upstream_model.as_deref(),
+    )
+    .await?;
     finish_task_json_response(state, auth, task, response).await
 }
 
@@ -78,12 +88,53 @@ pub(crate) async fn openai_video_content(
     auth: UserAuth,
     Path(video_id): Path<String>,
 ) -> AppResult<Response> {
-    let (_task, upstream) =
+    let (task, upstream) =
         upstream_task::fetch_task_for_auth(&state, &auth, UpstreamTaskType::OpenAiVideo, &video_id)
             .await?;
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
+    if let Some(url) = adapter.video_content_url(
+        task.upstream_model.as_deref(),
+        &task.upstream_metadata,
+        &task.status,
+    )? {
+        return proxy_video_content_url(&state, url).await;
+    }
     let path = format!("/v1/videos/{video_id}/content");
     let response = forward_openai_bound(&state, &upstream, Method::GET, &path, None).await?;
     raw_upstream_response(response).await
+}
+
+async fn proxy_video_content_url(state: &AppState, url: reqwest::Url) -> AppResult<Response> {
+    let response = state.http.get(url).send().await?;
+    let status = reqwest_status(response.status());
+    if !status.is_success() {
+        return Err(AppError::UpstreamUnavailable(format!(
+            "video content CDN returned {}",
+            status.as_u16()
+        )));
+    }
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("video/mp4"));
+    let content_length = response.headers().get(header::CONTENT_LENGTH).cloned();
+    let stream = response
+        .bytes_stream()
+        .map(|result| result.map_err(std::io::Error::other));
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type);
+    if let Some(content_length) = content_length {
+        builder = builder.header(header::CONTENT_LENGTH, content_length);
+    }
+    builder
+        .body(Body::from_stream(stream))
+        .map_err(|err| AppError::BadRequest(err.to_string()))
 }
 
 async fn relay_openai_video_create(
@@ -97,7 +148,7 @@ async fn relay_openai_video_create(
         crate::project::models::resolve_project_model(&state.db.pool, auth.project_id, &meta.model)
             .await?;
     let content_type_text = meta.content_type.to_str().unwrap_or("");
-    let upstream_body = if resolved.target_model == meta.model {
+    let model_body = if resolved.target_model == meta.model {
         body.clone()
     } else if content_type_text
         .to_ascii_lowercase()
@@ -107,6 +158,19 @@ async fn relay_openai_video_create(
     } else {
         rewrite_multipart_model_field(&body, content_type_text, &resolved.target_model)?
     };
+    let asset_resolution = if meta.is_json {
+        resolve_video_asset_request(&state, &auth, &resolved.target_model, model_body.clone())
+            .await?
+    } else {
+        None
+    };
+    let upstream_body = asset_resolution
+        .as_ref()
+        .map(|resolved| resolved.body.clone())
+        .unwrap_or(model_body);
+    let bound_asset_upstream = asset_resolution
+        .as_ref()
+        .map(|resolved| resolved.upstream.clone());
     let user_key_model_credit_account =
         auth.model_credit_account(&resolved.external_model).cloned();
     let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
@@ -116,15 +180,19 @@ async fn relay_openai_video_create(
 
     loop {
         let started = Instant::now();
-        let (protocol, upstream) = select_upstream_excluding(
-            &state,
-            VIDEO_CREATE_PATH,
-            &resolved.target_model,
-            resolved.target_channel_id,
-            None,
-            &attempted_upstreams,
-        )
-        .await?;
+        let (protocol, upstream) = if let Some(upstream) = bound_asset_upstream.clone() {
+            (crate::relay::selector::UpstreamProtocol::Openai, upstream)
+        } else {
+            select_upstream_excluding(
+                &state,
+                VIDEO_CREATE_PATH,
+                &resolved.target_model,
+                resolved.target_channel_id,
+                None,
+                &attempted_upstreams,
+            )
+            .await?
+        };
         attempted_upstreams.push(AttemptedUpstream::from(&upstream));
         let price = state
             .billing
@@ -165,6 +233,7 @@ async fn relay_openai_video_create(
             auth: auth.clone(),
             upstream: upstream.clone(),
             protocol,
+            method: "POST",
             path: VIDEO_CREATE_PATH,
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),
@@ -186,16 +255,31 @@ async fn relay_openai_video_create(
             upstream_request_path: Some(RelayRoute::Videos.path().to_string()),
             upstream_response_mode: None,
         };
-        let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
-        let response = if meta.is_json || matches!(adapter.name(), "doubao" | "haxicloud") {
-            let prepared = adapter.prepare_openai_request(
+        let adapter = adapter_for_endpoint(
+            &ctx.upstream.provider,
+            &ctx.upstream.base_url,
+            ctx.upstream.adapter_hint.as_deref(),
+        );
+        let response = if meta.is_json || adapter.prepares_video_request(&resolved.target_model) {
+            let prepared = match adapter.prepare_openai_request(
                 &ctx.upstream,
                 protocol,
                 RelayRoute::Videos,
                 upstream_body.clone(),
                 &headers,
                 false,
-            )?;
+            ) {
+                Ok(prepared) => prepared,
+                Err(err) => {
+                    release_empty_hold(
+                        &ctx.state,
+                        ctx.hold,
+                        "video request rejected by upstream adapter",
+                    )
+                    .await;
+                    return Err(err);
+                }
+            };
             ctx.upstream_request_path = Some(prepared.log_path.clone());
             ctx.upstream_response_mode = Some(prepared.response_mode.as_str());
             forward_prepared_openai(&state, &ctx.upstream, protocol, &headers, prepared).await
@@ -227,13 +311,14 @@ async fn relay_openai_video_create(
 
                 let error_body = read_upstream_error_body(upstream_response).await;
                 let failure = describe_upstream_http_failure(status, &error_body);
-                if should_failover_upstream_failure(
-                    &ctx,
-                    &attempted_upstreams,
-                    failure.failoverable(),
-                    retryable_failovers,
-                )
-                .await
+                if bound_asset_upstream.is_none()
+                    && should_failover_upstream_failure(
+                        &ctx,
+                        &attempted_upstreams,
+                        failure.failoverable(),
+                        retryable_failovers,
+                    )
+                    .await
                 {
                     retryable_failovers += 1;
                     record_upstream_http_failure(&ctx, status, &failure, "upstream video failover")
@@ -261,13 +346,14 @@ async fn relay_openai_video_create(
             }
             Err(err) => {
                 let retryable = err.retryable();
-                if should_failover_upstream_failure(
-                    &ctx,
-                    &attempted_upstreams,
-                    retryable,
-                    retryable_failovers,
-                )
-                .await
+                if bound_asset_upstream.is_none()
+                    && should_failover_upstream_failure(
+                        &ctx,
+                        &attempted_upstreams,
+                        retryable,
+                        retryable_failovers,
+                    )
+                    .await
                 {
                     retryable_failovers += 1;
                     record_upstream_transport_failure_for_failover(&ctx, err.to_string()).await;
@@ -295,8 +381,12 @@ async fn finish_video_create_success(
     let body = match upstream_response.bytes().await {
         Ok(body) => {
             ctx.release_request_permit();
-            adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url)
-                .normalize_response_body(RelayRoute::Videos, body)?
+            adapter_for_endpoint(
+                &ctx.upstream.provider,
+                &ctx.upstream.base_url,
+                ctx.upstream.adapter_hint.as_deref(),
+            )
+            .normalize_response_body(RelayRoute::Videos, body)?
         }
         Err(err) => {
             ctx.release_request_permit();
@@ -394,14 +484,15 @@ fn json_video_request_meta(body: &[u8], content_type: HeaderValue) -> AppResult<
     let value: Value = serde_json::from_slice(body)
         .map_err(|err| AppError::BadRequest(format!("invalid json: {err}")))?;
     let model = required_json_string_field(&value, "model")?;
+    validate_json_video_references(&value)?;
     Ok(VideoRequestMeta {
-        model,
+        model: model.clone(),
         request_params: RelayRequestParams::video(
             json_string_field(&value, "size"),
             positive_i64_field(&value, "seconds")
                 .or_else(|| positive_i64_field(&value, "duration")),
         ),
-        video_billing_input: video::json_video_billing_input(&value),
+        video_billing_input: video::json_video_billing_input(&value, Some(&model)),
         content_type,
         is_json: true,
     })
@@ -413,18 +504,29 @@ fn multipart_video_request_meta(
     content_type: HeaderValue,
 ) -> AppResult<VideoRequestMeta> {
     let boundary = multipart_boundary(content_type_text)?;
+    validate_multipart_video_references(body, &boundary)?;
     let mut model = None;
+    let mut prompt = None;
     let mut size = None;
     let mut seconds = None;
     for (name, value) in multipart_text_fields(body, &boundary)? {
         match name.as_str() {
             "model" if !value.is_empty() => model = Some(value),
+            "prompt" if !value.trim().is_empty() => prompt = Some(value),
             "size" if !value.is_empty() => size = Some(safe_multipart_log_label(&value)),
             "seconds" | "duration" => seconds = positive_i64_text(&value),
+            "input_reference" => {
+                return Err(AppError::BadRequest(
+                    "input_reference must be uploaded as an image file".into(),
+                ));
+            }
             _ => {}
         }
     }
     let model = model.ok_or_else(|| AppError::BadRequest("model is required".to_string()))?;
+    if prompt.is_none() {
+        return Err(AppError::BadRequest("prompt is required".to_string()));
+    }
     let video_billing_input = video::video_billing_input(size.as_deref(), seconds, false);
     Ok(VideoRequestMeta {
         model,
@@ -433,6 +535,136 @@ fn multipart_video_request_meta(
         content_type,
         is_json: false,
     })
+}
+
+/// Validate the reference shape at the public OpenAI-compatible boundary.
+/// Provider-specific multimodal extensions remain in JSON `content[]` and
+/// are validated by the selected adapter.
+fn validate_json_video_references(value: &Value) -> AppResult<()> {
+    let Some(reference) = value.get("input_reference") else {
+        return validate_extended_video_content(value);
+    };
+    let image_url = match reference {
+        Value::String(url) => url.clone(),
+        Value::Object(object) => {
+            if object.contains_key("file_id") {
+                return Err(AppError::BadRequest(
+                    "input_reference.file_id is not supported; use multipart input_reference or an asset://asset_* reference".into(),
+                ));
+            }
+            object
+                .get("image_url")
+                .and_then(Value::as_str)
+                .filter(|url| !url.trim().is_empty())
+                .ok_or_else(|| {
+                    AppError::BadRequest("input_reference.image_url is required".into())
+                })?
+                .to_string()
+        }
+        _ => {
+            return Err(AppError::BadRequest(
+                "input_reference must be an image URL or an object with image_url".into(),
+            ));
+        }
+    };
+    let lower = image_url.to_ascii_lowercase();
+    if !(lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("data:image/")
+        || lower.starts_with("asset://asset_"))
+    {
+        return Err(AppError::BadRequest(
+            "input_reference.image_url must be an http(s) URL, image data URL, or asset://asset_* reference".into(),
+        ));
+    }
+    validate_extended_video_content(value)
+}
+
+fn validate_extended_video_content(value: &Value) -> AppResult<()> {
+    let Some(content) = value.get("content") else {
+        return Ok(());
+    };
+    let content = content
+        .as_array()
+        .ok_or_else(|| AppError::BadRequest("content must be an array".into()))?;
+    for item in content {
+        let object = item
+            .as_object()
+            .ok_or_else(|| AppError::BadRequest("content items must be objects".into()))?;
+        let item_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::BadRequest("content item type is required".into()))?;
+        match item_type {
+            "text" => {
+                if object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(|text| text.trim().is_empty())
+                {
+                    return Err(AppError::BadRequest(
+                        "text content requires non-empty text".into(),
+                    ));
+                }
+            }
+            "image_url" | "video_url" | "audio_url" => {
+                if object
+                    .get(item_type)
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("url"))
+                    .and_then(Value::as_str)
+                    .is_none_or(|url| url.trim().is_empty())
+                {
+                    return Err(AppError::BadRequest(format!(
+                        "{item_type} content requires {item_type}.url"
+                    )));
+                }
+            }
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "unsupported video content type: {item_type}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_multipart_video_references(body: &[u8], boundary: &str) -> AppResult<()> {
+    let files = multipart_files(body, boundary)?;
+    if let Some(file) = files.iter().find(|file| file.name != "input_reference") {
+        return Err(AppError::BadRequest(format!(
+            "unsupported video multipart file field: {}",
+            file.name
+        )));
+    }
+    let references: Vec<_> = files
+        .into_iter()
+        .filter(|file| file.name == "input_reference")
+        .collect();
+    if references.len() > 1 {
+        return Err(AppError::BadRequest(
+            "input_reference accepts only one reference image in the OpenAI video protocol".into(),
+        ));
+    }
+    if let Some(reference) = references.first() {
+        if reference.data.is_empty() {
+            return Err(AppError::BadRequest(
+                "input_reference image file must not be empty".into(),
+            ));
+        }
+        let content_type = reference
+            .content_type
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !content_type.is_empty() && !content_type.starts_with("image/") {
+            return Err(AppError::BadRequest(
+                "input_reference must be an image file".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn video_terminal(status: &str) -> bool {
@@ -500,6 +732,75 @@ mod tests {
     }
 
     #[test]
+    fn accepts_json_image_reference_and_multimodal_extension() {
+        let value = serde_json::json!({
+            "model": "sd_2.0_discount",
+            "input_reference": {"image_url": "https://example.com/cover.png"},
+            "content": [
+                {"type": "text", "text": "walk"},
+                {"type": "video_url", "video_url": {"url": "https://example.com/ref.mp4"}}
+            ]
+        });
+
+        validate_json_video_references(&value).unwrap();
+    }
+
+    #[test]
+    fn rejects_file_id_and_invalid_extended_content() {
+        let file_id = serde_json::json!({
+            "model": "sora-2",
+            "input_reference": {"file_id": "file-123"}
+        });
+        assert!(validate_json_video_references(&file_id)
+            .unwrap_err()
+            .to_string()
+            .contains("file_id is not supported"));
+
+        let invalid_content = serde_json::json!({
+            "model": "sd_2.0_discount",
+            "content": [{"type": "video_url", "video_url": {}}]
+        });
+        assert!(validate_json_video_references(&invalid_content)
+            .unwrap_err()
+            .to_string()
+            .contains("video_url.url"));
+    }
+
+    #[test]
+    fn rejects_multiple_or_non_image_multipart_references() {
+        let content_type = "multipart/form-data; boundary=boundary";
+        let multiple = b"--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\na\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"b.png\"\r\nContent-Type: image/png\r\n\r\nb\r\n--boundary--\r\n";
+        assert!(multipart_video_request_meta(
+            multiple,
+            content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=boundary"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("only one reference image"));
+
+        let video = b"--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"ref.mp4\"\r\nContent-Type: video/mp4\r\n\r\nvideo\r\n--boundary--\r\n";
+        assert!(multipart_video_request_meta(
+            video,
+            content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=boundary"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must be an image file"));
+
+        let empty = b"--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--boundary\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ndraw\r\n--boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"ref.png\"\r\nContent-Type: image/png\r\n\r\n\r\n--boundary--\r\n";
+        assert!(multipart_video_request_meta(
+            empty,
+            content_type,
+            HeaderValue::from_static("multipart/form-data; boundary=boundary"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must not be empty"));
+    }
+
+    #[test]
     fn parses_nested_video_task_response_fields() {
         let value = serde_json::json!({
             "output": {
@@ -515,7 +816,7 @@ mod tests {
 
     #[test]
     fn parses_and_rewrites_multipart_video_model() {
-        let body = b"------neogate-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncompany-video\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n------neogate-boundary--\r\n";
+        let body = b"------neogate-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncompany-video\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ndraw\r\n------neogate-boundary\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\nPNG_BYTES\r\n------neogate-boundary--\r\n";
         let content_type = "multipart/form-data; boundary=----neogate-boundary";
         let meta = multipart_video_request_meta(
             body,

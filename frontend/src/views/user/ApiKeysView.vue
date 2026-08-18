@@ -290,8 +290,15 @@ async function confirmDeleteApiKey(row: UserKey) {
   color: #354154;
   display: grid;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Microsoft YaHei', sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
   gap: 12px;
   width: min(1120px, 100%);
 }

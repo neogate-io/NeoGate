@@ -8,7 +8,7 @@ use sqlx::Row;
 use crate::{
     auth::AdminAuth,
     cache::InvalidationEvent,
-    config::DEFAULT_ANTHROPIC_VERSION,
+    config::{DEFAULT_ANTHROPIC_VERSION, UPSTREAM_TIMEOUT},
     error::{AppError, AppResult, UpstreamRequestError},
     id::DbId,
     input::trimmed_non_empty,
@@ -16,8 +16,8 @@ use crate::{
 };
 
 use super::{
-    credentials::runtime_secret_from_enabled_credential, ensure_builtin_manual_provider_by_code,
-    invalidate_cache, provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
+    credentials::runtime_secret_from_enabled_credential, invalidate_cache,
+    provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Deserialize)]
@@ -47,8 +47,6 @@ pub(super) async fn upstream_models(
     if provider_code.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
     }
-    ensure_builtin_manual_provider_by_code(&state, provider_code).await?;
-
     let defaults = provider_default_endpoints(&state, provider_code)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider_code}")))?;
@@ -314,7 +312,7 @@ pub(crate) async fn fetch_upstream_models(
         request = request.bearer_auth(secret);
     }
 
-    let response = tokio::time::timeout(state.config.http.upstream_timeout, request.send())
+    let response = tokio::time::timeout(UPSTREAM_TIMEOUT, request.send())
         .await
         .map_err(|_| {
             AppError::UpstreamRequest(UpstreamRequestError::new(
@@ -322,7 +320,7 @@ pub(crate) async fn fetch_upstream_models(
                 upstream_models_error_provider(base_url),
                 format!(
                     "upstream models request timed out after {} seconds",
-                    state.config.http.upstream_timeout.as_secs()
+                    UPSTREAM_TIMEOUT.as_secs()
                 ),
             ))
         })?

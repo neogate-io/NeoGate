@@ -48,6 +48,7 @@ use crate::{
 };
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+const X_ACCEL_BUFFERING: HeaderName = HeaderName::from_static("x-accel-buffering");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -67,6 +68,9 @@ pub struct AppState {
     pub user_auth_cache: auth::UserAuthCache,
     pub auth_rate_limiter: auth::AuthRateLimiter,
     pub(crate) user_request_limiter: relay::UserRequestLimiter,
+    /// per-endpoint 并发限制，防止某个 webhook app 在消息风暴时无限 spawn LLM 推理任务。
+    /// 键为 endpoint_id，值为各 endpoint 独享的 Semaphore。
+    pub(crate) app_message_limiter: Arc<dashmap::DashMap<crate::id::DbId, Arc<tokio::sync::Semaphore>>>,
     pub service_policy_cache: policy::ServicePolicyCache,
     pub cache_invalidator: cache::CacheInvalidator,
     pub(crate) task_wakeup: Arc<Notify>,
@@ -76,6 +80,11 @@ pub struct AppState {
 pub async fn run() -> anyhow::Result<()> {
     load_dotenv();
     init_tracing();
+
+    // tokio-tungstenite/reqwest/sqlx 各自通过 feature 拉入 rustls，可能同时启用
+    // aws-lc-rs 与 ring，rustls 无法自动选定进程级 CryptoProvider 会直接 panic。
+    // 这里显式安装 aws-lc-rs 作为默认 provider（已安装时返回 Err，忽略即可）。
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let probe = RuntimeProbe::from_env()?;
     if !probe.full_config_ready() {
@@ -143,10 +152,34 @@ fn api_router(config: &Config, state: Arc<AppState>) -> anyhow::Result<Router> {
     Ok(router(state)
         .layer(DefaultBodyLimit::max(config.relay.body_limit_bytes))
         .layer(cors_layer(config)?)
+        .layer(middleware::from_fn(add_sse_response_headers))
         .layer(middleware::from_fn_with_state(
             config.admin_token_secret.clone(),
             log_http_request,
         )))
+}
+
+async fn add_sse_response_headers(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let is_sse = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|media_type| media_type.trim() == "text/event-stream")
+        });
+    if is_sse {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        response
+            .headers_mut()
+            .insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
+    }
+    response
 }
 
 fn init_tracing() {
@@ -701,6 +734,7 @@ pub(crate) async fn build_state(
             config.relay.user_concurrent_request_limit,
             config.relay.global_concurrent_request_limit,
         ),
+        app_message_limiter: Arc::new(dashmap::DashMap::new()),
         service_policy_cache: policy::ServicePolicyCache::default(),
         cache_invalidator,
         task_wakeup: Arc::new(Notify::new()),
@@ -809,6 +843,7 @@ fn cors_layer_from_origins(cors_allowed_origins: &[String]) -> anyhow::Result<Co
     let allowed_methods = [
         Method::GET,
         Method::POST,
+        Method::PUT,
         Method::PATCH,
         Method::DELETE,
         Method::OPTIONS,
@@ -950,7 +985,6 @@ pub(crate) mod tests {
                 upstream_secret_key: "test-upstream-secret-key".to_string(),
                 http: config::HttpClientConfig {
                     upstream_connect_timeout: Duration::from_secs(10),
-                    upstream_timeout: Duration::from_secs(30),
                     pool_max_idle_per_host: 100,
                     pool_idle_timeout: Duration::from_secs(90),
                 },
@@ -1026,6 +1060,7 @@ pub(crate) mod tests {
             user_auth_cache: auth::UserAuthCache::new(Duration::from_secs(30), 1024),
             auth_rate_limiter: auth::AuthRateLimiter::default(),
             user_request_limiter: relay::UserRequestLimiter::new(100, 0),
+            app_message_limiter: Arc::new(dashmap::DashMap::new()),
             service_policy_cache: policy::ServicePolicyCache::default(),
             cache_invalidator: cache::CacheInvalidator::local(),
             task_wakeup: Arc::new(Notify::new()),
@@ -1201,5 +1236,57 @@ pub(crate) mod tests {
             sanitized,
             "provider=openai model=gpt-4.1 channel_id=7 status=502 tokens=128"
         );
+    }
+
+    #[tokio::test]
+    async fn sse_response_headers_disable_caching_and_proxy_buffering() {
+        let app = Router::new()
+            .route(
+                "/events",
+                get(|| async {
+                    (
+                        [(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")],
+                        "",
+                    )
+                }),
+            )
+            .layer(middleware::from_fn(add_sse_response_headers));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-cache"))
+        );
+        assert_eq!(
+            response.headers().get(&X_ACCEL_BUFFERING),
+            Some(&HeaderValue::from_static("no"))
+        );
+    }
+
+    #[tokio::test]
+    async fn non_sse_response_headers_are_unchanged() {
+        let app = Router::new()
+            .route(
+                "/json",
+                get(|| async { ([(header::CONTENT_TYPE, "application/json")], "{}") }),
+            )
+            .layer(middleware::from_fn(add_sse_response_headers));
+
+        let response = app
+            .oneshot(Request::builder().uri("/json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+        assert!(response.headers().get(&X_ACCEL_BUFFERING).is_none());
     }
 }

@@ -74,6 +74,28 @@ pub(super) fn choose_channel_for_request<'a>(
     attempted: &[AttemptedUpstream],
     excluded_endpoint_ids: Option<&[DbId]>,
 ) -> Option<&'a ChannelCandidate> {
+    choose_channel_for_request_matching(
+        cache,
+        protocol,
+        model,
+        now,
+        model_blocks,
+        attempted,
+        excluded_endpoint_ids,
+        |_| true,
+    )
+}
+
+pub(super) fn choose_channel_for_request_matching<'a>(
+    cache: &'a RoutingCache,
+    protocol: UpstreamProtocol,
+    model: &str,
+    now: DateTime<Utc>,
+    model_blocks: &ModelBlockLookup<'_>,
+    attempted: &[AttemptedUpstream],
+    excluded_endpoint_ids: Option<&[DbId]>,
+    matches: impl Fn(&ChannelCandidate) -> bool,
+) -> Option<&'a ChannelCandidate> {
     let availability = ChannelAvailability {
         protocol,
         model,
@@ -96,7 +118,7 @@ pub(super) fn choose_channel_for_request<'a>(
     let mut selected = None;
 
     for channel in indexed {
-        if !channel_is_available(cache, channel, &availability) {
+        if !matches(channel) || !channel_is_available(cache, channel, &availability) {
             continue;
         }
         let weight = channel.weight.max(1);
@@ -224,26 +246,29 @@ pub(super) fn choose_key<'a>(
     model_blocks: &ModelBlockLookup<'_>,
     attempted: &[AttemptedUpstream],
 ) -> Option<&'a KeyCandidate> {
-    let ready_count = keys
+    // 单次遍历：先收集所有就绪 key 的索引，再按选择模式取其一，
+    // 避免原来 ready_count + nth 两次 filter 遍历的双倍开销。
+    let ready_indices: Vec<usize> = keys
         .iter()
-        .filter(|key| {
+        .enumerate()
+        .filter(|(_, key)| {
             key_is_available(channel, key, model, now, model_blocks)
                 && !was_attempted(channel, key, attempted)
         })
-        .count();
-    if ready_count == 0 {
+        .map(|(i, _)| i)
+        .collect();
+
+    if ready_indices.is_empty() {
         return None;
     }
+
     let slot = match channel.key_selection_mode {
-        KeySelectionMode::Random => rand::rng().random_range(0..ready_count),
-        KeySelectionMode::Polling => channel.polling.fetch_add(1, Ordering::Relaxed) % ready_count,
+        KeySelectionMode::Random => rand::rng().random_range(0..ready_indices.len()),
+        KeySelectionMode::Polling => {
+            channel.polling.fetch_add(1, Ordering::Relaxed) % ready_indices.len()
+        }
     };
-    keys.iter()
-        .filter(|key| {
-            key_is_available(channel, key, model, now, model_blocks)
-                && !was_attempted(channel, key, attempted)
-        })
-        .nth(slot)
+    keys.get(ready_indices[slot])
 }
 
 pub(super) fn was_attempted(

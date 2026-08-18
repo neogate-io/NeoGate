@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     fmt,
     hash::{Hash, Hasher},
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
@@ -21,26 +21,43 @@ pub(crate) mod account;
 mod credit;
 mod metering;
 pub mod outbox;
+mod token_estimate;
 mod types;
 pub mod video;
 
 use credit::{HotAllocation, HotCreditStore, MemoryHotCreditStore, RedisHotCreditStore};
+pub(crate) use metering::estimate_token_reservation;
 pub use metering::{
-    cost_for_billable_usage, estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes,
-    parse_usage_from_sse_data,
+    cost_for_billable_usage, estimate_input_tokens, estimate_output_tokens_from_bytes_sent,
+    parse_usage_from_bytes, parse_usage_from_sse_data,
 };
+pub use token_estimate::{estimate_anthropic_input_tokens, estimate_claude_text_tokens};
 pub use types::{
-    BillableUsage, BillingCharge, BillingMeter, CreditAccountId, CreditAccountType, DebitHold,
-    DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode, VideoPriceTier,
+    BillableUsage, BillingCharge, BillingChargeStatus, BillingMeter, CreditAccountId,
+    CreditAccountType, DebitHold, DebitPart, Price, PricingBasis, TokenUsage, VideoBillingMode,
+    VideoPriceTier,
 };
 
 pub const MICROS_PER_MAJOR_UNIT: i64 = 1_000_000;
+
+/// 将 token 数量按百万单价换算为微元，向上取整，i128 中间值防止溢出。
+/// metering.rs 和 video.rs 曾各自维护一份相同实现，统一到此处消除重复。
+pub(crate) fn micros_for_tokens(tokens: i64, price_micros: i64) -> i64 {
+    if tokens <= 0 || price_micros <= 0 {
+        return 0;
+    }
+    let product = (tokens as i128).saturating_mul(price_micros as i128);
+    let rounded = (product + MICROS_PER_MAJOR_UNIT as i128 - 1) / MICROS_PER_MAJOR_UNIT as i128;
+    i64::try_from(rounded).unwrap_or(i64::MAX)
+}
 pub const BILLABLE_PRICE_CONDITION: &str = r#"
 (
     (billing_meter = 'token'
         AND input_price_micros >= 0
         AND output_price_micros >= 0)
     OR (billing_meter = 'image'
+        AND unit_price_micros > 0)
+    OR (billing_meter = 'audio'
         AND unit_price_micros > 0)
     OR (billing_meter = 'video'
         AND video_billing_mode IS NOT NULL
@@ -51,22 +68,32 @@ pub const BILLABLE_PRICE_CONDITION: &str = r#"
         END)
 )
 "#;
-pub const BILLABLE_PRICE_CONDITION_CP: &str = r#"
-(
-    (cp.billing_meter = 'token'
-        AND cp.input_price_micros >= 0
-        AND cp.output_price_micros >= 0)
-    OR (cp.billing_meter = 'image'
-        AND cp.unit_price_micros > 0)
-    OR (cp.billing_meter = 'video'
-        AND cp.video_billing_mode IS NOT NULL
-        AND CASE
-            WHEN jsonb_typeof(cp.video_price_tiers) = 'array'
-            THEN jsonb_array_length(cp.video_price_tiers) > 0
-            ELSE FALSE
-        END)
-)
-"#;
+/// 惰性初始化的 SQL 条件片段，实现 `Display` 后可直接在 `format!("{VAR}")` 中使用。
+pub struct LazyCondition(LazyLock<String>);
+
+impl fmt::Display for LazyCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+/// `BILLABLE_PRICE_CONDITION` 的 `cp.` 表别名版本，从基础常量运行时生成以保持单一来源。
+/// 新增 billing_meter 时只需修改 `BILLABLE_PRICE_CONDITION`，此处自动同步。
+pub static BILLABLE_PRICE_CONDITION_CP: LazyCondition = LazyCondition(LazyLock::new(|| {
+    const PRICE_COLUMNS: &[&str] = &[
+        "billing_meter",
+        "input_price_micros",
+        "output_price_micros",
+        "unit_price_micros",
+        "video_billing_mode",
+        "video_price_tiers",
+    ];
+    let mut s = BILLABLE_PRICE_CONDITION.to_string();
+    for col in PRICE_COLUMNS {
+        s = s.replace(col, &format!("cp.{col}"));
+    }
+    s
+}));
 const ALLOCATION_RECOVERY_LOG_SAMPLE_LIMIT: usize = 20;
 
 #[derive(Clone)]
@@ -93,6 +120,7 @@ pub struct SettleRequest<'a> {
     pub hold: DebitHold,
     pub usage: Option<BillableUsage>,
     pub price: &'a Price,
+    pub allow_supplemental: bool,
 }
 
 #[derive(Debug, Default)]
@@ -215,29 +243,52 @@ impl Billing {
         recover_after: Duration,
     ) {
         let billing = self.clone();
+        // 用监督壳包裹：任务 panic 后自动重启，避免静默退出导致 stale allocation 永久积压。
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(interval.max(Duration::from_secs(1)));
             loop {
-                ticker.tick().await;
-                let Ok(recover_after) = chrono::Duration::from_std(recover_after) else {
-                    tracing::warn!("invalid credit allocation recovery window");
-                    continue;
-                };
-                let stale_before = Utc::now() - recover_after;
-                match billing.recover_stale_allocations(&pool, stale_before).await {
-                    Ok(summary) if summary.count > 0 => {
-                        tracing::info!(
-                            count = summary.count,
-                            recovered_micros = summary.recovered_micros,
-                            oldest_created_at = ?summary.oldest_created_at,
-                            oldest_age_seconds = summary.oldest_age_seconds,
-                            samples = ?summary.samples,
-                            truncated = summary.truncated,
-                            "recovered stale credit allocations"
-                        );
+                let billing = billing.clone();
+                let pool = pool.clone();
+                let result = tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(interval.max(Duration::from_secs(1)));
+                    loop {
+                        ticker.tick().await;
+                        let Ok(recover_after) = chrono::Duration::from_std(recover_after) else {
+                            tracing::warn!("invalid credit allocation recovery window");
+                            continue;
+                        };
+                        let stale_before = Utc::now() - recover_after;
+                        match billing.recover_stale_allocations(&pool, stale_before).await {
+                            Ok(summary) if summary.count > 0 => {
+                                tracing::info!(
+                                    count = summary.count,
+                                    recovered_micros = summary.recovered_micros,
+                                    oldest_created_at = ?summary.oldest_created_at,
+                                    oldest_age_seconds = summary.oldest_age_seconds,
+                                    samples = ?summary.samples,
+                                    truncated = summary.truncated,
+                                    "recovered stale credit allocations"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                tracing::warn!("failed to recover stale credit allocations: {err}")
+                            }
+                        }
                     }
-                    Ok(_) => {}
-                    Err(err) => tracing::warn!("failed to recover stale credit allocations: {err}"),
+                })
+                .await;
+                match result {
+                    Ok(()) => break, // 正常退出不重启
+                    Err(err) if err.is_panic() => {
+                        tracing::error!(
+                            "credit allocation recovery worker panicked; restarting: {err:?}"
+                        );
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Err(err) => {
+                        tracing::warn!("credit allocation recovery worker exited: {err:?}");
+                        break;
+                    }
                 }
             }
         });
@@ -264,12 +315,7 @@ impl Billing {
         estimated_micros: i64,
     ) -> AppResult<DebitHold> {
         if estimated_micros <= 0 {
-            return Ok(DebitHold {
-                transaction_id: Uuid::new_v4(),
-                estimated_micros: 0,
-                parts: Vec::new(),
-                charge_credit: true,
-            });
+            return Ok(DebitHold::new(0, Vec::new(), true));
         }
 
         let credit_accounts = ordered_credit_accounts(accounts);
@@ -278,12 +324,7 @@ impl Billing {
             .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         {
-            return Ok(DebitHold {
-                transaction_id: Uuid::new_v4(),
-                estimated_micros,
-                parts,
-                charge_credit: true,
-            });
+            return Ok(DebitHold::new(estimated_micros, parts, true));
         }
 
         let lock_id = prefetch_lock_index(accounts, self.prefetch_locks.len());
@@ -294,12 +335,7 @@ impl Billing {
             .try_debit_ordered(&credit_accounts, estimated_micros)
             .await?
         {
-            return Ok(DebitHold {
-                transaction_id: Uuid::new_v4(),
-                estimated_micros,
-                parts,
-                charge_credit: true,
-            });
+            return Ok(DebitHold::new(estimated_micros, parts, true));
         }
 
         self.prefetch(pool, accounts, estimated_micros).await?;
@@ -316,20 +352,20 @@ impl Billing {
             });
         };
 
-        Ok(DebitHold {
-            transaction_id: Uuid::new_v4(),
-            estimated_micros,
-            parts,
-            charge_credit: true,
-        })
+        Ok(DebitHold::new(estimated_micros, parts, true))
     }
 
     pub async fn release_hold(&self, pool: &PgPool, hold: DebitHold) -> AppResult<()> {
-        if hold.parts.is_empty() {
-            return Ok(());
-        }
-
         let mut tx = pool.begin().await?;
+        Self::release_hold_in_transaction(&mut tx, &hold).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn release_hold_in_transaction(
+        tx: &mut Transaction<'_, Postgres>,
+        hold: &DebitHold,
+    ) -> AppResult<()> {
         for part in &hold.parts {
             if part.amount_micros <= 0 {
                 continue;
@@ -339,7 +375,7 @@ impl Billing {
             // already released at recovery time. Releasing again would fail the
             // capacity constraint and double-release reserved credit. Skip it —
             // the hold is already settled. See `flush_billing_part`.
-            if account::allocation_is_recovered(&mut tx, part.allocation_id).await? {
+            if account::allocation_is_recovered(tx, part.allocation_id).await? {
                 tracing::info!(
                     allocation_id = %part.allocation_id,
                     amount_micros = part.amount_micros,
@@ -347,11 +383,9 @@ impl Billing {
                 );
                 continue;
             }
-            account::decrement_reserved(&mut tx, &part.credit_account, part.amount_micros).await?;
-            account::mark_allocation_returned(&mut tx, part.allocation_id, part.amount_micros)
-                .await?;
+            account::decrement_reserved(tx, &part.credit_account, part.amount_micros).await?;
+            account::mark_allocation_returned(tx, part.allocation_id, part.amount_micros).await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -365,50 +399,68 @@ impl Billing {
             hold,
             usage,
             price,
+            allow_supplemental,
         } = request;
+        if let Some(usage) = usage {
+            let requires_unit_price =
+                matches!(usage.meter, BillingMeter::Image | BillingMeter::Audio)
+                    || (usage.meter == BillingMeter::Video && usage.token_usage.is_none());
+            if requires_unit_price && price.unit_price_micros.is_none() {
+                return Err(AppError::BadRequest(format!(
+                    "unit price is required for {} billing",
+                    usage.meter.as_str()
+                )));
+            }
+        }
         let (cost_micros, status) = match usage {
-            Some(usage) => (cost_for_billable_usage(usage, price), "billed".to_string()),
-            None => (hold.estimated_micros, "usage_missing".to_string()),
+            Some(usage) => (
+                cost_for_billable_usage(usage, price),
+                BillingChargeStatus::Billed,
+            ),
+            None => (
+                hold.cost_when_usage_missing(),
+                BillingChargeStatus::UsageMissing,
+            ),
         };
         let cost_micros = cost_micros.max(0);
         let token_usage = usage.and_then(|usage| usage.token_usage);
         let billing_meter = usage.map_or(price.billing_meter, |usage| usage.meter);
         let billable_units = usage.map_or(0, |usage| usage.billable_units.max(0));
+        // 提前解构，避免后续 hold.parts 被 move 后 hold 仍被借用。
+        let transaction_id = hold.transaction_id;
+        let estimated_micros = hold.estimated_micros;
+        let charge_credit = hold.charge_credit;
 
-        if !hold.charge_credit {
-            return Ok(BillingCharge {
-                transaction_id: hold.transaction_id,
-                input_tokens: token_usage.map(|usage| usage.input_tokens),
-                output_tokens: token_usage.map(|usage| usage.output_tokens),
-                total_tokens: token_usage.map(TokenUsage::total_tokens),
+        if !charge_credit {
+            return Ok(make_billing_charge(
+                transaction_id,
+                token_usage,
                 billing_meter,
                 billable_units,
                 cost_micros,
                 status,
-                parts: Vec::new(),
-                returned_parts: Vec::new(),
-            });
+                Vec::new(),
+                Vec::new(),
+            ));
         }
 
-        if cost_micros >= hold.estimated_micros {
-            if cost_micros > hold.estimated_micros {
-                let supplemental_micros = cost_micros - hold.estimated_micros;
+        if cost_micros >= estimated_micros {
+            if cost_micros > estimated_micros && allow_supplemental {
+                let supplemental_micros = cost_micros - estimated_micros;
                 match self.reserve(pool, accounts, supplemental_micros).await {
                     Ok(extra_hold) => {
                         let mut parts = hold.parts;
                         parts.extend(extra_hold.parts);
-                        return Ok(BillingCharge {
-                            transaction_id: hold.transaction_id,
-                            input_tokens: token_usage.map(|usage| usage.input_tokens),
-                            output_tokens: token_usage.map(|usage| usage.output_tokens),
-                            total_tokens: token_usage.map(TokenUsage::total_tokens),
+                        return Ok(make_billing_charge(
+                            transaction_id,
+                            token_usage,
                             billing_meter,
                             billable_units,
                             cost_micros,
                             status,
                             parts,
-                            returned_parts: Vec::new(),
-                        });
+                            Vec::new(),
+                        ));
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -417,22 +469,21 @@ impl Billing {
                     }
                 }
             }
-            return Ok(BillingCharge {
-                transaction_id: hold.transaction_id,
-                input_tokens: token_usage.map(|usage| usage.input_tokens),
-                output_tokens: token_usage.map(|usage| usage.output_tokens),
-                total_tokens: token_usage.map(TokenUsage::total_tokens),
+            let capped_status = if cost_micros > estimated_micros {
+                BillingChargeStatus::Undercharged
+            } else {
+                status
+            };
+            return Ok(make_billing_charge(
+                transaction_id,
+                token_usage,
                 billing_meter,
                 billable_units,
-                cost_micros: hold.estimated_micros,
-                status: if cost_micros > hold.estimated_micros {
-                    "undercharged".to_string()
-                } else {
-                    status
-                },
-                parts: hold.parts,
-                returned_parts: Vec::new(),
-            });
+                estimated_micros,
+                capped_status,
+                hold.parts,
+                Vec::new(),
+            ));
         }
 
         let mut remaining = cost_micros;
@@ -457,18 +508,16 @@ impl Billing {
             }
         }
 
-        Ok(BillingCharge {
-            transaction_id: hold.transaction_id,
-            input_tokens: token_usage.map(|usage| usage.input_tokens),
-            output_tokens: token_usage.map(|usage| usage.output_tokens),
-            total_tokens: token_usage.map(TokenUsage::total_tokens),
+        Ok(make_billing_charge(
+            transaction_id,
+            token_usage,
             billing_meter,
             billable_units,
             cost_micros,
             status,
-            parts: consumed,
+            consumed,
             returned_parts,
-        })
+        ))
     }
 
     async fn prefetch(
@@ -582,6 +631,32 @@ impl Billing {
             }
         }
         Ok(())
+    }
+}
+
+/// `settle` 各分支共享的 BillingCharge 构造辅助函数，消除重复展开 token_usage 字段的样板代码。
+#[allow(clippy::too_many_arguments)]
+fn make_billing_charge(
+    transaction_id: uuid::Uuid,
+    token_usage: Option<TokenUsage>,
+    billing_meter: BillingMeter,
+    billable_units: i64,
+    cost_micros: i64,
+    status: BillingChargeStatus,
+    parts: Vec<DebitPart>,
+    returned_parts: Vec<DebitPart>,
+) -> BillingCharge {
+    BillingCharge {
+        transaction_id,
+        input_tokens: token_usage.map(|u| u.input_tokens),
+        output_tokens: token_usage.map(|u| u.output_tokens),
+        total_tokens: token_usage.map(TokenUsage::total_tokens),
+        billing_meter,
+        billable_units,
+        cost_micros,
+        status,
+        parts,
+        returned_parts,
     }
 }
 
@@ -928,7 +1003,7 @@ async fn fetch_stale_allocations(
                    COALESCE(b.payload->'billing'->'parts', '[]'::jsonb) ||
                    COALESCE(b.payload->'billing'->'returned_parts', '[]'::jsonb)
                ) part
-               WHERE b.status IN ('pending', 'failed')
+               WHERE b.status = 'pending'
                  AND part->>'allocation_id' = credit_allocation.id::TEXT
            )
            AND NOT EXISTS (
@@ -963,26 +1038,35 @@ async fn recover_allocations_in_db(
     pool: &PgPool,
     allocations: &[HotAllocation],
 ) -> AppResult<AllocationRecoverySummary> {
-    let ids = allocations
-        .iter()
-        .map(|allocation| allocation.allocation_id)
-        .collect::<Vec<_>>();
-    let mut tx = pool.begin().await?;
-    let rows = sqlx::query(
-        "SELECT id, credit_account_id, amount_micros, consumed_micros, returned_micros, created_at
-         FROM credit_allocation
-         WHERE id = ANY($1) AND status = 'active'
-         ORDER BY id ASC
-         FOR UPDATE",
-    )
-    .bind(&ids)
-    .fetch_all(&mut *tx)
-    .await?;
-
     let now = Utc::now();
     let mut summary = AllocationRecoverySummary::default();
-    for row in rows {
-        let allocation_id: DbId = row.try_get("id")?;
+
+    // Process each allocation in its own transaction to avoid deadlocks with the
+    // billing outbox. The previous approach locked all stale allocations in a
+    // single batch TX (FOR UPDATE on all IDs at once), while the billing outbox
+    // locks allocation rows one at a time as it processes records. If the outbox
+    // held lock A and waited for B, while recovery held B and waited for credit_account
+    // (locked by outbox via A's processing), a deadlock resulted. Processing
+    // allocations individually limits each TX to one allocation lock at a time,
+    // eliminating the cross-lock dependency.
+    for allocation in allocations {
+        let allocation_id = allocation.allocation_id;
+        let mut tx = pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT id, credit_account_id, amount_micros, consumed_micros, returned_micros, created_at
+             FROM credit_allocation
+             WHERE id = $1 AND status = 'active'
+             FOR UPDATE",
+        )
+        .bind(allocation_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            tx.commit().await?;
+            continue;
+        };
+
         let credit_account_id: DbId = row.try_get("credit_account_id")?;
         let amount: i64 = row.try_get("amount_micros")?;
         let consumed: i64 = row.try_get("consumed_micros")?;
@@ -990,6 +1074,7 @@ async fn recover_allocations_in_db(
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let recover_amount = amount - consumed - returned;
         if recover_amount <= 0 {
+            tx.commit().await?;
             continue;
         }
         let age_seconds = (now - created_at).num_seconds().max(0);
@@ -1016,6 +1101,9 @@ async fn recover_allocations_in_db(
         }))
         .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
+
         summary.count += 1;
         summary.recovered_micros += recover_amount;
         if summary
@@ -1039,7 +1127,6 @@ async fn recover_allocations_in_db(
             summary.truncated += 1;
         }
     }
-    tx.commit().await?;
     Ok(summary)
 }
 
@@ -1129,6 +1216,7 @@ mod tests {
                         audio_output_tokens: None,
                     })),
                     price: &token_price(),
+                    allow_supplemental: true,
                 },
             )
             .await
@@ -1156,5 +1244,53 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn settle_uses_input_only_fallback_when_token_usage_is_missing() {
+        let billing = Billing::new_memory(Duration::from_secs(60), 32, 100, 100);
+        let pool = PgPool::connect_lazy("postgres://neogate:neogate@localhost/neogate").unwrap();
+        let user_key_credit_account = credit_account(10);
+        let project_credit_account = credit_account(20);
+
+        billing
+            .hot
+            .credit_allocation(user_key_credit_account.clone(), 101, 100)
+            .await
+            .unwrap();
+        let mut hold = billing
+            .reserve(
+                &pool,
+                billing_accounts(&user_key_credit_account, &project_credit_account),
+                100,
+            )
+            .await
+            .unwrap();
+        hold = hold.with_usage_missing_fallback(40);
+
+        let charge = billing
+            .settle(
+                &pool,
+                SettleRequest {
+                    accounts: billing_accounts(&user_key_credit_account, &project_credit_account),
+                    hold,
+                    usage: None,
+                    price: &token_price(),
+                    allow_supplemental: true,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(charge.cost_micros, 40);
+        assert_eq!(charge.status, BillingChargeStatus::UsageMissing);
+        assert_eq!(
+            charge
+                .returned_parts
+                .iter()
+                .map(|part| part.amount_micros)
+                .sum::<i64>(),
+            60
+        );
     }
 }

@@ -37,7 +37,8 @@ export const publicMessages = {
     runtimeConfigurationDescription:
       '填写数据库、站点名称和公网地址，NeoGate 会先验证配置，完成向导后再写入环境变量。',
     siteConfiguration: '站点信息',
-    siteConfigurationDescription: '设置后台显示名称、服务对外访问地址，以及初始化后固定的基础计费货币。',
+    siteConfigurationDescription:
+      '设置后台显示名称、服务对外访问地址，以及初始化后固定的基础计费货币。',
     databaseConfiguration: '数据库连接',
     databaseConfigurationDescription:
       '配置 NeoGate 使用的 PostgreSQL 数据库，并在保存前测试连通性。',
@@ -141,6 +142,7 @@ export const publicMessages = {
     loginEmailHint: '输入邮箱和密码即可登录，首次使用需邮箱验证码。',
     loginAccountPlaceholder: '请输入邮箱',
     loginFailed: '邮箱或密码不正确，请重新输入。',
+    sessionExpired: '登录已过期，请重新登录。',
     verificationCode: '验证码',
     loginVerificationHint: '新用户必填',
     sendVerificationCode: '发送验证码',
@@ -245,6 +247,7 @@ export const publicMessages = {
     startTime: '开始时间',
     endTime: '结束时间',
     exportDetails: '导出明细',
+    exportLimitExceeded: '导出结果超过 10 万条，请缩小筛选或时间范围。',
     cacheReadExport: '缓存读',
     viewHelpDocs: '查看帮助文档',
     helpDocsHint: '查看接入说明和常见问题',
@@ -474,7 +477,8 @@ export const publicMessages = {
       'The database user does not have enough permissions. Grant connection and table creation permissions.',
     databaseUnavailable:
       'The database is temporarily unavailable. Try again later or check whether it is still starting.',
-    databaseUserNotFound: 'The database user does not exist. Check whether the user has been created.',
+    databaseUserNotFound:
+      'The database user does not exist. Check whether the user has been created.',
     databaseAuthenticationFailed:
       'Database authentication failed. Check the database user and password.',
     databaseConnectionFailed:
@@ -572,6 +576,7 @@ export const publicMessages = {
       'Enter your email and password to sign in. First-time sign-in requires an email code.',
     loginAccountPlaceholder: 'Enter your email',
     loginFailed: 'Email or password is incorrect. Please try again.',
+    sessionExpired: 'Session expired, please sign in again.',
     verificationCode: 'Verification code',
     loginVerificationHint: 'Required for new users',
     sendVerificationCode: 'Send code',
@@ -679,6 +684,7 @@ export const publicMessages = {
     startTime: 'Start time',
     endTime: 'End time',
     exportDetails: 'Export details',
+    exportLimitExceeded: 'The export exceeds 100,000 rows. Narrow the filters or time range.',
     cacheReadExport: 'Cache read',
     viewHelpDocs: 'View help docs',
     helpDocsHint: 'Read setup notes and FAQs',

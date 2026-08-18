@@ -14,9 +14,9 @@ use crate::{
 };
 
 const MODELS_DEV_PRICING_URL: &str = "https://models.dev/api.json";
+const MOLIGATE_CNY_PRICING_URL: &str = "https://data.moligate.cn/api/models";
 const PRICE_TEMPLATE_SOURCE_MODELS_DEV: &str = "models_dev";
-const PRICE_TEMPLATE_SOURCE_LOCAL_CNY: &str = "local_cny";
-const PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX: &str = "local_cny_fx";
+const PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA: &str = "moligate_data";
 
 #[derive(Debug, Serialize)]
 pub struct ChannelPriceRecord {
@@ -152,16 +152,6 @@ pub struct SyncPricingTemplatesRequest {
 struct ModelsDevProvider {
     #[serde(default)]
     models: HashMap<String, ModelsDevModel>,
-    #[serde(default)]
-    metadata: Option<ModelsDevProviderMetadata>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevProviderMetadata {
-    /// 汇率换算脚本(fetch_modelsdev_pricing.py)写入的 USD->CNY 汇率。
-    /// 存在即表示该 provider 的价格为汇率换算价,非原生 CNY 官方价。
-    #[allow(dead_code)]
-    fx_rate: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +171,9 @@ struct ModelsDevModel {
     open_weights: Option<bool>,
     limit: Option<ModelsDevLimit>,
     cost: Option<ModelsDevCost>,
+    capabilities: Option<Value>,
+    #[serde(default)]
+    interfaces: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -204,7 +197,7 @@ struct ModelsDevCost {
     output: Option<f64>,
     cache_read: Option<f64>,
     cache_write: Option<f64>,
-    // 非 token 口径字段(由抓取脚本写入)
+    // 非 token 口径字段
     per_image: Option<f64>,
     per_call: Option<f64>,
     per_hour: Option<f64>,
@@ -215,10 +208,10 @@ struct ModelsDevCost {
     per_thousand_calls: Option<f64>,
     per_10k_token_input: Option<f64>,
     per_10k_token_output: Option<f64>,
-    /// 抓取脚本推断的口径字符串(见 PricingBasis::as_str)。
+    per_million_tokens: Option<f64>,
+    /// 上游提供的口径字符串(见 PricingBasis::as_str)。
     basis: Option<String>,
-    /// 多档视频价的完整档位结构(由抓取脚本 parse_multi_tier_video 写入),
-    /// 仅 `basis=multi_tier_video` 时存在。代表档仍写入 input/output。
+    /// 多档视频价的完整档位结构。
     video_tiers: Option<Vec<Value>>,
 }
 
@@ -238,7 +231,7 @@ fn default_enabled() -> bool {
 }
 
 fn default_pricing_template_sync_source() -> String {
-    PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string()
+    String::new()
 }
 
 pub async fn list_provider_models(state: &AppState) -> AppResult<Vec<ProviderModelRecord>> {
@@ -310,8 +303,8 @@ pub async fn live_model_reference_catalog(
     state: &AppState,
 ) -> AppResult<Vec<ModelReferenceCatalogRecord>> {
     let upstream = match state.config.billing_currency {
-        BillingCurrency::Usd => fetch_models_dev_pricing_json(state).await?,
-        BillingCurrency::Cny => fetch_local_cny_pricing_json(state).await?,
+        BillingCurrency::Usd => fetch_usd_pricing_with_moligate_capabilities(state).await?,
+        BillingCurrency::Cny => fetch_moligate_cny_pricing_json(state).await?,
     };
     let provider_codes = enabled_provider_codes(state).await?;
     let now = Utc::now();
@@ -327,7 +320,7 @@ pub async fn live_model_reference_catalog(
 
         let source = match state.config.billing_currency {
             BillingCurrency::Usd => PRICE_TEMPLATE_SOURCE_MODELS_DEV,
-            BillingCurrency::Cny => provider_source_for_local_cny(&provider_data),
+            BillingCurrency::Cny => PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
         };
         for (model, model_data) in provider_data.models {
             let template = match state.config.billing_currency {
@@ -335,7 +328,7 @@ pub async fn live_model_reference_catalog(
                     pricing_template_from_models_dev_model(provider, &model, &model_data)
                 }
                 BillingCurrency::Cny => {
-                    pricing_template_from_local_cny_model(provider, &model, &model_data)
+                    pricing_template_from_moligate_cny_model(provider, &model, &model_data)
                 }
             };
             let Some(template) = template else { continue };
@@ -389,20 +382,6 @@ pub async fn list_pricing_policies(state: &AppState) -> AppResult<Vec<PricingPol
     rows.iter().map(pricing_policy_from_row).collect()
 }
 
-/// 判断 local_cny 目录中的 provider 价格来源:含 `metadata.fx_rate` 的为汇率换算价,
-/// 否则为原生 CNY 官方价。返回对应的 `pricing_template.source` 值。
-fn provider_source_for_local_cny(provider_data: &ModelsDevProvider) -> &'static str {
-    if provider_data
-        .metadata
-        .as_ref()
-        .is_some_and(|meta| meta.fx_rate.is_some())
-    {
-        PRICE_TEMPLATE_SOURCE_LOCAL_CNY_FX
-    } else {
-        PRICE_TEMPLATE_SOURCE_LOCAL_CNY
-    }
-}
-
 pub async fn sync_pricing_templates(
     state: &AppState,
     req: SyncPricingTemplatesRequest,
@@ -410,10 +389,10 @@ pub async fn sync_pricing_templates(
     match req.source.trim() {
         "" => match state.config.billing_currency {
             BillingCurrency::Usd => sync_models_dev_pricing_templates(state).await,
-            BillingCurrency::Cny => sync_local_cny_pricing_templates(state).await,
+            BillingCurrency::Cny => sync_moligate_cny_pricing_templates(state).await,
         },
         PRICE_TEMPLATE_SOURCE_MODELS_DEV => sync_models_dev_pricing_templates(state).await,
-        PRICE_TEMPLATE_SOURCE_LOCAL_CNY => sync_local_cny_pricing_templates(state).await,
+        PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA => sync_moligate_cny_pricing_templates(state).await,
         source => Err(AppError::BadRequest(format!(
             "unsupported pricing template source: {source}"
         ))),
@@ -518,100 +497,40 @@ async fn sync_channel_model_enabled_for_price(
 async fn sync_models_dev_pricing_templates(
     state: &AppState,
 ) -> AppResult<PricingTemplateSyncResult> {
-    let upstream = fetch_models_dev_pricing_json(state).await?;
-    let provider_codes = enabled_provider_codes(state).await?;
-    let mut fetched = 0usize;
-    let mut skipped = 0usize;
-    let mut saved = 0u64;
-
-    for (upstream_provider, provider_data) in upstream {
-        fetched += provider_data.models.len();
-        let Some(provider) = normalize_template_provider(&upstream_provider) else {
-            skipped += provider_data.models.len();
-            continue;
-        };
-        if !provider_codes.contains(provider) {
-            skipped += provider_data.models.len();
-            continue;
-        }
-
-        for (model, model_data) in provider_data.models {
-            let Some(template) =
-                pricing_template_from_models_dev_model(provider, &model, &model_data)
-            else {
-                skipped += 1;
-                continue;
-            };
-            saved +=
-                upsert_synced_pricing_template(state, template, PRICE_TEMPLATE_SOURCE_MODELS_DEV)
-                    .await?;
-        }
-    }
-
-    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_LOCAL_CNY).await?;
-
-    Ok(PricingTemplateSyncResult {
-        source: PRICE_TEMPLATE_SOURCE_MODELS_DEV.to_string(),
-        fetched,
-        saved,
-        skipped,
-        removed,
-    })
-}
-
-const LOCAL_CNY_PRICING_JSON_PATH: &str = "/model-pricing.json";
-
-async fn sync_local_cny_pricing_templates(
-    state: &AppState,
-) -> AppResult<PricingTemplateSyncResult> {
-    let upstream = fetch_local_cny_pricing_json(state).await?;
-    apply_local_cny_pricing_templates(state, upstream).await
-}
-
-async fn fetch_local_cny_pricing_json(
-    state: &AppState,
-) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    let Some(base_url) = state.config.public_base_url.as_deref() else {
-        return Err(AppError::BadRequest(
-            "PUBLIC_BASE_URL is not configured, cannot fetch local CNY pricing JSON".to_string(),
-        ));
-    };
-    let url = format!("{base_url}{LOCAL_CNY_PRICING_JSON_PATH}");
-    fetch_pricing_json(state, &url, local_cny_pricing_unavailable).await
-}
-
-async fn fetch_models_dev_pricing_json(
-    state: &AppState,
-) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    fetch_pricing_json(
+    let upstream = fetch_usd_pricing_with_moligate_capabilities(state).await?;
+    apply_pricing_templates_from_upstream(
         state,
-        MODELS_DEV_PRICING_URL,
-        models_dev_pricing_unavailable,
+        upstream,
+        PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+        PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
+        models_dev_capabilities,
     )
     .await
 }
 
-async fn fetch_pricing_json(
+async fn sync_moligate_cny_pricing_templates(
     state: &AppState,
-    url: &str,
-    map_error: fn(reqwest::Error) -> AppError,
-) -> AppResult<HashMap<String, ModelsDevProvider>> {
-    state
-        .http
-        .get(url)
-        .send()
-        .await
-        .map_err(map_error)?
-        .error_for_status()
-        .map_err(map_error)?
-        .json::<HashMap<String, ModelsDevProvider>>()
-        .await
-        .map_err(map_error)
+) -> AppResult<PricingTemplateSyncResult> {
+    let upstream = fetch_moligate_cny_pricing_json(state).await?;
+    apply_pricing_templates_from_upstream(
+        state,
+        upstream,
+        PRICE_TEMPLATE_SOURCE_MOLIGATE_DATA,
+        PRICE_TEMPLATE_SOURCE_MODELS_DEV,
+        moligate_cny_pricing_capabilities,
+    )
+    .await
 }
 
-async fn apply_local_cny_pricing_templates(
+/// 两个定价数据源共享的迭代-upsert-剪枝骨架。
+/// `source` 为本次写入的数据源标签；`stale_source` 为同步后需要清理的旧数据源标签；
+/// `capabilities_fn` 由调用方按数据源格式提取模型能力 JSON。
+async fn apply_pricing_templates_from_upstream(
     state: &AppState,
     upstream: HashMap<String, ModelsDevProvider>,
+    source: &'static str,
+    stale_source: &'static str,
+    capabilities_fn: fn(&ModelsDevModel) -> Value,
 ) -> AppResult<PricingTemplateSyncResult> {
     let provider_codes = enabled_provider_codes(state).await?;
     let mut fetched = 0usize;
@@ -629,10 +548,9 @@ async fn apply_local_cny_pricing_templates(
             continue;
         }
 
-        let source = provider_source_for_local_cny(&provider_data);
         for (model, model_data) in provider_data.models {
             let Some(template) =
-                pricing_template_from_local_cny_model(provider, &model, &model_data)
+                pricing_template_from_model(provider, &model, &model_data, capabilities_fn)
             else {
                 skipped += 1;
                 continue;
@@ -641,10 +559,9 @@ async fn apply_local_cny_pricing_templates(
         }
     }
 
-    let removed = prune_stale_pricing_templates(state, PRICE_TEMPLATE_SOURCE_MODELS_DEV).await?;
-
+    let removed = prune_stale_pricing_templates(state, stale_source).await?;
     Ok(PricingTemplateSyncResult {
-        source: PRICE_TEMPLATE_SOURCE_LOCAL_CNY.to_string(),
+        source: source.to_string(),
         fetched,
         saved,
         skipped,
@@ -652,19 +569,93 @@ async fn apply_local_cny_pricing_templates(
     })
 }
 
-fn models_dev_pricing_unavailable(err: reqwest::Error) -> AppError {
-    tracing::warn!(
-        error = %err,
-        error_debug = ?err,
-        "failed to sync pricing templates from models.dev"
-    );
-    pricing_reference_source_unavailable()
+async fn fetch_moligate_cny_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    fetch_pricing_json(state, MOLIGATE_CNY_PRICING_URL, |err| {
+        pricing_source_unavailable("data.moligate.cn CNY pricing", err)
+    })
+    .await
 }
-fn local_cny_pricing_unavailable(err: reqwest::Error) -> AppError {
+
+async fn fetch_models_dev_pricing_json(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    fetch_pricing_json(state, MODELS_DEV_PRICING_URL, |err| {
+        pricing_source_unavailable("models.dev", err)
+    })
+    .await
+}
+
+async fn fetch_usd_pricing_with_moligate_capabilities(
+    state: &AppState,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    let mut pricing = fetch_models_dev_pricing_json(state).await?;
+    match fetch_moligate_cny_pricing_json(state).await {
+        Ok(catalog) => merge_catalog_capabilities(&mut pricing, catalog),
+        Err(err) => {
+            tracing::warn!(error = ?err, "failed to enrich USD models with Moligate capabilities")
+        }
+    }
+    Ok(pricing)
+}
+
+fn merge_catalog_capabilities(
+    pricing: &mut HashMap<String, ModelsDevProvider>,
+    catalog: HashMap<String, ModelsDevProvider>,
+) {
+    let mut capabilities_by_model = HashMap::new();
+    for (upstream_provider, provider_data) in catalog {
+        let Some(provider) = normalize_template_provider(&upstream_provider) else {
+            continue;
+        };
+        for (model, model_data) in provider_data.models {
+            if model_data.capabilities.is_some() || !model_data.interfaces.is_empty() {
+                capabilities_by_model.insert(
+                    (provider, model.trim().to_ascii_lowercase()),
+                    (model_data.capabilities, model_data.interfaces),
+                );
+            }
+        }
+    }
+
+    for (upstream_provider, provider_data) in pricing {
+        let Some(provider) = normalize_template_provider(upstream_provider) else {
+            continue;
+        };
+        for (model, model_data) in &mut provider_data.models {
+            let key = (provider, model.trim().to_ascii_lowercase());
+            if let Some((capabilities, interfaces)) = capabilities_by_model.get(&key) {
+                model_data.capabilities.clone_from(capabilities);
+                model_data.interfaces.clone_from(interfaces);
+            }
+        }
+    }
+}
+
+async fn fetch_pricing_json(
+    state: &AppState,
+    url: &str,
+    map_error: impl Fn(reqwest::Error) -> AppError,
+) -> AppResult<HashMap<String, ModelsDevProvider>> {
+    state
+        .http
+        .get(url)
+        .send()
+        .await
+        .map_err(&map_error)?
+        .error_for_status()
+        .map_err(&map_error)?
+        .json::<HashMap<String, ModelsDevProvider>>()
+        .await
+        .map_err(map_error)
+}
+
+fn pricing_source_unavailable(source_name: &str, err: reqwest::Error) -> AppError {
     tracing::warn!(
         error = %err,
         error_debug = ?err,
-        "failed to sync local CNY pricing templates from public base url"
+        "failed to sync pricing templates from {source_name}"
     );
     pricing_reference_source_unavailable()
 }
@@ -694,59 +685,83 @@ struct PricingTemplateUpsert<'a> {
     prices: Option<PricingMicros>,
 }
 
+/// 从数据源模型数据构建价格模板 upsert payload。
+/// `capabilities_fn` 由调用方提供，按数据源格式提取 capabilities JSON。
+fn pricing_template_from_model<'a>(
+    provider: &'a str,
+    model: &'a str,
+    model_data: &ModelsDevModel,
+    capabilities_fn: fn(&ModelsDevModel) -> Value,
+) -> Option<PricingTemplateUpsert<'a>> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let billing_meter = billing_meter_from_models_dev_model(model_data);
+    let capabilities = capabilities_fn(model_data);
+    let prices = audio_pricing_for_model(
+        billing_meter == BillingMeter::Audio,
+        pricing_micros_from_models_dev_model(model_data),
+    );
+    Some(PricingTemplateUpsert {
+        provider,
+        model,
+        billing_meter,
+        capabilities,
+        prices,
+    })
+}
+
 fn pricing_template_from_models_dev_model<'a>(
     provider: &'a str,
     model: &'a str,
     model_data: &ModelsDevModel,
 ) -> Option<PricingTemplateUpsert<'a>> {
-    let model = model.trim();
-    if model.is_empty() {
-        return None;
-    }
-    let billing_meter = billing_meter_from_models_dev_model(model_data);
-    let prices = pricing_micros_from_models_dev_model(model_data);
-    Some(PricingTemplateUpsert {
-        provider,
-        model,
-        billing_meter,
-        capabilities: models_dev_capabilities(model_data),
-        prices,
-    })
+    pricing_template_from_model(provider, model, model_data, models_dev_capabilities)
 }
 
-fn pricing_template_from_local_cny_model<'a>(
+fn pricing_template_from_moligate_cny_model<'a>(
     provider: &'a str,
     model: &'a str,
     model_data: &ModelsDevModel,
 ) -> Option<PricingTemplateUpsert<'a>> {
-    let model = model.trim();
-    if model.is_empty() {
-        return None;
-    }
-    let billing_meter = billing_meter_from_models_dev_model(model_data);
-    let prices = pricing_micros_from_local_pricing_model(model_data);
-    Some(PricingTemplateUpsert {
+    pricing_template_from_model(
         provider,
         model,
-        billing_meter,
-        capabilities: local_pricing_capabilities(model_data),
-        prices,
-    })
+        model_data,
+        moligate_cny_pricing_capabilities,
+    )
 }
 
 fn pricing_micros_from_models_dev_model(model: &ModelsDevModel) -> Option<PricingMicros> {
     pricing_micros_from_cost(model.cost.as_ref()?)
 }
 
-fn pricing_micros_from_local_pricing_model(model: &ModelsDevModel) -> Option<PricingMicros> {
-    pricing_micros_from_cost(model.cost.as_ref()?)
+fn audio_pricing_for_model(
+    audio_transcription: bool,
+    prices: Option<PricingMicros>,
+) -> Option<PricingMicros> {
+    prices.map(|mut prices| {
+        if audio_transcription && prices.pricing_basis == PricingBasis::Second {
+            prices.billing_meter = BillingMeter::Audio;
+        }
+        prices
+    })
 }
 
 /// 按 `cost.basis` 口径分流构造参考价微单位。
 /// 所有口径共用 `×1_000_000` 微单位换算,前端按 `pricing_basis` 选择展示标签。
 /// `pricing_basis` 影响参考价展示文案;实际计费链路仍以 `billing_meter` 为准。
 fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
-    let basis = parse_pricing_basis(cost.basis.as_deref());
+    let basis = if cost
+        .video_tiers
+        .as_ref()
+        .is_some_and(|tiers| !tiers.is_empty())
+    {
+        PricingBasis::MultiTierVideo
+    } else {
+        parse_pricing_basis(cost.basis.as_deref())
+    };
     use PricingBasis::*;
     match basis {
         Image => {
@@ -812,10 +827,11 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         MultiTierVideo => {
-            // input/output 已由抓取脚本取代表档(最低档)写入,作为视频参考价代表档。
-            let input = per_million_to_micros(cost.input)?;
-            let output =
-                per_million_to_micros(cost.output).or_else(|| per_million_to_micros(cost.input))?;
+            // 新数据源只提供 video_tiers 时，从首档取一个代表价用于列表摘要。
+            let representative = representative_video_tier_price(cost.video_tiers.as_deref());
+            let input = per_million_to_micros(cost.input.or(representative))?;
+            let output = per_million_to_micros(cost.output)
+                .or_else(|| per_million_to_micros(cost.input.or(representative)))?;
             Some(PricingMicros {
                 input_price_micros: input,
                 output_price_micros: output,
@@ -827,8 +843,8 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
         Token => {
-            let input = per_million_to_micros(cost.input)?;
-            let output = per_million_to_micros(cost.output)?;
+            let input = per_million_to_micros(cost.input.or(cost.per_million_tokens))?;
+            let output = per_million_to_micros(cost.output.or(cost.per_million_tokens))?;
             Some(PricingMicros {
                 input_price_micros: input,
                 output_price_micros: output,
@@ -840,6 +856,31 @@ fn pricing_micros_from_cost(cost: &ModelsDevCost) -> Option<PricingMicros> {
             })
         }
     }
+}
+
+fn representative_video_tier_price(video_tiers: Option<&[Value]>) -> Option<f64> {
+    const DIMENSION_PRIORITY: &[&str] = &[
+        "input_without_video",
+        "input_with_video",
+        "with_audio",
+        "without_audio",
+        "price",
+    ];
+
+    for tier in video_tiers? {
+        let Some(dimensions) = tier.get("tiers").and_then(Value::as_object) else {
+            continue;
+        };
+        for dimension in DIMENSION_PRIORITY {
+            if let Some(value) = dimensions.get(*dimension).and_then(Value::as_f64) {
+                return Some(value);
+            }
+        }
+        if let Some(value) = dimensions.values().find_map(Value::as_f64) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
@@ -855,7 +896,9 @@ fn parse_pricing_basis(value: Option<&str>) -> PricingBasis {
 }
 
 fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
-    if model
+    if is_audio_transcription_model_data(model) {
+        BillingMeter::Audio
+    } else if model
         .modalities
         .as_ref()
         .is_some_and(|modalities| modality_contains(&modalities.output, "video"))
@@ -872,6 +915,13 @@ fn billing_meter_from_models_dev_model(model: &ModelsDevModel) -> BillingMeter {
     }
 }
 
+fn is_audio_transcription_model_data(model: &ModelsDevModel) -> bool {
+    model.modalities.as_ref().is_some_and(|modalities| {
+        modality_contains(&modalities.input, "audio")
+            && modality_contains(&modalities.output, "text")
+    })
+}
+
 fn modality_contains(values: &[String], target: &str) -> bool {
     values
         .iter()
@@ -879,7 +929,7 @@ fn modality_contains(values: &[String], target: &str) -> bool {
 }
 
 fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
-    json!({
+    let mut payload = json!({
         "id": model.id,
         "name": model.name,
         "family": model.family,
@@ -894,10 +944,12 @@ fn models_dev_capabilities(model: &ModelsDevModel) -> Value {
         "modalities": model.modalities,
         "open_weights": model.open_weights,
         "limit": model.limit,
-    })
+    });
+    attach_catalog_capabilities(&mut payload, model);
+    payload
 }
 
-fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
+fn moligate_cny_pricing_capabilities(model: &ModelsDevModel) -> Value {
     let mut payload = json!({
         "id": model.id,
         "name": model.name,
@@ -908,7 +960,18 @@ fn local_pricing_capabilities(model: &ModelsDevModel) -> Value {
             payload["video_tiers"] = json!(video_tiers);
         }
     }
+    attach_catalog_capabilities(&mut payload, model);
     payload
+}
+
+fn attach_catalog_capabilities(payload: &mut Value, model: &ModelsDevModel) {
+    if model.capabilities.is_none() && model.interfaces.is_empty() {
+        return;
+    }
+    payload["catalog"] = json!({
+        "capabilities": model.capabilities,
+        "interfaces": model.interfaces,
+    });
 }
 
 async fn upsert_synced_pricing_template(
@@ -924,7 +987,11 @@ async fn upsert_synced_pricing_template(
          ON CONFLICT (provider, model)
          DO UPDATE SET
              billing_meter = EXCLUDED.billing_meter,
-             capabilities = EXCLUDED.capabilities,
+             capabilities = (provider_model.capabilities
+                 - 'audio_transcription'
+                 - 'audio_transcription_api'
+                 - 'realtime_audio_transcription'
+                 - 'realtime_audio_transcription_api') || EXCLUDED.capabilities,
              updated_at = now()",
     )
     .bind(template.provider)
@@ -1102,6 +1169,7 @@ fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
         pricing_basis: match req.billing_meter {
             BillingMeter::Image => PricingBasis::Image,
             BillingMeter::Video => PricingBasis::MultiTierVideo,
+            BillingMeter::Audio => PricingBasis::Second,
             BillingMeter::Token => PricingBasis::Token,
         },
     };
@@ -1118,6 +1186,17 @@ fn validate_price(req: &UpsertChannelPriceRequest) -> AppResult<()> {
                 return Err(AppError::BadRequestWithCode {
                     code: "image_unit_price_required",
                     message: "unit price is required for image billing",
+                });
+            }
+        }
+    }
+    if prices.billing_meter == BillingMeter::Audio {
+        match prices.unit_price_micros {
+            Some(price) if price > 0 => {}
+            _ => {
+                return Err(AppError::BadRequestWithCode {
+                    code: "audio_unit_price_required",
+                    message: "a positive per-second price is required for audio billing",
                 });
             }
         }
@@ -1380,6 +1459,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn omitted_sync_source_uses_billing_currency_default() {
+        let request: SyncPricingTemplatesRequest = serde_json::from_str("{}").unwrap();
+        assert!(request.source.is_empty());
+    }
+
+    #[test]
+    fn parses_moligate_cny_provider_map_shape() {
+        let providers: HashMap<String, ModelsDevProvider> = serde_json::from_str(
+            r#"{
+                "dashscope": {
+                    "models": {
+                        "qwen-test": {
+                            "name": "Qwen Test",
+                            "modalities": {"input": ["text"], "output": ["text"]},
+                            "cost": {"input": 0.8, "output": 2, "basis": "token"},
+                            "metadata": {"currency": "CNY"}
+                        }
+                    },
+                    "metadata": {"currency": "CNY", "fetched_at": "2026-07-29T00:00:00Z"}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let model = providers["dashscope"].models.get("qwen-test").unwrap();
+        let prices = pricing_micros_from_models_dev_model(model).unwrap();
+        assert_eq!(prices.input_price_micros, 800_000);
+        assert_eq!(prices.output_price_micros, 2_000_000);
+    }
+
+    #[test]
     fn converts_models_dev_per_million_to_micros() {
         assert_eq!(per_million_to_micros(Some(0.1)), Some(100_000));
         assert_eq!(per_million_to_micros(Some(1.25)), Some(1_250_000));
@@ -1473,6 +1583,59 @@ mod tests {
     }
 
     #[test]
+    fn moligate_per_million_tokens_uses_same_input_output_price() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["text","image","video"],"output":["video"]},
+                "cost":{"per_million_tokens":15}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("doubao", "doubao-seedance-1.0-pro", &model)
+                .unwrap();
+        let prices = template.prices.unwrap();
+
+        assert_eq!(template.billing_meter, BillingMeter::Video);
+        assert_eq!(prices.pricing_basis, PricingBasis::Token);
+        assert_eq!(prices.input_price_micros, 15_000_000);
+        assert_eq!(prices.output_price_micros, 15_000_000);
+    }
+
+    #[test]
+    fn moligate_video_tiers_infer_multi_tier_price() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["text","image","video"],"output":["video"]},
+                "cost":{"video_tiers":[
+                    {"resolution":"480p,720p","tiers":{
+                        "input_without_video":46,
+                        "input_with_video":28
+                    }},
+                    {"resolution":"1080p","tiers":{
+                        "input_without_video":51,
+                        "input_with_video":31
+                    }}
+                ]}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("doubao", "doubao-seedance-2.0", &model)
+                .unwrap();
+        let prices = template.prices.unwrap();
+
+        assert_eq!(prices.pricing_basis, PricingBasis::MultiTierVideo);
+        assert_eq!(prices.billing_meter, BillingMeter::Video);
+        assert_eq!(prices.input_price_micros, 46_000_000);
+        assert_eq!(prices.output_price_micros, 46_000_000);
+        assert_eq!(
+            template.capabilities["video_tiers"][0]["tiers"]["input_with_video"],
+            28
+        );
+    }
+
+    #[test]
     fn pricing_basis_multi_tier_video_uses_representative_tier() {
         let model: ModelsDevModel =
             serde_json::from_str(r#"{"cost":{"input":16,"output":16,"basis":"multi_tier_video"}}"#)
@@ -1494,6 +1657,185 @@ mod tests {
         assert_eq!(
             billing_meter_from_models_dev_model(&model),
             BillingMeter::Video
+        );
+    }
+
+    #[test]
+    fn audio_modalities_distinguish_transcription_from_speech_generation() {
+        let transcription: ModelsDevModel =
+            serde_json::from_str(r#"{"modalities":{"input":["audio"],"output":["text"]}}"#)
+                .unwrap();
+        let speech_generation: ModelsDevModel =
+            serde_json::from_str(r#"{"modalities":{"input":["text"],"output":["audio"]}}"#)
+                .unwrap();
+
+        assert!(is_audio_transcription_model_data(&transcription));
+        assert!(!is_audio_transcription_model_data(&speech_generation));
+        assert_eq!(
+            billing_meter_from_models_dev_model(&transcription),
+            BillingMeter::Audio
+        );
+        assert_eq!(
+            billing_meter_from_models_dev_model(&speech_generation),
+            BillingMeter::Token
+        );
+    }
+
+    #[test]
+    fn moligate_fun_asr_flash_preserves_catalog_capability_and_audio_price() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["audio"],"output":["text"]},
+                "capabilities":{"audio_transcription":{"file":true,"realtime":false}},
+                "interfaces":[{
+                    "operation":"audio_transcription",
+                    "mode":"file",
+                    "transport":"https",
+                    "upstream_protocol":"dashscope_http",
+                    "request_style":"dashscope_multimodal_generation"
+                }],
+                "cost":{"per_second":0.00022,"basis":"second"}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("qwen", "fun-asr-flash-2026-06-15", &model)
+                .unwrap();
+
+        assert_eq!(template.billing_meter, BillingMeter::Audio);
+        assert!(template.capabilities.get("audio_transcription").is_none());
+        assert_eq!(
+            template.capabilities["catalog"]["capabilities"]["audio_transcription"]["file"],
+            true
+        );
+        assert_eq!(
+            template.capabilities["catalog"]["interfaces"][0]["mode"],
+            "file"
+        );
+        let prices = template.prices.unwrap();
+        assert_eq!(prices.billing_meter, BillingMeter::Audio);
+        assert_eq!(prices.pricing_basis, PricingBasis::Second);
+        assert_eq!(prices.unit_price_micros, Some(220));
+    }
+
+    #[test]
+    fn realtime_asr_preserves_structured_catalog_capability() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["audio"],"output":["text"]},
+                "capabilities":{"audio_transcription":{"file":false,"realtime":true}},
+                "interfaces":[{
+                    "operation":"audio_transcription",
+                    "mode":"realtime",
+                    "transport":"websocket",
+                    "upstream_protocol":"dashscope_websocket",
+                    "request_style":"dashscope_qwen_realtime"
+                }],
+                "cost":{"per_second":0.00022,"basis":"second"}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("qwen", "qwen3-asr-flash-realtime", &model)
+                .unwrap();
+
+        assert_eq!(template.billing_meter, BillingMeter::Audio);
+        assert_eq!(
+            template.capabilities["catalog"]["interfaces"][0]["request_style"],
+            "dashscope_qwen_realtime"
+        );
+        let prices = template.prices.unwrap();
+        assert_eq!(prices.billing_meter, BillingMeter::Audio);
+        assert_eq!(prices.pricing_basis, PricingBasis::Second);
+        assert_eq!(prices.unit_price_micros, Some(220));
+    }
+
+    #[test]
+    fn source_without_structured_interfaces_gets_no_asr_execution_capability() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["audio"],"output":["text"]},
+                "cost":{"per_second":0.00003,"basis":"second"}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_models_dev_model("qwen", "qwen3-asr-flash-realtime", &model)
+                .unwrap();
+
+        assert_eq!(template.billing_meter, BillingMeter::Audio);
+        assert!(template.capabilities.get("catalog").is_none());
+        let prices = template.prices.unwrap();
+        assert_eq!(prices.billing_meter, BillingMeter::Audio);
+        assert_eq!(prices.pricing_basis, PricingBasis::Second);
+        assert_eq!(prices.unit_price_micros, Some(30));
+    }
+
+    #[test]
+    fn usd_pricing_can_merge_moligate_capabilities_without_merging_prices() {
+        let mut pricing: HashMap<String, ModelsDevProvider> = serde_json::from_str(
+            r#"{
+                "qwen": {"models": {"qwen3-asr-flash-realtime": {
+                    "cost":{"per_second":0.00003,"basis":"second"}
+                }}}
+            }"#,
+        )
+        .unwrap();
+        let catalog: HashMap<String, ModelsDevProvider> = serde_json::from_str(
+            r#"{
+                "dashscope": {"models": {"qwen3-asr-flash-realtime": {
+                    "cost":{"per_second":0.00033,"basis":"second"},
+                    "capabilities":{"audio_transcription":{"file":false,"realtime":true}},
+                    "interfaces":[{
+                        "operation":"audio_transcription",
+                        "mode":"realtime",
+                        "transport":"websocket",
+                        "upstream_protocol":"dashscope_websocket",
+                        "request_style":"dashscope_qwen_realtime"
+                    }]
+                }}}
+            }"#,
+        )
+        .unwrap();
+
+        merge_catalog_capabilities(&mut pricing, catalog);
+        let model = &pricing["qwen"].models["qwen3-asr-flash-realtime"];
+        assert_eq!(model.cost.as_ref().unwrap().per_second, Some(0.00003));
+        assert_eq!(
+            model.capabilities.as_ref().unwrap()["audio_transcription"]["realtime"],
+            true
+        );
+        assert_eq!(
+            model.interfaces[0]["request_style"],
+            "dashscope_qwen_realtime"
+        );
+    }
+
+    #[test]
+    fn catalog_realtime_capability_does_not_enable_an_unimplemented_adapter() {
+        let model: ModelsDevModel = serde_json::from_str(
+            r#"{
+                "modalities":{"input":["audio"],"output":["text"]},
+                "capabilities":{"audio_transcription":{"file":false,"realtime":true}},
+                "interfaces":[{
+                    "operation":"audio_transcription",
+                    "mode":"realtime",
+                    "transport":"websocket",
+                    "upstream_protocol":"dashscope_websocket",
+                    "request_style":"dashscope_realtime"
+                }],
+                "cost":{"per_second":0.00022,"basis":"second"}
+            }"#,
+        )
+        .unwrap();
+        let template =
+            pricing_template_from_moligate_cny_model("qwen", "fun-asr-realtime-2026-02-28", &model)
+                .unwrap();
+
+        assert_eq!(template.billing_meter, BillingMeter::Audio);
+        assert_eq!(
+            template.capabilities["catalog"]["capabilities"]["audio_transcription"]["realtime"],
+            true
         );
     }
 

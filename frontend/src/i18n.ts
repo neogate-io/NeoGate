@@ -1,4 +1,5 @@
 import { adminMessages } from './i18n/admin'
+import { appMessages } from './i18n/apps'
 import { publicMessages } from './i18n/public'
 import { userMessages } from './i18n/user'
 
@@ -15,11 +16,13 @@ const messages = {
   'zh-CN': {
     ...publicMessages['zh-CN'],
     ...adminMessages['zh-CN'],
+    ...appMessages['zh-CN'],
     ...userMessages['zh-CN']
   },
   'en-US': {
     ...publicMessages['en-US'],
     ...adminMessages['en-US'],
+    ...appMessages['en-US'],
     ...userMessages['en-US']
   }
 } satisfies Record<Locale, Record<string, string>>

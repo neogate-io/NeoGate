@@ -1,9 +1,15 @@
+mod assets;
+mod audio;
 mod background;
 mod images;
 mod multipart;
+mod realtime;
 mod videos;
 
+pub(crate) use assets::{openai_asset_detail, openai_assets_create};
+pub(crate) use audio::openai_audio_transcriptions;
 pub(crate) use background::response_terminal;
+pub(crate) use realtime::openai_realtime;
 pub(crate) use videos::{video_status_text, video_terminal};
 
 use std::{sync::Arc, time::Instant};
@@ -362,7 +368,7 @@ async fn relay_openai(
     let PreparedRelayBody {
         body,
         meta,
-        output_tokens,
+        requested_output_tokens,
     } = prepare_relay_body(body, body_kind, state.billing.default_output_tokens())?;
     let routing_context = project_model_request_context(&body);
     let resolved = crate::project::models::resolve_project_model_with_context(
@@ -397,7 +403,7 @@ async fn relay_openai(
                 target_model: resolved.target_model,
                 target_channel_id: resolved.target_channel_id,
                 routing: resolved.routing,
-                output_tokens,
+                requested_output_tokens,
                 request_params: meta.request_params,
                 channel_affinity_key: meta.channel_affinity_key,
             },
@@ -483,7 +489,7 @@ async fn relay_openai(
                 &auth,
                 user_key_model_credit_account.as_ref(),
                 &upstream_body,
-                output_tokens,
+                requested_output_tokens,
                 &price,
             )
             .await?
@@ -493,6 +499,7 @@ async fn relay_openai(
             auth: auth.clone(),
             upstream,
             protocol,
+            method: "POST",
             path,
             model: resolved.target_model.clone(),
             external_model: resolved.external_model.clone(),
@@ -528,7 +535,11 @@ async fn relay_openai(
                 "Anthropic fallback is not supported for {path}"
             ))),
             UpstreamProtocol::Openai | UpstreamProtocol::OpenAiOauth => {
-                let adapter = adapter_for_endpoint(&ctx.upstream.provider, &ctx.upstream.base_url);
+                let adapter = adapter_for_endpoint(
+                    &ctx.upstream.provider,
+                    &ctx.upstream.base_url,
+                    ctx.upstream.adapter_hint.as_deref(),
+                );
                 let prepared = adapter.prepare_openai_request(
                     &ctx.upstream,
                     protocol,
@@ -742,6 +753,14 @@ async fn finish_openai_relay_success(
             "/v1/responses",
             AdapterResponseMode::OpenAiChatAsOpenAiResponse,
         ) => bridge::finish_openai_chat_as_openai_response(ctx, status, upstream_response).await,
+        (UpstreamProtocol::Openai, "/v1/responses", AdapterResponseMode::Passthrough) => {
+            bridge::finish_openai_response_with_reasoning_normalization(
+                ctx,
+                status,
+                upstream_response,
+            )
+            .await
+        }
         _ => finish_relay(ctx, Ok(upstream_response)).await,
     }
 }

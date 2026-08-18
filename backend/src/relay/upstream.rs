@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use crate::{
     admin::credentials::refresh_openai_runtime_credential,
-    config::DEFAULT_ANTHROPIC_VERSION,
+    config::{DEFAULT_ANTHROPIC_VERSION, UPSTREAM_TIMEOUT},
     error::{AppError, AppResult, UpstreamErrorKind, UpstreamRequestError},
     provider::adapters::{adapter_for_endpoint, PreparedUpstreamRequest},
     AppState,
@@ -60,7 +60,7 @@ pub(crate) async fn forward_openai_with_headers(
     }
     ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, protocol, path, || {
+    send_upstream_request(upstream, protocol, path, || {
         let request = state
             .http
             .post(url.clone())
@@ -83,7 +83,7 @@ pub(crate) async fn forward_prepared_openai(
         return forward_openai_oauth(state, upstream, prepared.body, &prepared.log_path).await;
     }
     ensure_openai_protocol(protocol)?;
-    send_upstream_request(state, upstream, protocol, &prepared.log_path, || {
+    send_upstream_request(upstream, protocol, &prepared.log_path, || {
         let mut request = state
             .http
             .post(prepared.url.clone())
@@ -109,7 +109,7 @@ pub(crate) async fn forward_openai_with_content_type(
 ) -> AppResult<reqwest::Response> {
     ensure_openai_protocol(protocol)?;
     let url = upstream_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, protocol, path, || {
+    send_upstream_request(upstream, protocol, path, || {
         let mut request = state
             .http
             .post(url.clone())
@@ -151,6 +151,14 @@ fn apply_openai_codex_passthrough_headers(
     }
 
     for &header in ANTHROPIC_CLI_PASSTHROUGH_HEADERS {
+        // 跳过已在 CODEX 循环中处理过的头（如 user-agent），避免 reqwest 追加语义
+        // 导致同一头被发送两次，某些上游/网关会因重复头拒绝或行为异常。
+        if CODEX_CLI_PASSTHROUGH_HEADERS
+            .iter()
+            .any(|&h| h.eq_ignore_ascii_case(header))
+        {
+            continue;
+        }
         if let Some(value) = headers.get(header) {
             request = request.header(header, value.clone());
         }
@@ -241,17 +249,64 @@ pub(crate) async fn forward_openai_bound(
     path: &str,
     body: Option<Bytes>,
 ) -> AppResult<reqwest::Response> {
-    let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
-    let (url, log_path) = adapter.resolve_bound_url(&upstream.base_url, path);
-    send_upstream_request(state, upstream, UpstreamProtocol::Openai, &log_path, || {
+    forward_openai_bound_with_headers(state, upstream, method, path, body, &HeaderMap::new()).await
+}
+
+pub(crate) async fn forward_openai_video_task_bound(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    path: &str,
+    model: Option<&str>,
+) -> AppResult<reqwest::Response> {
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
+    let target = adapter.resolve_video_task_url(&upstream.base_url, path, model);
+    forward_openai_bound_to(state, upstream, method, None, &HeaderMap::new(), target).await
+}
+
+pub(crate) async fn forward_openai_bound_with_headers(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    path: &str,
+    body: Option<Bytes>,
+    headers: &HeaderMap,
+) -> AppResult<reqwest::Response> {
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
+    let target = adapter.resolve_bound_url(&upstream.base_url, path);
+    forward_openai_bound_to(state, upstream, method, body, headers, target).await
+}
+
+async fn forward_openai_bound_to(
+    state: &AppState,
+    upstream: &SelectedUpstream,
+    method: Method,
+    body: Option<Bytes>,
+    headers: &HeaderMap,
+    (url, log_path): (String, String),
+) -> AppResult<reqwest::Response> {
+    send_upstream_request(upstream, UpstreamProtocol::Openai, &log_path, || {
         let mut request = state
             .http
             .request(method.clone(), url.clone())
             .bearer_auth(&upstream.secret);
+        if let Some(value) = headers.get("accept") {
+            request = request.header("accept", value.clone());
+        }
         if let Some(body) = body.clone() {
-            request = request
-                .header("content-type", "application/json")
-                .body(body);
+            let content_type = headers
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+            request = request.header("content-type", content_type).body(body);
         }
         request
     })
@@ -266,7 +321,7 @@ async fn send_openai_oauth_request(
     body: Bytes,
     path: &str,
 ) -> AppResult<reqwest::Response> {
-    send_upstream_request(state, upstream, UpstreamProtocol::OpenAiOauth, path, || {
+    send_upstream_request(upstream, UpstreamProtocol::OpenAiOauth, path, || {
         state
             .http
             .post(url)
@@ -378,18 +433,9 @@ pub(crate) async fn forward_anthropic(
     body: Bytes,
 ) -> AppResult<reqwest::Response> {
     let url = upstream_url(&upstream.base_url, "/v1/messages");
-    let anthropic_version = headers
-        .get("anthropic-version")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
-        .to_string();
-    let anthropic_beta = headers
-        .get("anthropic-beta")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+    let (anthropic_version, anthropic_beta) = extract_anthropic_version_headers(headers);
 
     send_upstream_request(
-        state,
         upstream,
         UpstreamProtocol::Anthropic,
         "/v1/messages",
@@ -421,17 +467,9 @@ pub(crate) async fn forward_anthropic_bound(
     body: Option<Bytes>,
 ) -> AppResult<reqwest::Response> {
     let url = upstream_url(&upstream.base_url, path);
-    let anthropic_version = headers
-        .get("anthropic-version")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
-        .to_string();
-    let anthropic_beta = headers
-        .get("anthropic-beta")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+    let (anthropic_version, anthropic_beta) = extract_anthropic_version_headers(headers);
 
-    send_upstream_request(state, upstream, UpstreamProtocol::Anthropic, path, || {
+    send_upstream_request(upstream, UpstreamProtocol::Anthropic, path, || {
         let mut request = state
             .http
             .request(method.clone(), url.clone())
@@ -450,6 +488,20 @@ pub(crate) async fn forward_anthropic_bound(
     .await
 }
 
+/// 从下游请求头提取 anthropic-version（缺省用 DEFAULT_ANTHROPIC_VERSION）和可选的 anthropic-beta。
+fn extract_anthropic_version_headers(headers: &HeaderMap) -> (String, Option<String>) {
+    let anthropic_version = headers
+        .get("anthropic-version")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(DEFAULT_ANTHROPIC_VERSION)
+        .to_string();
+    let anthropic_beta = headers
+        .get("anthropic-beta")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    (anthropic_version, anthropic_beta)
+}
+
 fn apply_anthropic_cli_passthrough_headers(
     mut request: reqwest::RequestBuilder,
     headers: &HeaderMap,
@@ -463,7 +515,6 @@ fn apply_anthropic_cli_passthrough_headers(
 }
 
 async fn send_upstream_request<F>(
-    state: &AppState,
     upstream: &SelectedUpstream,
     _protocol: UpstreamProtocol,
     _path: &str,
@@ -473,7 +524,7 @@ where
     F: FnOnce() -> reqwest::RequestBuilder,
 {
     match tokio::time::timeout(
-        state.config.http.upstream_timeout,
+        UPSTREAM_TIMEOUT,
         build().header("accept-encoding", "identity").send(),
     )
     .await
@@ -485,7 +536,7 @@ where
             upstream.provider.clone(),
             format!(
                 "response headers were not received within {} seconds",
-                state.config.http.upstream_timeout.as_secs()
+                UPSTREAM_TIMEOUT.as_secs()
             ),
         ))),
     }
@@ -518,50 +569,37 @@ pub(crate) fn log_relay_upstream_failure(ctx: &RelayContext, err: &AppError) {
                 }
             })
             .to_string();
+            // tracing 宏要求编译期常量级别，无法传运行时 Level；
+            // 用局部宏把 14 个字段只写一份，展开到 error/warn 两个分支。
+            macro_rules! log_upstream_failed {
+                ($macro:ident) => {
+                    tracing::$macro!(
+                        channel = %ctx.upstream.channel_name,
+                        channel_id = ctx.upstream.channel_id,
+                        channel_endpoint_id = ctx.upstream.channel_endpoint_id,
+                        channel_key_id = ?ctx.upstream.channel_key_id,
+                        credential_id = ?ctx.upstream.credential_id,
+                        provider = %ctx.upstream.provider,
+                        protocol = ctx.protocol.as_str(),
+                        model = %ctx.model,
+                        path = ctx.path,
+                        upstream = %ctx.upstream.base_url,
+                        status = upstream_error.status().as_u16(),
+                        client_status = upstream_error.status().as_u16(),
+                        latency_ms,
+                        error_kind,
+                        reason,
+                        detail,
+                        retryable = upstream_error.retryable,
+                        client_response = %client_response,
+                        "upstream request failed"
+                    )
+                };
+            }
             if upstream_error.status().is_server_error() {
-                tracing::error!(
-                    channel = %ctx.upstream.channel_name,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    channel_key_id = ?ctx.upstream.channel_key_id,
-                    credential_id = ?ctx.upstream.credential_id,
-                    provider = %ctx.upstream.provider,
-                    protocol = ctx.protocol.as_str(),
-                    model = %ctx.model,
-                    path = ctx.path,
-                    upstream = %ctx.upstream.base_url,
-                    status = upstream_error.status().as_u16(),
-                    client_status = upstream_error.status().as_u16(),
-                    latency_ms,
-                    error_kind,
-                    reason,
-                    detail,
-                    retryable = upstream_error.retryable,
-                    client_response = %client_response,
-                    "upstream request failed"
-                );
+                log_upstream_failed!(error);
             } else {
-                tracing::warn!(
-                    channel = %ctx.upstream.channel_name,
-                    channel_id = ctx.upstream.channel_id,
-                    channel_endpoint_id = ctx.upstream.channel_endpoint_id,
-                    channel_key_id = ?ctx.upstream.channel_key_id,
-                    credential_id = ?ctx.upstream.credential_id,
-                    provider = %ctx.upstream.provider,
-                    protocol = ctx.protocol.as_str(),
-                    model = %ctx.model,
-                    path = ctx.path,
-                    upstream = %ctx.upstream.base_url,
-                    status = upstream_error.status().as_u16(),
-                    client_status = upstream_error.status().as_u16(),
-                    latency_ms,
-                    error_kind,
-                    reason,
-                    detail,
-                    retryable = upstream_error.retryable,
-                    client_response = %client_response,
-                    "upstream request failed"
-                );
+                log_upstream_failed!(warn);
             }
             tracing::debug!(
                 channel_id = ctx.upstream.channel_id,

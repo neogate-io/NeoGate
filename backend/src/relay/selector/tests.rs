@@ -22,6 +22,7 @@ fn candidate(name: &str, priority: i32, weight: i32, models: Vec<&str>) -> Chann
         key_selection_mode: KeySelectionMode::Polling,
         use_credentials: false,
         cooldown_until: None,
+        adapter_hint: None,
         polling: Arc::new(AtomicUsize::new(0)),
     }
 }
@@ -103,6 +104,22 @@ async fn refreshed_credential_invalidation_is_targeted_and_stales_routing_cache(
         "secret-2"
     );
     assert!(selector.routing_cache.read().await.loaded_at.is_none());
+}
+
+#[tokio::test]
+async fn invalidate_bumps_routing_epoch_to_stale_concurrent_reload() {
+    // epoch 递增是 routing_snapshot 检测「加载期间被 invalidate」的依据。
+    let selector = Selector::with_cache_ttl(Duration::from_secs(30));
+    let before = selector.routing_epoch.load(Ordering::Acquire);
+    selector.invalidate().await;
+    let after_invalidate = selector.routing_epoch.load(Ordering::Acquire);
+    assert_eq!(after_invalidate, before + 1);
+
+    selector.invalidate_refreshed_credential(1).await;
+    assert_eq!(
+        selector.routing_epoch.load(Ordering::Acquire),
+        after_invalidate + 1
+    );
 }
 
 #[tokio::test]
@@ -644,6 +661,7 @@ fn affinity_target_preserves_selected_upstream_identity() {
         secret: "secret".to_string(),
         account_id: None,
         affinity: None,
+        adapter_hint: None,
     };
 
     let target = UpstreamAffinityTarget::from(&upstream);

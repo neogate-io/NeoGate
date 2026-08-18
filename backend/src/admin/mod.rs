@@ -73,8 +73,8 @@ use self::{
         UpdateProjectRequest, UpsertProjectMemberRequest,
     },
     provider::{
-        ensure_builtin_manual_provider_by_code, list_providers, provider_default_endpoints,
-        record_provider_models, ProviderRecord, OPENAI_OAUTH_PROTOCOL,
+        list_providers, provider_default_endpoints, record_provider_models, ProviderRecord,
+        OPENAI_OAUTH_PROTOCOL,
     },
     setting::{
         ensure_default_text_model_setting, get_admin_model_setting, get_site_setting,

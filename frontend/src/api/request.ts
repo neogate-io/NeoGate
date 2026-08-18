@@ -1,5 +1,8 @@
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
-import { ApiError, readApiErrorPayload } from '../utils/errors'
+import { ApiError, isSessionExpiredError, readApiErrorPayload } from '../utils/errors'
+import { translate } from '../i18n'
+import { locale } from '../composables/useLocale'
 import { router } from '../router'
 
 export type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -15,6 +18,14 @@ export async function userRequest<T>(path: string, init?: RequestInit) {
 }
 
 export async function adminFileRequest(path: string, init?: RequestInit) {
+  return authedFileRequest(path, init)
+}
+
+export async function userFileRequest(path: string, init?: RequestInit) {
+  return authedFileRequest(path, init)
+}
+
+async function authedFileRequest(path: string, init?: RequestInit) {
   const auth = useAuthStore()
   const headers = new Headers(init?.headers)
   if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
@@ -62,6 +73,25 @@ export async function adminUploadRequest<T>(path: string, form: FormData, init: 
   }
 }
 
+export async function adminResponseRequest(path: string, init: RequestInit = {}) {
+  const auth = useAuthStore()
+  const headers = new Headers(init.headers)
+  if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
+
+  try {
+    const response = await fetch(path, { ...init, headers })
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      const error = readApiErrorPayload(data)
+      throw new ApiError(error?.message ?? response.statusText, response.status, error?.code)
+    }
+    return response
+  } catch (err) {
+    handleAuthFailure(err)
+    throw err
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}, token = ''): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('content-type', 'application/json')
@@ -83,11 +113,10 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 }
 
 function handleAuthFailure(err: unknown) {
-  if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
-    return
-  }
+  if (!(err instanceof ApiError)) return
 
   const auth = useAuthStore()
+  if (!auth.isAuthed) return
   if (isPasswordChangeRequiredError(err) && auth.isUser) {
     auth.markPasswordChangeRequired()
     void router
@@ -99,6 +128,9 @@ function handleAuthFailure(err: unknown) {
     return
   }
 
+  if (!isSessionExpiredError(err)) return
+
+  ElMessage.warning(translate(locale.value, 'sessionExpired'))
   auth.clearToken()
   void router
     .replace({

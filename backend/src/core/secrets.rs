@@ -62,7 +62,7 @@ impl SecretStore {
         }
 
         let plaintext = self.decrypt(ciphertext)?;
-        let mut cache = self.cache.write().expect("secret cache poisoned");
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
         trim_secret_cache_for_insert(&mut cache, key_id, self.max_cache_entries);
         cache.insert(
             key_id,
@@ -77,14 +77,14 @@ impl SecretStore {
     pub fn forget(&self, key_id: DbId) {
         self.cache
             .write()
-            .expect("secret cache poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&key_id);
     }
 
     fn cached_plaintext(&self, key_id: DbId, ciphertext: &str) -> Option<String> {
         self.cache
             .read()
-            .expect("secret cache poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&key_id)
             .filter(|cached| cached.ciphertext == ciphertext)
             .map(|cached| cached.plaintext.clone())
@@ -92,6 +92,10 @@ impl SecretStore {
 
     fn decrypt(&self, ciphertext: &str) -> Result<String> {
         let Some(rest) = ciphertext.strip_prefix(SECRET_PREFIX) else {
+            // 无前缀说明密钥以明文存入（兼容历史数据），记录 debug 日志便于审计。
+            tracing::debug!(
+                "secret has no encryption prefix; treating as plaintext (legacy key)"
+            );
             return Ok(ciphertext.to_string());
         };
         let mut parts = rest.strip_prefix(':').unwrap_or(rest).splitn(2, ':');

@@ -8,6 +8,7 @@ mod widget;
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use axum::{
+    body::{to_bytes, Body},
     routing::{get, post},
     Router,
 };
@@ -36,6 +37,13 @@ const WECOM_ENCODING_AES_KEY_ENGINE: GeneralPurpose = GeneralPurpose::new(
 pub(crate) const DEFAULT_CONTEXT_TURNS: i32 = 10;
 pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 2048;
 const APP_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
+/// 读取 webhook 回调请求体（统一限制 4 MB）。
+pub(super) async fn read_app_body(body: Body) -> AppResult<bytes::Bytes> {
+    to_bytes(body, APP_BODY_LIMIT_BYTES)
+        .await
+        .map_err(|err| AppError::BadRequest(format!("failed to read request body: {err}")))
+}
 
 #[derive(Debug, Serialize)]
 pub struct AppRecord {
@@ -204,6 +212,10 @@ fn app_message_response(outcome: AppRunOutcome) -> AppMessageResponse {
     }
 }
 
+/// 每个 endpoint 最多允许同时进行的 LLM 推理数。
+/// 超限时直接丢弃并回复忙，防止消息风暴无限 spawn 上游请求（DoS 和 rate limit 放大）。
+const MAX_CONCURRENT_APP_MESSAGES: usize = 5;
+
 fn spawn_app_message_reply<SendReply, ReplyFuture>(
     state: Arc<AppState>,
     runtime: AppRuntime,
@@ -215,7 +227,42 @@ fn spawn_app_message_reply<SendReply, ReplyFuture>(
 {
     let endpoint_id = runtime.endpoint_id;
     let app_type = runtime.app_type.clone();
+
+    // 获取或创建该 endpoint 的并发 Semaphore
+    let semaphore = state
+        .app_message_limiter
+        .entry(endpoint_id)
+        .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_APP_MESSAGES)))
+        .clone();
+
     tokio::spawn(async move {
+        let permit = match semaphore.try_acquire() {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::warn!(
+                    endpoint_id,
+                    app_type = %app_type,
+                    "app message dropped: concurrent limit reached"
+                );
+                // 超限时回复忙，避免无限 spawn 上游推理
+                if let Err(err) = send_reply(
+                    state,
+                    runtime,
+                    "服务繁忙，请稍后重试。".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        endpoint_id,
+                        app_type = %app_type,
+                        error = %err,
+                        "failed to send busy reply"
+                    );
+                }
+                return;
+            }
+        };
+        let _permit = permit; // permit 在整个推理过程中持有
         match runtime::run_app_message(Arc::clone(&state), runtime.clone(), message).await {
             Ok(outcome) if !outcome.duplicate => {
                 if let Err(err) = send_reply(state, runtime, outcome.message).await {

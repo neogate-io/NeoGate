@@ -7,8 +7,7 @@ import type {
   DiagnosticStep,
   EndpointProtocol
 } from '../types/admin'
-import { adminRequest } from './request'
-import { useAuthStore } from '../stores/auth'
+import { adminRequest, adminResponseRequest } from './request'
 import { ApiError } from '../utils/errors'
 
 export type KeySelectionMode = 'polling' | 'random'
@@ -147,7 +146,7 @@ export function updateChannel(
 export function updateChannelModel(
   channelId: number,
   model: string,
-  payload: { enabled: boolean }
+  payload: { enabled?: boolean; base_model?: string | null }
 ) {
   return adminRequest<ChannelModel>(
     `/api/admin/channels/${channelId}/models/${encodeURIComponent(model)}`,
@@ -211,46 +210,48 @@ export type ChannelDiagnosticStreamEvent =
 export async function streamChannelDiagnostic(
   id: number,
   scope: ChannelDiagnosticScope,
-  onEvent: (event: ChannelDiagnosticStreamEvent) => void
+  onEvent: (event: ChannelDiagnosticStreamEvent) => void,
+  signal?: AbortSignal
 ) {
-  const auth = useAuthStore()
-  const headers = new Headers()
-  if (auth.token) headers.set('authorization', `Bearer ${auth.token}`)
-  headers.set('content-type', 'application/json')
-
-  const response = await fetch(`/api/admin/channels/${id}/diagnose/stream`, {
+  const response = await adminResponseRequest(`/api/admin/channels/${id}/diagnose/stream`, {
     method: 'POST',
-    headers,
-    body: JSON.stringify({ scope })
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scope }),
+    signal
   })
-  if (!response.ok || !response.body) {
-    throw new ApiError(response.statusText, response.status)
-  }
+  if (!response.body) throw new ApiError('Diagnostic response has no body', response.status)
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   let report: ChannelDiagnosticReport | null = null
 
+  function processChunk(chunk: string) {
+    const data = chunk
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+    if (!data) return
+    const event = JSON.parse(data) as ChannelDiagnosticStreamEvent
+    onEvent(event)
+    if (event.type === 'finished') report = event.report
+    if (event.type === 'error') throw new Error(event.message)
+  }
+
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() ?? ''
-    for (const chunk of chunks) {
-      const data = chunk
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n')
-      if (!data) continue
-      const event = JSON.parse(data) as ChannelDiagnosticStreamEvent
-      onEvent(event)
-      if (event.type === 'finished') report = event.report
-      if (event.type === 'error') throw new Error(event.message)
+    if (done) {
+      buffer += decoder.decode()
+      break
     }
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split(/\r?\n\r?\n/)
+    buffer = chunks.pop() ?? ''
+    chunks.forEach(processChunk)
   }
+
+  if (buffer.trim()) processChunk(buffer)
 
   if (!report) throw new Error('Diagnostic stream ended without a final report')
   return report

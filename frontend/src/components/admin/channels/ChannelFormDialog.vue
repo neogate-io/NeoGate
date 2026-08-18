@@ -6,7 +6,6 @@ import { useLocale } from '../../../composables/useLocale'
 import type { ChannelForm } from '../../../composables/useChannels'
 import type { ChannelKey, EndpointProtocol } from '../../../types/admin'
 import type { ChannelProviderOption } from '../../../utils/channel'
-import { isManualBaseUrlProvider } from '../../../utils/channel'
 import { formatCompactDateTime } from '../../../utils/format'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -44,10 +43,6 @@ const showExistingKeyTable = computed(
   () => props.mode === 'edit' && Boolean(props.existingKeys?.length)
 )
 const visibleEndpointProtocols = computed<EndpointProtocol[]>(() => {
-  if (isManualBaseUrlProvider(form.value.provider)) {
-    return ['openai', 'anthropic']
-  }
-
   if (form.value.provider === 'openai' && form.value.use_credentials) {
     return ['openai_oauth']
   }

@@ -23,6 +23,10 @@ impl ProviderAdapter for DoubaoAdapter {
         "doubao"
     }
 
+    fn prepares_video_request(&self, _model: &str) -> bool {
+        true
+    }
+
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
         match route {
             RelayRoute::Videos => seedance_tasks_url(base_url),
@@ -99,11 +103,7 @@ fn seedance_task_url(base_url: &str, task_id: &str) -> String {
 }
 
 fn seedance_task_id_from_openai_video_path(path: &str) -> Option<&str> {
-    let task_id = path.strip_prefix("/v1/videos/")?;
-    if task_id.is_empty() || task_id.contains('/') {
-        return None;
-    }
-    Some(task_id)
+    super::openai_video_task_id(path)
 }
 
 fn openai_video_to_seedance(body: Bytes) -> AppResult<Bytes> {
@@ -232,7 +232,7 @@ fn image_urls(input: &Map<String, Value>) -> Vec<String> {
     if let Some(image) = input.get("image").and_then(Value::as_str) {
         urls.push(image.to_string());
     }
-    if let Some(image) = input.get("input_reference").and_then(Value::as_str) {
+    if let Some(image) = input.get("input_reference").and_then(image_reference_url) {
         urls.push(image.to_string());
     }
     if let Some(images) = input.get("images").and_then(Value::as_array) {
@@ -244,6 +244,12 @@ fn image_urls(input: &Map<String, Value>) -> Vec<String> {
     }
     urls.retain(|url| !url.trim().is_empty());
     urls
+}
+
+fn image_reference_url(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get("image_url")?.as_str())
 }
 
 fn content_array(output: &mut Map<String, Value>) -> &mut Vec<Value> {
@@ -270,6 +276,7 @@ mod tests {
             responses_chat_fallback: false,
             secret: "sk-test".to_string(),
             account_id: None,
+            adapter_hint: None,
             affinity: None,
         }
     }

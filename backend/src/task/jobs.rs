@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::{
     auth::UserAuth,
     billing::{parse_usage_from_bytes, DebitHold, TokenUsage},
+    config::UPSTREAM_TIMEOUT,
     error::{reqwest_status, AppError, AppResult, UpstreamErrorKind},
     id::DbId,
     provider::adapters::adapter_for_endpoint,
@@ -46,6 +47,7 @@ const ASSET_URL_TTL_SECONDS: u64 = 3600;
 const IMAGE_TASK_LEASE_MARGIN: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const MAX_IMAGE_TASK_ATTEMPTS: u32 = 3;
 const MAX_IMAGE_EDIT_INPUT_BYTES: usize = 50 * 1024 * 1024;
+const IMAGE_REQUEST_BODY_MUST_BE_OBJECT: &str = "image request body must be an object";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -560,16 +562,20 @@ pub(crate) async fn run(state: &AppState, task: UpstreamTask) -> AppResult<()> {
     } else if let Some(spool) = metadata.request_spool.clone() {
         spool::read(&state.config.response_assets.dir, &spool).await
     } else {
-        adapter_for_endpoint(&upstream.provider, &upstream.base_url)
-            .prepare_response_image_generation_request(Bytes::from(serde_json::to_vec(
-                &metadata.request,
-            )?))?
-            .ok_or_else(|| {
-                AppError::BadRequest(
-                    "provider adapter does not translate response image generation".to_string(),
-                )
-            })
-            .map(|request| request.body)
+        adapter_for_endpoint(
+            &upstream.provider,
+            &upstream.base_url,
+            upstream.adapter_hint.as_deref(),
+        )
+        .prepare_response_image_generation_request(Bytes::from(serde_json::to_vec(
+            &metadata.request,
+        )?))?
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "provider adapter does not translate response image generation".to_string(),
+            )
+        })
+        .map(|request| request.body)
     };
     let body = match body_result {
         Ok(body) => body,
@@ -969,6 +975,8 @@ pub(crate) async fn cleanup_orphaned_asset_directories(state: &AppState) -> AppR
             continue;
         }
         let date_dir = date_entry.path();
+        // 收集所有候选目录（过期的 resp_* 目录）后批量查询，避免 N+1 问题。
+        let mut candidates: Vec<(std::path::PathBuf, String)> = Vec::new();
         let mut task_entries = fs::read_dir(&date_dir).await?;
         while let Some(task_entry) = task_entries.next_entry().await? {
             let response_id = task_entry.file_name().to_string_lossy().to_string();
@@ -979,15 +987,27 @@ pub(crate) async fn cleanup_orphaned_asset_directories(state: &AppState) -> AppR
             if !older_than_asset_retention(metadata.modified().ok()) {
                 continue;
             }
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM task_upstream WHERE task_type = 'neogate_response' AND upstream_task_id = $1)",
+            candidates.push((task_entry.path(), response_id));
+        }
+        if !candidates.is_empty() {
+            // 单次批量查询替代逐个 SELECT EXISTS
+            let response_ids: Vec<&str> = candidates.iter().map(|(_, id)| id.as_str()).collect();
+            let existing: std::collections::HashSet<String> = sqlx::query_scalar(
+                "SELECT upstream_task_id
+                 FROM task_upstream
+                 WHERE task_type = 'neogate_response'
+                   AND upstream_task_id = ANY($1::TEXT[])",
             )
-            .bind(&response_id)
-            .fetch_one(&state.db.pool)
-            .await?;
-            if !exists {
-                remove_managed_tree(&task_entry.path()).await?;
-                deleted += 1;
+            .bind(&response_ids[..])
+            .fetch_all(&state.db.pool)
+            .await?
+            .into_iter()
+            .collect();
+            for (path, response_id) in candidates {
+                if !existing.contains(&response_id) {
+                    remove_managed_tree(&path).await?;
+                    deleted += 1;
+                }
             }
         }
         remove_empty_date_dir(&date_dir).await?;
@@ -1164,7 +1184,7 @@ fn prepare_image_upstream_request(
     let mut request: Value = serde_json::from_slice(&body)?;
     let object = request
         .as_object_mut()
-        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest(IMAGE_REQUEST_BODY_MUST_BE_OBJECT.to_string()))?;
     object.insert(
         "model".to_string(),
         Value::String(upstream_model.to_string()),
@@ -1263,7 +1283,7 @@ fn validate_image_reference(value: &Value, label: &str) -> AppResult<()> {
 fn image_api_json_request(request: &Value, edit: bool) -> AppResult<Value> {
     let object = request
         .as_object()
-        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest(IMAGE_REQUEST_BODY_MUST_BE_OBJECT.to_string()))?;
     let mut output = serde_json::Map::new();
     let fields: &[&str] = if edit {
         &[
@@ -1326,7 +1346,7 @@ fn has_only_embedded_image_data_urls(object: &serde_json::Map<String, Value>) ->
 fn image_edit_multipart_body(request: &Value) -> AppResult<(Bytes, String)> {
     let object = request
         .as_object()
-        .ok_or_else(|| AppError::BadRequest("image request body must be an object".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest(IMAGE_REQUEST_BODY_MUST_BE_OBJECT.to_string()))?;
     let images = object
         .get("images")
         .and_then(Value::as_array)
@@ -1767,12 +1787,7 @@ async fn update_metadata(
 ) -> AppResult<bool> {
     metadata.response["status"] = Value::String(status.to_string());
     let usage_summary = UsageSummary::value_from_usage(usage)?;
-    let next_poll_at = next_poll_at_for_status(
-        status,
-        terminal,
-        Utc::now(),
-        state.config.http.upstream_timeout,
-    );
+    let next_poll_at = next_poll_at_for_status(status, terminal, Utc::now(), UPSTREAM_TIMEOUT);
     let expires_at = terminal.then(|| asset_expiration(Utc::now()));
     let result = sqlx::query(
         r#"

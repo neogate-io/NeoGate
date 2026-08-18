@@ -11,7 +11,9 @@ const route = useRoute()
 const { locale, t } = useLocale()
 const { siteName } = useSiteBrand()
 const elementLocale = computed(() => (locale.value === 'zh-CN' ? zhCn : en))
-const showPoweredFooter = computed(() => !route.matched.some((record) => record.meta.admin === true || record.meta.user === true))
+const showPoweredFooter = computed(
+  () => !route.matched.some((record) => record.meta.admin === true || record.meta.user === true)
+)
 const rootShellClass = computed(() => {
   const routeName = typeof route.name === 'string' ? route.name : ''
 

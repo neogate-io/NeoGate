@@ -20,13 +20,10 @@ use crate::{
             PricingTemplateRecord, PricingTemplateSyncResult, SyncPricingTemplatesRequest,
             UpsertChannelPriceRequest,
         },
-        provider::{
-            ensure_builtin_manual_provider_by_code, list_providers, provider_default_endpoints,
-            record_provider_models,
-        },
+        provider::{list_providers, provider_default_endpoints, record_provider_models},
         setting::{
-            test_smtp_setting, upsert_smtp_setting, TestSmtpSettingResponse,
-            UpsertSmtpSettingRequest,
+            test_smtp_setting, upsert_smtp_setting_in_tx,
+            TestSmtpSettingResponse, UpsertSmtpSettingRequest,
         },
     },
     auth::{AdminAuth, UserSessionAuth},
@@ -34,7 +31,9 @@ use crate::{
     cache::InvalidationEvent,
     config::RuntimeProbe,
     error::{AppError, AppResult},
-    payment::settings::{upsert_payment_setting, UpsertPaymentSettingRequest},
+    payment::settings::{
+        upsert_payment_setting_in_tx, UpsertPaymentSettingRequest,
+    },
     setup::bootstrap::{
         apply_service_mode_env, save_runtime_config, save_service_mode_config, test_database,
         validate_service_mode_config, BootstrapConfigInput, BootstrapConfigResult,
@@ -92,7 +91,7 @@ struct CachedServicePolicy {
 impl ServicePolicyCache {
     pub fn get(&self) -> Option<ServicePolicyRecord> {
         let now = Instant::now();
-        let mut cached = self.inner.lock().expect("service policy cache poisoned");
+        let mut cached = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let entry = cached.as_ref()?;
         if entry.expires_at > now {
             return Some(entry.record.clone());
@@ -102,7 +101,7 @@ impl ServicePolicyCache {
     }
 
     pub fn store(&self, record: ServicePolicyRecord) {
-        let mut cached = self.inner.lock().expect("service policy cache poisoned");
+        let mut cached = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         *cached = Some(CachedServicePolicy {
             record,
             expires_at: Instant::now() + SERVICE_POLICY_CACHE_TTL,
@@ -111,7 +110,7 @@ impl ServicePolicyCache {
 
     #[cfg(test)]
     pub fn invalidate(&self) {
-        let mut cached = self.inner.lock().expect("service policy cache poisoned");
+        let mut cached = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         *cached = None;
     }
 }
@@ -358,7 +357,9 @@ pub async fn complete_setup_for_state(
         .await?;
     }
     if let Some(smtp) = req.smtp {
-        upsert_smtp_setting(&state, smtp).await?;
+        // 在事务内写入，与 service_policy 同一原子提交。
+        // 修复前：写入在 tx 外执行，若后续 commit 失败则 setup_completed=false 但 SMTP 已持久化，导致半初始化状态。
+        upsert_smtp_setting_in_tx(&mut tx, &state, smtp).await?;
     }
     if let Some(payment) = req.payment {
         if req.service_mode != ServiceMode::Paid && payment.payment_enabled {
@@ -366,7 +367,7 @@ pub async fn complete_setup_for_state(
                 "payment can only be enabled in paid service mode".to_string(),
             ));
         }
-        upsert_payment_setting(&state, payment).await?;
+        upsert_payment_setting_in_tx(&mut tx, &state, payment).await?;
     }
     validate_service_mode_config(req.service_mode)?;
     apply_service_mode_env(req.service_mode);
@@ -436,7 +437,6 @@ pub async fn setup_upstream_models_for_state(
             "upstream api key is required".to_string(),
         ));
     }
-    ensure_builtin_manual_provider_by_code(state, provider).await?;
     provider_default_endpoints(state, provider)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("invalid provider: {provider}")))?;
@@ -568,7 +568,7 @@ async fn upsert_stored_policy(
     tx: &mut Transaction<'_, Postgres>,
     stored: StoredServicePolicy,
 ) -> AppResult<ServicePolicyRecord> {
-    let stored = normalize_stored_policy(stored);
+    let stored = normalize_stored_policy(stored, None);
     upsert_policy_setting(
         tx,
         SERVICE_POLICY_SETUP_COMPLETED_KEY,
@@ -652,7 +652,7 @@ fn stored_policy_from_setting_rows(
             _ => {}
         }
     }
-    Ok(normalize_stored_policy(stored))
+    Ok(normalize_stored_policy(stored, None))
 }
 
 fn latest_policy_updated_at(rows: &[sqlx::postgres::PgRow]) -> AppResult<Option<DateTime<Utc>>> {
@@ -839,9 +839,14 @@ fn default_stored_policy() -> StoredServicePolicy {
     }
 }
 
-fn normalize_stored_policy(mut stored: StoredServicePolicy) -> StoredServicePolicy {
-    let service_mode = RuntimeProbe::from_env()
-        .ok()
+/// 根据运行时环境变量覆盖部分策略字段（service_mode/credit_required/registration_enabled）。
+/// 接收已解析的 `probe` 而非自行调用 `from_env()`，供 `record_from_stored` 统一传入，
+/// 避免原来 normalize + record_from_stored 两处各调一次 `from_env()` 的冗余。
+fn normalize_stored_policy(
+    mut stored: StoredServicePolicy,
+    probe: Option<&RuntimeProbe>,
+) -> StoredServicePolicy {
+    let service_mode = probe
         .and_then(|probe| probe.service_mode)
         .unwrap_or(ServiceMode::Internal);
     stored.service_mode = service_mode;
@@ -858,8 +863,10 @@ fn record_from_stored(
     stored: StoredServicePolicy,
     updated_at: Option<DateTime<Utc>>,
 ) -> ServicePolicyRecord {
-    let stored = normalize_stored_policy(stored);
+    // 调用一次 from_env() 后将 probe 传给 normalize_stored_policy，
+    // 消除之前 normalize 内部再次调用 from_env() 的重复。
     let probe = RuntimeProbe::from_env().ok();
+    let stored = normalize_stored_policy(stored, probe.as_ref());
     let runtime_mode = probe.as_ref().map_or_else(
         || "standalone".to_string(),
         |probe| probe.runtime_mode.as_str().to_string(),
@@ -917,7 +924,7 @@ mod tests {
 
     impl EnvRestore {
         fn capture() -> Self {
-            let guard = ENV_LOCK.lock().expect("policy test env lock poisoned");
+            let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             Self {
                 service_mode: std::env::var("SERVICE_MODE").ok(),
                 neogate_env_file: std::env::var("NEOGATE_ENV_FILE").ok(),

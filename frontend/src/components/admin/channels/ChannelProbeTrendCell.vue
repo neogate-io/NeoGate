@@ -155,12 +155,7 @@ function probeSampleTitle(sample: ChannelProbeSample) {
 </script>
 
 <template>
-  <el-tooltip
-    placement="top"
-    effect="light"
-    popper-class="probe-trend-tooltip"
-    :show-after="600"
-  >
+  <el-tooltip placement="top" effect="light" popper-class="probe-trend-tooltip" :show-after="600">
     <template #content>
       <div class="probe-tooltip-content">
         <div class="probe-tooltip-head">
@@ -205,14 +200,7 @@ function probeSampleTitle(sample: ChannelProbeSample) {
         <span>{{ t('probeNoData') }}</span>
       </div>
       <svg v-else class="probe-trend-chart" viewBox="0 0 132 44" aria-hidden="true">
-        <line
-          x1="0"
-          y1="39"
-          x2="132"
-          y2="39"
-          class="probe-trend-baseline"
-          stroke-linecap="round"
-        />
+        <line x1="0" y1="39" x2="132" y2="39" class="probe-trend-baseline" stroke-linecap="round" />
         <rect
           v-for="bar in trendBars"
           :key="bar.key"

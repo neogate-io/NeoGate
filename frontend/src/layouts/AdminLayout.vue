@@ -20,6 +20,7 @@ import { useLocale } from '../composables/useLocale'
 import { useLogout } from '../composables/useLogout'
 import { useAsyncData } from '../composables/useAsyncData'
 import { useSiteBrand } from '../composables/useSiteBrand'
+import '../styles/admin.css'
 
 const { t } = useLocale()
 const { siteName, logoUrl } = useSiteBrand()
@@ -124,7 +125,13 @@ watch(
   <el-container class="app-shell light-sidebar-shell admin-shell">
     <el-aside :class="{ 'is-open': adminMenuOpen }" width="248px">
       <h1 class="shell-logo">
-        <a class="shell-logo-link" href="/" target="_blank" rel="noopener noreferrer" :aria-label="t('home')">
+        <a
+          class="shell-logo-link"
+          href="/"
+          target="_blank"
+          rel="noopener noreferrer"
+          :aria-label="t('home')"
+        >
           <img v-if="logoUrl" class="shell-logo-image" :src="logoUrl" :alt="siteName" />
           <span class="shell-logo-name">{{ siteName }}</span>
         </a>

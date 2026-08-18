@@ -110,10 +110,7 @@ export function savePaymentSetting(input: {
   })
 }
 
-export function updateAdminPassword(input: {
-  current_password: string
-  new_password: string
-}) {
+export function updateAdminPassword(input: { current_password: string; new_password: string }) {
   return adminRequest<{ ok: boolean }>('/api/admin/settings/admin-password', {
     method: 'POST',
     body: JSON.stringify(input)

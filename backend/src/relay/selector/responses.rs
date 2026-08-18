@@ -38,7 +38,7 @@ impl ResponsesSupportCache {
             let entries = self
                 .entries
                 .read()
-                .expect("responses support cache poisoned");
+                .unwrap_or_else(|e| e.into_inner());
             match entries.get(&key) {
                 Some(until) if *until > now => return true,
                 Some(_) => true,
@@ -64,7 +64,7 @@ impl ResponsesSupportCache {
         let mut entries = self
             .entries
             .write()
-            .expect("responses support cache poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         let now = Utc::now();
         entries.retain(|_, until| *until > now);
         entries.insert(key, unsupported_until);
@@ -74,7 +74,7 @@ impl ResponsesSupportCache {
         let mut entries = self
             .entries
             .write()
-            .expect("responses support cache poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         entries.retain(|_, until| *until > now);
     }
 }

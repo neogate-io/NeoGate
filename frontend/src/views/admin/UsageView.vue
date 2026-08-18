@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
 import { useCursorPageActions } from '../../composables/useCursorPageActions'
 import { useCursorPagination } from '../../composables/useCursorPagination'
+import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import type { UsageRecord } from '../../types/admin'
 import {
@@ -49,7 +50,7 @@ const filters = reactive<UsageFilters>({
   query: '',
   status: 'all'
 })
-const exporting = ref(false)
+const { downloading: exporting, run: runDownload } = useDownloadTask()
 const {
   currentPage,
   pageSize,
@@ -237,7 +238,9 @@ function numberQueryValue(key: string) {
 
 function billingMeterQueryValue() {
   const value = stringQueryValue('billing_meter')
-  return value === 'token' || value === 'image' || value === 'video' ? value : undefined
+  return value === 'token' || value === 'image' || value === 'video' || value === 'audio'
+    ? value
+    : undefined
 }
 
 function routingRulesText(row: UsageRecord) {
@@ -288,6 +291,10 @@ function usageSuccessSummary(row: UsageRecord) {
     return parts.join(' · ')
   }
 
+  if (row.billing_meter === 'audio') {
+    return `${t('usageDetailAudioTranscription')} · ${formatNumber(row.billable_units, locale.value)} ${t('usageDetailSeconds')}`
+  }
+
   if ((row.total_tokens ?? 0) > 0) {
     return `${t('usageDetailTextCall')} · ${formatNumber(row.total_tokens, locale.value)} ${t('usageDetailTokens')}`
   }
@@ -307,6 +314,7 @@ function compactUsageError(row: UsageRecord) {
   if (/upstream model unavailable|invalidendpointormodel|not\s*found/.test(lower)) {
     return t('usageErrorUpstreamModelUnavailable')
   }
+  if (/stream_timeout|stream idle/.test(lower)) return t('usageErrorUpstreamStreamIdle')
   if (/timeout|timed out|deadline/.test(lower)) return t('usageErrorUpstreamTimeout')
   if (/insufficient|quota|balance|credit/.test(lower)) return t('usageErrorInsufficientCredit')
   if (/unauthorized|forbidden|authentication|permission|access denied/.test(lower)) {
@@ -338,6 +346,7 @@ function usageBillingUnitsDisplay(row: UsageRecord) {
     return `${value} ${isPerSecondBilling ? t('usageDetailSeconds') : t('usageDetailTokens')}`
   }
   if (row.billing_meter === 'image') return `${value} ${t('usageDetailImages')}`
+  if (row.billing_meter === 'audio') return `${value} ${t('usageDetailSeconds')}`
   return `${value} ${t('usageDetailBillingUnits')}`
 }
 
@@ -381,6 +390,18 @@ function usageDetailRows(row: UsageRecord) {
     rows.push({
       label: t('usageDetailTokens'),
       value: `${formatNumber(row.input_tokens, locale.value)} / ${formatNumber(row.output_tokens, locale.value)}`
+    })
+  }
+  if ((row.cache_in_tokens ?? 0) > 0) {
+    rows.push({
+      label: t('cacheReadTokensDetail'),
+      value: formatNumber(row.cache_in_tokens, locale.value)
+    })
+  }
+  if (cacheWriteTokens(row)) {
+    rows.push({
+      label: t('cacheWriteTokensDetail'),
+      value: formatNumber(cacheWriteTokens(row), locale.value)
     })
   }
   if ((row.total_tokens ?? 0) > 0) {
@@ -450,16 +471,13 @@ async function handleSearch() {
 }
 
 async function exportUsage() {
-  exporting.value = true
-  try {
+  await runDownload(async () => {
     const result = await downloadAdminUsageCsv(usageBaseQuery.value)
     downloadBlob(
       result.filename ?? `usage-details-${new Date().toISOString().slice(0, 10)}.csv`,
       result.blob
     )
-  } finally {
-    exporting.value = false
-  }
+  })
 }
 </script>
 
@@ -619,6 +637,12 @@ async function exportUsage() {
                 {{ formatNumber(row.billable_units, locale) }} {{ t('perSecond') }}
               </span>
               <span class="usage-muted">{{ t('billingMeterVideo') }}</span>
+            </div>
+            <div v-else-if="row.billing_meter === 'audio'" class="usage-stack">
+              <span class="usage-mono">
+                {{ formatNumber(row.billable_units, locale) }} {{ t('usageDetailSeconds') }}
+              </span>
+              <span class="usage-muted">{{ t('billingMeterAudio') }}</span>
             </div>
             <div v-else class="usage-stack">
               <span class="usage-mono">

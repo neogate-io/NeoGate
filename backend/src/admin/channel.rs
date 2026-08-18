@@ -1,7 +1,11 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{AssertSqlSafe, Postgres, Row, Transaction};
 
 use crate::{
@@ -15,8 +19,8 @@ use crate::{
 
 use super::diagnostics::{recent_probe_samples_by_channel, ChannelProbeSampleRecord};
 use super::provider::{
-    ensure_builtin_manual_provider_by_code, provider_default_endpoint_base_url,
-    provider_default_endpoints, record_provider_models, OPENAI_OAUTH_PROTOCOL,
+    provider_default_endpoint_base_url, provider_default_endpoints, record_provider_models,
+    OPENAI_OAUTH_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,6 +77,7 @@ pub struct ChannelModelRecord {
     pub channel_id: DbId,
     pub provider: String,
     pub model: String,
+    pub base_model: Option<String>,
     pub enabled: bool,
     pub status: String,
     pub runtime_status: String,
@@ -183,9 +188,24 @@ pub struct UpdateChannelKeyRequest {
     pub last_error: Option<Option<String>>,
 }
 
+/// `base_model` 字段使用三层 Option 支持 PATCH 语义：
+/// - `None`：请求体中缺少此字段，不更新
+/// - `Some(None)`：显式设为 null，清空 base_model
+/// - `Some(Some(v))`：更新为新值 v
 #[derive(Debug, Deserialize)]
 pub struct UpdateChannelModelRequest {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_base_model")]
+    pub base_model: Option<Option<String>>,
+}
+
+fn deserialize_nullable_base_model<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 fn default_true() -> bool {
@@ -209,7 +229,6 @@ pub async fn create_channel(
     if provider_code.is_empty() {
         return Err(AppError::BadRequest("provider is required".to_string()));
     }
-    ensure_builtin_manual_provider_by_code(state, &provider_code).await?;
     ensure_provider_exists(state, &provider_code).await?;
     let endpoints = normalize_create_endpoints(state, &provider_code, &req).await?;
     let endpoint_models = models_from_endpoints(&endpoints);
@@ -238,6 +257,14 @@ pub async fn create_channel(
     }
     sync_channel_models_for_channel(&mut tx, channel_id, &provider_code).await?;
     tx.commit().await?;
+
+    // 后台探测 adapter hint，不阻塞响应
+    {
+        let state_bg = state.clone();
+        tokio::spawn(async move {
+            detect_and_update_channel_endpoint_hints(&state_bg, channel_id).await;
+        });
+    }
 
     get_channel(state, channel_id).await
 }
@@ -330,6 +357,9 @@ pub async fn update_channel(
             .iter()
             .map(|endpoint| endpoint.protocol.clone())
             .collect();
+        // 删除条件按 protocol 集合过滤，隐含假设 (channel_id, protocol) 唯一。
+        // 若同一 channel 下存在同协议多个 endpoint，此删除只保留 protocol 在新列表中的，
+        // 随后的 upsert 会按 (channel_id, protocol) 唯一键覆盖，仍然正确。
         sqlx::query(
             "DELETE FROM channel_endpoint WHERE channel_id = $1 AND NOT (protocol = ANY($2))",
         )
@@ -344,6 +374,14 @@ pub async fn update_channel(
         sync_channel_models_for_channel(&mut tx, id, &provider_code).await?;
     }
     tx.commit().await?;
+
+    // 后台探测 adapter hint（仅对 hint 为 NULL 的 endpoint），不阻塞响应
+    {
+        let state_bg = state.clone();
+        tokio::spawn(async move {
+            detect_and_update_channel_endpoint_hints(&state_bg, id).await;
+        });
+    }
 
     let endpoints = endpoints_by_channel(state, &[id]).await?;
     let models = models_by_channel(state, &[id]).await?;
@@ -382,47 +420,76 @@ pub async fn update_channel_model(
         ensure_channel_model_has_enabled_price(state, channel_id, model).await?;
     }
 
-    let row = sqlx::query(
-        "UPDATE channel_model
-         SET enabled = COALESCE($3, enabled),
-             status = CASE
-                 WHEN COALESCE($3, enabled) = FALSE THEN 'disabled'
-                 WHEN status = 'disabled' THEN 'available'
-                 ELSE status
-             END,
-             runtime_status = CASE
-                 WHEN $3 = TRUE THEN 'normal'
-                 ELSE runtime_status
-             END,
-             cooldown_until = CASE
-                 WHEN $3 = TRUE THEN NULL
-                 ELSE cooldown_until
-             END,
-             last_error = CASE
-                 WHEN $3 = TRUE THEN NULL
-                 ELSE last_error
-             END,
-             last_status_code = CASE
-                 WHEN $3 = TRUE THEN NULL
-                 ELSE last_status_code
-             END,
-             updated_at = now()
-         WHERE channel_id = $1
-           AND model = $2
-         RETURNING id",
-    )
+    let update_base_model = req.base_model.is_some();
+    let base_model = req
+        .base_model
+        .flatten()
+        .and_then(|value| trimmed_non_empty(Some(&value)).map(str::to_string));
+
+    // 使用 CTE 将 UPDATE 与后续的 JOIN 合并为单次原子查询，
+    // 消除原来 RETURNING id 后再 models_by_channel 两步之间的不一致窗口。
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "WITH updated AS (
+             UPDATE channel_model
+             SET enabled = COALESCE($3, enabled),
+                 base_model = CASE WHEN $4 THEN $5 ELSE base_model END,
+                 status = CASE
+                     WHEN COALESCE($3, enabled) = FALSE THEN 'disabled'
+                     WHEN status = 'disabled' THEN 'available'
+                     ELSE status
+                 END,
+                 runtime_status = CASE
+                     WHEN $3 = TRUE THEN 'normal'
+                     ELSE runtime_status
+                 END,
+                 cooldown_until = CASE
+                     WHEN $3 = TRUE THEN NULL
+                     ELSE cooldown_until
+                 END,
+                 last_error = CASE
+                     WHEN $3 = TRUE THEN NULL
+                     ELSE last_error
+                 END,
+                 last_status_code = CASE
+                     WHEN $3 = TRUE THEN NULL
+                     ELSE last_status_code
+                 END,
+                 updated_at = now()
+             WHERE channel_id = $1
+               AND model = $2
+             RETURNING id, channel_id
+         )
+         SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.base_model, cm.enabled,
+                cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
+                cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
+                cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
+                COALESCE(
+                    cp.enabled
+                    AND {BILLABLE_PRICE_CONDITION_CP},
+                    FALSE
+                ) AS billing_enabled,
+                (cp.id IS NOT NULL) AS price_configured,
+                cp.input_price_micros, cp.output_price_micros,
+                cp.cache_read_price_micros, cp.cache_write_price_micros,
+                cp.billing_meter,
+                cp.unit_price_micros
+         FROM updated
+         JOIN channel_model cm ON cm.id = updated.id
+         JOIN channel c ON c.id = cm.channel_id
+         LEFT JOIN channel_price cp
+           ON cp.channel_id = cm.channel_id
+          AND cp.model = cm.model"
+    )))
     .bind(channel_id)
     .bind(model)
     .bind(req.enabled)
+    .bind(update_base_model)
+    .bind(base_model)
     .fetch_optional(&state.db.pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    let model_id: DbId = row.try_get("id")?;
-    let models = models_by_channel(state, &[channel_id]).await?;
-    models
-        .get(&channel_id)
-        .and_then(|items| items.iter().find(|item| item.id == model_id).cloned())
-        .ok_or(AppError::NotFound)
+
+    channel_model_from_row(&row)
 }
 
 pub async fn create_channel_key(
@@ -896,15 +963,16 @@ async fn upsert_endpoint(
 async fn sync_channel_models_for_channel(
     tx: &mut Transaction<'_, Postgres>,
     channel_id: DbId,
-    _provider: &str,
+    provider: &str,
 ) -> AppResult<()> {
     let rows = sqlx::query("SELECT models FROM channel_endpoint WHERE channel_id = $1")
         .bind(channel_id)
         .fetch_all(&mut **tx)
         .await?;
 
+    let templates = base_model_templates(tx).await?;
     let mut active_models = Vec::<String>::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for row in rows {
         let models: Vec<String> = row.try_get("models")?;
         for model in models {
@@ -913,13 +981,15 @@ async fn sync_channel_models_for_channel(
                 continue;
             }
             let price_configured = model_has_enabled_price(tx, channel_id, model).await?;
+            let base_model = find_base_model(&templates, provider, model);
             active_models.push(model.to_string());
             sqlx::query(
                 "INSERT INTO channel_model
-                 (channel_id, model, enabled, status, runtime_status, last_seen_at)
-                 VALUES ($1, $2, $3, 'available', 'normal', now())
+                 (channel_id, model, base_model, enabled, status, runtime_status, last_seen_at)
+                 VALUES ($1, $2, $3, $4, 'available', 'normal', now())
                  ON CONFLICT (channel_id, model)
                  DO UPDATE SET
+                     base_model = EXCLUDED.base_model,
                      enabled = EXCLUDED.enabled,
                      status = 'available',
                      missing_since = NULL,
@@ -928,6 +998,7 @@ async fn sync_channel_models_for_channel(
             )
             .bind(channel_id)
             .bind(model)
+            .bind(base_model)
             .bind(price_configured)
             .execute(&mut **tx)
             .await?;
@@ -952,6 +1023,204 @@ async fn sync_channel_models_for_channel(
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct BaseModelTemplate {
+    provider: String,
+    model: String,
+}
+
+async fn base_model_templates(
+    tx: &mut Transaction<'_, Postgres>,
+) -> AppResult<Vec<BaseModelTemplate>> {
+    let rows = sqlx::query(
+        "SELECT provider, model
+         FROM pricing_template
+         WHERE enabled = TRUE
+           AND source <> 'confirmed_price'
+         ORDER BY provider ASC, model ASC",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(BaseModelTemplate {
+                provider: row.try_get("provider")?,
+                model: row.try_get("model")?,
+            })
+        })
+        .collect()
+}
+
+fn find_base_model(templates: &[BaseModelTemplate], provider: &str, model: &str) -> Option<String> {
+    let provider = provider.trim();
+    let model = model.trim().to_lowercase();
+    let aliases = pricing_reference_model_aliases(&model);
+    let matching: Vec<&BaseModelTemplate> = templates
+        .iter()
+        .filter(|template| {
+            pricing_reference_model_aliases(&template.model)
+                .iter()
+                .any(|alias| aliases.contains(alias))
+        })
+        .collect();
+
+    matching
+        .iter()
+        .copied()
+        .find(|template| {
+            template.provider.trim() == provider
+                && template.model.trim().eq_ignore_ascii_case(&model)
+        })
+        .or_else(|| {
+            matching
+                .iter()
+                .copied()
+                .find(|template| template.provider.trim() == provider)
+        })
+        .or_else(|| {
+            matching.iter().copied().find(|template| {
+                template.provider.trim() != provider
+                    && template.model.trim().eq_ignore_ascii_case(&model)
+            })
+        })
+        .or_else(|| {
+            matching
+                .iter()
+                .copied()
+                .find(|template| template.provider.trim() != provider)
+        })
+        .map(|template| template.model.clone())
+}
+
+fn pricing_reference_model_aliases(model: &str) -> HashSet<String> {
+    let mut aliases = HashSet::new();
+    let mut queue = VecDeque::from([model.trim().to_lowercase()]);
+
+    while let Some(alias) = queue.pop_front() {
+        if alias.is_empty() || !aliases.insert(alias.clone()) {
+            continue;
+        }
+
+        let without_display_prefix = strip_model_display_prefixes(&alias);
+        if without_display_prefix != alias {
+            queue.push_back(without_display_prefix);
+        }
+
+        let dotted_version = dot_version_alias(&alias);
+        if dotted_version != alias {
+            queue.push_back(dotted_version);
+        }
+
+        if let Some(without_date) = strip_six_digit_suffix(&alias) {
+            queue.push_back(without_date.clone());
+            let dotted_without_date = dot_version_alias(&without_date);
+            if dotted_without_date != alias {
+                queue.push_back(dotted_without_date);
+            }
+        }
+
+        if let Some(without_resolution) = strip_resolution_suffix(&alias) {
+            queue.push_back(without_resolution);
+        }
+
+        if let Some((prefix, remainder)) = alias.split_once(':') {
+            if !prefix.is_empty() && prefix.chars().all(|value| value.is_ascii_digit()) {
+                queue.push_back(remainder.to_string());
+            }
+        }
+
+        if let Some(seedance) = alias.strip_prefix("dreamina-seedance-") {
+            queue.push_back(format!("seedance-{seedance}"));
+        }
+
+        if let Some(seedance) = alias.strip_prefix("seedance-") {
+            queue.push_back(format!("doubao-seedance-{seedance}"));
+        }
+
+        let seedance = alias.strip_prefix("doubao-").unwrap_or(&alias);
+        if matches!(seedance, "seedance-2.0-fast" | "seedance-2.0-mini") {
+            queue.push_back(format!("{alias}-1080p"));
+        }
+    }
+
+    aliases
+}
+
+fn strip_model_display_prefixes(model: &str) -> String {
+    let mut value = model;
+    loop {
+        let closing = if value.starts_with('【') {
+            '】'
+        } else if value.starts_with('[') {
+            ']'
+        } else {
+            break;
+        };
+        let Some(index) = value.find(closing) else {
+            break;
+        };
+        value = value[index + closing.len_utf8()..].trim_start();
+    }
+    value.to_string()
+}
+
+fn strip_six_digit_suffix(model: &str) -> Option<String> {
+    let (base, suffix) = model.rsplit_once('-')?;
+    (suffix.len() == 6 && suffix.chars().all(|value| value.is_ascii_digit()))
+        .then(|| base.to_string())
+}
+
+fn strip_resolution_suffix(model: &str) -> Option<String> {
+    ["-480p", "-720p", "-1080p", "-4k"]
+        .iter()
+        .find_map(|suffix| model.strip_suffix(suffix).map(str::to_string))
+}
+
+fn dot_version_alias(model: &str) -> String {
+    let chars: Vec<char> = model.chars().collect();
+    let mut result = String::with_capacity(model.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] != '-' {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let major_start = index + 1;
+        let mut major_end = major_start;
+        while major_end < chars.len() && chars[major_end].is_ascii_digit() {
+            major_end += 1;
+        }
+        if major_end == major_start || major_end >= chars.len() || chars[major_end] != '-' {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let minor_start = major_end + 1;
+        let mut minor_end = minor_start;
+        while minor_end < chars.len() && chars[minor_end].is_ascii_digit() {
+            minor_end += 1;
+        }
+        if minor_end == minor_start || (minor_end < chars.len() && chars[minor_end] != '-') {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        result.push('-');
+        result.extend(&chars[major_start..major_end]);
+        result.push('.');
+        result.extend(&chars[minor_start..minor_end]);
+        index = minor_end;
+    }
+
+    result
 }
 
 async fn model_has_enabled_price(
@@ -1056,7 +1325,7 @@ async fn models_by_channel(
     }
 
     let rows = sqlx::query(AssertSqlSafe(format!(
-        "SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.enabled,
+        "SELECT cm.id, cm.channel_id, c.provider, cm.model, cm.base_model, cm.enabled,
                 cm.status, cm.runtime_status, cm.cooldown_until, cm.last_seen_at,
                 cm.missing_since, cm.last_probe_at, cm.last_error, cm.last_status_code,
                 cm.success_count, cm.failure_count, cm.created_at, cm.updated_at,
@@ -1171,6 +1440,7 @@ fn channel_model_from_row(row: &sqlx::postgres::PgRow) -> AppResult<ChannelModel
         channel_id: row.try_get("channel_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
+        base_model: row.try_get("base_model")?,
         enabled: row.try_get("enabled")?,
         status: row.try_get("status")?,
         runtime_status: row.try_get("runtime_status")?,
@@ -1237,4 +1507,206 @@ pub(crate) fn mask_channel_key(secret: &str) -> String {
         .skip(length.saturating_sub(TAIL_LEN))
         .collect();
     format!("{head}********{tail}")
+}
+
+/// 剥离 base_url 末尾的 API 版本路径（/v1、/v2 等）以还原根 URL，
+/// 用于拼接厂商自有的非 /v1 路径（如 new-api 的 /api/status）。
+fn strip_api_version_suffix(base_url: &str) -> &str {
+    let trimmed = base_url.trim_end_matches('/');
+    if let Some(idx) = trimmed.rfind('/') {
+        let last = &trimmed[idx + 1..];
+        if matches!(
+            last,
+            "v1" | "v2" | "v3" | "v4" | "v1beta" | "v1beta1" | "openai"
+        ) {
+            return &trimmed[..idx];
+        }
+    }
+    trimmed
+}
+
+/// 向 `{base_url}/api/status` 发送一次轻量探测，识别上游服务类型。
+/// 目前仅识别 new-api（响应 JSON 同时包含 `version` 和 `start_time` 字段）。
+/// 超时或响应不匹配时静默返回 None，不影响调用方流程。
+async fn probe_adapter_hint(
+    http: &reqwest::Client,
+    base_url: &str,
+    secret: Option<&str>,
+) -> Option<&'static str> {
+    let root = strip_api_version_suffix(base_url);
+    let url = format!("{root}/api/status");
+    let mut req = http.get(&url).timeout(Duration::from_secs(3));
+    if let Some(key) = secret {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: Value = resp.json().await.ok()?;
+    // new-api 特有指纹：同时返回 version 和 start_time
+    if body.get("version").is_some() && body.get("start_time").is_some() {
+        return Some("newapi");
+    }
+    None
+}
+
+/// 后台任务：对 channel 下 adapter_hint 为 NULL 的 openai 端点运行指纹探测，
+/// 若识别成功则写入 DB 并使路由缓存失效。
+/// 仅在 hint 为 NULL 时运行，不覆盖已有的手动配置。
+async fn detect_and_update_channel_endpoint_hints(state: &AppState, channel_id: DbId) {
+    let rows = sqlx::query(
+        "SELECT ce.id, ce.base_url, ck.id AS key_id, ck.secret_ciphertext
+         FROM channel_endpoint ce
+         LEFT JOIN LATERAL (
+             SELECT id, secret_ciphertext
+             FROM channel_key
+             WHERE channel_id = ce.channel_id
+               AND enabled = TRUE
+               AND healthy = TRUE
+             ORDER BY created_at ASC
+             LIMIT 1
+         ) ck ON TRUE
+         WHERE ce.channel_id = $1
+           AND ce.protocol = 'openai'
+           AND ce.adapter_hint IS NULL",
+    )
+    .bind(channel_id)
+    .fetch_all(&state.db.pool)
+    .await;
+
+    let rows = match rows {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::debug!(channel_id, %err, "adapter hint detection: failed to load endpoints");
+            return;
+        }
+    };
+
+    let mut any_updated = false;
+    for row in &rows {
+        let Ok(endpoint_id): Result<DbId, _> = row.try_get("id") else {
+            continue;
+        };
+        let Ok(base_url): Result<String, _> = row.try_get("base_url") else {
+            continue;
+        };
+        let key_id: Option<DbId> = row.try_get("key_id").ok().flatten();
+        let ciphertext: Option<String> = row.try_get("secret_ciphertext").ok().flatten();
+
+        let secret = if let (Some(kid), Some(ct)) = (key_id, ciphertext.as_deref()) {
+            state.secrets.plaintext(kid, ct).ok()
+        } else {
+            None
+        };
+
+        let Some(hint) = probe_adapter_hint(&state.http, &base_url, secret.as_deref()).await else {
+            continue;
+        };
+
+        match sqlx::query(
+            "UPDATE channel_endpoint
+             SET adapter_hint = $2, updated_at = now()
+             WHERE id = $1 AND adapter_hint IS NULL",
+        )
+        .bind(endpoint_id)
+        .bind(hint)
+        .execute(&state.db.pool)
+        .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    channel_id,
+                    endpoint_id,
+                    %base_url,
+                    hint,
+                    "adapter hint detected and saved"
+                );
+                any_updated = true;
+            }
+            Err(err) => {
+                tracing::debug!(endpoint_id, %err, "failed to save adapter hint");
+            }
+        }
+    }
+
+    if any_updated {
+        state
+            .cache_invalidator
+            .invalidate(state, crate::cache::InvalidationEvent::Routing)
+            .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        find_base_model, pricing_reference_model_aliases, BaseModelTemplate,
+        UpdateChannelModelRequest,
+    };
+
+    fn template(provider: &str, model: &str) -> BaseModelTemplate {
+        BaseModelTemplate {
+            provider: provider.to_string(),
+            model: model.to_string(),
+        }
+    }
+
+    #[test]
+    fn base_model_aliases_normalize_upstream_model_variants() {
+        let aliases = pricing_reference_model_aliases("【按秒计费】dreamina-seedance-2-0-260128");
+
+        assert!(aliases.contains("doubao-seedance-2.0"));
+    }
+
+    #[test]
+    fn base_model_match_prefers_same_provider_reference() {
+        let templates = vec![
+            template("other", "doubao-seedance-1.0-pro-fast"),
+            template("doubao", "doubao-seedance-1.0-pro-fast"),
+        ];
+
+        assert_eq!(
+            find_base_model(&templates, "doubao", "doubao-seedance-1-0-pro-fast-251015").as_deref(),
+            Some("doubao-seedance-1.0-pro-fast")
+        );
+    }
+
+    #[test]
+    fn base_model_match_can_use_cross_provider_reference() {
+        let templates = vec![template("doubao", "doubao-seedance-2.0")];
+
+        assert_eq!(
+            find_base_model(
+                &templates,
+                "openai",
+                "[per second] dreamina-seedance-2-0-260128"
+            )
+            .as_deref(),
+            Some("doubao-seedance-2.0")
+        );
+    }
+
+    #[test]
+    fn base_model_match_returns_none_for_unknown_model() {
+        let templates = vec![template("openai", "gpt-5")];
+
+        assert_eq!(find_base_model(&templates, "openai", "unknown-model"), None);
+    }
+
+    #[test]
+    fn channel_model_update_distinguishes_missing_null_and_named_base_model() {
+        let missing: UpdateChannelModelRequest = serde_json::from_value(serde_json::json!({}))
+            .expect("missing base_model should deserialize");
+        let cleared: UpdateChannelModelRequest =
+            serde_json::from_value(serde_json::json!({ "base_model": null }))
+                .expect("null base_model should deserialize");
+        let named: UpdateChannelModelRequest =
+            serde_json::from_value(serde_json::json!({ "base_model": "gpt-5" }))
+                .expect("named base_model should deserialize");
+
+        assert_eq!(missing.base_model, None);
+        assert_eq!(cleared.base_model, Some(None));
+        assert_eq!(named.base_model, Some(Some("gpt-5".to_string())));
+    }
 }

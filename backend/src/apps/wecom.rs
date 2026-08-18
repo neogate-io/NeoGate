@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aes::Aes256;
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
 };
@@ -17,15 +17,15 @@ use sha1::{Digest as Sha1Digest, Sha1};
 use uuid::Uuid;
 
 use crate::{
+    config::UPSTREAM_TIMEOUT,
     error::{AppError, AppResult},
     id::DbId,
     AppState,
 };
 
 use super::{
-    constant_time_eq, extract_xml_value, runtime_for_endpoint, secret_plaintext,
-    spawn_app_message_reply, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
-    WECOM_ENCODING_AES_KEY_ENGINE,
+    constant_time_eq, extract_xml_value, read_app_body, runtime_for_endpoint, secret_plaintext,
+    spawn_app_message_reply, AppRuntime, IncomingAppMessage, WECOM_ENCODING_AES_KEY_ENGINE,
 };
 
 pub(super) const TOKEN_SECRET_KEY: &str = "token";
@@ -74,9 +74,7 @@ pub(super) async fn message(
     body: Body,
 ) -> AppResult<Response> {
     let runtime = runtime_for_endpoint(&state, endpoint_id, "wecom").await?;
-    let bytes = to_bytes(body, APP_BODY_LIMIT_BYTES)
-        .await
-        .map_err(|err| AppError::BadRequest(format!("failed to read request body: {err}")))?;
+    let bytes = read_app_body(body).await?;
     let encrypted = extract_xml_value(&bytes, "Encrypt")
         .ok_or_else(|| AppError::BadRequest("missing Encrypt".to_string()))?;
     let msg_signature = query
@@ -270,14 +268,14 @@ async fn send_text(
     let token_url = format!(
         "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={secret}"
     );
-    let token_value: Value = tokio::time::timeout(
-        state.config.http.upstream_timeout,
-        state.http.get(token_url).send(),
-    )
-    .await
-    .map_err(|_| AppError::BadRequest("timed out fetching wecom access token".to_string()))??
-    .json()
-    .await?;
+    let token_value: Value =
+        tokio::time::timeout(UPSTREAM_TIMEOUT, state.http.get(token_url).send())
+            .await
+            .map_err(|_| {
+                AppError::BadRequest("timed out fetching wecom access token".to_string())
+            })??
+            .json()
+            .await?;
     let access_token = token_value
         .get("access_token")
         .and_then(Value::as_str)
@@ -287,7 +285,8 @@ async fn send_text(
     let payload = json!({
         "touser": target_user,
         "msgtype": "text",
-        "agentid": agent_id.parse::<i64>().unwrap_or(0),
+        "agentid": agent_id.parse::<i64>()
+            .map_err(|_| AppError::BadRequest("wecom agent_id must be a valid integer".to_string()))?,
         "text": { "content": content },
         "safe": 0
     });

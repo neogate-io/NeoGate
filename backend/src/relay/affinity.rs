@@ -126,20 +126,31 @@ impl ChannelAffinityCache {
             if entry.expires_at > now {
                 return Some((entry.target.clone(), ChannelAffinityStatus::Local));
             }
+            // drop(entry) 释放分片锁后 remove 存在 TOCTOU 窗口：另一线程可能在两步之间
+            // 插入新鲜条目而被误删。remove_if 在持锁下原子地校验后删除，消除该窗口。
             drop(entry);
-            self.entries.remove(key);
+            self.entries.remove_if(key, |_, e| e.expires_at <= now);
         }
 
         let redis = self.redis.as_ref()?;
         let redis_key = redis.key(key);
         let mut conn = redis.manager.clone();
-        let payload = match conn.get::<_, Option<String>>(&redis_key).await {
-            Ok(payload) => payload?,
+
+        // GET + PTTL 合并为单次 pipeline，避免两次 Redis 往返。
+        let (payload, ttl_ms): (Option<String>, i64) = match redis::pipe()
+            .get(&redis_key)
+            .pttl(&redis_key)
+            .query_async(&mut conn)
+            .await
+        {
+            Ok(result) => result,
             Err(err) => {
                 tracing::warn!("failed to read channel affinity from redis: {err}");
                 return None;
             }
         };
+
+        let payload = payload?;
         let target = match serde_json::from_str::<UpstreamAffinityTarget>(&payload) {
             Ok(target) => target,
             Err(err) => {
@@ -148,18 +159,17 @@ impl ChannelAffinityCache {
                 return None;
             }
         };
-        match conn.pttl::<_, i64>(&redis_key).await {
-            Ok(ttl_ms) if ttl_ms > 0 => self.insert_local(
+
+        if ttl_ms == -2 {
+            return None; // key 已过期
+        }
+        if ttl_ms > 0 {
+            self.insert_local(
                 key.clone(),
                 target.clone(),
                 now,
                 Duration::from_millis(ttl_ms as u64),
-            ),
-            Ok(-2) => return None,
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!("failed to read channel affinity ttl from redis: {err}");
-            }
+            );
         }
         Some((target, ChannelAffinityStatus::Redis))
     }

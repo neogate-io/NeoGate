@@ -34,8 +34,8 @@ use crate::provider::{anthropic, openai};
 use crate::{
     auth::UserAuth,
     billing::{
-        estimate_input_tokens, estimated_cost_micros, parse_usage_from_bytes, BillingAccounts,
-        BillingCharge, DebitHold, Price, TokenUsage,
+        estimate_token_reservation, parse_usage_from_bytes, BillingAccounts, BillingCharge,
+        DebitHold, Price, TokenUsage,
     },
     cache::InvalidationEvent,
     error::{reqwest_status, AppError, AppResult},
@@ -52,24 +52,30 @@ pub(crate) use error::{
     describe_upstream_http_failure, is_model_error_text, FailureCooldown, UpstreamFailureKind,
     UpstreamHttpFailure,
 };
-pub(crate) use limit::UserRequestLimiter;
-use models::{list_anthropic_models, list_openai_models, retrieve_openai_model};
+pub(crate) use limit::{UserRequestLimiter, UserRequestPermit};
+use models::{
+    list_anthropic_models, list_openai_models, retrieve_anthropic_model, retrieve_openai_model,
+};
 pub(crate) use request::{
     prepare_relay_body, rewrite_relay_body_model, safe_log_label, BodyKind, PreparedRelayBody,
     RelayRequestParams,
 };
 pub(crate) use streaming::{body_from_bytes, body_from_stream, RelayContext, StreamUsageParser};
+pub(crate) use upstream::forward_openai_bound_with_headers;
 pub(crate) use upstream::{
     forward_anthropic, forward_openai, forward_openai_with_content_type, forward_prepared_openai,
     log_relay_upstream_failure, relay_upstream_error, upstream_url,
 };
-pub(crate) use upstream::{forward_anthropic_bound, forward_openai_bound};
+pub(crate) use upstream::{
+    forward_anthropic_bound, forward_openai_bound, forward_openai_video_task_bound,
+};
 use upstream_task::{UpstreamTask, UpstreamTaskType};
 
 const UPSTREAM_ERROR_BODY_READ_LIMIT: usize = 64 * 1024;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(crate::provider::adapters::router())
         .route("/v1/models", get(list_openai_models))
         .route("/v1/models/{model_id}", get(retrieve_openai_model))
         .route(
@@ -78,9 +84,18 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/v1/embeddings", post(openai::openai_embeddings))
         .route("/v1/moderations", post(openai::openai_moderations))
+        .route(
+            "/v1/audio/transcriptions",
+            post(openai::openai_audio_transcriptions),
+        )
+        .route("/v1/realtime", get(openai::openai_realtime))
         .route("/v1/responses", post(openai::openai_responses))
         .route(
             "/v1/responses/compact",
+            post(openai::openai_responses_compact),
+        )
+        .route(
+            "/anthropic/v1/responses/compact",
             post(openai::openai_responses_compact),
         )
         .route("/v1/responses/{response_id}", get(openai::openai_response))
@@ -105,6 +120,8 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/images/variations",
             post(openai::openai_image_variations),
         )
+        .route("/v1/assets", post(openai::openai_assets_create))
+        .route("/v1/assets/{asset_id}", get(openai::openai_asset_detail))
         .route("/v1/videos", post(openai::openai_videos))
         .route(
             "/v1/videos/{video_id}/content",
@@ -115,11 +132,28 @@ pub fn router() -> Router<Arc<AppState>> {
             "/anthropic",
             get(anthropic_gateway_probe).head(anthropic_gateway_probe),
         )
+        // 标准 Anthropic Models API 路径：Anthropic 官方 SDK 的 models.list() /
+        // models.retrieve() 打的是 <base>/v1/models[/{id}]，客户端以 origin/anthropic
+        // 为 base 时即 /anthropic/v1/models[/{id}]。
+        .route("/anthropic/v1/models", get(list_anthropic_models))
+        .route(
+            "/anthropic/v1/models/{model_id}",
+            get(retrieve_anthropic_model),
+        )
+        // 兼容旧路径（NeoGate 早期非标准路径），保留避免破坏既有调用方。
         .route("/anthropic/v1/messages/models", get(list_anthropic_models))
         .route("/v1/messages", post(anthropic::anthropic_messages))
         .route(
             "/anthropic/v1/messages",
             post(anthropic::anthropic_messages),
+        )
+        .route(
+            "/v1/messages/count_tokens",
+            post(anthropic::anthropic_count_tokens),
+        )
+        .route(
+            "/anthropic/v1/messages/count_tokens",
+            post(anthropic::anthropic_count_tokens),
         )
         .route(
             "/v1/messages/batches",
@@ -158,8 +192,12 @@ pub(crate) async fn finish_task_json_response(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let body = upstream_response.bytes().await?;
-    let body = adapter_for_endpoint(&task.provider, &task.upstream_base_url)
-        .normalize_response_body(RelayRoute::Videos, body)?;
+    let body = adapter_for_endpoint(
+        &task.provider,
+        &task.upstream_base_url,
+        task.adapter_hint.as_deref(),
+    )
+    .normalize_response_body(RelayRoute::Videos, body)?;
     tracing::info!(
         task_id = task.id,
         ?task.task_type,
@@ -169,36 +207,66 @@ pub(crate) async fn finish_task_json_response(
         "upstream async task bound response"
     );
     if status.is_success() {
-        if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
-            if task.task_type == UpstreamTaskType::OpenAiVideo {
-                crate::billing::video::copy_neogate_metadata(&task.upstream_metadata, &mut value);
-            }
-            let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
-            let usage = parse_usage_from_bytes(&body, false);
-            upstream_task::update_task_from_upstream_value(
-                &state.db.pool,
-                upstream_task::UpstreamTaskUpdate {
-                    task_id: task.id,
-                    task_type: task.task_type,
-                    upstream_task_id: task.upstream_task_id.clone(),
-                    status: status_text,
-                    terminal,
-                    metadata: value,
-                    usage,
-                    poll_interval: crate::task::POLL_INTERVAL,
-                },
-            )
-            .await?;
-            if terminal {
-                task_billing::finalize_for_auth(
-                    &state,
-                    &auth,
-                    &task.upstream_task_id,
-                    task.task_type,
-                    usage,
-                    true,
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(mut value) => {
+                if task.task_type == UpstreamTaskType::OpenAiVideo {
+                    crate::billing::video::copy_neogate_metadata(
+                        &task.upstream_metadata,
+                        &mut value,
+                    );
+                }
+                let (status_text, terminal) = task_status_from_value(task.task_type, &value, &task);
+                let usage = parse_usage_from_bytes(&body, false);
+                upstream_task::update_task_from_upstream_value(
+                    &state.db.pool,
+                    upstream_task::UpstreamTaskUpdate {
+                        task_id: task.id,
+                        task_type: task.task_type,
+                        upstream_task_id: task.upstream_task_id.clone(),
+                        status: status_text,
+                        terminal,
+                        metadata: value,
+                        usage,
+                        poll_interval: crate::task::POLL_INTERVAL,
+                    },
                 )
                 .await?;
+                if terminal {
+                    task_billing::finalize_for_auth(
+                        &state,
+                        &auth,
+                        &task.upstream_task_id,
+                        task.task_type,
+                        usage,
+                        true,
+                    )
+                    .await?;
+                }
+            }
+            Err(err) => {
+                // 成功响应体无法解析为 JSON：任务状态无法更新，billing hold 无法 finalize。
+                // 主动释放 hold 并返回错误，避免 hold 永久泄漏。
+                tracing::error!(
+                    task_id = task.id,
+                    ?task.task_type,
+                    upstream_task_id = %task.upstream_task_id,
+                    "failed to parse upstream task response body as JSON; releasing billing hold: {err}"
+                );
+                task_billing::release_task_hold_by_id(
+                    &state,
+                    task.id,
+                    "task response body JSON parse failed",
+                )
+                .await
+                .unwrap_or_else(|release_err| {
+                    tracing::warn!(
+                        task_id = task.id,
+                        "failed to release task billing hold after JSON parse failure: {release_err}"
+                    );
+                });
+                return Err(AppError::BadRequest(format!(
+                    "upstream task response is not valid JSON: {err}"
+                )));
             }
         }
     }
@@ -248,6 +316,15 @@ pub(crate) fn task_status_from_value(
         UpstreamTaskType::OpenAiVideo => {
             let status = openai::video_status_text(value, &task.status);
             let terminal = openai::video_terminal(&status);
+            (status, terminal)
+        }
+        UpstreamTaskType::AudioTranscription => {
+            let status = value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.status)
+                .to_string();
+            let terminal = matches!(status.as_str(), "completed" | "failed");
             (status, terminal)
         }
         UpstreamTaskType::AnthropicMessageBatch => {
@@ -339,14 +416,24 @@ fn rewrite_response_model(body: Bytes, external_model: &str) -> AppResult<Bytes>
 
 async fn finish_relay_error(mut ctx: RelayContext, err: AppError) -> AppResult<Response> {
     let err = relay_upstream_error(&ctx, err);
-    let summary = err.to_string();
     log_relay_upstream_failure(&ctx, &err);
-    let usage = usage_from_context(&ctx, None, Some(summary.clone()), None, None, None);
     ctx.release_request_permit();
-    let failure = key_failure_from_context(&ctx, summary).await;
-    release_empty_hold(&ctx.state, ctx.hold.clone(), "failed relay").await;
-    enqueue_relay_usage(&ctx.state, usage, failure).await;
+    record_relay_transport_failure(&ctx, err.to_string(), "failed relay").await;
     Err(err)
+}
+
+/// 记录传输层或前置失败的 relay 请求：释放预扣额度、记录失败 key 冷却并入队 usage。
+/// 仅用于无上游 HTTP 状态码的场景（status_code = None）；有状态码时使用
+/// `record_upstream_http_failure`。
+pub(crate) async fn record_relay_transport_failure(
+    ctx: &RelayContext,
+    summary: String,
+    release_context: &str,
+) {
+    let usage = usage_from_context(ctx, None, Some(summary.clone()), None, None, None);
+    let failure = key_failure_from_context(ctx, summary).await;
+    release_empty_hold(&ctx.state, ctx.hold.clone(), release_context).await;
+    enqueue_relay_usage(&ctx.state, usage, failure).await;
 }
 
 pub(crate) async fn handle_upstream_http_error(
@@ -535,10 +622,7 @@ pub(crate) async fn record_upstream_transport_failure_for_failover(
     ctx: &RelayContext,
     summary: String,
 ) {
-    let usage = usage_from_context(ctx, None, Some(summary.clone()), None, None, None);
-    let failure = key_failure_from_context(ctx, summary).await;
-    release_empty_hold(&ctx.state, ctx.hold.clone(), "upstream transport failover").await;
-    enqueue_relay_usage(&ctx.state, usage, failure).await;
+    record_relay_transport_failure(ctx, summary, "upstream transport failover").await;
 }
 
 pub(crate) async fn read_upstream_error_body(upstream_response: reqwest::Response) -> Bytes {
@@ -670,10 +754,8 @@ pub(crate) fn usage_from_context(
     billing: Option<BillingCharge>,
 ) -> UsageInsert {
     let latency_ms = ctx.started.elapsed().as_millis() as i64;
-    let output_tokens_per_second = token_usage.and_then(|usage| {
-        (latency_ms > 0 && usage.output_tokens > 0)
-            .then_some((usage.output_tokens as f64 * 1000.0) / latency_ms as f64)
-    });
+    let output_tokens_per_second =
+        output_tokens_per_second(token_usage.map(|usage| usage.output_tokens), latency_ms);
     let billing_meter = billing
         .as_ref()
         .map_or(ctx.price.billing_meter, |billing| billing.billing_meter);
@@ -726,6 +808,7 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let cached_input_tokens = token_usage.and_then(|usage| usage.cached_input_tokens);
     let cache_creation_input_tokens =
         token_usage.and_then(|usage| usage.cache_creation_input_tokens);
+    let summary_input_tokens = summary_input_tokens(input_tokens, cache_creation_input_tokens);
     let cache_creation_input_tokens_5m =
         token_usage.and_then(|usage| usage.cache_creation_input_tokens_5m);
     let cache_creation_input_tokens_1h =
@@ -733,35 +816,27 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     let reasoning_output_tokens = token_usage.and_then(|usage| usage.reasoning_output_tokens);
     let audio_input_tokens = token_usage.and_then(|usage| usage.audio_input_tokens);
     let audio_output_tokens = token_usage.and_then(|usage| usage.audio_output_tokens);
-    let (uncached_input_tokens, cache_hit_pct) =
-        request_cache_metrics(input_tokens, cached_input_tokens);
-    let generation_tokens_per_second =
-        generation_tokens_per_second(output_tokens, usage.latency_ms, usage.first_response_ms);
+    let output_tokens_per_second = output_tokens_per_second(output_tokens, usage.latency_ms);
     let upstream_path = ctx.upstream_request_path.as_deref().unwrap_or(ctx.path);
     let response_mode = ctx.upstream_response_mode.unwrap_or("passthrough");
     let responses_chat_fallback = response_mode == "openai_chat_as_openai_response";
 
     let mut info = String::from("relay request");
     push_field(&mut info, "trace", short_trace_id(ctx.relay_trace_id));
+    push_field(&mut info, "method", ctx.method);
     push_field(&mut info, "path", ctx.path);
-    push_field(&mut info, "upstream_path", upstream_path);
-    push_field(&mut info, "response_mode", response_mode);
-    push_field(
-        &mut info,
-        "responses_chat_fallback",
-        responses_chat_fallback,
-    );
+    if upstream_path != ctx.path {
+        push_field(&mut info, "upstream_path", upstream_path);
+    }
+    if response_mode != "passthrough" {
+        push_field(&mut info, "response_mode", response_mode);
+    }
+    push_opt(&mut info, "status", usage.status_code);
+    push_field(&mut info, "total_ms", usage.latency_ms);
+    push_opt(&mut info, "ttfb_ms", usage.first_response_ms);
     push_field(&mut info, "user", usage.user_id);
     push_field(&mut info, "key", usage.user_key_id);
     push_field(&mut info, "channel", usage.channel_id);
-    push_opt(
-        &mut info,
-        "affinity",
-        ctx.upstream
-            .affinity
-            .as_ref()
-            .map(|affinity| affinity.status.as_str()),
-    );
     push_field(
         &mut info,
         "model",
@@ -770,18 +845,13 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     if ctx.upstream_model != usage.model.as_deref().unwrap_or(&ctx.model) {
         push_field(&mut info, "upstream_model", &ctx.upstream_model);
     }
-    push_opt(&mut info, "status", usage.status_code);
-    push_field(&mut info, "latency_ms", usage.latency_ms);
-    push_opt(&mut info, "first_ms", usage.first_response_ms);
-    push_opt(&mut info, "in", input_tokens);
-    push_opt(&mut info, "uncached_in", uncached_input_tokens);
+    push_opt(&mut info, "input", summary_input_tokens);
+    push_opt(&mut info, "output", output_tokens);
     push_opt(&mut info, "cache_read", cached_input_tokens);
     push_opt(&mut info, "cache_write", cache_creation_input_tokens);
-    push_opt_f64(&mut info, "cache_hit_pct", cache_hit_pct);
-    push_opt(&mut info, "out", output_tokens);
     push_opt(&mut info, "reasoning", reasoning_output_tokens);
-    push_opt_f64(&mut info, "gen_tps", generation_tokens_per_second);
     push_opt(&mut info, "cost_micros", cost_micros);
+    push_opt_f64(&mut info, "tps", output_tokens_per_second);
     push_info_request_params(&mut info, &ctx.request_params);
     if usage.relay_attempt > 1 {
         push_field(&mut info, "attempt", usage.relay_attempt);
@@ -908,33 +978,19 @@ fn log_relay_request_summary(ctx: &RelayContext, usage: &UsageInsert) {
     tracing::debug!("{detail}");
 }
 
-fn request_cache_metrics(
-    input_tokens: Option<i64>,
-    cached_input_tokens: Option<i64>,
-) -> (Option<i64>, Option<f64>) {
-    let Some((input_tokens, cached_input_tokens)) = input_tokens.zip(cached_input_tokens) else {
-        return (None, None);
-    };
-    if input_tokens <= 0 {
-        return (None, None);
-    }
-
-    let cached_input_tokens = cached_input_tokens.clamp(0, input_tokens);
-    (
-        Some(input_tokens - cached_input_tokens),
-        Some((cached_input_tokens as f64 * 100.0) / input_tokens as f64),
-    )
+fn output_tokens_per_second(output_tokens: Option<i64>, latency_ms: i64) -> Option<f64> {
+    let output_tokens = output_tokens?;
+    (output_tokens > 0 && latency_ms > 0)
+        .then_some((output_tokens as f64 * 1000.0) / latency_ms as f64)
 }
 
-fn generation_tokens_per_second(
-    output_tokens: Option<i64>,
-    latency_ms: i64,
-    first_response_ms: Option<i64>,
-) -> Option<f64> {
-    let output_tokens = output_tokens?;
-    let generation_ms = latency_ms.saturating_sub(first_response_ms?);
-    (output_tokens > 0 && generation_ms > 0)
-        .then_some((output_tokens as f64 * 1000.0) / generation_ms as f64)
+fn summary_input_tokens(
+    input_tokens: Option<i64>,
+    cache_creation_input_tokens: Option<i64>,
+) -> Option<i64> {
+    input_tokens.map(|input_tokens| {
+        input_tokens.saturating_add(cache_creation_input_tokens.unwrap_or(0).max(0))
+    })
 }
 
 fn push_request_params(line: &mut String, params: &RelayRequestParams) {
@@ -1096,20 +1152,22 @@ pub(crate) async fn reserve_credit(
     auth: &UserAuth,
     user_key_model_credit_account: Option<&crate::billing::CreditAccountId>,
     body: &[u8],
-    output_tokens: i64,
+    requested_output_tokens: i64,
     price: &Price,
 ) -> AppResult<DebitHold> {
-    let input_tokens = estimate_input_tokens(body);
-    let estimated = estimated_cost_micros(input_tokens, output_tokens, price);
-    if !policy::credit_required(state).await? {
-        return Ok(DebitHold {
-            transaction_id: Uuid::new_v4(),
-            estimated_micros: estimated,
-            parts: Vec::new(),
-            charge_credit: false,
-        });
+    let estimate = estimate_token_reservation(body, requested_output_tokens, price);
+    if estimate.reserved_output_tokens != estimate.requested_output_tokens {
+        tracing::debug!(
+            requested_output_tokens = estimate.requested_output_tokens,
+            reserved_output_tokens = estimate.reserved_output_tokens,
+            "capped output tokens used for billing reservation"
+        );
     }
-    state
+    if !policy::credit_required(state).await? {
+        return Ok(DebitHold::new(estimate.estimated_micros, Vec::new(), false)
+            .with_usage_missing_fallback(estimate.usage_missing_micros));
+    }
+    let hold = state
         .billing
         .reserve(
             &state.db.pool,
@@ -1121,9 +1179,10 @@ pub(crate) async fn reserve_credit(
                 user_key_credit_account: &auth.user_key_credit_account,
                 project_credit_account: &auth.project_credit_account,
             },
-            estimated,
+            estimate.estimated_micros,
         )
-        .await
+        .await?;
+    Ok(hold.with_usage_missing_fallback(estimate.usage_missing_micros))
 }
 
 pub(crate) async fn reserve_billable_credit(
@@ -1134,12 +1193,7 @@ pub(crate) async fn reserve_billable_credit(
 ) -> AppResult<DebitHold> {
     let estimated = estimated_micros.max(0);
     if !policy::credit_required(state).await? {
-        return Ok(DebitHold {
-            transaction_id: Uuid::new_v4(),
-            estimated_micros: estimated,
-            parts: Vec::new(),
-            charge_credit: false,
-        });
+        return Ok(DebitHold::new(estimated, Vec::new(), false));
     }
     state
         .billing
@@ -1187,7 +1241,19 @@ pub(crate) async fn enqueue_relay_usage(
             .await;
     }
     if item.billing.is_some() {
-        state.billing_outbox.enqueue_or_retry(item);
+        if let Err(err) = state.billing_outbox.enqueue(&item).await {
+            tracing::error!(
+                "failed to persist durable relay billing event; retaining background retry: {err}"
+            );
+            if let Err(retry_err) = state.billing_outbox.enqueue_or_retry(item).await {
+                tracing::error!("failed to queue relay billing retry: {retry_err}");
+            }
+        }
+        // billing 分支必须独立持久化 key failure：billing_outbox 不写 channel_key 表，
+        // 而 cache_invalidator 仅更新内存 routing cache；若跳过此步，30s TTL 重载后冷却丢失。
+        if let Some(failure) = failure {
+            state.usage.enqueue_key_failure(failure);
+        }
         return;
     }
     if let Err(err) = state.usage.enqueue(item, failure).await {
@@ -1285,27 +1351,21 @@ mod tests {
     }
 
     #[test]
-    fn derives_cache_metrics_from_input_usage() {
-        let (uncached_input, cache_hit_pct) = request_cache_metrics(Some(327_027), Some(325_376));
-
-        assert_eq!(uncached_input, Some(1_651));
-        assert!((cache_hit_pct.unwrap() - 99.495).abs() < 0.001);
+    fn calculates_output_rate_over_total_latency() {
+        let output_rate = output_tokens_per_second(Some(1_206), 43_181);
+        assert!((output_rate.unwrap() - 27.929).abs() < 0.001);
+        assert_eq!(output_tokens_per_second(Some(106), 0), None);
+        assert_eq!(output_tokens_per_second(None, 7_864), None);
     }
 
     #[test]
-    fn clamps_invalid_cache_usage_and_omits_missing_values() {
+    fn summary_input_includes_cache_creation_tokens() {
+        assert_eq!(summary_input_tokens(Some(58), Some(207_135)), Some(207_193));
         assert_eq!(
-            request_cache_metrics(Some(10), Some(15)),
-            (Some(0), Some(100.0))
+            summary_input_tokens(Some(207_193), Some(1_209)),
+            Some(208_402)
         );
-        assert_eq!(request_cache_metrics(Some(10), None), (None, None));
-        assert_eq!(request_cache_metrics(Some(0), Some(0)), (None, None));
-    }
-
-    #[test]
-    fn calculates_generation_rate_after_first_response() {
-        let generation_rate = generation_tokens_per_second(Some(106), 7_864, Some(5_565));
-        assert!((generation_rate.unwrap() - 46.107).abs() < 0.001);
-        assert_eq!(generation_tokens_per_second(Some(106), 7_864, None), None);
+        assert_eq!(summary_input_tokens(Some(58), None), Some(58));
+        assert_eq!(summary_input_tokens(None, Some(207_135)), None);
     }
 }

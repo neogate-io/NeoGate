@@ -1,51 +1,61 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use sqlx::Row;
 
 use crate::{
-    billing::BillingMeter,
     error::{AppError, AppResult},
     AppState,
 };
 
-pub const CUSTOM_PROVIDER_CODE: &str = "custom";
-pub const NEWAPI_PROVIDER_CODE: &str = "newapi";
-pub const SUB2API_PROVIDER_CODE: &str = "sub2api";
-const CUSTOM_PROVIDER_DISPLAY_NAME: &str = "自定义";
-const CUSTOM_PROVIDER_NAME: &str = "Custom";
-const NEWAPI_PROVIDER_DISPLAY_NAME: &str = "NewAPI";
-const NEWAPI_PROVIDER_NAME: &str = "NewAPI";
-const SUB2API_PROVIDER_DISPLAY_NAME: &str = "Sub2API";
-const SUB2API_PROVIDER_NAME: &str = "Sub2API";
 pub const OPENAI_OAUTH_PROTOCOL: &str = "openai_oauth";
 
-struct BuiltinManualProvider {
-    code: &'static str,
-    display_name: &'static str,
-    name: &'static str,
-    sort_order: i32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AudioTranscriptionAdapter {
+    AsyncFile,
+    MultimodalGeneration,
+    QwenRealtime,
 }
 
-const BUILTIN_MANUAL_PROVIDERS: &[BuiltinManualProvider] = &[
-    BuiltinManualProvider {
-        code: CUSTOM_PROVIDER_CODE,
-        display_name: CUSTOM_PROVIDER_DISPLAY_NAME,
-        name: CUSTOM_PROVIDER_NAME,
-        sort_order: 0,
-    },
-    BuiltinManualProvider {
-        code: NEWAPI_PROVIDER_CODE,
-        display_name: NEWAPI_PROVIDER_DISPLAY_NAME,
-        name: NEWAPI_PROVIDER_NAME,
-        sort_order: 1,
-    },
-    BuiltinManualProvider {
-        code: SUB2API_PROVIDER_CODE,
-        display_name: SUB2API_PROVIDER_DISPLAY_NAME,
-        name: SUB2API_PROVIDER_NAME,
-        sort_order: 2,
-    },
-];
+pub(crate) fn catalog_audio_transcription_adapter(
+    provider: &str,
+    capabilities: &Value,
+) -> Option<AudioTranscriptionAdapter> {
+    if !provider.trim().eq_ignore_ascii_case("qwen") {
+        return None;
+    }
+    let transcription = capabilities.pointer("/catalog/capabilities/audio_transcription")?;
+    let interfaces = capabilities.pointer("/catalog/interfaces")?.as_array()?;
+    interfaces.iter().find_map(|interface| {
+        if interface.get("operation")?.as_str()? != "audio_transcription" {
+            return None;
+        }
+        let mode = interface.get("mode")?.as_str()?;
+        let transport = interface.get("transport")?.as_str()?;
+        let protocol = interface.get("upstream_protocol")?.as_str()?;
+        let request_style = interface.get("request_style")?.as_str()?;
+        match (mode, transport, protocol, request_style) {
+            ("file", "https", "dashscope_http", "dashscope_async_file")
+                if transcription.get("file").and_then(Value::as_bool) == Some(true) =>
+            {
+                Some(AudioTranscriptionAdapter::AsyncFile)
+            }
+            ("file", "https", "dashscope_http", "dashscope_multimodal_generation")
+                if transcription.get("file").and_then(Value::as_bool) == Some(true) =>
+            {
+                Some(AudioTranscriptionAdapter::MultimodalGeneration)
+            }
+            ("realtime", "websocket", "dashscope_websocket", "dashscope_qwen_realtime")
+                if transcription.get("realtime").and_then(Value::as_bool) == Some(true) =>
+            {
+                Some(AudioTranscriptionAdapter::QwenRealtime)
+            }
+            _ => None,
+        }
+    })
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderRecord {
@@ -67,8 +77,6 @@ pub struct ProviderDefaultEndpointRecord {
 }
 
 pub async fn list_providers(state: &AppState) -> AppResult<Vec<ProviderRecord>> {
-    ensure_builtin_manual_providers(state).await?;
-
     let rows = sqlx::query(
         "SELECT id, code, display_name, name,
                 default_openai_base_url, default_openai_oauth_base_url, default_anthropic_base_url,
@@ -127,53 +135,6 @@ pub async fn provider_default_endpoints(
         .transpose()
 }
 
-pub async fn ensure_builtin_manual_provider_by_code(state: &AppState, code: &str) -> AppResult<()> {
-    let Some(provider) = BUILTIN_MANUAL_PROVIDERS
-        .iter()
-        .find(|provider| provider.code == code)
-    else {
-        return Ok(());
-    };
-
-    ensure_builtin_manual_provider_record(state, provider).await
-}
-
-async fn ensure_builtin_manual_providers(state: &AppState) -> AppResult<()> {
-    for provider in BUILTIN_MANUAL_PROVIDERS {
-        ensure_builtin_manual_provider_record(state, provider).await?;
-    }
-    Ok(())
-}
-
-async fn ensure_builtin_manual_provider_record(
-    state: &AppState,
-    provider: &BuiltinManualProvider,
-) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO provider
-         (code, display_name, name, default_openai_base_url,
-          default_openai_oauth_base_url, default_anthropic_base_url, enabled, sort_order)
-         VALUES ($1, $2, $3, '', '', '', TRUE, $4)
-         ON CONFLICT (code) DO UPDATE
-         SET display_name = EXCLUDED.display_name,
-             name = EXCLUDED.name,
-             default_openai_base_url = EXCLUDED.default_openai_base_url,
-             default_openai_oauth_base_url = EXCLUDED.default_openai_oauth_base_url,
-             default_anthropic_base_url = EXCLUDED.default_anthropic_base_url,
-             enabled = TRUE,
-             sort_order = EXCLUDED.sort_order,
-             updated_at = now()",
-    )
-    .bind(provider.code)
-    .bind(provider.display_name)
-    .bind(provider.name)
-    .bind(provider.sort_order)
-    .execute(&state.db.pool)
-    .await?;
-
-    Ok(())
-}
-
 pub async fn record_provider_models(
     state: &AppState,
     provider: &str,
@@ -190,7 +151,7 @@ pub async fn record_provider_models(
         sqlx::query(
             "INSERT INTO provider_model
              (provider, model, display_name, source, billing_meter, capabilities, enabled)
-             VALUES ($1, $2, $2, $3, $4, '{}'::JSONB, $5)
+             VALUES ($1, $2, $2, $3, 'token', '{}'::JSONB, $4)
              ON CONFLICT (provider, model)
              DO UPDATE SET
                  display_name = CASE
@@ -208,7 +169,6 @@ pub async fn record_provider_models(
         .bind(provider)
         .bind(model)
         .bind(source)
-        .bind(BillingMeter::Token.as_str())
         .bind(enabled)
         .execute(&state.db.pool)
         .await?;
@@ -248,4 +208,85 @@ fn provider_default_endpoints_from_row(
             base_url: row.try_get("default_anthropic_base_url")?,
         },
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_supported_audio_adapters_from_catalog_interfaces() {
+        for (request_style, mode, transport, protocol, expected) in [
+            (
+                "dashscope_async_file",
+                "file",
+                "https",
+                "dashscope_http",
+                AudioTranscriptionAdapter::AsyncFile,
+            ),
+            (
+                "dashscope_multimodal_generation",
+                "file",
+                "https",
+                "dashscope_http",
+                AudioTranscriptionAdapter::MultimodalGeneration,
+            ),
+            (
+                "dashscope_qwen_realtime",
+                "realtime",
+                "websocket",
+                "dashscope_websocket",
+                AudioTranscriptionAdapter::QwenRealtime,
+            ),
+        ] {
+            let capabilities = json!({
+                "catalog": {
+                    "capabilities": {
+                        "audio_transcription": { "file": mode == "file", "realtime": mode == "realtime" }
+                    },
+                    "interfaces": [{
+                        "operation": "audio_transcription",
+                        "mode": mode,
+                        "transport": transport,
+                        "upstream_protocol": protocol,
+                        "request_style": request_style
+                    }]
+                }
+            });
+            assert_eq!(
+                catalog_audio_transcription_adapter("qwen", &capabilities),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_inconsistent_or_unsupported_catalog_interfaces() {
+        let unsupported = json!({
+            "catalog": {
+                "capabilities": {
+                    "audio_transcription": { "file": false, "realtime": true }
+                },
+                "interfaces": [{
+                    "operation": "audio_transcription",
+                    "mode": "realtime",
+                    "transport": "websocket",
+                    "upstream_protocol": "dashscope_websocket",
+                    "request_style": "dashscope_realtime"
+                }]
+            }
+        });
+        assert_eq!(
+            catalog_audio_transcription_adapter("qwen", &unsupported),
+            None
+        );
+        assert_eq!(
+            catalog_audio_transcription_adapter("custom", &unsupported),
+            None
+        );
+        assert_eq!(
+            catalog_audio_transcription_adapter("qwen", &json!({})),
+            None
+        );
+    }
 }

@@ -1,20 +1,134 @@
-use axum::http::HeaderMap;
+use std::sync::Arc;
+
+use axum::{
+    extract::{OriginalUri, State},
+    http::{HeaderMap, Method},
+    response::Response,
+    routing::{get, post, put},
+    Router,
+};
 use bytes::Bytes;
 use serde_json::{Map, Value};
 
 use super::{AdapterResponseMode, PreparedUpstreamRequest, ProviderAdapter, RelayRoute};
 use crate::{
+    auth::UserAuth,
     error::{AppError, AppResult},
     relay::{
+        forward_openai_bound_with_headers, raw_upstream_response,
         selector::{SelectedUpstream, UpstreamProtocol},
         upstream_url,
     },
+    AppState,
 };
 
 pub(crate) static HAXICLOUD_ADAPTER: HaxicloudAdapter = HaxicloudAdapter;
 pub(crate) struct HaxicloudAdapter;
 const TASKS_PATH: &str = "/contents/generations/tasks";
 const HAXICLOUD_HOST: &str = "token.haxicloud.com";
+const ASSET_ROUTING_MODEL: &str = "dreamina-seedance-2-0-260128";
+
+pub(crate) fn router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/asset-groups", get(proxy_get).post(proxy_post))
+        .route("/v1/asset-groups/{id}", put(proxy_put).delete(proxy_delete))
+        .route("/v1/assets/upload", post(proxy_post))
+        .route("/v1/assets/sync-upload", post(proxy_post))
+        .route("/v1/assets/sync", post(proxy_post))
+        .route("/v1/assets/importable", get(proxy_get))
+        .route("/v1/assets/import", post(proxy_post))
+        .route("/v1/realperson/agreement", post(proxy_post))
+        .route("/v1/realperson/session", post(proxy_post))
+        .route("/v1/realperson/result", post(proxy_post))
+}
+
+async fn proxy_get(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::GET, Bytes::new()).await
+}
+
+async fn proxy_post(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::POST, body).await
+}
+
+async fn proxy_put(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::PUT, body).await
+}
+
+async fn proxy_delete(
+    state: State<Arc<AppState>>,
+    auth: UserAuth,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    proxy(state, auth, uri, headers, Method::DELETE, Bytes::new()).await
+}
+
+async fn proxy(
+    State(state): State<Arc<AppState>>,
+    _auth: UserAuth,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    method: Method,
+    body: Bytes,
+) -> AppResult<Response> {
+    let upstream = state
+        .selector
+        .select_matching_endpoint(
+            &state.db.pool,
+            &state.secrets,
+            UpstreamProtocol::Openai,
+            ASSET_ROUTING_MODEL,
+            None,
+            |channel| {
+                super::adapter_for_endpoint(
+                    &channel.provider,
+                    &channel.base_url,
+                    channel.adapter_hint.as_deref(),
+                )
+                .name()
+                    == "haxicloud"
+            },
+        )
+        .await
+        .map_err(|err| match err {
+            AppError::UpstreamUnavailable(_) => AppError::UpstreamUnavailable(
+                "no available HaxiCloud channel for asset or real-person APIs".to_string(),
+            ),
+            err => err,
+        })?;
+
+    let path = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| uri.path());
+    let response = forward_openai_bound_with_headers(
+        &state,
+        &upstream,
+        method,
+        path,
+        (!body.is_empty()).then_some(body),
+        &headers,
+    )
+    .await?;
+    raw_upstream_response(response).await
+}
 
 pub(crate) fn matches_base_url(base_url: &str) -> bool {
     reqwest::Url::parse(base_url)
@@ -31,6 +145,10 @@ impl ProviderAdapter for HaxicloudAdapter {
         "haxicloud"
     }
 
+    fn prepares_video_request(&self, _model: &str) -> bool {
+        true
+    }
+
     fn resolve_url(&self, base_url: &str, route: RelayRoute) -> String {
         if route == RelayRoute::Videos {
             tasks_url(base_url)
@@ -40,10 +158,7 @@ impl ProviderAdapter for HaxicloudAdapter {
     }
 
     fn resolve_bound_url(&self, base_url: &str, path: &str) -> (String, String) {
-        if let Some(id) = path
-            .strip_prefix("/v1/videos/")
-            .filter(|id| !id.is_empty() && !id.contains('/'))
-        {
+        if let Some(id) = super::openai_video_task_id(path) {
             return (
                 format!("{}/{}", tasks_url(base_url), id),
                 format!("{TASKS_PATH}/{id}"),
@@ -155,6 +270,27 @@ impl ProviderAdapter for HaxicloudAdapter {
                 .entry("output")
                 .or_insert_with(|| serde_json::json!({"video_url": url}));
         }
+        // 保留上游用量字段，否则 OfficialToken 结算读不到 total_tokens 将零扣费。
+        // usage 可能位于 data.data 内层或 data 外层，优先原样保留。
+        if !payload.contains_key("usage") {
+            if let Some(usage) = data.get("usage").cloned() {
+                payload.insert("usage".to_string(), usage);
+            } else if let Some(total_tokens) = payload
+                .get("totalTokens")
+                .or_else(|| data.get("totalTokens"))
+                .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+            {
+                // 结算只识别 usage.total_tokens，将 camelCase totalTokens 归一化为 usage 对象
+                payload.insert(
+                    "usage".to_string(),
+                    serde_json::json!({
+                        "input_tokens": total_tokens,
+                        "output_tokens": 0,
+                        "total_tokens": total_tokens,
+                    }),
+                );
+            }
+        }
         Ok(Bytes::from(serde_json::to_vec(&Value::Object(payload))?))
     }
 }
@@ -189,7 +325,7 @@ fn append_images(input: &Map<String, Value>, output: &mut Map<String, Value>) {
     for key in ["image", "input_reference"] {
         if let Some(url) = input
             .get(key)
-            .and_then(Value::as_str)
+            .and_then(image_reference_url)
             .filter(|v| !v.trim().is_empty())
         {
             urls.push(url.to_string());
@@ -220,6 +356,12 @@ fn append_images(input: &Map<String, Value>, output: &mut Map<String, Value>) {
     }
 }
 
+fn image_reference_url(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get("image_url")?.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +377,7 @@ mod tests {
             responses_chat_fallback: false,
             secret: "sk".into(),
             account_id: None,
+            adapter_hint: None,
             affinity: None,
         }
     }
@@ -281,6 +424,19 @@ mod tests {
             "https://token.haxicloud.com/api/v3/contents/generations/tasks/task_123"
         );
         assert_eq!(log_path, "/contents/generations/tasks/task_123");
+    }
+
+    #[test]
+    fn asset_paths_preserve_v1_and_query_parameters() {
+        let (url, log_path) = HAXICLOUD_ADAPTER.resolve_bound_url(
+            "https://token.haxicloud.com/v1",
+            "/v1/assets/importable?target_group_id=20",
+        );
+        assert_eq!(
+            url,
+            "https://token.haxicloud.com/v1/assets/importable?target_group_id=20"
+        );
+        assert_eq!(log_path, "/v1/assets/importable?target_group_id=20");
     }
 
     #[test]

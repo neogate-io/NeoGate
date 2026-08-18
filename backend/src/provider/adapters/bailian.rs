@@ -137,11 +137,7 @@ fn bailian_task_url(base_url: &str, task_id: &str) -> String {
 }
 
 fn bailian_task_id_from_openai_video_path(path: &str) -> Option<&str> {
-    let rest = path.strip_prefix("/v1/videos/")?;
-    if rest.is_empty() || rest.contains('/') {
-        return None;
-    }
-    Some(rest)
+    super::openai_video_task_id(path)
 }
 
 fn openai_video_to_bailian(body: Bytes) -> AppResult<Bytes> {
@@ -202,11 +198,13 @@ fn openai_video_to_bailian(body: Bytes) -> AppResult<Bytes> {
 
 fn normalize_bailian_video_resolution(value: &str) -> Option<String> {
     let normalized = value.trim().to_ascii_uppercase().replace(['X', '*'], "x");
-    if normalized == "720P" || normalized.ends_with("x720") || normalized.contains("720") {
-        return Some("720P".to_string());
-    }
+    // 必须先判 1080：竖屏分辨率 "720x1080" 同时含 "720" 和 "1080"，
+    // 若先判 720 会把 1080P 竖屏误判为 720P，导致计费档位偏低而少扣。
     if normalized == "1080P" || normalized.ends_with("x1080") || normalized.contains("1080") {
         return Some("1080P".to_string());
+    }
+    if normalized == "720P" || normalized.ends_with("x720") || normalized.contains("720") {
+        return Some("720P".to_string());
     }
     None
 }
@@ -228,6 +226,7 @@ mod tests {
             responses_chat_fallback,
             secret: "sk-test".to_string(),
             account_id: None,
+            adapter_hint: None,
             affinity: None,
         }
     }
@@ -270,6 +269,27 @@ mod tests {
             BAILIAN_ADAPTER
                 .resolve_url("https://dashscope.aliyuncs.com/api/v1", RelayRoute::Videos),
             "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+        );
+    }
+
+    #[test]
+    fn bailian_portrait_1080_resolution_not_misclassified_as_720() {
+        // 竖屏 720x1080 同时含 "720" 与 "1080"，必须判为 1080P（先判 1080）
+        assert_eq!(
+            normalize_bailian_video_resolution("720x1080"),
+            Some("1080P".to_string())
+        );
+        assert_eq!(
+            normalize_bailian_video_resolution("1080x720"),
+            Some("1080P".to_string())
+        );
+        assert_eq!(
+            normalize_bailian_video_resolution("1280x720"),
+            Some("720P".to_string())
+        );
+        assert_eq!(
+            normalize_bailian_video_resolution("720P"),
+            Some("720P".to_string())
         );
     }
 

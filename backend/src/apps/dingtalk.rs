@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     extract::{Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
@@ -15,14 +15,15 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::{
+    core::net::validate_public_url,
     error::{AppError, AppResult},
     id::DbId,
     AppState,
 };
 
 use super::{
-    constant_time_eq, header_value, runtime_for_endpoint, secret_plaintext,
-    spawn_app_message_reply, AppRuntime, IncomingAppMessage, APP_BODY_LIMIT_BYTES,
+    constant_time_eq, header_value, read_app_body, runtime_for_endpoint, secret_plaintext,
+    spawn_app_message_reply, AppRuntime, IncomingAppMessage,
 };
 
 pub(super) const APP_SECRET_KEY: &str = "app_secret";
@@ -71,9 +72,7 @@ pub(super) async fn callback(
 ) -> AppResult<Response> {
     let runtime = runtime_for_endpoint(&state, endpoint_id, "dingtalk").await?;
     verify_signature(&state, &runtime, &query, &headers)?;
-    let bytes = to_bytes(body, APP_BODY_LIMIT_BYTES)
-        .await
-        .map_err(|err| AppError::BadRequest(format!("failed to read request body: {err}")))?;
+    let bytes = read_app_body(body).await?;
     let payload: CallbackBody = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::BadRequest("invalid dingtalk callback body".to_string()))?;
     let Some(incoming) = incoming_message(&payload) else {
@@ -201,6 +200,11 @@ async fn send_session_text(
     session_webhook: &str,
     content: &str,
 ) -> AppResult<()> {
+    // 防 SSRF：session_webhook 来自钉钉回调 payload（body 不在签名范围内），
+    // 必须确保目标为公网地址，阻断内网/元数据端点探测。
+    // 钉钉官方 sessionWebhook 恒为 https://oapi.dingtalk.com/robot/... 格式。
+    validate_public_url(session_webhook)
+        .map_err(|_| AppError::BadRequest("invalid session_webhook URL".to_string()))?;
     let res: Value = state
         .http
         .post(session_webhook)

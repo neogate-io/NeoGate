@@ -48,7 +48,7 @@ export function resolvedVideoTokensPerSecondEstimate(
 
 export function isChannelPriceConfigured(price?: ChannelPrice) {
   if (!price) return false
-  if (price.billing_meter === 'image') {
+  if (price.billing_meter === 'image' || price.billing_meter === 'audio') {
     return price.unit_price_micros !== undefined && price.unit_price_micros !== null
   }
   if (price.billing_meter === 'video') {
@@ -137,4 +137,18 @@ export function findPricingTemplate(templates: PricingTemplate[], provider: stri
     sameModelTemplates.find((template) => template.provider.trim() !== normalizedProvider) ??
     enabledTemplates.find((template) => template.provider.trim() !== normalizedProvider)
   )
+}
+
+export function resolvePricingReference(
+  templates: PricingTemplate[],
+  provider: string,
+  model: string,
+  baseModel?: string | null
+) {
+  const referenceModel = baseModel?.trim() || model
+  const template = findPricingTemplate(templates, provider, referenceModel)
+  return {
+    provider: template?.provider ?? provider,
+    model: template?.model ?? referenceModel
+  }
 }

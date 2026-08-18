@@ -18,6 +18,7 @@ import {
 } from '../../api/usage'
 import { useAsyncData } from '../../composables/useAsyncData'
 import { useBillingCurrency } from '../../composables/useBillingCurrency'
+import { useDownloadTask } from '../../composables/useDownloadTask'
 import { useLocale } from '../../composables/useLocale'
 import {
   downloadBlob,
@@ -27,6 +28,7 @@ import {
   microAmountToMajor,
   toDateKey
 } from '../../utils/format'
+import { axisTooltip, categoryAxis, chartGrid, metricAxis } from '../../utils/usageCharts'
 
 const { locale, t } = useLocale()
 const { currencySymbol, formatMoney } = useBillingCurrency()
@@ -51,7 +53,7 @@ const statisticsFilters = reactive<StatisticsFilters>({
 })
 const statisticsModelsPage = ref(1)
 const statisticsModelsPageSize = ref(20)
-const statisticsExporting = ref(false)
+const { downloading: statisticsExporting, run: runDownload } = useDownloadTask()
 const tokenTrendMode = ref<'total' | 'input' | 'output'>('total')
 const requestTrendMode = ref<'total' | 'errors' | 'errorRate'>('total')
 const performanceTrendMode = ref<'latency' | 'firstResponse' | 'throughput'>('latency')
@@ -95,10 +97,10 @@ const {
   data: statisticsOptions,
   loading: statisticsOptionsLoading,
   reload: reloadStatisticsOptions
-} = useAsyncData(
-  () => getAdminUsageStatisticsOptions(statisticsBaseQuery.value),
-  { models: [], users: [] }
-)
+} = useAsyncData(() => getAdminUsageStatisticsOptions(statisticsBaseQuery.value), {
+  models: [],
+  users: []
+})
 const {
   data: statisticsTimeSeries,
   loading: statisticsTimeSeriesLoading,
@@ -144,24 +146,10 @@ const timelineRows = computed(() =>
 const modelSeriesRows = computed(() => statisticsTimeSeries.value.model_points)
 const costTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#2563eb'],
-  grid: { left: 12, right: 18, top: 28, bottom: 28, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
-  tooltip: {
-    trigger: 'axis',
-    formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
-  },
-  xAxis: {
-    type: 'category',
-    data: dailyChartRows.value.map((item) => item.date),
-    axisLabel: { color: '#667085', hideOverlap: true }
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: {
-      color: '#667085',
-      formatter: (value: number) => formatChartMoney(value)
-    },
-    splitLine: { lineStyle: { color: '#edf2f7' } }
-  },
+  grid: chartGrid(),
+  tooltip: axisTooltip((params) => trendTooltip(params, t('cost'), 'cost')),
+  xAxis: categoryAxis(dailyChartRows.value.map((item) => item.date)),
+  yAxis: metricAxis(formatChartMoney),
   series: [
     {
       name: t('cost'),
@@ -174,21 +162,10 @@ const costTrendOption = computed<EChartsCoreOption>(() => ({
 }))
 const requestTrendOption = computed<EChartsCoreOption>(() => ({
   color: ['#16a34a'],
-  grid: { left: 12, right: 18, top: 28, bottom: 28, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
-  tooltip: {
-    trigger: 'axis',
-    formatter: (params: unknown) => trendTooltip(params, t('requestCount'), 'number')
-  },
-  xAxis: {
-    type: 'category',
-    data: dailyChartRows.value.map((item) => item.date),
-    axisLabel: { color: '#667085', hideOverlap: true }
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: { color: '#667085' },
-    splitLine: { lineStyle: { color: '#edf2f7' } }
-  },
+  grid: chartGrid(),
+  tooltip: axisTooltip((params) => trendTooltip(params, t('requestCount'), 'number')),
+  xAxis: categoryAxis(dailyChartRows.value.map((item) => item.date)),
+  yAxis: metricAxis(),
   series: [
     {
       name: t('requestCount'),
@@ -202,22 +179,13 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
   const rows = statisticsSummary.value.top_users
   return {
     color: ['#0f766e'],
-    grid: { left: 12, right: 18, top: 28, bottom: 58, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
-    },
-    xAxis: {
-      type: 'category',
-      data: rows.map((item) => item.user_display_name),
-      axisLabel: { color: '#667085', rotate: 24, width: 92, overflow: 'truncate' }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { color: '#667085', formatter: (value: number) => formatChartMoney(value) },
-      splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
+    grid: chartGrid(58),
+    tooltip: axisTooltip((params) => trendTooltip(params, t('cost'), 'cost'), true),
+    xAxis: categoryAxis(
+      rows.map((item) => item.user_display_name),
+      { rotate: 24, width: 92 }
+    ),
+    yAxis: metricAxis(formatChartMoney),
     series: [
       {
         name: t('cost'),
@@ -233,24 +201,13 @@ const topUsersOption = computed<EChartsCoreOption>(() => {
 })
 const topModelsOption = computed<EChartsCoreOption>(() => ({
   color: ['#7c3aed'],
-  grid: { left: 12, right: 18, top: 28, bottom: 54, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
-  tooltip: {
-    trigger: 'axis',
-    axisPointer: { type: 'shadow' },
-    formatter: (params: unknown) => trendTooltip(params, t('cost'), 'cost')
-  },
-  xAxis: {
-    type: 'category',
-    data: statisticsSummary.value.top_models.map((item) =>
-      modelDisplay(item.channel_name, item.model)
-    ),
-    axisLabel: { color: '#667085', rotate: 28, width: 92, overflow: 'truncate' }
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: { color: '#667085', formatter: (value: number) => formatChartMoney(value) },
-    splitLine: { lineStyle: { color: '#edf2f7' } }
-  },
+  grid: chartGrid(54),
+  tooltip: axisTooltip((params) => trendTooltip(params, t('cost'), 'cost'), true),
+  xAxis: categoryAxis(
+    statisticsSummary.value.top_models.map((item) => modelDisplay(item.channel_name, item.model)),
+    { rotate: 28, width: 92 }
+  ),
+  yAxis: metricAxis(formatChartMoney),
   series: [
     {
       name: t('cost'),
@@ -328,16 +285,16 @@ const performanceTrendOption = computed<EChartsCoreOption>(() => {
     aggregateRows: timelineRows.value,
     aggregateValue: (item) =>
       mode === 'firstResponse'
-        ? item.avg_first_response_ms ?? 0
+        ? (item.avg_first_response_ms ?? 0)
         : mode === 'throughput'
-          ? item.avg_output_tokens_per_second ?? 0
-          : item.avg_latency_ms ?? 0,
+          ? (item.avg_output_tokens_per_second ?? 0)
+          : (item.avg_latency_ms ?? 0),
     modelValue: (item) =>
       mode === 'firstResponse'
-        ? item.avg_first_response_ms ?? 0
+        ? (item.avg_first_response_ms ?? 0)
         : mode === 'throughput'
-          ? item.avg_output_tokens_per_second ?? 0
-          : item.avg_latency_ms ?? 0,
+          ? (item.avg_output_tokens_per_second ?? 0)
+          : (item.avg_latency_ms ?? 0),
     label,
     valueMode: mode === 'throughput' ? 'tokenRate' : 'duration'
   })
@@ -396,13 +353,10 @@ async function applyTrendGranularity(
 }
 
 async function exportStatisticsTrend() {
-  statisticsExporting.value = true
-  try {
+  await runDownload(async () => {
     const result = await downloadAdminUsageStatisticsCsv('daily', statisticsBaseQuery.value)
     downloadBlob(result.filename ?? 'usage-statistics-trend.csv', result.blob)
-  } finally {
-    statisticsExporting.value = false
-  }
+  })
 }
 
 async function handleTopUserChartClick(params: unknown) {
@@ -530,6 +484,7 @@ function modelDisplay(channelName: string, model: string) {
 function billingMeterLabel(value?: string | null) {
   if (value === 'image') return t('billingMeterImageGeneration')
   if (value === 'video') return t('billingMeterVideo')
+  if (value === 'audio') return t('billingMeterAudio')
   if (value === 'token') return t('billingMeterToken')
   return t('billingMeterAll')
 }
@@ -602,7 +557,10 @@ function modelLineOption(options: {
     }
   })
   const aggregateValues = new Map(
-    options.aggregateRows.map((item) => [item.bucket ?? item.date ?? '', options.aggregateValue(item)])
+    options.aggregateRows.map((item) => [
+      item.bucket ?? item.date ?? '',
+      options.aggregateValue(item)
+    ])
   )
   const series =
     modelSeries.length > 0
@@ -618,25 +576,11 @@ function modelLineOption(options: {
         ]
   return {
     color: chartPalette(),
-    grid: { left: 12, right: 18, top: 36, bottom: 34, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
+    grid: chartGrid(34, 36),
     legend: { top: 0, type: 'scroll', textStyle: { color: '#667085' } },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
-    },
-    xAxis: {
-      type: 'category',
-      data: buckets,
-      axisLabel: { color: '#667085', hideOverlap: true }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#667085',
-        formatter: (value: number) => axisValueLabel(value, options.valueMode)
-      },
-      splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
+    tooltip: axisTooltip((params) => trendTooltip(params, options.label, options.valueMode)),
+    xAxis: categoryAxis(buckets),
+    yAxis: metricAxis((value) => axisValueLabel(value, options.valueMode)),
     series
   }
 }
@@ -650,25 +594,13 @@ function verticalMetricOption(options: {
 }): EChartsCoreOption {
   return {
     color: [options.color],
-    grid: { left: 12, right: 18, top: 28, bottom: 62, outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (params: unknown) => trendTooltip(params, options.label, options.valueMode)
-    },
-    xAxis: {
-      type: 'category',
-      data: options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
-      axisLabel: { color: '#667085', rotate: 28, width: 96, overflow: 'truncate' }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#667085',
-        formatter: (value: number) => axisValueLabel(value, options.valueMode)
-      },
-      splitLine: { lineStyle: { color: '#edf2f7' } }
-    },
+    grid: chartGrid(62),
+    tooltip: axisTooltip((params) => trendTooltip(params, options.label, options.valueMode), true),
+    xAxis: categoryAxis(
+      options.rows.map((item) => modelDisplay(item.channel_name, item.model)),
+      { rotate: 28, width: 96 }
+    ),
+    yAxis: metricAxis((value) => axisValueLabel(value, options.valueMode)),
     series: [
       {
         name: options.label,
@@ -680,7 +612,10 @@ function verticalMetricOption(options: {
   }
 }
 
-function axisValueLabel(value: number, mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate') {
+function axisValueLabel(
+  value: number,
+  mode: 'cost' | 'number' | 'duration' | 'percent' | 'tokenRate'
+) {
   if (mode === 'cost') return formatChartMoney(value)
   if (mode === 'duration') return formatDurationMs(value)
   if (mode === 'percent') return `${value.toFixed(value >= 10 ? 0 : 1)}%`
@@ -735,283 +670,274 @@ function formatChartMoney(value: number) {
     maximumFractionDigits: 2
   })}`
 }
-
 </script>
 
 <template>
   <section class="grid usage-view usage-statistics-view">
     <div class="usage-statistics">
-          <el-form class="usage-toolbar statistics-toolbar" @submit.prevent="reloadStatistics">
-            <div class="usage-toolbar-filters">
-              <label class="admin-filter-field">
-                <span>{{ t('timeRange') }}</span>
-                <el-date-picker
-                  v-model="statisticsFilters.dateRange"
-                  class="usage-date-range"
-                  type="daterange"
-                  value-format="YYYY-MM-DD"
-                  :range-separator="t('to')"
-                  :start-placeholder="t('startTime')"
-                  :end-placeholder="t('endTime')"
-                />
-              </label>
-              <label class="admin-filter-field">
-                <span>{{ t('project') }}</span>
-                <el-input
-                  v-model="statisticsFilters.projectQuery"
-                  class="usage-search-input"
-                  clearable
-                  :prefix-icon="Search"
-                  :placeholder="t('costProjectSearchPlaceholder')"
-                />
-              </label>
-              <label class="admin-filter-field">
-                <span>{{ t('userSearch') }}</span>
-                <el-input
-                  v-model="statisticsFilters.userQuery"
-                  class="usage-search-input"
-                  clearable
-                  :prefix-icon="Search"
-                  :placeholder="t('userSearchPlaceholder')"
-                />
-              </label>
-              <label class="admin-filter-field">
-                <span>{{ t('model') }}</span>
-                <el-select
-                  v-model="statisticsFilters.model"
-                  class="usage-model-filter"
-                  clearable
-                  filterable
-                  :placeholder="t('allModels')"
-                >
-                  <el-option
-                    v-for="item in filteredModelOptions"
-                    :key="`${item.channel_name}/${item.model}`"
-                    :label="modelDisplay(item.channel_name, item.model)"
-                    :value="item.model"
-                  />
-                </el-select>
-              </label>
-              <el-button
-                class="admin-action-button"
-                type="primary"
-                native-type="submit"
-                :icon="Search"
-                :loading="statisticsLoading"
-              >
-                {{ t('search') }}
-              </el-button>
-            </div>
-            <div class="usage-toolbar-actions">
-              <el-button
-                class="admin-action-button"
-                :icon="Download"
-                :loading="statisticsExporting"
-                :disabled="statisticsEmpty"
-                @click="exportStatisticsTrend"
-              >
-                {{ t('exportTrend') }}
-              </el-button>
-            </div>
-            <div class="statistics-quick-ranges">
-              <el-button :class="{ 'is-active': activeQuickRange === 7 }" @click="applyQuickRange(7)">
-                {{ t('quickRange7') }}
-              </el-button>
-              <el-button
-                :class="{ 'is-active': activeQuickRange === 30 }"
-                @click="applyQuickRange(30)"
-              >
-                {{ t('quickRange30') }}
-              </el-button>
-              <el-button
-                :class="{ 'is-active': activeQuickRange === 90 }"
-                @click="applyQuickRange(90)"
-              >
-                {{ t('quickRange90') }}
-              </el-button>
-              <div class="statistics-granularity-field">
-                <el-button
-                  :class="{ 'is-active': statisticsFilters.trendGranularity === 'day' }"
-                  @click="applyTrendGranularity('day')"
-                >
-                  {{ t('granularityDay') }}
-                </el-button>
-                <el-button
-                  :class="{ 'is-active': statisticsFilters.trendGranularity === 'month' }"
-                  @click="applyTrendGranularity('month')"
-                >
-                  {{ t('granularityMonth') }}
-                </el-button>
-              </div>
-            </div>
-          </el-form>
-
-          <div class="statistics-metric-grid">
-            <div class="statistics-metric">
-              <span>{{ t('totalCost') }}</span>
-              <strong>{{ formatMoney(statisticsSummary.totals.cost_micros, locale) }}</strong>
-            </div>
-            <div class="statistics-metric">
-              <span>{{ t('requestCount') }}</span>
-              <strong>{{ formatNumber(statisticsSummary.totals.request_count, locale) }}</strong>
-            </div>
-            <div class="statistics-metric">
-              <span>{{ t('tokens') }}</span>
-              <strong>{{ formatNumber(statisticsSummary.totals.total_tokens, locale) }}</strong>
-            </div>
-            <div class="statistics-metric">
-              <span>{{ t('successRate') }}</span>
-              <strong>{{
-                successRate(
-                  statisticsSummary.totals.success_count,
-                  statisticsSummary.totals.request_count
-                )
-              }}</strong>
-            </div>
-            <div class="statistics-metric">
-              <span>{{ t('averageLatency') }}</span>
-              <strong>{{ formatDurationMs(statisticsSummary.totals.avg_latency_ms) }}</strong>
-            </div>
-          </div>
-
-          <div
-            v-if="statisticsInitialLoading"
-            v-loading="true"
-            class="statistics-loading-panel service-table-panel"
-          ></div>
-
-          <template v-else>
-            <div class="statistics-chart-grid">
-              <section class="statistics-panel">
-                <header>{{ t('costTrend') }}</header>
-                <AdminUsageChart
-                  :option="costTrendOption"
-                  :loading="statisticsSummaryLoading"
-                  :empty="statisticsEmpty"
-                  :empty-text="t('noStatisticsData')"
-                  height="300px"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header>{{ t('requestTrend') }}</header>
-                <AdminUsageChart
-                  :option="requestTrendOption"
-                  :loading="statisticsSummaryLoading"
-                  :empty="statisticsEmpty"
-                  :empty-text="t('noStatisticsData')"
-                  height="300px"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header class="statistics-chart-header">
-                  <span>{{ t('tokenUsageTrend') }}</span>
-                  <el-segmented
-                    v-model="tokenTrendMode"
-                    class="statistics-segmented"
-                    :options="[
-                      { label: t('totalTokens'), value: 'total' },
-                      { label: t('inputTokens'), value: 'input' },
-                      { label: t('outputTokens'), value: 'output' }
-                    ]"
-                  />
-                </header>
-                <AdminUsageChart
-                  :option="tokenUsageTrendOption"
-                  :loading="statisticsTimeSeriesLoading"
-                  :empty="timelineRows.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="320px"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header class="statistics-chart-header">
-                  <span>{{ t('callMonitor') }}</span>
-                  <el-segmented
-                    v-model="requestTrendMode"
-                    class="statistics-segmented"
-                    :options="[
-                      { label: t('totalCalls'), value: 'total' },
-                      { label: t('failedRequests'), value: 'errors' },
-                      { label: t('failureRate'), value: 'errorRate' }
-                    ]"
-                  />
-                </header>
-                <AdminUsageChart
-                  :option="callTrendOption"
-                  :loading="statisticsTimeSeriesLoading"
-                  :empty="timelineRows.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="320px"
-                />
-              </section>
-              <section class="statistics-panel is-wide">
-                <header class="statistics-chart-header">
-                  <span>{{ t('performanceMonitor') }}</span>
-                  <el-segmented
-                    v-model="performanceTrendMode"
-                    class="statistics-segmented"
-                    :options="[
-                      { label: t('averageLatencyShort'), value: 'latency' },
-                      { label: t('firstResponseLatency'), value: 'firstResponse' },
-                      { label: t('outputTokensPerSecond'), value: 'throughput' }
-                    ]"
-                  />
-                </header>
-                <AdminUsageChart
-                  :option="performanceTrendOption"
-                  :loading="statisticsTimeSeriesLoading"
-                  :empty="timelineRows.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="340px"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header>{{ t('topUsersByCost') }}</header>
-                <AdminUsageChart
-                  :option="topUsersOption"
-                  :loading="statisticsSummaryLoading"
-                  :empty="statisticsSummary.top_users.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="320px"
-                  @chart-click="handleTopUserChartClick"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header>{{ t('topModelsByCost') }}</header>
-                <AdminUsageChart
-                  :option="topModelsOption"
-                  :loading="statisticsSummaryLoading"
-                  :empty="statisticsSummary.top_models.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="320px"
-                  @chart-click="handleTopModelChartClick"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header>{{ t('modelFailureRateRank') }}</header>
-                <AdminUsageChart
-                  :option="modelFailureRateOption"
-                  :loading="statisticsModelsLoading"
-                  :empty="statisticsModels.items.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="340px"
-                />
-              </section>
-              <section class="statistics-panel">
-                <header>{{ t('modelLatencyRank') }}</header>
-                <AdminUsageChart
-                  :option="modelLatencyRankOption"
-                  :loading="statisticsModelsLoading"
-                  :empty="statisticsModels.items.length === 0"
-                  :empty-text="t('noStatisticsData')"
-                  height="340px"
-                />
-              </section>
-            </div>
-
-          </template>
-
+      <el-form class="usage-toolbar statistics-toolbar" @submit.prevent="reloadStatistics">
+        <div class="usage-toolbar-filters">
+          <label class="admin-filter-field">
+            <span>{{ t('timeRange') }}</span>
+            <el-date-picker
+              v-model="statisticsFilters.dateRange"
+              class="usage-date-range"
+              type="daterange"
+              value-format="YYYY-MM-DD"
+              :range-separator="t('to')"
+              :start-placeholder="t('startTime')"
+              :end-placeholder="t('endTime')"
+            />
+          </label>
+          <label class="admin-filter-field">
+            <span>{{ t('project') }}</span>
+            <el-input
+              v-model="statisticsFilters.projectQuery"
+              class="usage-search-input"
+              clearable
+              :prefix-icon="Search"
+              :placeholder="t('costProjectSearchPlaceholder')"
+            />
+          </label>
+          <label class="admin-filter-field">
+            <span>{{ t('userSearch') }}</span>
+            <el-input
+              v-model="statisticsFilters.userQuery"
+              class="usage-search-input"
+              clearable
+              :prefix-icon="Search"
+              :placeholder="t('userSearchPlaceholder')"
+            />
+          </label>
+          <label class="admin-filter-field">
+            <span>{{ t('model') }}</span>
+            <el-select
+              v-model="statisticsFilters.model"
+              class="usage-model-filter"
+              clearable
+              filterable
+              :placeholder="t('allModels')"
+            >
+              <el-option
+                v-for="item in filteredModelOptions"
+                :key="`${item.channel_name}/${item.model}`"
+                :label="modelDisplay(item.channel_name, item.model)"
+                :value="item.model"
+              />
+            </el-select>
+          </label>
+          <el-button
+            class="admin-action-button"
+            type="primary"
+            native-type="submit"
+            :icon="Search"
+            :loading="statisticsLoading"
+          >
+            {{ t('search') }}
+          </el-button>
         </div>
+        <div class="usage-toolbar-actions">
+          <el-button
+            class="admin-action-button"
+            :icon="Download"
+            :loading="statisticsExporting"
+            :disabled="statisticsEmpty"
+            @click="exportStatisticsTrend"
+          >
+            {{ t('exportTrend') }}
+          </el-button>
+        </div>
+        <div class="statistics-quick-ranges">
+          <el-button :class="{ 'is-active': activeQuickRange === 7 }" @click="applyQuickRange(7)">
+            {{ t('quickRange7') }}
+          </el-button>
+          <el-button :class="{ 'is-active': activeQuickRange === 30 }" @click="applyQuickRange(30)">
+            {{ t('quickRange30') }}
+          </el-button>
+          <el-button :class="{ 'is-active': activeQuickRange === 90 }" @click="applyQuickRange(90)">
+            {{ t('quickRange90') }}
+          </el-button>
+          <div class="statistics-granularity-field">
+            <el-button
+              :class="{ 'is-active': statisticsFilters.trendGranularity === 'day' }"
+              @click="applyTrendGranularity('day')"
+            >
+              {{ t('granularityDay') }}
+            </el-button>
+            <el-button
+              :class="{ 'is-active': statisticsFilters.trendGranularity === 'month' }"
+              @click="applyTrendGranularity('month')"
+            >
+              {{ t('granularityMonth') }}
+            </el-button>
+          </div>
+        </div>
+      </el-form>
+
+      <div class="statistics-metric-grid">
+        <div class="statistics-metric">
+          <span>{{ t('totalCost') }}</span>
+          <strong>{{ formatMoney(statisticsSummary.totals.cost_micros, locale) }}</strong>
+        </div>
+        <div class="statistics-metric">
+          <span>{{ t('requestCount') }}</span>
+          <strong>{{ formatNumber(statisticsSummary.totals.request_count, locale) }}</strong>
+        </div>
+        <div class="statistics-metric">
+          <span>{{ t('tokens') }}</span>
+          <strong>{{ formatNumber(statisticsSummary.totals.total_tokens, locale) }}</strong>
+        </div>
+        <div class="statistics-metric">
+          <span>{{ t('successRate') }}</span>
+          <strong>{{
+            successRate(
+              statisticsSummary.totals.success_count,
+              statisticsSummary.totals.request_count
+            )
+          }}</strong>
+        </div>
+        <div class="statistics-metric">
+          <span>{{ t('averageLatency') }}</span>
+          <strong>{{ formatDurationMs(statisticsSummary.totals.avg_latency_ms) }}</strong>
+        </div>
+      </div>
+
+      <div
+        v-if="statisticsInitialLoading"
+        v-loading="true"
+        class="statistics-loading-panel service-table-panel"
+      ></div>
+
+      <template v-else>
+        <div class="statistics-chart-grid">
+          <section class="statistics-panel">
+            <header>{{ t('costTrend') }}</header>
+            <AdminUsageChart
+              :option="costTrendOption"
+              :loading="statisticsSummaryLoading"
+              :empty="statisticsEmpty"
+              :empty-text="t('noStatisticsData')"
+              height="300px"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header>{{ t('requestTrend') }}</header>
+            <AdminUsageChart
+              :option="requestTrendOption"
+              :loading="statisticsSummaryLoading"
+              :empty="statisticsEmpty"
+              :empty-text="t('noStatisticsData')"
+              height="300px"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header class="statistics-chart-header">
+              <span>{{ t('tokenUsageTrend') }}</span>
+              <el-segmented
+                v-model="tokenTrendMode"
+                class="statistics-segmented"
+                :options="[
+                  { label: t('totalTokens'), value: 'total' },
+                  { label: t('inputTokens'), value: 'input' },
+                  { label: t('outputTokens'), value: 'output' }
+                ]"
+              />
+            </header>
+            <AdminUsageChart
+              :option="tokenUsageTrendOption"
+              :loading="statisticsTimeSeriesLoading"
+              :empty="timelineRows.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="320px"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header class="statistics-chart-header">
+              <span>{{ t('callMonitor') }}</span>
+              <el-segmented
+                v-model="requestTrendMode"
+                class="statistics-segmented"
+                :options="[
+                  { label: t('totalCalls'), value: 'total' },
+                  { label: t('failedRequests'), value: 'errors' },
+                  { label: t('failureRate'), value: 'errorRate' }
+                ]"
+              />
+            </header>
+            <AdminUsageChart
+              :option="callTrendOption"
+              :loading="statisticsTimeSeriesLoading"
+              :empty="timelineRows.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="320px"
+            />
+          </section>
+          <section class="statistics-panel is-wide">
+            <header class="statistics-chart-header">
+              <span>{{ t('performanceMonitor') }}</span>
+              <el-segmented
+                v-model="performanceTrendMode"
+                class="statistics-segmented"
+                :options="[
+                  { label: t('averageLatencyShort'), value: 'latency' },
+                  { label: t('firstResponseLatency'), value: 'firstResponse' },
+                  { label: t('outputTokensPerSecond'), value: 'throughput' }
+                ]"
+              />
+            </header>
+            <AdminUsageChart
+              :option="performanceTrendOption"
+              :loading="statisticsTimeSeriesLoading"
+              :empty="timelineRows.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="340px"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header>{{ t('topUsersByCost') }}</header>
+            <AdminUsageChart
+              :option="topUsersOption"
+              :loading="statisticsSummaryLoading"
+              :empty="statisticsSummary.top_users.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="320px"
+              @chart-click="handleTopUserChartClick"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header>{{ t('topModelsByCost') }}</header>
+            <AdminUsageChart
+              :option="topModelsOption"
+              :loading="statisticsSummaryLoading"
+              :empty="statisticsSummary.top_models.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="320px"
+              @chart-click="handleTopModelChartClick"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header>{{ t('modelFailureRateRank') }}</header>
+            <AdminUsageChart
+              :option="modelFailureRateOption"
+              :loading="statisticsModelsLoading"
+              :empty="statisticsModels.items.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="340px"
+            />
+          </section>
+          <section class="statistics-panel">
+            <header>{{ t('modelLatencyRank') }}</header>
+            <AdminUsageChart
+              :option="modelLatencyRankOption"
+              :loading="statisticsModelsLoading"
+              :empty="statisticsModels.items.length === 0"
+              :empty-text="t('noStatisticsData')"
+              height="340px"
+            />
+          </section>
+        </div>
+      </template>
+    </div>
   </section>
 </template>
 
@@ -1263,11 +1189,10 @@ function formatChartMoney(value: number) {
   padding-top: 16px;
 }
 
-
 @media (max-width: 1180px) {
   .statistics-metric-grid,
   .statistics-chart-grid,
-    .statistics-toolbar {
+  .statistics-toolbar {
     align-items: stretch;
     grid-template-columns: 1fr;
   }
@@ -1305,7 +1230,7 @@ function formatChartMoney(value: number) {
 
   .statistics-metric-grid,
   .statistics-chart-grid,
-    .statistics-panel.is-wide {
+  .statistics-panel.is-wide {
     grid-column: auto;
   }
 

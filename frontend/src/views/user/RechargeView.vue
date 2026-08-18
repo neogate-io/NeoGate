@@ -159,11 +159,7 @@ async function submitRecharge() {
 
   await withLoading(submitting, async () => {
     try {
-      const result = await createRechargeOrder(
-        amountMicro.value,
-        payType.value,
-        paymentReturnUrl()
-      )
+      const result = await createRechargeOrder(amountMicro.value, payType.value, paymentReturnUrl())
       if (ordersLoaded.value || historyDialogVisible.value) await reloadOrders()
       if (result.checkout_url) {
         window.location.href = result.checkout_url
@@ -205,9 +201,7 @@ async function submitRecharge() {
             </span>
             <strong>{{ formatMajorAmount(plan.amount) }}</strong>
             <span class="plan-hint">{{ plan.hint }}</span>
-            <el-icon v-if="customAmount == null && amountMajor === plan.amount"
-              ><Check
-            /></el-icon>
+            <el-icon v-if="customAmount == null && amountMajor === plan.amount"><Check /></el-icon>
           </button>
         </div>
 
@@ -254,11 +248,7 @@ async function submitRecharge() {
           <div>
             <dt>{{ t('paymentMethod') }}</dt>
             <dd>
-              <el-segmented
-                v-model="payType"
-                class="payment-methods"
-                :options="paymentOptions"
-              >
+              <el-segmented v-model="payType" class="payment-methods" :options="paymentOptions">
                 <template #default="{ item }">
                   <span class="payment-method-option">
                     <img
@@ -377,8 +367,15 @@ async function submitRecharge() {
   color: #354154;
   display: grid;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Microsoft YaHei', sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
   gap: 12px;
   width: min(1120px, 100%);
 }

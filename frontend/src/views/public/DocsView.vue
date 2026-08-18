@@ -22,7 +22,7 @@ claude`
 const claudeCodeConfig = computed(
   () => `{
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "YOUR_NEOGATE_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
     "ANTHROPIC_BASE_URL": "${anthropicBaseUrl.value}",
     "ANTHROPIC_MODEL": "claude-sonnet-4-5",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-4-5",
@@ -52,7 +52,7 @@ requires_openai_auth = false
 )
 
 const codexAuth = `{
-  "OPENAI_API_KEY": "YOUR_NEOGATE_API_KEY",
+  "OPENAI_API_KEY": "YOUR_API_KEY",
   "auth_mode": "apikey"
 }`
 

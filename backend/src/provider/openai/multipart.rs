@@ -35,6 +35,43 @@ pub(super) fn multipart_text_fields(
     })
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct MultipartFile {
+    pub(super) name: String,
+    pub(super) data: Bytes,
+    pub(super) content_type: Option<String>,
+}
+
+pub(super) fn multipart_files(body: &[u8], boundary: &str) -> AppResult<Vec<MultipartFile>> {
+    let marker = format!("--{boundary}").into_bytes();
+    let mut files = Vec::new();
+    let Some(mut cursor) = find_bytes(body, &marker) else {
+        return Err(AppError::BadRequest("invalid multipart body".to_string()));
+    };
+
+    loop {
+        cursor += marker.len();
+        if body.get(cursor..cursor + 2) == Some(b"--") {
+            break;
+        }
+        cursor = skip_line_break(body, cursor)?;
+        let Some(next_marker_offset) = find_bytes(&body[cursor..], &marker) else {
+            return Err(AppError::BadRequest("invalid multipart body".to_string()));
+        };
+        let mut part = &body[cursor..cursor + next_marker_offset];
+        if part.ends_with(b"\r\n") {
+            part = &part[..part.len() - 2];
+        } else if part.ends_with(b"\n") {
+            part = &part[..part.len() - 1];
+        }
+        if let Some(file) = multipart_file(part)? {
+            files.push(file);
+        }
+        cursor += next_marker_offset;
+    }
+    Ok(files)
+}
+
 struct MultipartTextField {
     name: String,
     value: String,
@@ -105,25 +142,16 @@ fn skip_line_break(body: &[u8], cursor: usize) -> AppResult<usize> {
 }
 
 fn multipart_text_field(part: &[u8], part_start: usize) -> AppResult<Option<MultipartTextField>> {
-    let (headers, value, value_start_offset) = if let Some(offset) = find_bytes(part, b"\r\n\r\n") {
-        (&part[..offset], &part[offset + 4..], offset + 4)
-    } else if let Some(offset) = find_bytes(part, b"\n\n") {
-        (&part[..offset], &part[offset + 2..], offset + 2)
-    } else {
-        return Err(AppError::BadRequest("invalid multipart body".to_string()));
-    };
+    let (headers, value, value_start_offset) = split_part(part)?;
     let headers = std::str::from_utf8(headers)
         .map_err(|_| AppError::BadRequest("invalid multipart headers".to_string()))?;
-    let Some(disposition) = headers.lines().find(|line| {
-        line.to_ascii_lowercase()
-            .starts_with("content-disposition:")
-    }) else {
+    let Some(disposition) = content_disposition(headers) else {
         return Ok(None);
     };
-    if disposition.contains("filename=") {
+    if disposition.to_ascii_lowercase().contains("filename=") {
         return Ok(None);
     }
-    let Some(name) = multipart_disposition_name(disposition) else {
+    let Some(name) = multipart_disposition_parameter(disposition, "name") else {
         return Ok(None);
     };
     let value_text = std::str::from_utf8(value)
@@ -140,11 +168,52 @@ fn multipart_text_field(part: &[u8], part_start: usize) -> AppResult<Option<Mult
     }))
 }
 
-fn multipart_disposition_name(disposition: &str) -> Option<String> {
+fn multipart_file(part: &[u8]) -> AppResult<Option<MultipartFile>> {
+    let (headers, value, _) = split_part(part)?;
+    let headers = std::str::from_utf8(headers)
+        .map_err(|_| AppError::BadRequest("invalid multipart headers".to_string()))?;
+    let Some(disposition) = content_disposition(headers) else {
+        return Ok(None);
+    };
+    if !disposition.to_ascii_lowercase().contains("filename=") {
+        return Ok(None);
+    }
+    let Some(name) = multipart_disposition_parameter(disposition, "name") else {
+        return Ok(None);
+    };
+    Ok(Some(MultipartFile {
+        name,
+        data: Bytes::copy_from_slice(value),
+        content_type: headers.lines().find_map(|line| {
+            line.split_once(':')
+                .filter(|(key, _)| key.trim().eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.trim().to_string())
+        }),
+    }))
+}
+
+fn split_part(part: &[u8]) -> AppResult<(&[u8], &[u8], usize)> {
+    if let Some(offset) = find_bytes(part, b"\r\n\r\n") {
+        Ok((&part[..offset], &part[offset + 4..], offset + 4))
+    } else if let Some(offset) = find_bytes(part, b"\n\n") {
+        Ok((&part[..offset], &part[offset + 2..], offset + 2))
+    } else {
+        Err(AppError::BadRequest("invalid multipart body".to_string()))
+    }
+}
+
+fn content_disposition(headers: &str) -> Option<&str> {
+    headers.lines().find(|line| {
+        line.to_ascii_lowercase()
+            .starts_with("content-disposition:")
+    })
+}
+
+fn multipart_disposition_parameter(disposition: &str, parameter: &str) -> Option<String> {
     let (_, params) = disposition.split_once(':')?;
     for param in params.split(';').skip(1) {
         let (key, value) = param.trim().split_once('=')?;
-        if key.trim().eq_ignore_ascii_case("name") {
+        if key.trim().eq_ignore_ascii_case(parameter) {
             return Some(value.trim().trim_matches('"').to_string());
         }
     }

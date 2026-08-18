@@ -37,7 +37,7 @@ pub(super) struct CreateBackgroundResponseRequest {
     pub(super) target_model: String,
     pub(super) target_channel_id: Option<i64>,
     pub(super) routing: Option<UsageRoutingSnapshot>,
-    pub(super) output_tokens: i64,
+    pub(super) requested_output_tokens: i64,
     pub(super) request_params: RelayRequestParams,
     pub(super) channel_affinity_key: Option<ChannelAffinityKey>,
 }
@@ -53,7 +53,7 @@ pub(super) async fn create_background_response(
         target_model,
         target_channel_id,
         routing,
-        output_tokens,
+        requested_output_tokens,
         request_params,
         channel_affinity_key,
     } = req;
@@ -90,7 +90,11 @@ pub(super) async fn create_background_response(
             .await?
     };
     ensure_key_backed_async_upstream(&upstream)?;
-    let adapter = adapter_for_endpoint(&upstream.provider, &upstream.base_url);
+    let adapter = adapter_for_endpoint(
+        &upstream.provider,
+        &upstream.base_url,
+        upstream.adapter_hint.as_deref(),
+    );
     let translates_image_generation = adapter.capabilities().translates_response_image_generation
         && prepared.has_image_generation_tool;
     if translates_image_generation {
@@ -221,7 +225,7 @@ pub(super) async fn create_background_response(
         &auth,
         user_key_model_credit_account.as_ref(),
         &prepared.body,
-        output_tokens,
+        requested_output_tokens,
         &price,
     )
     .await?;
@@ -231,7 +235,18 @@ pub(super) async fn create_background_response(
             "image_format=url or both is only supported for NeoGate async image tasks".to_string(),
         ));
     }
-    let mut request_permit = Some(state.user_request_limiter.try_acquire(auth.user_id).await?);
+    // reserve_credit 已扣减热额度；若并发限制失败必须显式释放 hold，
+    // 否则用户余额被锁至陈旧分配回收任务兜底（可能长达数分钟）。
+    let mut request_permit = Some(
+        match state.user_request_limiter.try_acquire(auth.user_id).await {
+            Ok(permit) => permit,
+            Err(err) => {
+                release_empty_hold(&state, hold, "background response concurrency rejection")
+                    .await;
+                return Err(err);
+            }
+        },
+    );
     let request_body_bytes = prepared.body.len();
     let request_input_tokens_estimate = crate::billing::estimate_input_tokens(&prepared.body);
     let response = forward_openai(
@@ -247,6 +262,7 @@ pub(super) async fn create_background_response(
         auth: auth.clone(),
         upstream: upstream.clone(),
         protocol: UpstreamProtocol::Openai,
+        method: "POST",
         path: "/v1/responses",
         model: target_model.clone(),
         external_model: external_model.clone(),

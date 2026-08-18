@@ -143,7 +143,9 @@ fn openai_chat_tool_to_anthropic(message: &Value) -> Option<Value> {
         .get("content")
         .map(openai_chat_content_to_text)
         .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| "...".to_string());
+        // Anthropic 允许 tool_result content 为空字符串；原来的 "..." 占位符
+        // 会让模型误以为工具返回了省略号，产生语义混乱。
+        .unwrap_or_default();
     Some(json!({
         "role": "user",
         "content": [{
@@ -161,11 +163,21 @@ fn openai_chat_tool_call_to_anthropic(tool_call: &Value) -> Option<Value> {
         .get("id")
         .and_then(Value::as_str)
         .unwrap_or("call_openai_fallback");
-    let input = function
-        .get("arguments")
-        .and_then(Value::as_str)
+    let raw_arguments = function.get("arguments").and_then(Value::as_str);
+    let input = raw_arguments
         .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_else(|| {
+            // 流式聚合阶段 arguments 可能是残缺 JSON，解析失败时记录日志便于排查，
+            // 回退到空对象（而非 panic 或丢弃整个 tool call）。
+            if let Some(raw) = raw_arguments {
+                tracing::debug!(
+                    tool_id = id,
+                    raw_arguments = raw,
+                    "failed to parse tool call arguments as JSON; falling back to {{}}"
+                );
+            }
+            json!({})
+        });
     Some(json!({
         "type": "tool_use",
         "id": id,
@@ -229,16 +241,36 @@ fn openai_chat_image_to_anthropic_image(item: &Value) -> Option<Value> {
         Value::Object(object) => object.get("url").and_then(Value::as_str)?,
         _ => return None,
     };
-    let data_url = url.strip_prefix("data:")?;
-    let (media_type, data) = data_url.split_once(";base64,")?;
-    Some(json!({
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": media_type,
-            "data": data,
-        },
-    }))
+
+    // Anthropic 支持两种图片来源：
+    // 1. base64 data URL：data:<media_type>;base64,<data>
+    // 2. 公网 URL（Anthropic url source）
+    if let Some(data_url) = url.strip_prefix("data:") {
+        let (media_type, data) = data_url.split_once(";base64,")?;
+        return Some(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": data,
+            },
+        }));
+    }
+
+    // URL 格式图片：直接转为 Anthropic url source 类型。
+    // 原来此分支静默返回 None（丢弃图片），现在转发给 Anthropic 处理。
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return Some(json!({
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": url,
+            },
+        }));
+    }
+
+    // 既非 data URL 也非 http URL，忽略。
+    None
 }
 
 fn openai_chat_content_to_text(value: &Value) -> String {
@@ -859,25 +891,11 @@ fn openai_cached_input_tokens(
 }
 
 fn choice_usage_cached_tokens(value: &Value) -> Option<i64> {
-    value
-        .get("choices")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(|choice| {
-            choice
-                .get("usage")
-                .and_then(|usage| usage.get("cached_tokens"))
-                .and_then(Value::as_i64)
-        })
-        .find(|tokens| *tokens > 0)
+    super::responses_common::choice_usage_cached_tokens(value)
 }
 
 fn push_anthropic_sse(out: &mut Vec<u8>, event: &str, data: Value) {
-    out.extend_from_slice(b"event: ");
-    out.extend_from_slice(event.as_bytes());
-    out.extend_from_slice(b"\ndata: ");
-    serde_json::to_writer(&mut *out, &data).expect("serializing JSON value to Vec cannot fail");
-    out.extend_from_slice(b"\n\n");
+    super::responses_common::push_sse_event(out, event, &data);
 }
 
 #[cfg(test)]

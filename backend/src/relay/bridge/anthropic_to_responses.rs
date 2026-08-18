@@ -9,7 +9,7 @@ use super::{
     estimate_tokens,
     responses_common::{
         drain_sse_lines, openai_response_message_item, openai_response_reasoning_item,
-        openai_response_usage, StreamingToolCall,
+        openai_response_usage, push_sse_event, StreamingToolCall,
     },
     stream::{finish_bridge_json, finish_bridge_stream, BridgeSseConverter},
 };
@@ -85,6 +85,10 @@ fn anthropic_content_to_openai_response_output(
     let mut output = Vec::new();
     let mut text = String::new();
     let mut reasoning_text = String::new();
+
+    // 按原始块顺序遍历，在遇到 tool_use 时先 flush 已累积的 reasoning 和 text，
+    // 保持 Anthropic 原始顺序（thinking → text → tool_use）。
+    // 修复前：reasoning_text 统一在循环结束后追加，丢失了与 tool_use 之间的位置关系。
     for item in items {
         match item.get("type").and_then(Value::as_str) {
             Some("text") => {
@@ -98,6 +102,14 @@ fn anthropic_content_to_openai_response_output(
                 }
             }
             Some("tool_use") => {
+                // 在工具调用之前按顺序 flush 已累积的 reasoning 和 text
+                if !reasoning_text.is_empty() {
+                    output.push(openai_response_reasoning_item(
+                        format!("rs_{response_id}_{}", output.len()),
+                        std::mem::take(&mut reasoning_text),
+                        "completed",
+                    ));
+                }
                 if !text.is_empty() {
                     output.push(openai_response_message_item(
                         format!("msg_{response_id}_{}", output.len()),
@@ -112,6 +124,7 @@ fn anthropic_content_to_openai_response_output(
             _ => {}
         }
     }
+    // flush 循环结束后剩余的 reasoning 和 text
     if !reasoning_text.is_empty() {
         output.push(openai_response_reasoning_item(
             format!("rs_{response_id}_{}", output.len()),
@@ -156,6 +169,11 @@ pub(super) struct AnthropicSseToOpenAiResponse {
     response_id: String,
     output_item_id: String,
     message_output_index: i64,
+    /// 单调递增的下一个 output_index。每创建一个新 output item（reasoning/message/
+    /// tool_call）时分配当前值再自增，保证唯一。不能像旧实现那样只按存活标志推算——
+    /// 已完成的 tool_use 块会移入 completed_output，导致后续并行 tool_use 复用同一
+    /// index（都算成 0），下游按 output_index 索引时会覆盖前一个工具调用而丢失。
+    next_output_index: i64,
     current_tool_call: Option<StreamingToolCall>,
     content_index: i64,
     sequence_number: i64,
@@ -184,6 +202,7 @@ impl AnthropicSseToOpenAiResponse {
             response_id: "resp_anthropic_fallback".to_string(),
             output_item_id: "msg_anthropic_fallback".to_string(),
             message_output_index: 0,
+            next_output_index: 0,
             current_tool_call: None,
             content_index: 0,
             sequence_number: 0,
@@ -333,7 +352,9 @@ impl AnthropicSseToOpenAiResponse {
             .and_then(|delta| delta.get("stop_reason"))
             .and_then(Value::as_str)
         {
-            // "max_tokens" stop reason is treated as completed, not incomplete.
+            // stop_reason = "tool_use" 表示工具调用正常完成，状态应标记为 completed。
+            // （与 max_tokens/end_turn 等其他停止原因区分：tool_use 是预期的中间停止，
+            //  不是截断，因此标记 completed 而非 incomplete。）
             self.status = "completed";
         }
         self.observe_usage(value);
@@ -792,26 +813,14 @@ impl AnthropicSseToOpenAiResponse {
         format!("rs_{}", self.output_item_id)
     }
 
-    fn next_output_index_for_new_item(&self) -> i64 {
-        let mut index: i64 = 0;
-        if self.reasoning_output_index.is_some() {
-            index = index.saturating_add(1);
-        }
-        if self.output_started {
-            index = index.saturating_add(1);
-        }
-        if self.current_tool_call.is_some() {
-            index = index.saturating_add(1);
-        }
+    fn next_output_index_for_new_item(&mut self) -> i64 {
+        let index = self.next_output_index;
+        self.next_output_index = self.next_output_index.saturating_add(1);
         index
     }
 
     fn push_event(&self, out: &mut Vec<u8>, event: &str, data: Value) {
-        out.extend_from_slice(b"event: ");
-        out.extend_from_slice(event.as_bytes());
-        out.extend_from_slice(b"\ndata: ");
-        serde_json::to_writer(&mut *out, &data).expect("serializing JSON value to Vec cannot fail");
-        out.extend_from_slice(b"\n\n");
+        push_sse_event(out, event, &data);
     }
 
     fn next_sequence_number(&mut self) -> i64 {
@@ -832,5 +841,81 @@ impl BridgeSseConverter for AnthropicSseToOpenAiResponse {
 
     fn stopped(&self) -> bool {
         self.stopped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collect_output_indexes_for_added_items(output: &str) -> Vec<i64> {
+        let mut indexes = Vec::new();
+        for line in output.lines() {
+            let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if value.get("type").and_then(Value::as_str) == Some("response.output_item.added") {
+                if let Some(index) = value.get("output_index").and_then(Value::as_i64) {
+                    indexes.push(index);
+                }
+            }
+        }
+        indexes
+    }
+
+    #[test]
+    fn parallel_tool_calls_get_unique_output_indexes() {
+        // 两个连续 tool_use 块（前一个先 stop 再开下一个）必须获得不同的 output_index，
+        // 否则下游按 output_index 索引会用第二个工具调用覆盖第一个，丢失工具调用。
+        let mut converter = AnthropicSseToOpenAiResponse::new("claude".to_string());
+        let mut out = Vec::new();
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude\"}}\n\n",
+        ));
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"search\"}}\n\n",
+        ));
+        out.extend_from_slice(
+            &converter.push(b"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+        );
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"fetch\"}}\n\n",
+        ));
+        out.extend_from_slice(
+            &converter.push(b"data: {\"type\":\"content_block_stop\",\"index\":1}\n\n"),
+        );
+
+        let output = String::from_utf8(out).unwrap();
+        let indexes = collect_output_indexes_for_added_items(&output);
+        assert_eq!(indexes, vec![0, 1], "两个工具调用应有唯一递增的 output_index");
+    }
+
+    #[test]
+    fn message_after_tool_call_gets_distinct_output_index() {
+        // tool_use 完成后再来 text 块，text 的 output_index 不能与已完成的工具调用冲突。
+        let mut converter = AnthropicSseToOpenAiResponse::new("claude".to_string());
+        let mut out = Vec::new();
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude\"}}\n\n",
+        ));
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"search\"}}\n\n",
+        ));
+        out.extend_from_slice(
+            &converter.push(b"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+        );
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        ));
+        out.extend_from_slice(&converter.push(
+            b"data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+        ));
+
+        let output = String::from_utf8(out).unwrap();
+        let indexes = collect_output_indexes_for_added_items(&output);
+        assert_eq!(indexes, vec![0, 1], "工具调用后的消息块应获得独立 output_index");
     }
 }

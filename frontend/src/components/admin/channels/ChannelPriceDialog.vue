@@ -3,42 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { useLocale } from '../../../composables/useLocale'
 import { useBillingCurrency } from '../../../composables/useBillingCurrency'
 import type { BillingMeter, VideoBillingMode } from '../../../types/admin'
+import type { ChannelPriceForm, ChannelVideoPriceTierForm } from '../../../types/channelPricing'
 import { resolvedVideoTokensPerSecondEstimate } from '../../../utils/pricing'
-
-export type ChannelVideoPriceTierForm = {
-  resolutionsText: string
-  resolutionLabel?: string
-  pricePairLeftLabel?: string
-  pricePairRightLabel?: string
-  inputWithVideo: number
-  inputWithoutVideo: number
-  estimatedTokensPerSecond: number
-  inputWithVideoUnit: number
-  inputWithoutVideoUnit: number
-  singlePrice?: boolean
-}
-
-export type ChannelPriceForm = {
-  channelId: number
-  provider: string
-  model: string
-  modelCategory: 'text' | 'image' | 'video'
-  billingMeter: BillingMeter | null
-  videoBillingMode: VideoBillingMode | null
-  videoPriceTiers: ChannelVideoPriceTierForm[]
-  inputPerMillion: number
-  outputPerMillion: number
-  cacheReadPerMillion: number
-  cacheWritePerMillion: number | null
-  unitPrice: number
-  enabled: boolean
-  hasPrice: boolean
-  hasPriceRecord: boolean
-  billingMeterLocked: boolean
-  videoBillingModeLocked: boolean
-  canUseImageBilling: boolean
-  canUseVideoBilling: boolean
-}
 
 const open = defineModel<boolean>('open', { required: true })
 
@@ -73,6 +39,10 @@ const imagePriceForms = computed(() =>
   priceFormList.value.filter((form) => form.modelCategory === 'image')
 )
 
+const audioPriceForms = computed(() =>
+  priceFormList.value.filter((form) => form.modelCategory === 'audio')
+)
+
 const videoPriceForms = computed(() =>
   priceFormList.value.filter((form) => form.modelCategory === 'video')
 )
@@ -80,7 +50,8 @@ const videoPriceForms = computed(() =>
 const standardPriceSections = computed(() =>
   [
     { key: 'text', title: t('textModelPrices'), forms: textPriceForms.value },
-    { key: 'image', title: t('imageModelPrices'), forms: imagePriceForms.value }
+    { key: 'image', title: t('imageModelPrices'), forms: imagePriceForms.value },
+    { key: 'audio', title: t('audioModelPrices'), forms: audioPriceForms.value }
   ].filter((section) => section.forms.length > 0)
 )
 
@@ -115,6 +86,7 @@ function billingMeterOptionLabel(row: ChannelPriceForm, billingMeter: BillingMet
   if (row.canUseImageBilling && billingMeter === 'image') return t('billingMeterPerCall')
   if (billingMeter === 'image') return t('billingMeterImageGeneration')
   if (billingMeter === 'video') return t('billingMeterVideo')
+  if (billingMeter === 'audio') return t('videoBillingPerSecond')
   return t('billingMeterToken')
 }
 
@@ -256,11 +228,14 @@ function updateVideoTierSecondaryPrice(
               <span>{{ section.forms.length }}</span>
             </span>
           </template>
-          <div class="price-editor" :class="{ 'is-image-editor': section.key === 'image' }">
+          <div
+            class="price-editor"
+            :class="{ 'is-image-editor': section.key === 'image' || section.key === 'audio' }"
+          >
             <div class="price-editor-head">
               <span>{{ t('model') }}</span>
               <span>{{ t('billingMeter') }}</span>
-              <template v-if="section.key === 'image'">
+              <template v-if="section.key === 'image' || section.key === 'audio'">
                 <span>{{ t('prices') }}</span>
               </template>
               <template v-else>
@@ -278,6 +253,19 @@ function updateVideoTierSecondaryPrice(
               >
                 <div class="price-model-cell" :title="row.model">
                   <span>{{ row.model }}</span>
+                  <el-tag
+                    v-if="row.audioTranscriptionMode"
+                    class="audio-transcription-mode-tag"
+                    effect="plain"
+                    size="small"
+                    :type="row.audioTranscriptionMode === 'realtime' ? 'success' : 'info'"
+                  >
+                    {{
+                      row.audioTranscriptionMode === 'realtime'
+                        ? t('realtimeAudioTranscription')
+                        : t('fileAudioTranscription')
+                    }}
+                  </el-tag>
                 </div>
                 <div class="price-meter-cell">
                   <span v-if="row.billingMeterLocked" class="price-meter-static">
@@ -298,7 +286,10 @@ function updateVideoTierSecondaryPrice(
                     />
                   </el-select>
                 </div>
-                <div v-if="section.key === 'image'" class="image-price-cell">
+                <div
+                  v-if="section.key === 'image' || section.key === 'audio'"
+                  class="image-price-cell"
+                >
                   <template v-if="row.billingMeter === 'token'">
                     <div class="image-price-group">
                       <span class="image-price-group-label">{{ t('inputOutputPairShort') }}</span>
@@ -361,6 +352,19 @@ function updateVideoTierSecondaryPrice(
                         :min="0"
                         :parser="parseCurrencyInput"
                         :step="0.01"
+                      />
+                    </div>
+                  </div>
+                  <div v-else-if="row.billingMeter === 'audio'" class="video-price-cell">
+                    <div class="video-price-pair-input is-single">
+                      <el-input-number
+                        v-model="row.unitPrice"
+                        class="video-tier-pair-number"
+                        :controls="false"
+                        :formatter="formatCurrencyInput"
+                        :min="0"
+                        :parser="parseCurrencyInput"
+                        :step="0.0001"
                       />
                     </div>
                   </div>
@@ -788,6 +792,13 @@ function updateVideoTierSecondaryPrice(
 .price-model-cell span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.price-model-cell .audio-transcription-mode-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 500;
+  overflow: visible;
 }
 
 .price-pair-field {

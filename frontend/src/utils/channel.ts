@@ -4,43 +4,24 @@ export type ChannelProviderOption = {
   value: ChannelProvider
   label: string
   defaultName: string
-  defaultEndpoints: Record<EndpointProtocol, {
-    baseUrl: string
-  }>
+  defaultEndpoints: Record<
+    EndpointProtocol,
+    {
+      baseUrl: string
+    }
+  >
 }
 
-export const customProviderOption: ChannelProviderOption = {
-  value: 'custom',
-  label: '自定义',
-  defaultName: '',
-  defaultEndpoints: emptyDefaultEndpoints()
-}
-
-export const newapiProviderOption: ChannelProviderOption = {
-  value: 'newapi',
-  label: 'NewAPI',
-  defaultName: '',
-  defaultEndpoints: emptyDefaultEndpoints()
-}
-
-export const sub2apiProviderOption: ChannelProviderOption = {
-  value: 'sub2api',
-  label: 'Sub2API',
-  defaultName: '',
+export const comfyUIOption: ChannelProviderOption = {
+  value: 'comfyui',
+  label: 'ComfyUI',
+  defaultName: 'ComfyUI',
   defaultEndpoints: emptyDefaultEndpoints()
 }
 
 export function providerToOption(provider: ProviderRecord): ChannelProviderOption {
-  if (isCustomProvider(provider.code)) {
-    return customProviderOption
-  }
-
-  if (isNewapiProvider(provider.code)) {
-    return newapiProviderOption
-  }
-
-  if (isSub2apiProvider(provider.code)) {
-    return sub2apiProviderOption
+  if (isComfyUIProvider(provider.code)) {
+    return comfyUIOption
   }
 
   const defaultEndpoints = emptyDefaultEndpoints()
@@ -58,44 +39,15 @@ export function providerToOption(provider: ProviderRecord): ChannelProviderOptio
   }
 }
 
-export function isCustomProvider(provider: ChannelProvider) {
-  return provider === customProviderOption.value
-}
-
-export function isNewapiProvider(provider: ChannelProvider) {
-  return provider === newapiProviderOption.value
-}
-
-export function isSub2apiProvider(provider: ChannelProvider) {
-  return provider === sub2apiProviderOption.value
-}
-
-export function isManualBaseUrlProvider(provider: ChannelProvider) {
-  return isCustomProvider(provider) || isNewapiProvider(provider) || isSub2apiProvider(provider)
-}
-
-export function withCustomProviderLast(providers: ChannelProviderOption[]) {
-  return [
-    ...providers.filter((provider) => !isManualBaseUrlProvider(provider.value)),
-    newapiProviderOption,
-    sub2apiProviderOption,
-    customProviderOption
-  ]
+export function sortProviderOptionsForDisplay(providers: ChannelProviderOption[]) {
+  return moveComfyUiLast(providers, (provider) => provider.value)
 }
 
 export function sortProvidersForDisplay(providers: ProviderRecord[]) {
-  const manualProviderOrder = ['newapi', 'sub2api', 'custom']
-  const manualProviders = manualProviderOrder
-    .map((code) => providers.find((provider) => provider.code === code))
-    .filter((provider): provider is ProviderRecord => Boolean(provider))
-  const rest = providers.filter((provider) => !isManualBaseUrlProvider(provider.code))
-  return [...rest, ...manualProviders]
+  return moveComfyUiLast(providers, (provider) => provider.code)
 }
 
-export function findProviderOption(
-  provider: ChannelProvider,
-  providers: ChannelProviderOption[]
-) {
+export function findProviderOption(provider: ChannelProvider, providers: ChannelProviderOption[]) {
   return providers.find((option) => option.value === provider)
 }
 
@@ -120,6 +72,17 @@ function emptyDefaultEndpoints(): ChannelProviderOption['defaultEndpoints'] {
       baseUrl: ''
     }
   }
+}
+
+function moveComfyUiLast<T>(providers: T[], providerCode: (provider: T) => ChannelProvider) {
+  return [
+    ...providers.filter((provider) => !isComfyUIProvider(providerCode(provider))),
+    ...providers.filter((provider) => isComfyUIProvider(providerCode(provider)))
+  ]
+}
+
+function isComfyUIProvider(provider: ChannelProvider) {
+  return provider.toLowerCase() === comfyUIOption.value
 }
 
 export function splitCommaList(value: string) {

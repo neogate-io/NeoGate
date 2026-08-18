@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "neogate"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "neogate-scheduler"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes-gcm",
  "anyhow",

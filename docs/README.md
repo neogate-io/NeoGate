@@ -13,7 +13,7 @@ NeoGate is a self-hosted Rust LLM API gateway for OpenAI-compatible and Anthropi
 | [Project Model](design/project-model.md) | Project, member, API key, and usage attribution design. |
 | [Billing Outbox](design/billing-outbox.md) | Reliable metering and billing event processing design. |
 | [App Integrations](design/apps.zh.md) | WeCom, Feishu, DingTalk, Webhook, and web widget public endpoints. |
-| [Release Notes v0.4.4](releases/v0.4.4.md) | Latest release highlights, upgrade notes, and version metadata. |
+| [Release Notes v0.4.5](releases/v0.4.5.md) | Latest release highlights, upgrade notes, and version metadata. |
 
 ## Search Terms
 
